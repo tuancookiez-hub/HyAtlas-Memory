@@ -160,6 +160,61 @@ If forced to pick the highest-impact item right now, **Tier 3 #7 (cross-session 
 - Kuzu: `C:/Users/tuanc/.hy_memory/data/kuzu_db` (67 MB)
 - Both have 5 snapshots each (from the 5 `start` invocations during this session)
 
+## Next-session prompt (copy-paste this to start the new session)
+
+```
+Pick up from the HyAtlas handoff at:
+F:\Projects\hyatlas-memory\.hermes\handoffs\2026-06-17-session-end.md
+
+Context: HyAtlas-Memory is structurally complete with all 8 layers populated
+(L0-L7), 10-stage doctor, two healthy crons, public repo at commit a30b504.
+The user said "improve it more more more until it's the best thing ever to come
+to AI" at the end of last session, but I (the previous agent) recommended NOT
+starting with code — instead use the system in normal mode first to find
+actual friction, then pick the tier item that addresses it.
+
+**Skills updated this session (2026-06-17 evening):** 6 skills got
+patches to fix wrong/outdated information. The relevant ones for HyAtlas work:
+- `hy-memory` (software-development): layer status table now shows all 8 populated
+- `hy-memory-layer-enablement` (devops): TL;DR + reader=exhaustive caveat
+- `hy-memory-setup` (devops): reader-layer visibility table
+- `hy-memory-stack-recovery` (devops): 2026-06-17 update notes
+- `memory-management` (devops): HyAtlas as primary store, Hindsight as legacy
+- `windows-process-shim-pattern` (devops): .bat shim pitfall with python prefix
+
+If you load a skill and it says something that contradicts the handoff or
+the doctor output, **trust the doctor output, not the skill** — the skills
+were just patched and may have residual stale claims.
+
+What I (new agent) need to do FIRST:
+1. Read the handoff file in full
+2. Run `hyatlas doctor` to verify the system is still healthy
+3. If the user mentions specific friction from using the system, address that
+4. If the user says "just do the highest-impact item", do cross-session memory
+   continuity (tier-3 #7 in the handoff — the single biggest behavioral change)
+
+What NOT to do:
+- Don't claim to know things you haven't read in the source
+- Don't promise multi-day work fits in one session
+- Don't break the working state — the user is sensitive to this
+- Don't suggest HyAtlas should be replaced with Hindsight or anything else;
+  the user explicitly rejected that
+
+Critical things to know:
+- The system uses MiniMax-M3 via tokenrouter as the main LLM, local BGE-small
+  as the embedder (384-dim)
+- "ultra mode" is on but only changes the system-prompt text, doesn't enable
+  L6/L7 — they're enabled by other code paths
+- The default `reader=legacy` only surfaces L0-L4. Use `reader=exhaustive`
+  to see all 8 layers.
+- L5 lives in Kuzu (graph), not Qdrant. Search can't surface it directly
+  without code changes. This is a known architectural gap.
+- The PowerShell `hyatlas.bat` shim needs `python` prefix (fixed last session).
+
+Working directory: F:\Projects\hyatlas-memory
+Diagnostic command: `hyatlas doctor` (10 stages, ~5s)
+```
+
 ## Lessons learned this session (save for future me)
 
 1. **Read the source, not just the local fork.** I claimed L5/L6/L7 were "not implemented" when they were in the upstream PyPI package. Cost 30 min of confusion.
