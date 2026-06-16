@@ -264,6 +264,131 @@ def stage_qdrant() -> StageResult:
         )
 
 
+def stage_qdrant_health() -> StageResult:
+    """4b. Per-collection health: points, on-disk size, snapshot count.
+
+    Catches the kind of bloat we just cleaned up:
+    - Empty/orphan collections eating hundreds of MB
+    - Bloated collections where disk >> expected
+    - Snapshot pile-up from L5/start/stop cycles
+    - Collections we don't expect to see
+
+    Warns (but does not fail) above 500 MB per collection or >4
+    snapshots per collection. Fails only on missing/unreachable
+    Qdrant or on the canonical production collection being missing.
+    """
+    t0 = time.perf_counter()
+    base = f"http://{HYATLAS_HOST}:{HYATLAS_QDRANT_PORT}"
+    code, body, _ = _http_get(f"{base}/collections")
+    if code != 200:
+        duration = int((time.perf_counter() - t0) * 1000)
+        return StageResult(
+            name="qdrant_health",
+            passed=False,
+            detail=f"GET /collections returned code={code}",
+            duration_ms=duration,
+            error=f"qdrant unreachable: {code}",
+        )
+    try:
+        collections = json.loads(body).get("result", {}).get("collections", [])
+    except Exception as e:
+        duration = int((time.perf_counter() - t0) * 1000)
+        return StageResult(
+            name="qdrant_health",
+            passed=False,
+            detail="qdrant response not parseable",
+            duration_ms=duration,
+            error=repr(e),
+        )
+
+    # Find Qdrant storage path (env-overridable; default matches the
+    # user's local install at C:/qdrant/storage)
+    qdrant_storage = Path(os.environ.get("HYATLAS_QDRANT_STORAGE", "C:/qdrant/storage/collections"))
+    qdrant_snapshots = Path(os.environ.get("HYATLAS_QDRANT_SNAPSHOTS", "C:/qdrant/snapshots"))
+
+    EXPECTED = {HYATLAS_QDRANT_COLLECTION, "agent_memories_384_tag_index"}
+    SIZE_WARN_MB = 1500      # absolute per-collection size; catches real bloat
+    BLOAT_KB_PER_PT = 1024   # > 1 MB per point = real bloat (normal is 50-400 KB)
+    SNAPSHOT_WARN_PER_COLL = 4
+
+    rows: list[dict] = []
+    warnings: list[str] = []
+    fatal: list[str] = []
+
+    for c in collections:
+        name = c["name"]
+        info_code, info_body, _ = _http_get(f"{base}/collections/{name}")
+        if info_code != 200:
+            warnings.append(f"{name}: GET /collections/{name} returned {info_code}")
+            continue
+        info = json.loads(info_body).get("result", {})
+        points = info.get("points_count", 0)
+        vecs = info.get("indexed_vectors_count", 0)
+        # on-disk size
+        coll_dir = qdrant_storage / name
+        size_mb = round(sum(f.stat().st_size for f in coll_dir.rglob("*") if f.is_file()) / (1024 * 1024), 1) if coll_dir.exists() else 0.0
+        # snapshot count
+        snap_dir = qdrant_snapshots / name
+        snap_count = len(list(snap_dir.glob("*.snapshot"))) if snap_dir.exists() else 0
+        rows.append({
+            "name": name, "points": points, "indexed": vecs,
+            "size_mb": size_mb, "snapshots": snap_count,
+            "expected": name in EXPECTED,
+        })
+        if name not in EXPECTED:
+            warnings.append(f"unexpected collection '{name}' ({size_mb} MB, {points} pts)")
+        if size_mb > SIZE_WARN_MB:
+            warnings.append(f"'{name}' is large: {size_mb} MB (> {SIZE_WARN_MB} MB threshold)")
+        if points > 0 and size_mb > SIZE_WARN_MB * 0.1:
+            kb_per_pt = (size_mb * 1024) / points
+            if kb_per_pt > BLOAT_KB_PER_PT:
+                warnings.append(
+                    f"'{name}' is bloated: {size_mb:.0f} MB for {points} pts "
+                    f"({kb_per_pt:.0f} KB/pt, normal is 50-400 KB/pt)"
+                )
+        if size_mb > SIZE_WARN_MB and points == 0:
+            warnings.append(f"'{name}' is empty but uses {size_mb} MB (orphan)")
+        if snap_count > SNAPSHOT_WARN_PER_COLL:
+            warnings.append(f"'{name}' has {snap_count} snapshots (> {SNAPSHOT_WARN_PER_COLL})")
+
+    if HYATLAS_QDRANT_COLLECTION not in {r["name"] for r in rows}:
+        fatal.append(f"production collection '{HYATLAS_QDRANT_COLLECTION}' missing")
+
+    total_mb = round(sum(r["size_mb"] for r in rows), 1)
+    total_snaps = sum(r["snapshots"] for r in rows)
+    snap_total_mb = 0.0
+    if qdrant_snapshots.exists():
+        for f in qdrant_snapshots.rglob("*.snapshot"):
+            snap_total_mb += f.stat().st_size / (1024 * 1024)
+    snap_total_mb = round(snap_total_mb, 1)
+
+    detail_lines = [f"total={total_mb} MB live, {snap_total_mb} MB snapshots across {len(rows)} collection(s)"]
+    for r in sorted(rows, key=lambda x: -x["size_mb"]):
+        marker = "✅" if r["expected"] and (r["size_mb"] < SIZE_WARN_MB or r["points"] > 0) else "⚠️ "
+        detail_lines.append(
+            f"  {marker} {r['name']:36s}  pts={r['points']:6d}  size={r['size_mb']:7.1f} MB  snaps={r['snapshots']}"
+        )
+    if warnings:
+        detail_lines.append("warnings: " + "; ".join(warnings))
+
+    duration = int((time.perf_counter() - t0) * 1000)
+    return StageResult(
+        name="qdrant_health",
+        passed=not fatal,
+        detail="\n".join(detail_lines),
+        duration_ms=duration,
+        extras={
+            "total_storage_mb": total_mb,
+            "total_snapshots_mb": snap_total_mb,
+            "collection_count": len(rows),
+            "collections": rows,
+            "warnings": warnings,
+            "fatal": fatal,
+        },
+        error="; ".join(fatal) if fatal else None,
+    )
+
+
 def stage_kuzu() -> StageResult:
     """5. Is the Kuzu DB on disk and non-zero size?"""
     t0 = time.perf_counter()
@@ -464,6 +589,7 @@ def run_all(cleanup: bool = False) -> SmokeReport:
     stages.append(stage_entry_point())
     stages.append(stage_server_health())
     stages.append(stage_qdrant())
+    stages.append(stage_qdrant_health())
     stages.append(stage_kuzu())
     stages.append(stage_plugin_prefetch())
     stages.append(stage_roundtrip(stamp))
