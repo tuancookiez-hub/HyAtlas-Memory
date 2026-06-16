@@ -573,6 +573,147 @@ def stage_roundtrip(stamp: str) -> StageResult:
         )
 
 
+def stage_cron_health() -> StageResult:
+    """Catches cron jobs that errored, are overdue, or reference missing files.
+
+    Runs `hermes cron list` and parses the output. Fails the stage if any
+    active job has last_status != "ok" or a last_delivery_error. Also
+    fails if a script-based job references a file that doesn't exist
+    (this was the bug behind the qdrant-snapshot-rotate error on
+    2026-06-17 04:48 — script was created in bin/ but the cron store
+    expects scripts/).
+    """
+    import subprocess
+    t0 = time.perf_counter()
+    try:
+        r = subprocess.run(
+            ["hermes", "cron", "list"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        duration = int((time.perf_counter() - t0) * 1000)
+        return StageResult(
+            name="cron_health",
+            passed=False,
+            detail="hermes cron list timed out (>10s)",
+            duration_ms=duration,
+            error="cron list timeout",
+        )
+    except FileNotFoundError:
+        duration = int((time.perf_counter() - t0) * 1000)
+        return StageResult(
+            name="cron_health",
+            passed=False,
+            detail="hermes CLI not on PATH",
+            duration_ms=duration,
+            error="hermes not found",
+        )
+
+    out = r.stdout
+    rows: list[dict] = []
+    warnings: list[str] = []
+    fatal: list[str] = []
+
+    # Parse the human-readable format. Each job block looks like:
+    #   <id> [active]
+    #     Name:      <name>
+    #     Schedule:  <cron expr>
+    #     Next run:  <iso>
+    #     Last run:  <iso>  <status>      <- status comes AFTER timestamp
+    #     Script:    <path>               (script jobs only)
+    #     Mode:      no-agent ...
+    current: dict = {}
+    for line in out.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s.endswith("[active]") or s.endswith("[paused]"):
+            if current:
+                rows.append(current)
+            parts = s.split()
+            current = {
+                "id": parts[0] if parts else "?",
+                "state": "paused" if "[paused]" in s else "active",
+            }
+        elif "Last run:" in line:
+            # Format: "Last run:  2026-06-17T05:00:41.962395+08:00  ok"
+            # or     "Last run:  2026-06-17T04:48:09.889614+08:00  error: ..."
+            tail = line.split("Last run:")[-1].strip()
+            current["last_run_text"] = tail
+            # Extract just the status word after the timestamp
+            parts = tail.split()
+            if len(parts) >= 2:
+                current["last_status"] = parts[1].rstrip(":")
+        elif s.startswith("Next run:") and current:
+            current["next_run"] = s.split(":", 1)[1].strip()
+        elif s.startswith("Schedule:") and current:
+            current["schedule"] = s.split(":", 1)[1].strip()
+        elif s.startswith("Name:") and current:
+            current["name"] = s.split(":", 1)[1].strip()
+        elif s.startswith("Script:") and current:
+            current["script"] = s.split(":", 1)[1].strip()
+        elif s.startswith("Mode:") and current:
+            current["mode"] = s.split(":", 1)[1].strip()
+        elif s.startswith("Deliver:") and current:
+            current["deliver"] = s.split(":", 1)[1].strip()
+    if current:
+        rows.append(current)
+
+    for row in rows:
+        name = row.get("name", "?")
+        state = row.get("state", "?")
+        if state != "active":
+            continue
+        last_status = row.get("last_status", "")
+        last_run_text = row.get("last_run_text", "")
+        if last_status and last_status.lower() != "ok":
+            warnings.append(f"{name}: last run status={last_status}: {last_run_text[:80]}")
+            fatal.append(f"{name}: last run was {last_status}")
+        # script-file existence check. hermes cron list reports script
+        # as a bare filename; resolve it relative to the canonical
+        # scripts dir the cron store uses, not the doctor's CWD.
+        if row.get("script"):
+            script_name = row["script"].strip()
+            if not Path(script_name).is_absolute():
+                script_path = Path.home() / "AppData" / "Local" / "hermes" / "scripts" / script_name
+            else:
+                script_path = Path(script_name)
+            if not script_path.exists():
+                warnings.append(f"{name}: script file missing: {script_path}")
+                fatal.append(f"{name}: referenced script file does not exist")
+            else:
+                row["script_resolved"] = str(script_path)
+
+    detail_lines = [f"{len(rows)} cron job(s), {sum(1 for r in rows if r.get('state') == 'active')} active"]
+    for r in rows:
+        marker = "✅" if r.get("state") == "active" and not any(w.startswith(r.get("name", "?")) for w in warnings) else "⚠️ "
+        script = r.get("script", "")
+        script_str = f"  script={script}" if script else ""
+        detail_lines.append(
+            f"  {marker} {r.get('name', '?'):32s}  "
+            f"schedule={r.get('schedule', '?'):15s}  "
+            f"last={r.get('last_run_text', '(never)')[:60]}{script_str}"
+        )
+    if warnings:
+        detail_lines.append("warnings: " + "; ".join(warnings))
+
+    duration = int((time.perf_counter() - t0) * 1000)
+    return StageResult(
+        name="cron_health",
+        passed=not fatal,
+        detail="\n".join(detail_lines),
+        duration_ms=duration,
+        extras={
+            "job_count": len(rows),
+            "active_count": sum(1 for r in rows if r.get("state") == "active"),
+            "jobs": rows,
+            "warnings": warnings,
+            "fatal": fatal,
+        },
+        error="; ".join(fatal) if fatal else None,
+    )
+
+
 # ---------- main ----------
 
 def run_all(cleanup: bool = False) -> SmokeReport:
@@ -593,6 +734,7 @@ def run_all(cleanup: bool = False) -> SmokeReport:
     stages.append(stage_kuzu())
     stages.append(stage_plugin_prefetch())
     stages.append(stage_roundtrip(stamp))
+    stages.append(stage_cron_health())
 
     return _finalize(stages, t_start, started_at)
 
