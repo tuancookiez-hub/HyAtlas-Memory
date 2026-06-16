@@ -79,16 +79,13 @@ print(f"  Embedder: {os.environ['MEMORY_EMBEDDER_MODEL']} ({os.environ['MEMORY_E
 print(f"  Vector store: {os.environ['MEMORY_VECTOR_STORE']}")
 print(f"  Embedder: in-process (no sidecar)")
 
-# Import and run.
-# First apply our user-space patches to the SDK so we don't depend on
-# site-packages edits (which get wiped on `pip install --upgrade hy-memory`).
+# Apply our user-space patches to the SDK. The patches.py file lives
+# in the standalone hyatlas_memory package (this is the post-extraction
+# layout as of 2026-06-16). The legacy `plugins/memory/hy_memory/`
+# in-fork path is intentionally NOT checked any more — it was the
+# old layout before HyAtlas-Memory was extracted into its own repo.
 # patches.py is a no-op if the SDK is already patched.
-import importlib.util
-# Disable System2 background tasks at the launcher level. The S2 task is
-# a no-op with MEMORY_CACHE_BACKEND=disabled, and it has been the source
-# of crashes in the running server. With this set, no S2 background
-# task will fire on add(), and the metrics/cleanup background tasks are
-# unaffected.
+import importlib
 os.environ["MEMORY_SYSTEM2_TRIGGER_MODE"] = "scheduled"
 # Honor MEMORY_L5_AUTO from .env (don't override). The L5 pipeline spawns
 # a detached subprocess whose first step is to STOP the hy-memory server
@@ -96,23 +93,12 @@ os.environ["MEMORY_SYSTEM2_TRIGGER_MODE"] = "scheduled"
 # so it doesn't run constantly. Set MEMORY_L5_AUTO=false in .env to disable.
 _l5_auto = os.environ.get("MEMORY_L5_AUTO", "true").strip().lower()
 os.environ["MEMORY_L5_AUTO"] = "true" if _l5_auto in ("1", "true", "yes") else "false"
-_patches_path = Path(__file__).parent / "hermes-agent" / "plugins" / "memory" / "hy_memory" / "patches.py"
-if not _patches_path.exists():
-    # Try without the hermes-agent subdir (if launcher is alongside the plugin)
-    _patches_path = Path(__file__).parent / "plugins" / "memory" / "hy_memory" / "patches.py"
-if _patches_path.exists():
-    spec = importlib.util.spec_from_file_location("_hy_memory_patches", _patches_path)
-    if spec and spec.loader:
-        _pm = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(_pm)
-        _result = _pm.apply_all_patches()
-        print(f"  Patches applied: {_result}")
-        # Make patches available to the server subprocess via PYTHONPATH
-        # (so the server can also apply them on import)
-        plugin_dir = str(_patches_path.parent)
-        existing_pp = os.environ.get("PYTHONPATH", "")
-        if plugin_dir not in existing_pp:
-            os.environ["PYTHONPATH"] = plugin_dir + os.pathsep + existing_pp
+try:
+    _pm = importlib.import_module("hyatlas_memory.patches")
+    _result = _pm.apply_all_patches()
+    print(f"  Patches applied: {_result}")
+except ImportError as _e:
+    print(f"  WARN: hyatlas_memory.patches not importable: {_e}")
 
 from hy_memory.server import run_server
 run_server(port=19527, host="127.0.0.1")
