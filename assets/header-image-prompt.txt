@@ -1,0 +1,113 @@
+Cinematic 16:9 widescreen hero illustration for a software product
+header. Two-figure composition on a vast dark observatory backdrop.
+
+COLOR PALETTE — STRICT (matches the product dashboard exactly):
+- Background: near-black with a faint warm gradient, around #050505
+  fading to #0a0a0a at the edges. No pure black, no blue-purple sky.
+- Primary accent: warm metallic gold #d4af37 — used for the
+  protective energy sphere, the orbital rings, the connection lines,
+  and the small accent details. This is the ONLY saturated color.
+- Secondary accent: deep amber #b8960f for shadows on the gold.
+- Text/UI elements: warm off-white #e8e8e8.
+- Muted greys: #666666 for distant background details.
+- DO NOT use bright red, neon blue, or any saturated cool color.
+  The product's accent is gold, not red, not cyan.
+
+COMPOSITION (left to right):
+LEFT THIRD — A massive translucent golden orbital sphere, like a
+protective shell of energy. Inside the sphere, glowing concentric
+rings of gold light, reminiscent of a planetary system or an atom.
+The sphere has subtle particle drift around its edges and a faint
+inner glow. This represents the 6-layer memory system: each ring is
+a layer, the shell is the cognitive architecture.
+
+CENTER — A stoic Asian man in his 30s with short dark hair and a
+goatee, wearing a black tactical jacket with multiple pockets and
+zippers, layered over a black shirt. A pendant hangs from a chain
+around his neck. He wears a black fingerless glove on his left
+hand, a tactical pouch on his belt, and a wristwatch or tactical
+device on his right wrist. He holds a black folder or tablet with a
+small white geometric logo. He stands in a grounded, contemplative
+pose, looking outward at the sphere. His expression is calm,
+focused, the look of someone who has been at this a long time.
+
+RIGHT THIRD — Behind and slightly elevated, a semi-transparent,
+glowing ethereal female hologram with long flowing platinum-blonde
+hair streaming dramatically, pale luminous skin, a small glowing
+mark beneath her left eye. She wears a form-fitting bodysuit with
+glowing circuit patterns in gold (NOT blue — gold). A star emblem
+glows softly on her chest. Her right arm extends outward, hand
+open, gesturing toward a complex holographic display.
+
+HOLOGRAPHIC DISPLAYS:
+- A constellation-graph of glowing gold dots connected by thin
+  gold lines, representing the Kuzu knowledge graph (entities and
+  their relationships, the L5 layer).
+- A timeline strip showing small gold dots and dotted lines threading
+  through them, representing evolution chains: each new memory
+  supersedes the previous one, with the chain pointer visible.
+- Small tabular readouts in fine JetBrains-Mono-style monospaced
+  glyphs (NOT legible words, just the SHAPE of monospace text and
+  numbers), representing the structured memory records.
+
+ATTRIBUTION (mandatory, must be visible in the composition):
+- In the lower-left corner, set in a refined sans-serif treatment
+  (NOT a fake-UI block, NOT a screenshot-looking element, NOT a
+  watermark), the text:
+
+     HY-MEMORY · TENCENT
+
+  set in monospaced gold #d4af37 letterspaced slightly, in a thin
+  rule above and below, small and unobtrusive. This is the official
+  framework attribution.
+
+- In the lower-right corner, in matching small monospaced gold text:
+
+     COMMUNITY IMPLEMENTATION
+
+  with the same thin rule treatment. This is the project's own
+  label.
+
+The two attribution lines should look like quiet, deliberate typeset
+credit, not like UI overlays. They should integrate with the
+composition as design elements, not stickers.
+
+MOOD & LIGHTING:
+- Volumetric gold god rays from above, breaking through subtle haze
+  in the air. The gold rays are the dominant light source.
+- The whole image has a "quiet power" feel — sophisticated, almost
+  editorial, not action-packed. Think product-hero, not movie-poster.
+- A few embers or motes of gold dust drift in the air, very subtle.
+- The figures' faces are lit primarily by the gold sphere, with
+  soft fill from the off-white ambient.
+
+STYLE:
+- High-end concept art. Photorealistic rendering with a slight
+  graphic-design finish on top — the image should feel like it
+  could be on the cover of an annual report from a serious
+  research lab, not a Marvel poster.
+- Skin texture, fabric texture, and the energy sphere should all
+  be rendered with the same level of care.
+- Sharp focus throughout, no motion blur, no lens distortion.
+
+TECHNICAL:
+- 16:9 widescreen, ultra-detailed, 8K quality.
+- No logos other than the one on the man's tablet (the small white
+  geometric mark) and the two attribution lines described above.
+- No fake UI screenshots, no buttons, no panels, no toolbars.
+- No watermarks.
+
+LONG VERSION INCLUDES: two figures, one human + one AI-hologram,
+showing a human-AI partnership; a knowledge-graph constellation;
+an evolution-chain timeline strip; a planetary/atomic energy sphere
+representing the 6-layer cognitive architecture; gold god rays
+breaking through haze; quiet sophisticated mood; HY-MEMORY · TENCENT
+attribution in lower-left, COMMUNITY IMPLEMENTATION attribution in
+lower-right.
+
+RUN-TIME DIRECTION FOR IMAGE MODELS: do not place any text other
+than the two attribution lines. Do not invent any other words,
+labels, or fake text. Render all monospace glyphs as decorative
+marks (small dashes, dots, block-shapes) if a model cannot
+reliably spell; but the two attribution lines must be spelled
+exactly as: HY-MEMORY · TENCENT  and  COMMUNITY IMPLEMENTATION.

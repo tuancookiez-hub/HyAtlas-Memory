@@ -2,11 +2,16 @@
 """
 HY Memory installer for Hermes — `hermes hy-memory install`
 
-Adapted from the canonical upstream plugin (plugins/native/hermes/installer.py).
-For our local fork, the plugin is already activated (we're at
-plugins/memory/hy_memory/, the standard discovery path). The "installer"
-therefore just verifies the setup is correct, gives diagnostics, and
-optionally bootstraps missing config.
+This is the community-implementation installer for the
+hyatlas_memory package (formerly the in-fork plugin at
+plugins/memory/hy_memory/, now a standalone pip package).
+
+What it does:
+  - The package is activated by installing it (`pip install hyatlas-memory`)
+    and having Hermes discover it via the `hermes.memory_provider` entry
+    point. No path-based discovery is required any more.
+  - This installer therefore just verifies the setup is correct, gives
+    diagnostics, and optionally bootstraps missing config.
 
 Tasks:
   1. Detect the Hermes Python (auto or from --hermes-python)
@@ -112,12 +117,13 @@ def run_install(hermes_python: Optional[str] = None) -> int:
         return 1
 
     # 3. Our local client.py is importable
+    #    (editable install means hyatlas_memory is importable from
+    #    any cwd; no sys.path hack needed)
     try:
         r = subprocess.run(
             [py, "-c",
-             "import sys; sys.path.insert(0, r'{}'); "
-             "from plugins.memory.hy_memory.client import HyMemoryClient; "
-             "print('client.py OK')".format(str(Path(__file__).parent.parent.parent.parent))],
+             "from hyatlas_memory.client import HyMemoryClient; "
+             "print('client.py OK')"],
             capture_output=True, text=True, timeout=10,
         )
         if r.returncode == 0:

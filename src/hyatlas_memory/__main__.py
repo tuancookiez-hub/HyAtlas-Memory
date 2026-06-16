@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Entry point for ``python -m plugins.memory.hy_memory`` (standalone CLI).
+Entry point for ``python -m hyatlas_memory`` (standalone CLI).
+
+The package was previously the in-fork plugin at
+``plugins.memory.hy_memory``; the entry point is now the standalone
+package name. Update any cron jobs, scripts, or shortcuts that
+referenced the old module path.
 
 For most users, the right invocation is via the parent hermes CLI:
     hermes hy-memory doctor

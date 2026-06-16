@@ -256,8 +256,8 @@ def apply_rerank_patches() -> bool:
         logger.warning(
             "[hy-memory/patches] hy_memory.core.rerank not available — "
             "skipping rerank stage (patch #2 not applied). "
-            "If you want rerank, copy plugins/memory/hy_memory/core/rerank.py "
-            "into venv/Lib/site-packages/hy_memory/core/rerank.py"
+            "Install the upstream SDK >= 1.2.18 (hy-memory on PyPI) which "
+            "ships rerank in the canonical location."
         )
         return False
 

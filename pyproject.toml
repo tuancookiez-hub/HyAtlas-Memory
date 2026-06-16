@@ -46,6 +46,12 @@ requires-python = ">=3.10"
 # chromadb / qdrant-client / faiss-cpu = vector store (L4 identity search)
 # openai = default LLM/embedder client (overridable via hy_memory.json)
 dependencies = [
+    # Hy-Memory upstream SDK (Tencent, memory.hunyuan.tencent.com).
+    # Provides the canonical server, the in-process SDK client, the
+    # L5 pipeline, and the embedder integrations. hyatlas_memory is a
+    # community implementation that wraps this SDK with a Hermes Agent
+    # MemoryProvider interface.
+    "hy-memory>=1.2.18",
     "kuzu>=0.4.0",
     "openai>=1.30.0",
     "pydantic>=2.0",

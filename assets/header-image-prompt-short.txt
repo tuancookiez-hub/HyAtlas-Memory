@@ -1,0 +1,75 @@
+Cinematic 16:9 hero illustration for a software product header.
+Two-figure composition on a vast dark observatory backdrop.
+
+COLOR PALETTE — STRICT (matches the product dashboard):
+- Background: near-black #050505 to #0a0a0a. No pure black, no
+  blue-purple sky, no neon.
+- Primary accent: warm metallic gold #d4af37 (sphere, rings, lines).
+- Secondary accent: deep amber #b8960f for gold shadows.
+- Off-white #e8e8e8 for text/UI elements.
+- DO NOT use bright red, neon blue, or any saturated cool color.
+
+COMPOSITION (left to right):
+- LEFT: a massive translucent golden orbital sphere, like a
+  protective shell of energy. Concentric rings inside, faint
+  inner glow, particle drift at the edges. Represents the 6-layer
+  memory system.
+- CENTER: a stoic Asian man in his 30s, short dark hair, goatee,
+  black tactical jacket with multiple pockets and zippers over a
+  black shirt, pendant on a chain, black fingerless glove on left
+  hand, tactical pouch on belt, wristwatch or tactical device on
+  right wrist. Holds a black folder with a small white geometric
+  logo. Grounded contemplative pose, looking outward at the sphere.
+  Calm, focused expression.
+- RIGHT (behind him, slightly elevated): a semi-transparent ethereal
+  female hologram, long flowing platinum-blonde hair, pale luminous
+  skin, a small glowing mark beneath her left eye, form-fitting
+  bodysuit with GLOWING GOLD (not blue) circuit patterns, star
+  emblem on her chest, right arm extended outward gesturing.
+
+HOLOGRAPHIC DISPLAYS (in gold only):
+- A constellation-graph of gold dots connected by thin gold lines
+  (the Kuzu knowledge graph / L5 layer).
+- A timeline strip with gold dots and dotted lines threading through
+  them (evolution chains: each new memory supersedes the previous).
+- Small tabular readouts in fine MONOSPACED GLYPHS — but the
+  text should be DECORATIVE, not legible words. They should look
+  like the SHAPE of monospace text (small dashes, block-shapes,
+  number-like forms) without actually spelling anything.
+
+ATTRIBUTION (mandatory, must be visible):
+- Lower-left corner, set in monospaced gold #d4af37 with thin gold
+  rule above and below:
+
+     HY-MEMORY · TENCENT
+
+- Lower-right corner, matching monospaced gold with the same
+  rule treatment:
+
+     COMMUNITY IMPLEMENTATION
+
+Both attribution lines should look like quiet, deliberate typeset
+credit — not like UI overlays, not like watermarks. They integrate
+with the composition as design elements.
+
+MOOD & LIGHTING:
+- Volumetric gold god rays from above breaking through subtle haze.
+- Quiet power, sophisticated, almost editorial — like a research-lab
+  annual-report cover, not a movie poster.
+- The figures' faces lit primarily by the gold sphere, with soft
+  off-white fill ambient.
+- A few embers or motes of gold dust drift in the air, very subtle.
+
+STYLE:
+- High-end concept art, photorealistic with a slight graphic-design
+  finish on top.
+- Skin, fabric, and the energy sphere all rendered with the same
+  care.
+- Sharp focus throughout, no motion blur, no lens distortion.
+
+TECHNICAL:
+- 16:9, ultra-detailed, 8K quality.
+- The only text in the image is the two attribution lines spelled
+  EXACTLY as shown above. No other words, labels, fake UI, or
+  watermarks. The man's tablet has a small white geometric mark
+  (not a word).
