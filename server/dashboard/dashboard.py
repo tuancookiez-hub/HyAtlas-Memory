@@ -1,13 +1,19 @@
 #!/usr/bin/env python
-"""Hy-Memory Dashboard v2 — local-only web UI for hy_memory.
+"""Hy-Memory Dashboard v2 — local-only web UI for hyatlas-memory.
 
 7-tab dashboard inspired by Mnemosyne and Hindsight Control Plane.
-Talks to the local hy_memory HTTP API (port 19527 by default).
+Talks to the local hyatlas-memory HTTP API (port 19527 by default).
+
+> This dashboard is for the community implementation at
+> github.com/tuancookiez-hub/HyAtlas-Memory. The canonical 6-layer model
+> and three-mode design (Lite/Pro/Ultra) are defined by the official
+> Hy-Memory framework at https://memory.hunyuan.tencent.com.
 
 Tabs:
   1. Overview  — health, layer distribution, recent memories, quick actions
   2. Explore   — search, memory browser, recall debugger
-  3. Layers    — L0-L7 visualization and stats
+  3. Layers    — L0-L7 visualization and stats (L7 is the experimental
+                 intention layer, not in the official 6-layer spec)
   4. Today     — daily digest of memories added/recalled/consolidated
   5. Graph     — constellation view of entity relationships
   6. Activity  — timeline of memory writes and consolidations

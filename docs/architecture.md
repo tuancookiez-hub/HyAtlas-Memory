@@ -1,10 +1,27 @@
 # HyAtlas-Memory Architecture
 
+> **Scope note:** This document describes the local architecture of this **community implementation** of the [official Hy-Memory framework](https://memory.hunyuan.tencent.com) (by Tencent Hunyuan). The canonical 6-layer model and the three operating modes (Lite / Pro / Ultra) are defined on the official page. This implementation extends the official 6-layer spec with an **experimental 7th layer (L7 = intention)** for proactive intent detection; L7 is **not** part of the official framework and is documented here only for the benefit of contributors working on this code.
+
 This document explains the system design, layer semantics, and the
 verified-2026-06-16 implementation choices that aren't visible from
 the README.
 
-## The 7 layers in detail
+## Layer mapping: this impl vs. the official spec
+
+| This impl | Official (memory.hunyuan.tencent.com) | Purpose |
+|-----------|---------------------------------------|---------|
+| L1 raw | **L1 原始痕迹** | Verbatim session entries, time-ordered |
+| L2 fact | **L2 原子事实** | Atomic facts extracted by LLM |
+| L3 summary | (folded into L2 in official) | Periodic L2 rollups |
+| L4 identity | **L3 身份画像** | Long-lived user/agent identity facts |
+| L5 pipeline | **L4 心智** | Async ingest into Kuzu graph |
+| L6 schema | **L5 模式** | Typed entity/relationship schema |
+| L7 intention | **L6 意图** (proactive) | Proactive intent detection, async tasks |
+| — | — | **L7 in this impl = experimental extension, not in official spec** |
+
+The official 6-layer spec maps roughly onto our 6 layers L1-L6 with one difference: official L2 (原子事实) includes what we call L3 (summary); we keep them separate for query ergonomics. Our L7 (intention) is the experimental extension.
+
+## The 7 layers in detail (this implementation)
 
 ### L1 — Raw
 - **What**: Verbatim user/agent message text, time-ordered.
@@ -79,10 +96,15 @@ A user-visible read (`search()`) merges both: System 1 results
 (profile/normal channels) come back instantly; the proactive channel
 may include System 2 outputs if the L5 cycle has completed recently.
 
-## Why a 7-layer model
+## Why a 7-layer model (and how it relates to the official 6)
 
 Most agent memory systems use 2-3 layers (raw + summary, or facts
-only). The 7-layer model maps cleanly to the cognitive-architecture
+only). The [official Hy-Memory framework](https://memory.hunyuan.tencent.com)
+defines a 6-layer model; this implementation extends that to 7 with
+an experimental proactive-intent layer (L7).
+
+The mapping in the table above is the canonical reference. The 7-layer
+model in this implementation maps cleanly to the cognitive-architecture
 literature:
 
 | Layer | Cognitive analog |
@@ -99,9 +121,11 @@ The mapping is intentional but loose — the layers in this implementation
 are pragmatic engineering choices that happen to align with the
 psychology. Don't read too much into the count being 7.
 
-## Verified-2026-06-16 status
+## Verified-2026-06-16 status (this implementation)
 
-This is the v0.1.0 release. All 7 layers are functional:
+This is the v0.1.0 release of the community implementation. All 7
+layers are functional locally; L1-L6 correspond to the [official 6-layer
+spec](https://memory.hunyuan.tencent.com) and L7 is experimental:
 
 ```text
 L1 raw:     ✓ writes, ✓ dedup patch, ✓ time-ordered

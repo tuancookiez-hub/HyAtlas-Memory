@@ -1,5 +1,7 @@
 # HyAtlas-Memory Server Components
 
+> **This is a community implementation of the official [Hy-Memory framework](https://memory.hunyuan.tencent.com) (Tencent Hunyuan) for Hermes Agent.** The 6-layer model, the three operating modes (Lite/Pro/Ultra), and the evolution chain semantics are defined by the official framework; this server is the Hermes-targeted runtime that supports them. See the [official docs](https://memory.hunyuan.tencent.com) for the canonical architecture and the [project README](../README.md) for the local community-implementation notes.
+
 This directory contains the standalone HyAtlas server launcher, the L5
 async pipeline scripts, and the local dashboard. The plugin (in
 `src/hyatlas_memory/`) auto-starts the server when needed, but you can

@@ -1,5 +1,7 @@
 # HyAtlas-Memory
 
+> **This is a community implementation of the official [Hy-Memory](https://memory.hunyuan.tencent.com) framework by Tencent Hunyuan.** It is one of three supported entry points (alongside OpenClaw and OpenCode) and is targeted specifically at [Hermes Agent](https://github.com/NousResearch/hermes-agent). For the canonical 6-layer model, the three operating modes (Lite / Pro / Ultra), and the evolution chain specification, see the [official documentation](https://memory.hunyuan.tencent.com). This implementation extends the official 6-layer model with an **experimental 7th layer (L7 = intention)** for proactive intent detection; see [`docs/architecture.md`](docs/architecture.md) for the local extension notes.
+
 > A 7-layer cognitive memory for [Hermes Agent](https://github.com/NousResearch/hermes-agent), with System1/System2 dual processing, evolution chains, and a Kuzu graph backend.
 
 ```text
@@ -187,11 +189,15 @@ MIT. See `LICENSE`.
 
 ## Credits
 
-Built by Tuan Abdullah. Uses:
+Built on the [official Hy-Memory framework](https://memory.hunyuan.tencent.com) by **Tencent Hunyuan**. This community implementation targets the [Hermes Agent](https://github.com/NousResearch/hermes-agent) runtime; the official framework also provides integrations for OpenClaw and OpenCode via the same SDK.
+
+Uses:
 
 - [Kuzu](https://kuzudb.com/) — embedded graph database (L1 raw + L5 graph)
 - [Qdrant](https://qdrant.tech/) / [Chroma](https://www.trychroma.com/) / [FAISS](https://faiss.ai/) — vector store backends
 - [SentenceTransformers](https://www.sbert.net/) — local embedding model
-- [OpenClaw](https://github.com/openclaw) / Hermes Agent — the host agent runtime
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent) — the host agent runtime
 
-Inspired by Mnemosyne, Hindsight, and the cognitive-architecture literature on dual-process theory (Kahneman's System 1 / System 2).
+Architecture inspired by the cognitive-architecture literature on dual-process theory (Kahneman's System 1 / System 2) and by existing systems in the same family (Mnemosyne, Hindsight, OpenClaw's mem-agent).
+
+**Not affiliated with Tencent.** HyAtlas-Memory is an independent community project; the Hy-Memory name and the 6-layer model are referenced here for source-of-truth accuracy and to credit the canonical design.

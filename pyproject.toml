@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hyatlas-memory"
 version = "0.1.0"
-description = "HyAtlas-Memory — 7-layer cognitive memory with System1/System2 dual processing, evolution chains, and Kuzu graph. Drop-in memory provider for Hermes Agent."
+description = "Community implementation of the official Hy-Memory 6-layer memory framework (Tencent Hunyuan, memory.hunyuan.tencent.com) for Hermes Agent. Includes the experimental L7 intention layer. MIT licensed."
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
@@ -13,6 +13,7 @@ authors = [
 ]
 keywords = [
     "hermes",
+    "hermes-agent",
     "memory",
     "agent",
     "ai",
@@ -20,6 +21,11 @@ keywords = [
     "vector-store",
     "cognitive-architecture",
     "llm",
+    "hy-memory",
+    "hyatlas",
+    "tencent",
+    "hunyuan",
+    "openclaw",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -77,6 +83,9 @@ hy_memory = "hyatlas_memory:HyMemoryProvider"
 Homepage = "https://github.com/tuancookiez-hub/HyAtlas-Memory"
 Issues = "https://github.com/tuancookiez-hub/HyAtlas-Memory/issues"
 Source = "https://github.com/tuancookiez-hub/HyAtlas-Memory"
+# Reference to the upstream official framework this package implements.
+# Not affiliated; included for discoverability and source-of-truth accuracy.
+"Upstream Framework" = "https://memory.hunyuan.tencent.com"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
