@@ -5,6 +5,11 @@
 > A 7-layer cognitive memory for [Hermes Agent](https://github.com/NousResearch/hermes-agent), with System1/System2 dual processing, evolution chains, and a Kuzu graph backend.
 
 <p align="center">
+  <a href="https://tuancookiez-hub.github.io/tuandev-portfolio/"><img src="https://img.shields.io/badge/Built%20by-Tuan%20Dev-blueviolet?style=for-the-badge" alt="Built by Tuan Dev"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
+</p>
+
+<p align="center">
   <img src="./assets/01-architecture-overview.png" alt="HyAtlas-Memory architecture overview: 4-step flow from Hermes Agent CLI/TUI through MemoryProvider interface into the HyAtlas-Memory engine, then to persistent agent memory; alongside a 7-layer memory stack (episodic, semantic, procedural, preferences, contextual, metacognitive, archival)" width="900" />
 </p>
 
