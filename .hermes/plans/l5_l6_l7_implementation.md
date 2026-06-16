@@ -197,3 +197,28 @@ After completion, these files will have changed:
 - `F:\Projects\hyatlas-memory\README.md` — document the architecture
 - (possibly) `F:\Projects\hyatlas-memory\src\hyatlas_memory\l6_schema_extractor.py` — new file
 - (possibly) `F:\Projects\hyatlas-memory\src\hyatlas_memory\l7_intention_extractor.py` — new file
+
+## Implementation results (2026-06-17 07:30)
+
+**Status: L5 + L6 + L7 all functional.** This was faster than expected because the upstream's `intention_detector.py` had already populated L6 and L7 items in Qdrant during normal background operation — they just weren't being surfaced by the default `legacy` search reader.
+
+### What actually got built
+1. **L5 pipeline ran end-to-end** on 63 L2 facts → 8 min, $0.005 cost
+   - 30 unique entities extracted (Hermes, HyAtlas, Qdrant, Tavily, etc.)
+   - 5 entity nodes + 1 relation written to Kuzu
+   - Bug found and fixed: `l5_digest_writer.py` expected `id` field but our L2 export had `memory_id`
+2. **L6 + L7 were already there** — discovered via `reader=exhaustive` search
+3. **Critical finding**: search reader matters
+   - `reader=legacy` (default) only returns L0-L4
+   - `reader=exhaustive` returns all 8 layers including L5 from Kuzu and L6/L7 from Qdrant
+
+### To make this complete
+
+The doctor test currently uses the default reader (which doesn't see L5/L6/L7). Need to:
+1. Add a `layer_coverage` stage to the doctor that uses `reader=exhaustive` and asserts L0-L7 all >0
+2. Make the default search reader `exhaustive` (or document the requirement)
+3. Re-run L5 periodically (currently 12h debounce, debounced correctly)
+
+### Cost so far
+- L5 run: $0.005 (5 cents in 2026 dollars)
+- L6/L7 were free (already running in background)
