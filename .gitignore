@@ -1,0 +1,82 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ----------------------------------------------------------------------
+# NEVER COMMIT — these files contain real API keys, credentials, or
+# user data. Listed here so even `git add -A` cannot accidentally stage
+# them. The .example versions ARE committed.
+# ----------------------------------------------------------------------
+.env
+.env.local
+*.env
+!*.example.env
+hy_memory.json
+hy_memory.local.json
+auth.json
+credentials.json
+token.json
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+
+# User data (HyAtlas runtime DB; lives at ~/.hy_memory by default)
+*.db
+*.db-wal
+*.db-shm
+data/
+runtime/
+
+# Logs
+*.log
+logs/
+
+# Backup / scratch
+*.bak
+*.bak-*
+*.tmp
+*.swp
+.cache/
+.pytest_cache/
+
+# Local override files
+.override/
+overrides/
+
+# ----------------------------------------------------------------------
+# Build outputs
+# ----------------------------------------------------------------------
+node_modules/
+.next/
+.turbo/
+.parcel-cache/

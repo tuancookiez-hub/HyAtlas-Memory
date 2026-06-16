@@ -1,0 +1,21 @@
+{
+  "llm": {
+    "api_key": "YOUR_LLM_API_KEY_HERE",
+    "model": "gpt-4o-mini",
+    "base_url": "https://api.openai.com/v1",
+    "extra_body": {"thinking": {"type": "disabled"}}
+  },
+  "embedder": {
+    "model": "BAAI/bge-small-en-v1.5",
+    "dims": 384,
+    "provider": "local"
+  },
+  "mode": "ultra",
+  "vector_store": {
+    "provider": "qdrant",
+    "host": "127.0.0.1",
+    "port": 6333
+  },
+  "auto_start": true,
+  "port": 19527
+}

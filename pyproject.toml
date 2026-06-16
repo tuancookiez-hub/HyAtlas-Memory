@@ -1,0 +1,127 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hyatlas-memory"
+version = "0.1.0"
+description = "HyAtlas-Memory — 7-layer cognitive memory with System1/System2 dual processing, evolution chains, and Kuzu graph. Drop-in memory provider for Hermes Agent."
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Tuan Abdullah", email = "tuancookiez@gmail.com"},
+]
+keywords = [
+    "hermes",
+    "memory",
+    "agent",
+    "ai",
+    "kuzu",
+    "vector-store",
+    "cognitive-architecture",
+    "llm",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.10"
+
+# Runtime deps. The package installs hermes-agent as a peer dep so the
+# plugin can register itself with the running Hermes instance.
+# kuzu = graph store (L1 raw, L2 fact)
+# chromadb / qdrant-client / faiss-cpu = vector store (L4 identity search)
+# openai = default LLM/embedder client (overridable via hy_memory.json)
+dependencies = [
+    "kuzu>=0.4.0",
+    "openai>=1.30.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+# Vector store backends (pick at least one; default is qdrant)
+qdrant = ["qdrant-client>=1.7.0"]
+chroma = ["chromadb>=0.4.0"]
+faiss = ["faiss-cpu>=1.7.0"]
+# Embedding server (local SentenceTransformers-based; no API key needed)
+local-embed = ["sentence-transformers>=2.0.0", "uvicorn>=0.27.0", "fastapi>=0.100.0"]
+# Dev tooling
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+test = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]
+
+# Entry point: Hermes discovers memory providers by the
+# `hermes.memory_provider` group. The plugin name is kept as `hy_memory`
+# for back-compat with existing user configs.
+[project.entry-points."hermes.memory_provider"]
+hy_memory = "hyatlas_memory:HyMemoryProvider"
+
+[project.urls]
+Homepage = "https://github.com/tuancookiez-hub/HyAtlas-Memory"
+Issues = "https://github.com/tuancookiez-hub/HyAtlas-Memory/issues"
+Source = "https://github.com/tuancookiez-hub/HyAtlas-Memory"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["hyatlas_memory*"]
+
+# ----------------------------------------------------------------------
+# Pytest config — discover tests in the new layout, not the old fork layout
+# ----------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow (deselect with -m 'not slow')",
+    "integration: marks integration tests (require running HyAtlas server)",
+    "unit: marks unit tests (no external deps)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+# ----------------------------------------------------------------------
+# Ruff config — match the style guide (single-word names, no try/except
+# where possible, no `else` after return, etc.)
+# ----------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "C4"]
+ignore = [
+    "E501",  # line too long (we use 100 char budget but allow flex)
+    "B008",  # function call in default argument (used for sentinels)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]  # imports at non-top-level are common in tests
+
+[tool.mypy]
+python_version = "3.10"
+strict_optional = true
+warn_unused_ignores = true
+disallow_untyped_defs = false
+ignore_missing_imports = true

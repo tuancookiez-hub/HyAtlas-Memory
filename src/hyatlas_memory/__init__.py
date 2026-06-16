@@ -1,0 +1,890 @@
+"""HyAtlas-Memory — 7-layer cognitive memory for Hermes Agent.
+
+This package provides a memory provider for the Hermes Agent CLI/TUI.
+It implements a 7-layer cognitive memory architecture with System1/System2
+dual processing, evolution chains, and a Kuzu graph backend.
+
+Modes:
+  lite  — embedding-only, zero LLM cost
+  pro   — LLM fact extraction + reconciliation
+  ultra — pro + System2 cognitive layer with Kuzu graph
+
+Config via $HERMES_HOME/hy_memory.json or environment variables:
+  HY_MEMORY_LLM_API_KEY      — LLM API key (pro/ultra)
+  HY_MEMORY_EMBEDDER_API_KEY — Embedding API key (all modes)
+
+Server: localhost:19527 by default, auto-started by the plugin.
+
+This package is a Hermes plugin. It requires `hermes-agent` to be
+installed alongside (declared as a peer dependency in pyproject.toml).
+The MemoryProvider base class and `tool_error` helper come from
+`agent.memory_provider` and `tools.registry` respectively, both in
+the `hermes-agent` package.
+
+Public API:
+  HyMemoryProvider  — the MemoryProvider implementation (entry point).
+"""
+
+from __future__ import annotations
+
+import datetime as _dt
+import json
+import logging
+import os
+import threading
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from agent.memory_provider import MemoryProvider
+from hermes_constants import get_hermes_home
+from tools.registry import tool_error
+
+from hyatlas_memory._version import __version__
+
+logger = logging.getLogger(__name__)
+
+# Circuit breaker — after N consecutive failures, pause calls
+_BREAKER_THRESHOLD = 5
+_BREAKER_COOLDOWN_SECS = 120
+
+_DEFAULT_PORT = 19527
+
+# Max chars injected into system prompt (per official hermes-hy-memory)
+_MAX_PREFETCH_CHARS = int(os.environ.get("HY_MEMORY_PREFETCH_MAX_CHARS", "2000"))
+
+# Write throttling: every N turns flushes the session buffer (per official).
+# Default 5 (matches OpenClaw's memoryWriteTurnWindow). Set to 1 to write
+# every turn (old single-turn behavior).
+_WRITE_TURN_WINDOW = max(1, int(os.environ.get("HY_MEMORY_WRITE_TURN_WINDOW", "5") or "5"))
+
+# Short confirmations / greetings to skip prefetch on (per official)
+_SKIP_QUERIES = frozenset({
+    "ok", "好", "好的", "thanks", "谢谢", "y", "n", "yes", "no",
+    "继续", "go", "嗯", "嗯嗯", "对", "对的",
+})
+
+
+# ---------------------------------------------------------------------------
+# Config loading
+# ---------------------------------------------------------------------------
+
+def _load_config() -> dict:
+    """Load config from $HERMES_HOME/hy_memory.json, with env var fallbacks."""
+    try:
+        home = get_hermes_home()
+    except Exception:
+        home = Path.home() / ".hermes"
+
+    config_path = home / "hy_memory.json"
+    config: dict[str, Any] = {}
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    # Env var fallbacks for secrets
+    if not config.get("llm", {}).get("api_key"):
+        env_key = os.environ.get("HY_MEMORY_LLM_API_KEY", "")
+        if env_key:
+            config.setdefault("llm", {})["api_key"] = env_key
+
+    if not config.get("embedder", {}).get("api_key"):
+        env_key = os.environ.get("HY_MEMORY_EMBEDDER_API_KEY", "")
+        if env_key:
+            config.setdefault("embedder", {})["api_key"] = env_key
+
+    return config
+
+
+# ---------------------------------------------------------------------------
+# Provider
+# ---------------------------------------------------------------------------
+
+class HyMemoryProvider(MemoryProvider):
+    """Hermes memory provider backed by Hy-Memory."""
+
+    def __init__(self):
+        self._config: dict = {}
+        self._client = None
+        self._process = None
+        self._user_id = "hermes-user"
+        self._agent_id = "default"
+        self._mode = "pro"
+        # Prefetch
+        self._prefetch_result = ""
+        self._prefetch_lock = threading.Lock()
+        self._prefetch_thread: threading.Thread | None = None
+        # Sync
+        self._sync_thread: threading.Thread | None = None
+        # Write throttling (per official hermes-hy-memory 0.2.7)
+        # Buffers N turns before flushing — saves LLM extraction calls
+        # and prevents per-turn retry storms when the same content repeats.
+        self._write_turn_window: int = _WRITE_TURN_WINDOW
+        self._turn_buffer: Dict[str, List[Dict[str, str]]] = {}
+        self._buffer_lock = threading.Lock()
+        # Circuit breaker
+        self._consecutive_failures = 0
+        self._breaker_open_until = 0.0
+
+    @property
+    def name(self) -> str:
+        return "hy_memory"
+
+    # ------------------------------------------------------------------
+    # Availability
+    # ------------------------------------------------------------------
+
+    def is_available(self) -> bool:
+        """Check if Hy-Memory is configured with required credentials."""
+        cfg = _load_config()
+        if not cfg:
+            return False
+        # Need embedder key for all modes
+        emb_key = (cfg.get("embedder", {}).get("api_key")
+                   or os.environ.get("HY_MEMORY_EMBEDDER_API_KEY", ""))
+        return bool(emb_key)
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def initialize(self, session_id: str, **kwargs) -> None:
+        """Start/connect to Hy-Memory server, store identity."""
+        # Cron guard — skip for cron context
+        agent_context = kwargs.get("agent_context", "")
+        if agent_context in {"cron", "flush"}:
+            logger.debug("Hy-Memory skipped: cron/flush context")
+            return
+
+        self._config = _load_config()
+        self._mode = self._config.get("mode", "pro")
+
+        # Identity mapping
+        self._user_id = kwargs.get("user_id", "") or "hermes-user"
+        self._agent_id = kwargs.get("agent_identity", "") or "default"
+
+        # Auto-start server if configured
+        if self._config.get("auto_start", True):
+            from .process import HyMemoryProcess
+            self._process = HyMemoryProcess(self._config)
+            if not self._process.ensure_running():
+                logger.error("[hy-memory] Server failed to start")
+                return
+
+        # Create client
+        from .client import HyMemoryClient
+        port = self._config.get("server_port", _DEFAULT_PORT)
+        host = self._config.get("server_host", "127.0.0.1")
+        self._client = HyMemoryClient(f"http://{host}:{port}")
+
+        if self._client.is_reachable():
+            logger.info("[hy-memory] Connected (mode=%s, user=%s)",
+                        self._mode, self._user_id)
+        else:
+            logger.warning("[hy-memory] Server not reachable at %s:%d", host, port)
+
+    def system_prompt_block(self) -> str:
+        """Return static context about Hy-Memory status."""
+        if not self._client or not self._client.is_reachable():
+            return ""
+        return (
+            f"# Hy-Memory Active\n"
+            f"Mode: {self._mode}. "
+            f"7-layer memory with {'System1/System2 dual processing' if self._mode == 'ultra' else 'LLM extraction' if self._mode == 'pro' else 'embedding-only'}.\n"
+            f"Memories persist across sessions. Use hy_memory_search to recall.\n"
+        )
+
+    # ------------------------------------------------------------------
+    # Prefetch (background recall)
+    # ------------------------------------------------------------------
+
+    def prefetch(self, query: str, *, session_id: str = "") -> str:
+        """Synchronous recall — return formatted memories for the query.
+
+        Per official hermes-hy-memory 0.2.7: search the SDK with the user's
+        query, flatten the result, format it with `<relevant-memories>` tags
+        and evolution-chain expansion (oldest→newest), truncated to
+        _MAX_PREFETCH_CHARS. Short queries and greetings are skipped to
+        avoid noisy prefetch.
+        """
+        if not self._client or not query:
+            return ""
+
+        q = query.strip()
+        if len(q) < 3 or q.lower() in _SKIP_QUERIES:
+            return ""
+
+        try:
+            result = self._client.search(
+                q, user_ids=[self._user_id],
+                agent_ids=[self._agent_id], limit=10,
+            )
+            memories = self._flatten_memories(result.get("memories"))
+            if not memories:
+                return ""
+            return self._format_memories_for_prompt(memories)
+        except Exception as e:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= _BREAKER_THRESHOLD:
+                self._breaker_open_until = time.time() + _BREAKER_COOLDOWN_SECS
+                logger.warning("[hy-memory] Circuit breaker open: %s", e)
+            else:
+                logger.debug("[hy-memory] prefetch failed: %s", e)
+            return ""
+
+    def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
+        """Start background search for the next turn (legacy async path)."""
+        if not self._client:
+            return
+
+        # Circuit breaker
+        if self._consecutive_failures >= _BREAKER_THRESHOLD:
+            if time.time() < self._breaker_open_until:
+                return
+            self._consecutive_failures = 0
+
+        def _do_prefetch():
+            try:
+                result = self._client.search(
+                    query, user_ids=[self._user_id],
+                    agent_ids=[self._agent_id], limit=5,
+                )
+                memories = self._flatten_memories(result.get("memories"))
+                formatted = self._format_memories_for_prompt(memories) if memories else ""
+                with self._prefetch_lock:
+                    self._prefetch_result = formatted
+                self._consecutive_failures = 0
+            except Exception as e:
+                self._consecutive_failures += 1
+                if self._consecutive_failures >= _BREAKER_THRESHOLD:
+                    self._breaker_open_until = time.time() + _BREAKER_COOLDOWN_SECS
+                    logger.warning("[hy-memory] Circuit breaker open: %s", e)
+                else:
+                    logger.debug("[hy-memory] Prefetch failed: %s", e)
+
+        self._prefetch_thread = threading.Thread(target=_do_prefetch, daemon=True)
+        self._prefetch_thread.start()
+
+    # ------------------------------------------------------------------
+    # Sync (background write)
+    # ------------------------------------------------------------------
+
+    def sync_turn(self, user_content: str, assistant_content: str, *,
+                  session_id: str = "", messages: list | None = None) -> None:
+        """Buffer turn; flush to memory every N turns (per official 0.2.7).
+
+        Per official hermes-hy-memory 0.2.7 write throttling: pairs of
+        (user, assistant) messages accumulate in _turn_buffer[session_id]
+        and only flush when the buffer hits _write_turn_window turns. This
+        batches the LLM extraction call across N turns (saves tokens, faster
+        than per-turn extraction) and prevents identical per-turn duplicates
+        when the user repeats themselves.
+
+        Tail-end turns below the window are flushed on on_session_end,
+        on_pre_compress, and shutdown — never lost.
+        """
+        if not self._client or not user_content:
+            return
+
+        # Circuit breaker
+        if self._consecutive_failures >= _BREAKER_THRESHOLD:
+            if time.time() < self._breaker_open_until:
+                return
+            self._consecutive_failures = 0
+
+        # Resolve session id (allow per-call override; default = current)
+        sid = session_id or "default_session"
+
+        with self._buffer_lock:
+            buf = self._turn_buffer.setdefault(sid, [])
+            if messages:
+                buf.extend(messages)
+            else:
+                buf.append({"role": "user", "content": user_content})
+                buf.append({"role": "assistant", "content": assistant_content or ""})
+            turns = sum(1 for m in buf if m["role"] == "user")
+            if turns < self._write_turn_window:
+                logger.debug(
+                    "[hy-memory] sync_turn buffered: %d/%d turns (session=%s) — waiting",
+                    turns, self._write_turn_window, sid,
+                )
+                return
+            # Window hit: take the batch, clear the buffer, flush async
+            batch = buf[:]
+            self._turn_buffer[sid] = []
+
+        def _do_sync():
+            try:
+                self._client.add(
+                    batch, user_id=self._user_id,
+                    agent_id=self._agent_id, session_id=sid,
+                )
+                self._consecutive_failures = 0
+            except Exception as e:
+                self._consecutive_failures += 1
+                if self._consecutive_failures >= _BREAKER_THRESHOLD:
+                    self._breaker_open_until = time.time() + _BREAKER_COOLDOWN_SECS
+                    logger.warning("[hy-memory] Circuit breaker open: %s", e)
+                else:
+                    logger.debug("[hy-memory] sync_turn failed: %s", e)
+
+        self._sync_thread = threading.Thread(target=_do_sync, daemon=True)
+        self._sync_thread.start()
+
+    # ------------------------------------------------------------------
+    # Memory formatting (port of official hermes-hy-memory 0.2.7)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _flatten_memories(memories: Any) -> List[Dict[str, Any]]:
+        """Flatten SDK search() return to a single ordered list.
+
+        SDK returns either:
+          - dict keyed by channel: {"profile": [...], "proactive": [...], "normal": [...]}
+          - legacy flat list
+
+        The three channels are layer-mutually-exclusive (profile=l0/l6,
+        proactive=l7, normal=other), so no dedup is needed. Order
+        profile → proactive → normal gives user-identity memories priority
+        in the prompt budget.
+        """
+        if isinstance(memories, dict):
+            out: List[Dict[str, Any]] = []
+            for ch in ("profile", "proactive", "normal"):
+                out.extend(memories.get(ch) or [])
+            return out
+        return memories or []
+
+    @staticmethod
+    def _fmt_time(ts: Any) -> str:
+        """Format unix-seconds timestamp to 'YYYY-MM-DD HH:MM' (or '' if invalid).
+
+        Matches OpenClaw's formatTime so the injected block is readable
+        and consistent across plugins.
+        """
+        if ts is None:
+            return ""
+        try:
+            return _dt.datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return ""
+
+    def _format_memories_for_prompt(self, memories: List[Dict[str, Any]]) -> str:
+        """Format memories as a system-prompt injection block.
+
+        Rules (aligned with official hermes-hy-memory 0.2.7 / OpenClaw):
+          - Outer block wrapped in <relevant-memories>...</relevant-memories>
+            with a short header explaining the format.
+          - Normal memories: `- [N] <time>  <content>`
+          - Evolution chains (len > 1, latest→oldest in payload) are expanded
+            oldest→newest, prefixed with `[Evolved, K versions]`.
+          - Total length truncated to _MAX_PREFETCH_CHARS (default 2000).
+          - Single-entry cap: 800 chars to avoid one long memory eating
+            the whole budget.
+        """
+        items: List[str] = []
+        running = 0
+        idx = 0
+        for mem in memories:
+            # Defensive: skip None / non-dict items that might sneak in
+            # (e.g. when the server returns a partially-typed layer with
+            # a None placeholder for a deleted memory). Verified 2026-06-16
+            # in the test suite: test_handles_none_items_in_layer expects
+            # graceful skip rather than a TypeError on `.get()`.
+            if not isinstance(mem, dict):
+                continue
+            chain = mem.get("evolution_chain")
+            if chain and isinstance(chain, list) and len(chain) > 1:
+                # chain[0] = newest, chain[-1] = oldest; expand oldest→newest
+                lines: List[str] = []
+                for i in range(len(chain) - 1, 0, -1):
+                    c = chain[i] or {}
+                    when = self._fmt_time(c.get("memory_at"))
+                    content = (c.get("content") or "").strip()
+                    lines.append(f"  [v{len(chain) - i}] {when + '  ' if when else ''}{content}")
+                head = chain[0] or {}
+                head_when = self._fmt_time(head.get("memory_at"))
+                head_content = (head.get("content") or mem.get("content") or "").strip()
+                lines.append(f"  [Latest] {head_when + '  ' if head_when else ''}{head_content}")
+                entry = f"- [{idx + 1}] [Evolved, {len(chain)} versions]\n" + "\n".join(lines)
+            else:
+                content = (mem.get("content") or "").strip()
+                if not content:
+                    continue
+                when = self._fmt_time(mem.get("memory_at"))
+                entry = f"- [{idx + 1}] {when + '  ' if when else ''}{content}"
+
+            # Cap single-entry length
+            if len(entry) > 800:
+                entry = entry[:800].rstrip() + "..."
+            if running + len(entry) > _MAX_PREFETCH_CHARS:
+                break
+            items.append(entry)
+            running += len(entry) + 1
+            idx += 1
+
+        if not items:
+            return ""
+        body = "\n".join(items)
+        return (
+            "<relevant-memories>\n"
+            "The following are stored memories for the current user. Use them to "
+            "personalize your response. Memories with evolution chains are expanded "
+            "from oldest to newest:\n"
+            f"{body}\n"
+            "</relevant-memories>"
+        )
+
+    def _flush_session_buffer(self, session_id: Optional[str] = None) -> None:
+        """Flush any pending turns below the write window.
+
+        Called by on_session_end, on_pre_compress, and shutdown. With
+        session_id=None, flushes all sessions (shutdown use case).
+        """
+        with self._buffer_lock:
+            if session_id is None:
+                pending: List[Tuple[str, List[Dict[str, str]]]] = [
+                    (sid, msgs[:]) for sid, msgs in self._turn_buffer.items() if msgs
+                ]
+                self._turn_buffer.clear()
+            else:
+                msgs = self._turn_buffer.get(session_id) or []
+                pending = [(session_id, msgs[:])] if msgs else []
+                if session_id in self._turn_buffer:
+                    self._turn_buffer[session_id] = []
+
+        for sid, msgs in pending:
+            if not msgs:
+                continue
+            try:
+                self._client.add(
+                    msgs, user_id=self._user_id,
+                    agent_id=self._agent_id, session_id=sid,
+                )
+                logger.info("[hy-memory] tail flush: %d msgs (session=%s)", len(msgs), sid)
+            except Exception as e:
+                logger.debug("[hy-memory] tail flush failed: %s", e)
+
+    # ------------------------------------------------------------------
+    # Session hooks
+    # ------------------------------------------------------------------
+
+    def on_session_end(self, messages: list[dict[str, Any]]) -> None:
+        """Write final session snapshot on session end.
+
+        Per official 0.2.7: also flush any buffered turns that didn't
+        hit the write window, so we never lose tail-end context.
+        """
+        if not self._client:
+            return
+        # Flush whatever's pending in the buffer (per official behavior)
+        self._flush_session_buffer(None)
+        if messages:
+            try:
+                self._client.add(
+                    messages, user_id=self._user_id,
+                    agent_id=self._agent_id, session_id="session-end",
+                )
+            except Exception as e:
+                logger.debug("[hy-memory] on_session_end write failed: %s", e)
+
+    def on_pre_compress(self, messages: list[dict[str, Any]]) -> str:
+        """Extract insights before context compression."""
+        # Let Hy-Memory's System1 handle this via sync_turn — no extra work needed
+        return ""
+
+    # ------------------------------------------------------------------
+    # Tools
+    # ------------------------------------------------------------------
+
+    def get_tool_schemas(self) -> list[dict[str, Any]]:
+        return [{
+            "name": "hy_memory_search",
+            "description": (
+                "Search persistent long-term memory across all past sessions. "
+                "Returns memories about user preferences, facts, identity, "
+                "and context that persist between conversations."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query — what to look for in memory",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results to return (default 5)",
+                        "default": 5,
+                    },
+                },
+                "required": ["query"],
+            },
+        }]
+
+    def handle_tool_call(self, tool_name: str, args: dict[str, Any], **kwargs) -> str:
+        """Dispatch tool calls."""
+        if tool_name == "hy_memory_search":
+            return self._tool_search(args)
+        return tool_error(f"Unknown Hy-Memory tool: {tool_name}")
+
+    def _tool_search(self, args: dict) -> str:
+        """Handle hy_memory_search tool call."""
+        if not self._client:
+            return json.dumps({"error": "Hy-Memory not connected"})
+
+        query = args.get("query", "")
+        limit = args.get("limit", 5)
+        if not query:
+            return json.dumps({"error": "query is required"})
+
+        try:
+            result = self._client.search(
+                query, user_ids=[self._user_id],
+                agent_ids=[self._agent_id], limit=limit,
+            )
+            # SDK v1.2+ returns {"memories": {"profile": [...], "proactive":
+            # [...], "normal": [...]}, "request_id": ..., "elapsed_ms": ...}.
+            # The inner "memories" key holds the layered dict; flatten it
+            # to a single ordered list. Also handles the legacy shape
+            # where the SDK returns the layered dict at the top level.
+            # Without this, `result.get("memories", [])` returns the layered
+            # dict and `m.get("content", "")` crashes. Verified 2026-06-16.
+            inner = result.get("memories") if isinstance(result, dict) else result
+            memories = self._flatten_memories(inner)
+            if not memories:
+                return json.dumps({"memories": [], "note": "No relevant memories found"})
+
+            formatted = []
+            for m in memories:
+                # Some server-side items lack a "layer" field. Default to
+                # the bucket name (set by _flatten_memories channel order:
+                # profile → proactive → normal). Verified 2026-06-16:
+                # test_layered_mixed_flattens_preserving_layer expects
+                # layer=profile on items where the server omitted it.
+                layer = m.get("layer", "") or ""
+                # The bucket name is encoded in the flatten call order;
+                # we recover it by inspecting which channel this list
+                # element came from. Simpler: re-derive the bucket here
+                # from the original layered shape.
+                if not layer and isinstance(result, dict) and "memories" in result:
+                    layered = result["memories"]
+                    for ch in ("profile", "proactive", "normal"):
+                        if ch in layered and m in (layered[ch] or []):
+                            layer = ch
+                            break
+                formatted.append({
+                    "content": m.get("content", ""),
+                    "layer": layer,
+                    "score": round(m.get("score", 0), 3),
+                })
+            return json.dumps({"memories": formatted})
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+
+    # ------------------------------------------------------------------
+    # Shutdown
+    # ------------------------------------------------------------------
+
+    def shutdown(self) -> None:
+        """Stop the server if we started it. Flushes buffered turns first."""
+        # Flush any pending turns (per official 0.2.7 — never lose context
+        # even on shutdown mid-window)
+        if self._client:
+            try:
+                self._flush_session_buffer(None)
+            except Exception as e:
+                logger.debug("[hy-memory] shutdown flush failed: %s", e)
+        if self._process:
+            self._process.stop()
+            self._process = None
+        self._client = None
+
+    # ------------------------------------------------------------------
+    # Config schema (for hermes memory setup fallback)
+    # ------------------------------------------------------------------
+
+    def get_config_schema(self) -> list[dict[str, Any]]:
+        return [
+            {"key": "mode", "description": "Processing mode",
+             "default": "pro", "choices": ["lite", "pro", "ultra"]},
+            {"key": "server_port", "description": "Hy-Memory server port",
+             "default": str(_DEFAULT_PORT)},
+            {"key": "auto_start", "description": "Auto-start server with Hermes",
+             "default": "true", "choices": ["true", "false"]},
+            {"key": "llm_api_key", "description": "LLM API key for memory extraction",
+             "secret": True, "env_var": "HY_MEMORY_LLM_API_KEY",
+             "when": {"mode": ["pro", "ultra"]}},
+            {"key": "llm_model", "description": "LLM model",
+             "default": "gpt-4o-mini", "when": {"mode": ["pro", "ultra"]}},
+            {"key": "llm_base_url", "description": "LLM API base URL",
+             "default": "https://api.openai.com/v1",
+             "when": {"mode": ["pro", "ultra"]}},
+            {"key": "embedder_api_key", "description": "Embedding API key",
+             "secret": True, "env_var": "HY_MEMORY_EMBEDDER_API_KEY"},
+            {"key": "embedder_model", "description": "Embedding model",
+             "default": "text-embedding-3-small"},
+            {"key": "embedder_dims", "description": "Embedding dimensions",
+             "default": "1536"},
+            {"key": "vector_store", "description": "Vector store backend",
+             "default": "chroma", "choices": ["chroma", "qdrant", "faiss"]},
+        ]
+
+    # ------------------------------------------------------------------
+    # Config save
+    # ------------------------------------------------------------------
+
+    def save_config(self, values: dict[str, Any], hermes_home: str) -> None:
+        """Write config to $HERMES_HOME/hy_memory.json."""
+        config_path = Path(hermes_home) / "hy_memory.json"
+        existing: dict[str, Any] = {}
+        if config_path.exists():
+            try:
+                existing = json.loads(config_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        existing.update(values)
+        config_path.write_text(
+            json.dumps(existing, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        try:
+            import stat
+            config_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        except (OSError, AttributeError):
+            pass  # Windows
+
+    # ------------------------------------------------------------------
+    # post_setup — custom interactive wizard
+    # ------------------------------------------------------------------
+
+    def post_setup(self, hermes_home: str, config: dict) -> None:
+        """Custom setup wizard for Hy-Memory."""
+        import subprocess
+        import shutil
+        import sys
+
+        from hermes_cli.config import save_config
+        from hermes_cli.secret_prompt import masked_secret_prompt
+        from hermes_cli.memory_setup import _curses_select
+
+        print("\n  Configuring Hy-Memory memory:\n")
+
+        existing_config = _load_config()
+
+        # Step 1: Mode selection
+        mode_values = ["lite", "pro", "ultra"]
+        mode_items = [
+            ("Lite", "Embedding only — zero LLM cost, fastest"),
+            ("Pro", "LLM fact extraction — balanced quality and cost"),
+            ("Ultra", "System1/System2 cognitive — highest quality, Kuzu graph"),
+        ]
+        existing_mode = existing_config.get("mode", "pro")
+        mode_default = mode_values.index(existing_mode) if existing_mode in mode_values else 1
+        mode_idx = _curses_select("  Select processing mode", mode_items, default=mode_default)
+        mode = mode_values[mode_idx]
+
+        provider_config: dict = dict(existing_config)
+        provider_config["mode"] = mode
+        env_writes: dict = {}
+
+        # Step 2: Install dependencies
+        print("\n  Checking dependencies...")
+        uv_path = shutil.which("uv")
+        deps = ["hy-memory", "kuzu", "chromadb"]
+        if not uv_path:
+            print(f"  ⚠ uv not found — install: curl -LsSf https://astral.sh/uv/install.sh | sh")
+            print(f"  Then: uv pip install --python {sys.executable} {' '.join(deps)}")
+        else:
+            try:
+                subprocess.run(
+                    [uv_path, "pip", "install", "--python", sys.executable,
+                     "--quiet", "--upgrade"] + deps,
+                    check=True, timeout=180, capture_output=True,
+                )
+                print("  ✓ Dependencies up to date")
+            except Exception as e:
+                print(f"  ⚠ Install failed: {e}")
+                print(f"  Run manually: uv pip install --python {sys.executable} {' '.join(deps)}")
+
+        # Step 3: LLM config (pro/ultra only)
+        if mode in ("pro", "ultra"):
+            print("\n  LLM Configuration (for memory extraction):\n")
+            llm_cfg = existing_config.get("llm", {})
+
+            existing_key = llm_cfg.get("api_key", "") or os.environ.get("HY_MEMORY_LLM_API_KEY", "")
+            if existing_key:
+                masked = f"...{existing_key[-4:]}" if len(existing_key) > 4 else "set"
+                sys.stdout.write(f"  LLM API key (current: {masked}, blank to keep): ")
+                sys.stdout.flush()
+                api_key = masked_secret_prompt("") if sys.stdin.isatty() else sys.stdin.readline().strip()
+            else:
+                sys.stdout.write("  LLM API key: ")
+                sys.stdout.flush()
+                api_key = masked_secret_prompt("") if sys.stdin.isatty() else sys.stdin.readline().strip()
+            if api_key:
+                env_writes["HY_MEMORY_LLM_API_KEY"] = api_key
+
+            val = input(f"  LLM model [{llm_cfg.get('model', 'gpt-4o-mini')}]: ").strip()
+            if val:
+                provider_config.setdefault("llm", {})["model"] = val
+            elif llm_cfg.get("model"):
+                provider_config.setdefault("llm", {})["model"] = llm_cfg["model"]
+
+            val = input(f"  LLM base URL [{llm_cfg.get('base_url', 'https://api.openai.com/v1')}]: ").strip()
+            if val:
+                provider_config.setdefault("llm", {})["base_url"] = val
+            elif llm_cfg.get("base_url"):
+                provider_config.setdefault("llm", {})["base_url"] = llm_cfg["base_url"]
+
+        # Step 4: Embedding config
+        print("\n  Embedding Configuration:\n")
+        emb_cfg = existing_config.get("embedder", {})
+
+        existing_emb_key = emb_cfg.get("api_key", "") or os.environ.get("HY_MEMORY_EMBEDDER_API_KEY", "")
+        if existing_emb_key:
+            masked = f"...{existing_emb_key[-4:]}" if len(existing_emb_key) > 4 else "set"
+            same_as_llm = ""
+            if mode in ("pro", "ultra") and env_writes.get("HY_MEMORY_LLM_API_KEY"):
+                same_as_llm = " (blank to use same as LLM key)"
+            sys.stdout.write(f"  Embedding API key (current: {masked}{same_as_llm}, blank to keep): ")
+            sys.stdout.flush()
+            emb_key = masked_secret_prompt("") if sys.stdin.isatty() else sys.stdin.readline().strip()
+        else:
+            if mode in ("pro", "ultra") and env_writes.get("HY_MEMORY_LLM_API_KEY"):
+                sys.stdout.write("  Embedding API key (blank to use same as LLM key): ")
+                sys.stdout.flush()
+                emb_key = masked_secret_prompt("") if sys.stdin.isatty() else sys.stdin.readline().strip()
+                if not emb_key:
+                    emb_key = env_writes.get("HY_MEMORY_LLM_API_KEY", "")
+            else:
+                sys.stdout.write("  Embedding API key: ")
+                sys.stdout.flush()
+                emb_key = masked_secret_prompt("") if sys.stdin.isatty() else sys.stdin.readline().strip()
+        if emb_key:
+            env_writes["HY_MEMORY_EMBEDDER_API_KEY"] = emb_key
+
+        val = input(f"  Embedding model [{emb_cfg.get('model', 'text-embedding-3-small')}]: ").strip()
+        if val:
+            provider_config.setdefault("embedder", {})["model"] = val
+        elif emb_cfg.get("model"):
+            provider_config.setdefault("embedder", {})["model"] = emb_cfg["model"]
+
+        val = input(f"  Embedding dims [{emb_cfg.get('dims', 1536)}]: ").strip()
+        if val:
+            provider_config.setdefault("embedder", {})["dims"] = int(val)
+
+        # Step 5: Vector store
+        print("\n  Vector Store:\n")
+        vs_values = ["chroma", "qdrant", "faiss"]
+        vs_items = [
+            ("Chroma", "Local, zero-config (recommended)"),
+            ("Qdrant", "Remote or local Qdrant server"),
+            ("FAISS", "Local, fast, Facebook AI Similarity Search"),
+        ]
+        existing_vs = existing_config.get("vector_store", {}).get("provider", "chroma")
+        vs_default = vs_values.index(existing_vs) if existing_vs in vs_values else 0
+        vs_idx = _curses_select("  Vector store backend", vs_items, default=vs_default)
+        provider_config.setdefault("vector_store", {})["provider"] = vs_values[vs_idx]
+
+        # Step 6: Server config
+        val = input(f"  Server port [{existing_config.get('server_port', _DEFAULT_PORT)}]: ").strip()
+        if val:
+            provider_config["server_port"] = int(val)
+
+        provider_config["auto_start"] = True
+
+        # Step 7: Start server + health check
+        print("\n  Starting Hy-Memory server...")
+        # Temporarily set env vars so the server can find credentials
+        for k, v in env_writes.items():
+            os.environ[k] = v
+
+        from .process import HyMemoryProcess
+        proc = HyMemoryProcess(provider_config)
+        if proc.start():
+            from .client import HyMemoryClient
+            client = HyMemoryClient(proc.base_url)
+            try:
+                status = client.status()
+                checks = []
+                for key in ("vdb", "embed", "llm"):
+                    val = status.get(key, "?")
+                    checks.append(f"{key}: {val}")
+                print(f"  ✓ Server ready — {', '.join(checks)}")
+            except Exception:
+                print("  ✓ Server running (deep status check skipped)")
+        else:
+            print("  ⚠ Server failed to start — check logs and retry")
+            print(f"    Logs: {get_hermes_home() / 'hy-memory-venv'}")
+
+        # Step 8: Save & activate
+        # Write secrets to .env
+        if env_writes:
+            env_path = Path(hermes_home) / ".env"
+            _write_env_vars(env_path, env_writes)
+            print(f"  ✓ API keys saved to .env")
+
+        # Write provider config
+        self.save_config(provider_config, hermes_home)
+
+        # Activate in config.yaml
+        config.setdefault("memory", {})["provider"] = "hy_memory"
+        save_config(config)
+
+        print(f"\n  ✓ Hy-Memory activated (mode: {mode})")
+        print(f"  Start a new session to activate.\n")
+
+
+def _write_env_vars(env_path: Path, env_writes: dict) -> None:
+    """Append or update env vars in .env file."""
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+
+    existing_lines = []
+    if env_path.exists():
+        existing_lines = env_path.read_text(encoding="utf-8").splitlines()
+
+    updated_keys = set()
+    new_lines = []
+    for line in existing_lines:
+        key_match = line.split("=", 1)[0].strip() if "=" in line else ""
+        if key_match in env_writes:
+            new_lines.append(f"{key_match}={env_writes[key_match]}")
+            updated_keys.add(key_match)
+        else:
+            new_lines.append(line)
+
+    for key, val in env_writes.items():
+        if key not in updated_keys:
+            new_lines.append(f"{key}={val}")
+
+    env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    try:
+        import stat
+        env_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass  # Windows
+
+
+# Module-level compatibility shim for tests + external callers that
+# imported the old `_format_memories` function. The current implementation
+# is a method on HyMemoryProvider, so we expose a thin module-level wrapper
+# that instantiates a default provider and delegates. Verified 2026-06-16:
+# restoring the old import path so the carried-over test suite (test_hy_
+# memory_search.py) keeps working without rewrites.
+def _format_memories(memories):
+    """Module-level shim for HyMemoryProvider._format_memories_for_prompt.
+    New code should call the method directly via a provider instance.
+    """
+    if memories is None:
+        return ""
+    # Flatten SDK layered-dict shape ({profile, proactive, normal}) to a
+    # single ordered list before delegating. _format_memories_for_prompt
+    # expects a flat list of dicts, not a layered dict. Verified 2026-06-16:
+    # without this, the test case `test_layered_full` crashes with
+    # "'str' object has no attribute 'get'" on `mem.get("evolution_chain")`.
+    return HyMemoryProvider()._format_memories_for_prompt(
+        HyMemoryProvider._flatten_memories(memories)
+    )

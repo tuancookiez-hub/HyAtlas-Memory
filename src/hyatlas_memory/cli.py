@@ -1,0 +1,426 @@
+# -*- coding: utf-8 -*-
+"""
+HY Memory CLI for Hermes — `hermes hy-memory <subcommand>`
+
+Adapted from the canonical upstream plugin (plugins/native/hermes/cli.py)
+to use our local HTTP-sidecar client instead of the in-process SDK.
+
+Subcommands:
+  doctor          connectivity + config health check (read-only, no writes)
+  add <text>      manually add a memory
+  search <query>  manually search
+  list            list recent N memories
+  init            interactive setup wizard (writes ~/.hermes/.env)
+  install         activate the plugin in Hermes (idempotent)
+  reset           erase all memories for a user (DESTRUCTIVE)
+
+Hermes calls register_cli(subparser) at plugin-load time to attach these
+subcommands to the `hermes hy-memory` subparser. Only active when the
+plugin is the active memory provider (HY_MEMORY_USER_ID set, or
+hermes config has memory.provider: hy_memory).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from typing import Optional
+
+from hermes_constants import get_hermes_home
+
+
+def _add_subcommands(sub: argparse._SubParsersAction) -> None:
+    """Attach init / install / doctor / add / search / list / reset."""
+    p_init = sub.add_parser(
+        "init", help="Interactive setup wizard (writes ~/.hermes/.env)"
+    )
+    p_init.set_defaults(func=_cmd_init)
+
+    p_install = sub.add_parser(
+        "install",
+        help="Verify plugin is activated in Hermes (symlink + SDK already in venv)",
+    )
+    p_install.add_argument(
+        "--hermes-python",
+        help="Path to the Python that Hermes runs (auto-detected if omitted)",
+    )
+    p_install.add_argument(
+        "--copy", action="store_true",
+        help="[no-op for local fork] (kept for API compat with canonical)",
+    )
+    p_install.add_argument(
+        "--no-sdk", action="store_true",
+        help="[no-op for local fork] (kept for API compat with canonical)",
+    )
+    p_install.add_argument(
+        "-U", "--upgrade", action="store_true",
+        help="Re-verify (no-op for local fork)",
+    )
+    p_install.set_defaults(func=_cmd_install)
+
+    p_doctor = sub.add_parser("doctor", help="Health check (read-only diagnostic)")
+    p_doctor.set_defaults(func=_cmd_doctor)
+
+    p_add = sub.add_parser("add", help="Manually add a memory")
+    p_add.add_argument("text", help="Memory content")
+    p_add.add_argument("--user-id", help="Override HY_MEMORY_USER_ID")
+    p_add.add_argument("--agent-id", help="Override HY_MEMORY_AGENT_ID")
+    p_add.set_defaults(func=_cmd_add)
+
+    p_search = sub.add_parser("search", help="Search memories")
+    p_search.add_argument("query", help="Search query")
+    p_search.add_argument("--limit", type=int, default=10)
+    p_search.add_argument("--user-id", help="Override HY_MEMORY_USER_ID")
+    p_search.add_argument("--agent-id", help="Override HY_MEMORY_AGENT_ID")
+    p_search.set_defaults(func=_cmd_search)
+
+    p_list = sub.add_parser("list", help="List recent memories")
+    p_list.add_argument("--limit", type=int, default=20)
+    p_list.add_argument("--user-id", help="Override HY_MEMORY_USER_ID")
+    p_list.add_argument("--agent-id", help="Override HY_MEMORY_AGENT_ID")
+    p_list.set_defaults(func=_cmd_list)
+
+    p_delete = sub.add_parser(
+        "delete",
+        help="Delete a specific memory by ID",
+    )
+    p_delete.add_argument("memory_id", help="Memory ID to delete (from `list` or `search`)")
+    p_delete.add_argument("--user-id", help="Override HY_MEMORY_USER_ID")
+    p_delete.add_argument("--agent-id", help="Override HY_MEMORY_AGENT_ID")
+    p_delete.add_argument(
+        "--yes", "-y", action="store_true",
+        help="Skip the confirmation prompt",
+    )
+    p_delete.set_defaults(func=_cmd_delete)
+
+    p_reset = sub.add_parser(
+        "reset",
+        help="Erase all memories for a user (DESTRUCTIVE)",
+    )
+    p_reset.add_argument("--user-id", help="Override HY_MEMORY_USER_ID")
+    p_reset.add_argument("--agent-id", help="Override HY_MEMORY_AGENT_ID")
+    p_reset.add_argument(
+        "--all-agents", action="store_true",
+        help="Delete across ALL agents for this user (default: only the current agent)",
+    )
+    p_reset.add_argument(
+        "--yes", "-y", action="store_true",
+        help="Skip the confirmation prompt",
+    )
+    p_reset.set_defaults(func=_cmd_reset)
+
+
+def register_cli(plugin_parser: argparse.ArgumentParser) -> None:
+    """Hermes plugin CLI registration entry point.
+
+    Called by hermes main CLI at plugin load:
+        hermes hy_memory {init|install|doctor|add|search|list|reset}
+
+    Contract (verified against google_meet, honcho, photon, teams_pipeline plugins):
+        ``plugin_parser`` is the already-created ArgumentParser for this
+        command. We attach a subparsers action to it and register our
+        7 subcommands on that. We do NOT add a new top-level parser
+        (the discovery code at hermes_cli/main.py:11004 already did that
+        with the plugin's name, help, and description).
+    """
+    sub = plugin_parser.add_subparsers(dest="hy_memory_cmd", required=True)
+    _add_subcommands(sub)
+
+
+# ---------------------------------------------------------------------------
+# Client accessor
+# ---------------------------------------------------------------------------
+
+def _get_client(user_id: Optional[str] = None, agent_id: Optional[str] = None):
+    """Build a HyMemoryClient from current env vars + optional overrides."""
+    # Lazy import — keeps the CLI importable even if hy_memory SDK is broken
+    from .client import HyMemoryClient
+
+    base_url = os.environ.get(
+        "HY_MEMORY_BASE_URL",
+        f"http://{os.environ.get('HY_MEMORY_HOST', '127.0.0.1')}:"
+        f"{os.environ.get('HY_MEMORY_PORT', '19527')}",
+    )
+    return HyMemoryClient(base_url=base_url)
+
+
+def _get_user_id(args, env_var: str = "HY_MEMORY_USER_ID", default: str = "hermes-user") -> str:
+    return (getattr(args, "user_id", None) or os.environ.get(env_var, "") or default).strip() or default
+
+
+def _get_agent_id(args, env_var: str = "HY_MEMORY_AGENT_ID", default: str = "default") -> str:
+    return (getattr(args, "agent_id", None) or os.environ.get(env_var, "") or default).strip() or default
+
+
+# ---------------------------------------------------------------------------
+# Subcommand handlers
+# ---------------------------------------------------------------------------
+
+def _cmd_doctor(args) -> int:
+    """Run health checks: server reachable, VDB+embed+LLM ok, config sane."""
+    print("[hy-memory] doctor — running health checks\n")
+
+    # 1. Server reachable
+    try:
+        client = _get_client()
+    except Exception as e:
+        print(f"  ✗ Client init failed: {e}")
+        return 1
+
+    if not client.is_reachable():
+        print("  ✗ Server not reachable on", client.base_url)
+        print("    Hint: run start_hy_memory_server.py or check HY_MEMORY_BASE_URL")
+        return 1
+    print(f"  ✓ Server reachable at {client.base_url}")
+
+    # 2. Deep health (VDB + embed + LLM)
+    try:
+        status = client.status()
+        s = status.get("status", "unknown")
+        vdb = status.get("vdb", "unknown")
+        emb = status.get("embed", status.get("embedder", "unknown"))  # v1.2.18 uses 'embed'
+        llm = status.get("llm", "unknown")
+        cnt = status.get("vdb_points", status.get("points_count", status.get("vdb_count", "?")))
+        provider = status.get("vdb_provider", "?")
+        dims = status.get("embed_dims", "?")
+        print(
+            f"  ✓ Deep health: {s} "
+            f"(vdb={vdb}[{provider}], embed={emb}[{dims}d], llm={llm}, points={cnt})"
+        )
+    except Exception as e:
+        print(f"  ✗ Deep status failed: {e}")
+        return 1
+
+    # 3. Env config
+    user_id = os.environ.get("HY_MEMORY_USER_ID", "(not set)")
+    agent_id = os.environ.get("HY_MEMORY_AGENT_ID", "(not set)")
+    mode = os.environ.get("HY_MEMORY_MODE", "(not set, defaulting to pro)")
+    print(f"  • Env: HY_MEMORY_USER_ID={user_id}, AGENT_ID={agent_id}, MODE={mode}")
+
+    # 4. Hermes config integration
+    home = get_hermes_home()
+    cfg = home / "config.yaml"
+    if cfg.exists():
+        try:
+            import yaml
+            data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+            mem = data.get("memory", {}) or {}
+            provider = mem.get("provider", "(not set)")
+            enabled = mem.get("memory_enabled", "(not set)")
+            print(f"  • Hermes config.yaml: memory.provider={provider}, memory_enabled={enabled}")
+        except Exception as e:
+            print(f"  ! Could not parse config.yaml: {e}")
+    else:
+        print(f"  ! No config.yaml at {cfg}")
+
+    # 5. Plugin discovery check
+    try:
+        from plugins.memory import load_memory_provider, discover_memory_providers
+        providers = discover_memory_providers()
+        active = next((p for p in providers if p[0] == "hy_memory"), None)
+        if active:
+            print(f"  ✓ Plugin discovered: hy_memory (available={active[2]})")
+        else:
+            print("  ! Plugin 'hy_memory' not in discovered providers list")
+    except Exception as e:
+        print(f"  ! Plugin discovery check failed: {e}")
+
+    print("\n[hy-memory] doctor — done")
+    return 0
+
+
+def _cmd_add(args) -> int:
+    text = args.text
+    if not text or not text.strip():
+        print("Error: text is required", file=sys.stderr)
+        return 1
+    user_id = _get_user_id(args)
+    agent_id = _get_agent_id(args)
+    client = _get_client()
+    if not client.is_reachable():
+        print(f"Error: server not reachable at {client.base_url}", file=sys.stderr)
+        return 1
+    try:
+        result = client.add(
+            text,
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id="cli-add",
+        )
+        if result.get("success"):
+            print(f"✓ Added memory {result.get('memory_id')} in {result.get('elapsed_ms', 0):.0f}ms")
+            return 0
+        print(f"✗ Add failed: {result.get('error', 'unknown')}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"✗ Add error: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_search(args) -> int:
+    query = args.query
+    if not query or not query.strip():
+        print("Error: query is required", file=sys.stderr)
+        return 1
+    user_id = _get_user_id(args)
+    agent_id = _get_agent_id(args)
+    client = _get_client()
+    if not client.is_reachable():
+        print(f"Error: server not reachable at {client.base_url}", file=sys.stderr)
+        return 1
+    try:
+        result = client.search(
+            query,
+            user_id=user_id,
+            agent_ids=[agent_id] if agent_id else None,
+            limit=args.limit,
+        )
+        mems = result.get("memories", [])
+        # v1.2+ server returns layered shape
+        if isinstance(mems, dict):
+            flat = []
+            for layer_name, items in mems.items():
+                if not items:
+                    continue
+                for m in items:
+                    if not m.get("layer"):
+                        m = {**m, "layer": layer_name}
+                    flat.append(m)
+            mems = flat
+        print(f"Found {len(mems)} result(s) for '{query}':\n")
+        for i, m in enumerate(mems[:args.limit], 1):
+            layer = m.get("layer", "?")
+            score = m.get("score", 0)
+            content = (m.get("content", "") or "")[:200]
+            print(f"  [{i}] {layer} (score={score:.2f})")
+            print(f"      {content}")
+            print()
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_list(args) -> int:
+    user_id = _get_user_id(args)
+    agent_id = _get_agent_id(args)
+    client = _get_client()
+    if not client.is_reachable():
+        print(f"Error: server not reachable at {client.base_url}", file=sys.stderr)
+        return 1
+    try:
+        result = client.list_memories(
+            user_id=user_id, agent_id=agent_id, limit=args.limit,
+        )
+        vdb = result.get("vdb", {}) or {}
+        items = vdb.get("memories", [])
+        total = vdb.get("total", "?")
+        print(f"Listing {len(items)} of {total} memories (user={user_id}, agent={agent_id}):\n")
+        for i, m in enumerate(items, 1):
+            layer = m.get("layer", "?")
+            content = (m.get("content", "") or "")[:150]
+            mid = m.get("memory_id", "")[:8]
+            print(f"  [{i}] {layer} ({mid}...) {content}")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_delete(args) -> int:
+    """Delete a specific memory by ID."""
+    memory_id = args.memory_id
+    if not memory_id:
+        print("Error: memory_id is required", file=sys.stderr)
+        return 1
+    user_id = _get_user_id(args)
+    agent_id = _get_agent_id(args)
+    client = _get_client()
+    if not client.is_reachable():
+        print(f"Error: server not reachable at {client.base_url}", file=sys.stderr)
+        return 1
+
+    if not args.yes:
+        confirm = input(
+            f"This will DELETE memory {memory_id!r} for user='{user_id}', agent='{agent_id}'.\n"
+            f"Type 'yes' to continue: "
+        )
+        if confirm.strip().lower() != "yes":
+            print("Aborted.")
+            return 1
+
+    try:
+        result = client.delete(memory_id)
+        if result.get("error") and not result.get("success"):
+            print(f"✗ Delete failed: {result.get('error')}")
+            return 1
+        print(f"✓ Deleted memory {memory_id}")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_reset(args) -> int:
+    user_id = _get_user_id(args)
+    agent_id = _get_agent_id(args)
+    client = _get_client()
+    if not client.is_reachable():
+        print(f"Error: server not reachable at {client.base_url}", file=sys.stderr)
+        return 1
+
+    if not args.yes:
+        scope = "all agents" if args.all_agents else f"agent {agent_id}"
+        confirm = input(
+            f"This will DELETE ALL memories for user='{user_id}', {scope}.\n"
+            f"Type 'yes' to continue: "
+        )
+        if confirm.strip().lower() != "yes":
+            print("Aborted.")
+            return 1
+
+    try:
+        if args.all_agents:
+            result = client.delete_all(user_id=user_id, agent_ids=None)
+        else:
+            result = client.delete_all(user_id=user_id, agent_ids=[agent_id])
+        print(f"✓ Reset result: {result}")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+# init / install delegate to wizard / installer modules (separate files)
+def _cmd_init(args) -> int:
+    from . import init_wizard
+    return init_wizard.run_interactive()
+
+
+def _cmd_install(args) -> int:
+    from . import installer
+    return installer.run_install(
+        hermes_python=getattr(args, "hermes_python", None),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Standalone entry point
+# ---------------------------------------------------------------------------
+
+def _main_standalone(argv: list[str] | None = None) -> int:
+    """Run as `hermes-hy-memory <cmd>` (without the parent `hermes` CLI)."""
+    parser = argparse.ArgumentParser(
+        prog="hermes-hy-memory",
+        description="HY Memory plugin CLI (standalone mode)",
+    )
+    sub = parser.add_subparsers(dest="hy_memory_cmd", required=True)
+    _add_subcommands(sub)
+    args = parser.parse_args(argv)
+    return args.func(args) or 0
+
+
+if __name__ == "__main__":
+    sys.exit(_main_standalone())
