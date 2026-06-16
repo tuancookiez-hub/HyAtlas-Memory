@@ -4,6 +4,10 @@
 
 > A 7-layer cognitive memory for [Hermes Agent](https://github.com/NousResearch/hermes-agent), with System1/System2 dual processing, evolution chains, and a Kuzu graph backend.
 
+<p align="center">
+  <img src="./assets/01-architecture-overview.png" alt="HyAtlas-Memory architecture overview: 4-step flow from Hermes Agent CLI/TUI through MemoryProvider interface into the HyAtlas-Memory engine, then to persistent agent memory; alongside a 7-layer memory stack (episodic, semantic, procedural, preferences, contextual, metacognitive, archival)" width="900" />
+</p>
+
 ```text
    ┌──────────── Hermes Agent CLI / TUI ────────────┐
    │                                                │
@@ -37,6 +41,10 @@ HyAtlas-Memory turns your Hermes Agent into something that **remembers and learn
 | **L5 pipeline** | Async ingest into Kuzu graph for relational queries | background |
 | **L6 schema** | Typed entity/relationship schema | L5 step |
 | **L7 intention** | Proactive intent detection, async tasks | L5 step |
+
+<p align="center">
+  <img src="./assets/02-dual-path-memory.png" alt="HyAtlas-Memory dual-path memory: System 1 online fast path (L1 raw, L2 fact) and System 2 background consolidation (L3 summary, L4 identity, L5 Kuzu graph, L6 schema, L7 intention)" width="900" />
+</p>
 
 Three modes:
 
@@ -144,6 +152,25 @@ tests/                     # pytest suite
 docs/                      # architecture + migration notes
 assets/                    # icons, banner
 ```
+
+<p align="center">
+  <img src="./assets/03-knowledge-graph.png" alt="HyAtlas-Memory knowledge graph: 8 node types (user, facts, preferences, events, projects, constraints, decisions, goals) connected by typed semantic edges, with LINK / QUERY / TRACE / REASON operations" width="900" />
+</p>
+
+## Memory evolution
+
+HyAtlas-Memory does not just append — it refines. Each `add` flows through a small, deterministic evolution pipeline that turns fragments of conversation into a stable identity profile:
+
+1. **Extract** entities, topics, preferences, intents from the new material.
+2. **Merge / dedupe** against existing facts (normalise, unify meaning).
+3. **Resolve conflicts** by weighing recency, confidence, and user feedback.
+4. **Update the stable identity profile** only when a value crosses a confidence threshold.
+
+The result is a signal/noise ratio that improves with every session rather than degrading. By the time the system has seen a few hundred interactions, raw conversation fragments have been distilled into a small, queryable, *evolving* model of the user.
+
+<p align="center">
+  <img src="./assets/04-memory-evolution.png" alt="HyAtlas-Memory memory evolution: raw conversation fragments flow through extract → merge/dedupe → resolve conflicts into a stable identity profile; a memory-evolution-over-time line graph shows signal rising and noise falling, with a memory maturity index of 87/100" width="900" />
+</p>
 
 ## Development
 
