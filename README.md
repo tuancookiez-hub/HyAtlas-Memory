@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="./assets/hyatlas-architecture.png" alt="HyAtlas-Memory complete system overview" width="600" />
+  <img src="./assets/01-hyatlas-system-overview.png" alt="HyAtlas-Memory complete system overview: 7-layer dual-path cognitive memory with System1/System2 processing, knowledge graph, and self-healing dashboard" width="600" />
 </p>
 
 ## What it is
@@ -120,6 +120,12 @@ python -m server.dashboard.dashboard
 ```
 
 7 tabs: Overview, Explore, Layers, Today, Graph, Activity, Settings. Reads the live server — no setup, no config.
+
+The Overview tab gives you a complete snapshot at a glance — total memories, layer distribution across L0–L7, ingestion activity over the last 7 days, and a live feed of recent writes:
+
+<p align="center">
+  <img src="./assets/dashboard-overview.png" alt="HyAtlas-Memory dashboard overview tab: dark-themed three-column layout with left navigation (Overview, Memory Observatory, Explore, Layers, Today, Settings, L5 Knowledge Graph), central KPI cards (3207 memories stored, 190 links, 8/8 layer coverage), an L0-L7 memory composition stacked bar chart, a 7-day ingestion line chart from Jun 11-17, and a right sidebar showing the most recent ingestion feed with filterable tabs (ALL, VDB, CODING, L1_RAW)" width="100%" />
+</p>
 
 ### CLI
 
