@@ -1,7 +1,5 @@
 # HyAtlas-Memory
 
-> **This is a community implementation of the official [Hy-Memory](https://memory.hunyuan.tencent.com) framework by Tencent Hunyuan.** It is one of three supported entry points (alongside OpenClaw and OpenCode) and is targeted specifically at [Hermes Agent](https://github.com/NousResearch/hermes-agent). For the canonical 6-layer model, the three operating modes (Lite / Pro / Ultra), and the evolution chain specification, see the [official documentation](https://memory.hunyuan.tencent.com). This implementation extends the official 6-layer model with an **experimental 7th layer (L7 = intention)** for proactive intent detection; see [`docs/architecture.md`](docs/architecture.md) for the local extension notes.
-
 > A 7-layer cognitive memory for [Hermes Agent](https://github.com/NousResearch/hermes-agent), with System1/System2 dual processing, evolution chains, and a Kuzu graph backend.
 
 <p align="center">
@@ -10,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="./assets/01-architecture-overview.png" alt="HyAtlas-Memory architecture overview: 4-step flow from Hermes Agent CLI/TUI through MemoryProvider interface into the HyAtlas-Memory engine, then to persistent agent memory; alongside a 7-layer memory stack (episodic, semantic, procedural, preferences, contextual, metacognitive, archival)" width="900" />
+  <img src="./assets/hyatlas-architecture.png" alt="HyAtlas-Memory complete system overview: bird's-eye view of the 4-step data flow (Hermes Agent CLI/TUI → MemoryProvider interface → HyAtlas-Memory engine → persistent agent memory), the input layer (WRITE/SEARCH/RECALL), the dual-path engine (System 1 online L1-L2 fast path; System 2 background L3 summary, L4 identity, L5 Kuzu graph, L6 schema, L7 intention), the 5-step evolution assembly line (capture → extract → merge/dedupe → resolve conflicts → stabilize identity), the knowledge graph (USER hub connected to FACTS, PREFERENCES, PROJECTS, EVENTS, GOALS, DECISIONS, CONSTRAINTS with sample queries and live stats), the dashboard (system health, layer counts, queue activity, graph preview, recall quality), and the always-on self-healing layer (monitor, detect, heal, improve, persistent, structured recall, provenance, agent-centric)" width="600" />
 </p>
 
 ```text
