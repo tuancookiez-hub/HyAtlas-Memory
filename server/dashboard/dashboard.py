@@ -62,12 +62,11 @@ QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "agent_memories_384")
 #   221727702992945152 →  13 points, agent_id="default"
 #   tuancookiez       →   5 points, agent_id="default_agent"
 # If a new (user_id, agent_id) pair appears in production, add it here.
-HERMES_USER_ID_PAIRS = [
-    ("hermes-user",              "default"),
-    ("221727702992945152",       "default"),
-    ("tuancookiez",              "default_agent"),
+HERMES_USER_IDS = [
+    "tuanc",            # primary user (memories from l3-summarizer, hermes, default_agent, l5-pipeline, ops-check, etc.)
+    "hermes-user",      # legacy/CLI-added memories
+    "221727702992945152",
 ]
-HERMES_USER_IDS = sorted({uid for uid, _ in HERMES_USER_ID_PAIRS})
 HERMES_USER_IDS_JS = json.dumps(HERMES_USER_IDS)  # inject into JS
 
 # Layer colors (matches CSS .layer-l0..l7)
@@ -141,14 +140,13 @@ def _fetch_l1_raw_from_qdrant(limit_total: int = 1500) -> list[dict]:
     we query Qdrant directly and normalize to the same memory-dict shape
     produced by _extract_memories().
     """
-    # Build an OR-of-ANDs filter for the (user_id, agent_id) pairs.
+    # Build a user_id-only filter (drop agent_id constraint, since each user
+    # can have memories written by many different agents over time).
     pairs_should = []
-    for uid, aid in HERMES_USER_ID_PAIRS:
+    for uid in HERMES_USER_IDS:
         pairs_should.append({
-            "must": [
-                {"key": "user_id", "match": {"value": uid}},
-                {"key": "agent_id", "match": {"value": aid}},
-            ]
+            "key": "user_id",
+            "match": {"value": uid},
         })
     if not pairs_should:
         return []
@@ -2719,14 +2717,13 @@ class Handler(BaseHTTPRequestHandler):
                 limit = min(int(qs.get("limit", ["25"])[0]), 500)
             except ValueError:
                 return self._json(400, {"error": "bad offset/limit"})
-            # Query all known (user_id, agent_id) pairs and merge results
-            # (the /api/v1/list endpoint only accepts a single user_id+agent_id)
+            # Query each known user_id and merge results.
+            # (the /api/v1/list endpoint only accepts a single user_id)
             all_items = []
             total = 0
-            for uid, aid in HERMES_USER_ID_PAIRS:
+            for uid in HERMES_USER_IDS:
                 code, payload = hy("POST", "/api/v1/list", {
                     "user_id": uid,
-                    "agent_id": aid,
                     "offset": offset,
                     "limit": max(limit * 2, 100),
                 }, timeout=15)
@@ -2966,10 +2963,9 @@ class Handler(BaseHTTPRequestHandler):
             l6_count = 0
             l7_count = 0
             try:
-                for uid, aid in HERMES_USER_ID_PAIRS:
+                for uid in HERMES_USER_IDS:
                     body = json.dumps({
                         "user_id": uid,
-                        "agent_id": aid,
                         "session_id": "default_session",
                         "limit": 200,
                     }).encode()

@@ -80,3 +80,7 @@ node_modules/
 .next/
 .turbo/
 .parcel-cache/
+
+# Runtime
+.qdrant-initialized
+storage/

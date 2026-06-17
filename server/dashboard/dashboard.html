@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Hy-Memory Dashboard</title>
-<link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=5">
-<link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16.png?v=5">
-<link rel="icon" type="image/png" sizes="48x48" href="/assets/favicon-48.png?v=5">
-<link rel="icon" type="image/x-icon" href="/assets/favicon.ico?v=5">
-<link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png?v=5">
+<link rel="icon" type="image/png" sizes="32x32" href="/assets/hy-memory-favicon.png?v=4">
+<link rel="icon" type="image/png" sizes="16x16" href="/assets/hy-memory-favicon.png?v=4">
+<link rel="icon" type="image/png" sizes="48x48" href="/assets/hy-memory-favicon.png?v=4">
+<link rel="icon" type="image/x-icon" href="/assets/hy-memory-favicon.png?v=4">
+<link rel="apple-touch-icon" sizes="180x180" href="/assets/hy-memory-favicon.png?v=4">
 <meta name="theme-color" content="#050505">
-<meta property="og:image" content="/assets/og-image.png">
+<meta property="og:image" content="/assets/hy-memory-favicon.png?v=4">
 <meta property="og:title" content="Hy-Memory Dashboard">
 <meta property="og:description" content="AI memory atlas — Qdrant + Kuzu cognitive store">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -1203,7 +1203,7 @@ h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 600; }
 <!-- Left Sidebar -->
 <div class="sidebar">
   <div class="sidebar-logo">
-    <img class="brand-mark" src="/assets/hy-memory-icon.png" alt="Hy-Memory">
+    <img class="brand-mark" src="/assets/hy-memory-icon.png?v=2" alt="Hy-Memory">
     <div>
       <h1>HY-MEMORY</h1>
       <div class="tagline">AI MEMORY ATLAS</div>
@@ -1312,28 +1312,21 @@ h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 600; }
           <span class="caption-text">Layers reflect <strong>durable user knowledge</strong> (L0–L7). Task memories from coding sessions are in a separate journal — see Today → Coding Memories. L6 schemas &amp; L7 intentions come from the periodic System2 digest (run <code>python .hermes/plans/run_digest.py</code>).</span>
         </div>
       </div>
-      
+
       <div class="panel">
         <div class="panel-header">
-          <div class="panel-title">TAG DISTRIBUTION</div>
+          <div class="panel-title">MEMORIES INGESTED</div>
         </div>
-        <div id="tag-distribution"></div>
+        <div class="chart-container">
+          <canvas id="activity-chart"></canvas>
+        </div>
       </div>
-      
+
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">MEMORY STORE</div>
         </div>
         <div id="memory-store"></div>
-      </div>
-      
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title">MEMORIES INGESTED (7D)</div>
-        </div>
-        <div class="chart-container">
-          <canvas id="activity-chart"></canvas>
-        </div>
       </div>
       
       <div class="panel">
@@ -1589,7 +1582,7 @@ h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 600; }
 <script>
 // Global state
 const REFRESH_S = __REFRESH_S__;
-const USER_IDS = ["221727702992945152", "hermes-user"];
+const USER_IDS = ["tuanc", "hermes-user"];
 let currentPage = 'overview';
 let allMemories = [];
 let layerCountsData = null;  // actual Qdrant counts per layer (used by Memory Composition bar)
@@ -1598,6 +1591,7 @@ let infoData = null;
 let storageData = null;
 let metricsData = null;
 let codingCountData = null;
+let l5Graph = null;  // full response from /api/l5/graph
 let activityChart = null;
 let radarChart = null;
 
@@ -1819,7 +1813,7 @@ async function fetchJSON(url, options = {}) {
 
 async function loadAllData() {
   try {
-    const [status, info, memories, storage, metrics, codingCount, codingMemories, layerCounts, graphCounts, l5Graph] = await Promise.all([
+    const [status, info, memories, storage, metrics, codingCount, codingMemories, layerCounts, graphCounts, l5] = await Promise.all([
       fetchJSON('/api/status'),
       fetchJSON('/api/info'),
       fetchJSON('/api/memories?limit=500'),
@@ -1831,6 +1825,7 @@ async function loadAllData() {
       fetchJSON('/api/graph-counts'),
       fetchJSON('/api/l5/graph').catch(() => null),  // L5 may not exist yet; ignore failure
     ]);
+    l5Graph = l5;
 
     statusData = status;
     infoData = info;
@@ -1942,10 +1937,25 @@ function updateGlobalStatus() {
     text.style.color = 'var(--accent)';
   }
   
-  const lastMemory = allMemories.length > 0 ? allMemories[0] : null;
+  const lastMemory = allMemories.length > 0
+    ? allMemories.reduce((latest, m) => {
+        const ts = m.gmt_created || 0;
+        return ts > (latest.gmt_created || 0) ? m : latest;
+      }, allMemories[0])
+    : null;
   if (lastMemory && lastMemory.gmt_created) {
     const ago = Math.floor((Date.now() / 1000 - lastMemory.gmt_created) / 60);
-    meta.textContent = `Last memory: ${ago}m ago`;
+    if (ago < 60) {
+      meta.textContent = `Last memory: ${ago}m ago`;
+    } else if (ago < 1440) {
+      const hours = Math.floor(ago / 60);
+      const mins = ago % 60;
+      meta.textContent = `Last memory: ${hours}h ${mins}m ago`;
+    } else {
+      const days = Math.floor(ago / 1440);
+      const hours = Math.floor((ago % 1440) / 60);
+      meta.textContent = `Last memory: ${days}d ${hours}h ago`;
+    }
   } else {
     meta.textContent = 'Last memory: —';
   }
@@ -1961,29 +1971,41 @@ function renderAll() {
 
 // Overview Page
 function renderOverview() {
+  // Compute total memories across all sources: VDB active + Coding
+  const vdbActive = (statusData?.vdb_points || 0);
+  const codingTotal = codingCountData?.total || 0;
+  const totalMemories = vdbActive + codingTotal;
+
+  // Compute total L5 graph links (edges + relationships)
+  const totalLinks = (l5Graph && l5Graph.relations) ? l5Graph.relations.length
+                    : (l5Graph && l5Graph.edges) ? l5Graph.edges.length
+                    : 0;
+
+  // Compute active layers from layer-counts (includes Kuzu L5/L6/L7, not just VDB)
+  const lc = (layerCountsData && layerCountsData.counts) ? layerCountsData.counts : {};
+  const activeLayers = Object.values(lc).filter(c => c > 0).length;
+  const totalLayers = 8;
+
   // Stat cards
   const statsHtml = `
     <div class="stat-card">
-      <div class="stat-label">SYSTEM SNAPSHOT</div>
-      <div class="stat-value">${statusData?.vdb_points || 0}</div>
+      <div class="stat-label">MEMORIES STORED</div>
+      <div class="stat-value">${totalMemories}</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">LAYERS ACTIVE</div>
-      <div class="stat-value">${getActiveLayerCount()}</div>
+      <div class="stat-label">LINKS</div>
+      <div class="stat-value">${totalLinks}</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">EMBEDDINGS</div>
-      <div class="stat-value">${statusData?.embed_dims || 0}</div>
+      <div class="stat-label">LAYER COVERAGE</div>
+      <div class="stat-value">${activeLayers}<span style="color: var(--muted); font-size: 20px;">/${totalLayers}</span></div>
     </div>
   `;
   document.getElementById('overview-stats').innerHTML = statsHtml;
   
   // Composition bar
   renderCompositionBar();
-  
-  // Tag distribution
-  renderTagDistribution();
-  
+
   // Memory store
   renderMemoryStore();
   
@@ -2053,35 +2075,6 @@ function renderCompositionBar() {
   html += '</div>';
 
   document.getElementById('composition-bar').innerHTML = html;
-}
-
-function renderTagDistribution() {
-  const tagCounts = {};
-  allMemories.forEach(m => {
-    (m.tags || []).forEach(tag => {
-      tagCounts[tag] = (tagCounts[tag] || 0) + 1;
-    });
-  });
-  
-  const sorted = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  
-  if (sorted.length === 0) {
-    document.getElementById('tag-distribution').innerHTML = '<div class="text-xs text-muted">No tags available</div>';
-    return;
-  }
-  
-  const total = sorted.reduce((sum, [, count]) => sum + count, 0);
-  
-  const colors = ['#d4af37', '#6b4c9a', '#3d8b8b', '#4a6fa5', '#4ade80'];
-  
-  let html = '<div class="tag-bar">';
-  sorted.forEach(([tag, count], i) => {
-    const pct = (count / total * 100).toFixed(1);
-    html += `<div class="tag-segment" style="width: ${pct}%; background: ${colors[i % colors.length]}" title="${tag}: ${count}">${tag} ${pct}%</div>`;
-  });
-  html += '</div>';
-  
-  document.getElementById('tag-distribution').innerHTML = html;
 }
 
 function renderMemoryStore() {
@@ -2904,7 +2897,7 @@ function renderOverviewSidebar() {
   // 'all'      = everything merged, sorted newest first
   let recent;
   if (recentIngestionTab === 'vdb') {
-    recent = allMemories.filter(m => m.user_id !== 'coding' && m.layer !== 'l1_raw' && m.layer !== 'l5_knowledge');
+    recent = allMemories.filter(m => m.user_id !== 'coding' && m.layer !== 'l5_knowledge');
   } else if (recentIngestionTab === 'coding') {
     recent = allMemories.filter(m => m.user_id === 'coding');
   } else if (recentIngestionTab === 'l1_raw') {
@@ -2925,7 +2918,7 @@ function renderOverviewSidebar() {
   // Counts for each tab so the user can see what's available.
   const tabCounts = {
     all:    allMemories.length,
-    vdb:    allMemories.filter(m => m.user_id !== 'coding' && m.layer !== 'l1_raw').length,
+    vdb:    allMemories.filter(m => m.user_id !== 'coding' && m.layer !== 'l5_knowledge').length,
     coding: allMemories.filter(m => m.user_id === 'coding').length,
     l1_raw: allMemories.filter(m => m.layer === 'l1_raw').length,
   };

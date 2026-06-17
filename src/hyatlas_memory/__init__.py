@@ -53,10 +53,12 @@ _DEFAULT_PORT = 19527
 # Max chars injected into system prompt (per official hermes-hy-memory)
 _MAX_PREFETCH_CHARS = int(os.environ.get("HY_MEMORY_PREFETCH_MAX_CHARS", "2000"))
 
-# Write throttling: every N turns flushes the session buffer (per official).
-# Default 5 (matches OpenClaw's memoryWriteTurnWindow). Set to 1 to write
-# every turn (old single-turn behavior).
-_WRITE_TURN_WINDOW = max(1, int(os.environ.get("HY_MEMORY_WRITE_TURN_WINDOW", "5") or "5"))
+# Write throttling: every N turns flushes the session buffer.
+# Default 1 (per-turn, Hindsight-style) — the previous default of 5 silently
+# dropped all data from short Hermes sessions (which are the norm — 1-3 turns).
+# Tradeoff: 5x more LLM extraction calls. Acceptable for the reliability.
+# Set to 0 to disable writes entirely (not recommended).
+_WRITE_TURN_WINDOW = max(0, int(os.environ.get("HY_MEMORY_WRITE_TURN_WINDOW", "1") or "1"))
 
 # Short confirmations / greetings to skip prefetch on (per official)
 _SKIP_QUERIES = frozenset({
@@ -123,7 +125,7 @@ class HyMemoryProvider(MemoryProvider):
         # and prevents per-turn retry storms when the same content repeats.
         self._write_turn_window: int = _WRITE_TURN_WINDOW
         self._turn_buffer: Dict[str, List[Dict[str, str]]] = {}
-        self._buffer_lock = threading.Lock()
+        self._buffer_lock = threading.RLock()
         # Circuit breaker
         self._consecutive_failures = 0
         self._breaker_open_until = 0.0
@@ -182,6 +184,18 @@ class HyMemoryProvider(MemoryProvider):
         if self._client.is_reachable():
             logger.info("[hy-memory] Connected (mode=%s, user=%s)",
                         self._mode, self._user_id)
+            # Replay any pending buffers left over from a force-killed
+            # previous session. This is the Hindsight-style guarantee: the
+            # data is on the server, not in the CLI process.
+            try:
+                replayed = self._replay_pending_buffers()
+                if replayed:
+                    logger.info(
+                        "[hy-memory] Recovered %d orphaned session buffer(s) from disk",
+                        replayed,
+                    )
+            except Exception as e:
+                logger.debug("[hy-memory] replay pass failed: %s", e)
         else:
             logger.warning("[hy-memory] Server not reachable at %s:%d", host, port)
 
@@ -284,6 +298,12 @@ class HyMemoryProvider(MemoryProvider):
 
         Tail-end turns below the window are flushed on on_session_end,
         on_pre_compress, and shutdown — never lost.
+
+        Disk persistence: every buffered turn is also appended to a
+        per-session pending file. If the CLI is killed mid-session, the
+        next session's __init__ scans the pending dir and replays the
+        buffer. This closes the silent-data-loss window where a force-kill
+        would drop the in-memory buffer.
         """
         if not self._client or not user_content:
             return
@@ -304,7 +324,16 @@ class HyMemoryProvider(MemoryProvider):
             else:
                 buf.append({"role": "user", "content": user_content})
                 buf.append({"role": "assistant", "content": assistant_content or ""})
+
+            # Disk persistence — write the just-appended messages to a per-session
+            # pending file so a force-killed CLI doesn't lose them. The file is
+            # deleted on successful flush.
+            self._persist_buffer_to_disk(sid)
+
             turns = sum(1 for m in buf if m["role"] == "user")
+            if self._write_turn_window == 0:
+                # Writes disabled entirely
+                return
             if turns < self._write_turn_window:
                 logger.debug(
                     "[hy-memory] sync_turn buffered: %d/%d turns (session=%s) — waiting",
@@ -322,16 +351,122 @@ class HyMemoryProvider(MemoryProvider):
                     agent_id=self._agent_id, session_id=sid,
                 )
                 self._consecutive_failures = 0
+                # Successful write — clear the disk pending file for this session
+                self._clear_disk_buffer(sid)
             except Exception as e:
                 self._consecutive_failures += 1
                 if self._consecutive_failures >= _BREAKER_THRESHOLD:
                     self._breaker_open_until = time.time() + _BREAKER_COOLDOWN_SECS
                     logger.warning("[hy-memory] Circuit breaker open: %s", e)
                 else:
-                    logger.debug("[hy-memory] sync_turn failed: %s", e)
+                    # Surface the failure so the user knows the write was lost
+                    logger.warning(
+                        "[hy-memory] sync_turn FAILED for session=%s (%d msgs): %s "
+                        "— buffer remains on disk, will retry next session",
+                        sid, len(batch), e,
+                    )
 
         self._sync_thread = threading.Thread(target=_do_sync, daemon=True)
         self._sync_thread.start()
+
+    # ------------------------------------------------------------------
+    # Disk persistence (Hindsight-style: never lose a turn to a process kill)
+    # ------------------------------------------------------------------
+
+    def _pending_dir(self) -> Optional[Path]:
+        """Directory for per-session pending buffer files, or None if disabled."""
+        if not self._user_id:
+            return None
+        d = Path(get_hermes_home()) / "logs" / "hyatlas_pending" / self._user_id
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            return None
+        return d
+
+    @staticmethod
+    def _safe_sid(sid: str) -> str:
+        """Sanitize a session id for use as a filename."""
+        return "".join(c if c.isalnum() or c in "._-" else "_" for c in sid)[:120]
+
+    def _persist_buffer_to_disk(self, sid: str) -> None:
+        """Append the current buffer for a session to its pending file."""
+        d = self._pending_dir()
+        if d is None:
+            return
+        try:
+            path = d / f"{self._safe_sid(sid)}.json"
+            # Read existing pending file (other-session pairs we haven't flushed)
+            existing: list = []
+            if path.exists():
+                try:
+                    existing = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    existing = []
+            # Append the just-added (user, assistant) pair
+            with self._buffer_lock:
+                buf = self._turn_buffer.get(sid, [])
+            # Take only what's not already in 'existing' (avoid double-append on retry)
+            if len(buf) > len(existing):
+                new_msgs = buf[len(existing):]
+                existing.extend(new_msgs)
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(existing, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(path)
+        except Exception as e:
+            logger.debug("[hy-memory] persist to disk failed: %s", e)
+
+    def _clear_disk_buffer(self, sid: str) -> None:
+        """Delete the pending file for a session after a successful write."""
+        d = self._pending_dir()
+        if d is None:
+            return
+        try:
+            (d / f"{self._safe_sid(sid)}.json").unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def _replay_pending_buffers(self) -> int:
+        """Scan pending dir and flush any orphaned buffers. Called at provider init.
+
+        This handles the case where the CLI was force-killed before
+        on_session_end fired: the disk file is still there, and we replay it
+        into the in-memory buffer and flush synchronously.
+        """
+        d = self._pending_dir()
+        if d is None or not d.exists():
+            return 0
+        count = 0
+        for path in d.glob("*.json"):
+            try:
+                msgs = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not msgs:
+                try:
+                    path.unlink()
+                except Exception:
+                    pass
+                continue
+            sid = path.stem  # inverse of _safe_sid (we don't recover the original,
+                              # but server-side dedup will handle duplicates)
+            try:
+                self._client.add(
+                    msgs, user_id=self._user_id,
+                    agent_id=self._agent_id, session_id=sid,
+                )
+                path.unlink()
+                count += 1
+                logger.info(
+                    "[hy-memory] replayed orphaned pending buffer: %d msgs (session=%s)",
+                    len(msgs), sid,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[hy-memory] could not replay pending buffer %s: %s "
+                    "— will retry next session", path.name, e,
+                )
+        return count
 
     # ------------------------------------------------------------------
     # Memory formatting (port of official hermes-hy-memory 0.2.7)
@@ -481,12 +616,44 @@ class HyMemoryProvider(MemoryProvider):
             return
         # Flush whatever's pending in the buffer (per official behavior)
         self._flush_session_buffer(None)
+        
+        # Cross-session continuity summary
         if messages:
             try:
+                # Get final turn context
+                last_user = next((m for m in reversed(messages) if m.get('role') == 'user'), None)
+                last_assistant = next((m for m in reversed(messages) if m.get('role') == 'assistant'), None)
+                last_tool = next((m for m in reversed(messages) if m.get('role') == 'tool'), None)
+                turn_count = len([m for m in messages if m.get('role') in ('user', 'assistant')])
+                
+                summary_text = f"""SESSION_SUMMARY {_dt.datetime.now().isoformat()}
+                
+Session completed.
+Turn count: {turn_count}
+
+Last user message:
+{last_user.get('content', '[none]')[:800]}
+
+Last assistant response:
+{last_assistant.get('content', '[none]')[:1200]}
+
+Next expected action:
+This session ended. The next session will automatically load this summary.
+"""
                 self._client.add(
-                    messages, user_id=self._user_id,
-                    agent_id=self._agent_id, session_id="session-end",
+                    summary_text,
+                    user_id=self._user_id,
+                    agent_id=self._agent_id,
+                    session_id="session-end-continuity",
+                    metadata={
+                        'kind': 'session_summary',
+                        'version': '1.0',
+                        'turn_count': turn_count,
+                        'timestamp': _dt.datetime.now().isoformat()
+                    },
                 )
+                logger.info(f"[hy-memory] wrote cross-session continuity summary, {len(summary_text)} chars")
+                
             except Exception as e:
                 logger.debug("[hy-memory] on_session_end write failed: %s", e)
 
