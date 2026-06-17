@@ -8,54 +8,36 @@
 </p>
 
 <p align="center">
-  <img src="./assets/hyatlas-architecture.png" alt="HyAtlas-Memory complete system overview: bird's-eye view of the 4-step data flow (Hermes Agent CLI/TUI → MemoryProvider interface → HyAtlas-Memory engine → persistent agent memory), the input layer (WRITE/SEARCH/RECALL), the dual-path engine (System 1 online L1-L2 fast path; System 2 background L3 summary, L4 identity, L5 Kuzu graph, L6 schema, L7 intention), the 5-step evolution assembly line (capture → extract → merge/dedupe → resolve conflicts → stabilize identity), the knowledge graph (USER hub connected to FACTS, PREFERENCES, PROJECTS, EVENTS, GOALS, DECISIONS, CONSTRAINTS with sample queries and live stats), the dashboard (system health, layer counts, queue activity, graph preview, recall quality), and the always-on self-healing layer (monitor, detect, heal, improve, persistent, structured recall, provenance, agent-centric)" width="600" />
+  <img src="./assets/hyatlas-architecture.png" alt="HyAtlas-Memory complete system overview" width="600" />
 </p>
-
-```text
-   ┌──────────── Hermes Agent CLI / TUI ────────────┐
-   │                                                │
-   │   conversation →  MemoryProvider interface     │
-   │                          │                     │
-   └──────────────────────────┼─────────────────────┘
-                              ▼
-   ┌────────── HyAtlas-Memory (this package) ──────────┐
-   │                                                    │
-   │   L1 raw  →  L2 fact  →  L3 summary (every 20)    │
-   │       │           │              │                 │
-   │       └───── L4 identity  ◄──────┘                 │
-   │                  │                                 │
-   │            L5 pipeline (async, Kuzu graph)         │
-   │            L6 schema                              │
-   │            L7 intention (proactive)                │
-   │                                                    │
-   └────────────────────────────────────────────────────┘
-```
 
 ## What it is
 
-HyAtlas-Memory turns your Hermes Agent into something that **remembers and learns across sessions**. Instead of each chat being a blank slate, your agent accumulates a structured 7-layer memory:
+Hermes Agent is powerful, but every conversation starts from zero. You tell it your preferences, your project structure, your coding conventions — and by the next session, it's forgotten all of it.
 
-| Layer | Purpose | Triggers |
-|-------|---------|----------|
-| **L1 raw** | Verbatim session entries, time-ordered | every `add` |
-| **L2 fact** | Atomic facts extracted by LLM | every `add` |
-| **L3 summary** | Periodic L2 rollups (coherent narratives) | every 20 adds |
-| **L4 identity** | Long-lived user/agent facts (preferences, persona) | automatic |
-| **L5 pipeline** | Async ingest into Kuzu graph for relational queries | background |
-| **L6 schema** | Typed entity/relationship schema | L5 step |
-| **L7 intention** | Proactive intent detection, async tasks | L5 step |
+HyAtlas-Memory fixes this. It's a memory provider plugin that drops into Hermes Agent and gives it **persistent, structured memory across sessions**. After a few conversations, your agent knows your name, your stack, your working style, your active projects, and the decisions you've made — without you repeating yourself.
+
+It doesn't just store raw text either. Every message you send flows through a pipeline that extracts facts, resolves conflicts, builds a knowledge graph, and stabilizes a long-term identity profile. The more you use it, the sharper the agent's understanding becomes.
+
+**Three things happen automatically:**
+
+1. **It remembers.** Every conversation is captured, broken into atomic facts, and stored across 7 memory layers.
+2. **It recalls.** When you start a new message, relevant memories are injected into the agent's context before it responds — no tool call needed.
+3. **It evolves.** Background processing merges duplicates, resolves contradictions, and refines the agent's model of you over time.
+
+## How it works
+
+Memory flows through two parallel paths — a fast path for real-time awareness, and a slow path for deep consolidation:
 
 <p align="center">
-  <img src="./assets/02-dual-path-memory.png" alt="HyAtlas-Memory dual-path memory: System 1 online fast path (L1 raw, L2 fact) and System 2 background consolidation (L3 summary, L4 identity, L5 Kuzu graph, L6 schema, L7 intention)" width="900" />
+  <img src="./assets/02-dual-path-memory.png" alt="Dual-path memory: System 1 online fast path (L1 raw, L2 fact, fast recall injection) and System 2 background consolidation (L3 summary, L4 identity, L5 Kuzu graph, L6 schema, L7 intention)" width="900" />
 </p>
 
-Three modes:
+**System 1 — Fast Path** handles every message you send. It captures raw text, extracts atomic facts via LLM, and injects relevant context back into the agent. This happens in milliseconds — you never wait for memory.
 
-- **`lite`** — embedding-only, zero LLM cost (free, fast)
-- **`pro`** — LLM fact extraction + reconciliation
-- **`ultra`** — pro + System2 cognitive layer with Kuzu graph (default; the most powerful)
+**System 2 — Background Consolidation** runs asynchronously. It takes the accumulated facts and builds something deeper: session summaries, identity profiles, a relationship graph, domain schemas, and proactive intent detection. This is where raw data becomes understanding.
 
-## Install
+## Quick start
 
 ```bash
 # 1. Install alongside Hermes Agent
@@ -69,12 +51,12 @@ memory:
 
 That's it. On first launch, HyAtlas-Memory will:
 
-1. Auto-create `~/.hy_memory/` (data dir)
+1. Auto-create `~/.hy_memory/` (data directory)
 2. Initialize the Kuzu graph store
 3. Prompt for one-time setup (vector store choice, LLM key)
-4. Start the local server on port 19527
+4. Start a local server on port 19527
 
-## Configure
+### Configuration
 
 Copy `hy_memory.json.example` to `~/.hy_memory/hy_memory.json`:
 
@@ -99,21 +81,29 @@ Copy `hy_memory.json.example` to `~/.hy_memory/hy_memory.json`:
 }
 ```
 
-Vector store options: `qdrant` (default, fastest), `chroma` (simplest), `faiss` (no daemon).
+**Vector store options:** `qdrant` (default, fastest), `chroma` (simplest), `faiss` (no daemon).
 
-LLM options: any OpenAI-compatible endpoint. Tested with OpenAI, OpenRouter, TokenRouter, DeepSeek, MiniMax, ByteDance. Use `base_url` to point to a local Ollama instance.
+**LLM options:** any OpenAI-compatible endpoint. Tested with OpenAI, OpenRouter, TokenRouter, DeepSeek, MiniMax, ByteDance. Use `base_url` to point to a local Ollama instance.
 
-## Use
+**Three modes:**
 
-The plugin integrates automatically with Hermes Agent. Three things happen:
+| Mode | What it does | Cost |
+|------|-------------|------|
+| `lite` | Embedding-only, zero LLM calls | Free |
+| `pro` | LLM fact extraction + reconciliation | LLM calls per `add` |
+| `ultra` | Pro + System2 cognitive layer with Kuzu graph (default) | LLM calls + background pipeline |
 
-### 1. Recalls happen transparently
+## Using it
 
-When your agent receives a user message, HyAtlas-Memory automatically injects relevant memories into the prompt as a `<relevant-memories>` block. You don't need to call any tool — it just works.
+The plugin integrates automatically with Hermes Agent — no manual tool calls needed.
 
-### 2. The `hy_memory_search` tool is available
+### Memory recall is transparent
 
-Agents (or you in the TUI) can explicitly recall:
+When your agent receives a message, HyAtlas-Memory injects relevant memories into the prompt as a `<relevant-memories>` block. The agent sees your past context without you doing anything.
+
+### Search tool
+
+Agents (or you in the TUI) can explicitly search memories:
 
 ```text
 > /hy_memory_search preferences
@@ -122,58 +112,125 @@ Agents (or you in the TUI) can explicitly recall:
 [normal] Working on HyAtlas extraction (2026-06-16)
 ```
 
-### 3. The dashboard shows everything
+### Dashboard
 
 ```bash
 python -m server.dashboard.dashboard
 # open http://127.0.0.1:8765
 ```
 
-7 tabs: Overview, Explore, Layers, Today, Graph, Activity, Settings. Reads the live server, no setup.
+7 tabs: Overview, Explore, Layers, Today, Graph, Activity, Settings. Reads the live server — no setup, no config.
+
+### CLI
+
+```bash
+hermes hy-memory doctor    # health check
+hermes hy-memory add       # manually add a memory
+hermes hy-memory search    # manual search
+hermes hy-memory list      # list recent memories
+hermes hy-memory init      # interactive setup wizard
+hermes hy-memory reset     # erase all memories (destructive)
+```
+
+## The 7 memory layers
+
+Every piece of memory lives in one of seven layers, each with a specific purpose and trigger:
+
+| Layer | Purpose | Triggers |
+|-------|---------|----------|
+| **L1 raw** | Verbatim session entries, time-ordered | every `add` |
+| **L2 fact** | Atomic facts extracted by LLM | every `add` |
+| **L3 summary** | Periodic L2 rollups (coherent narratives) | every 20 adds |
+| **L4 identity** | Long-lived user/agent facts (preferences, persona) | automatic |
+| **L5 pipeline** | Async ingest into Kuzu graph for relational queries | background |
+| **L6 schema** | Typed entity/relationship schema | L5 step |
+| **L7 intention** | Proactive intent detection, async tasks | L5 step |
+
+L1–L2 run on the fast path (every message). L3–L7 run on the background path (async). L7 is an experimental extension — proactive intent detection that surfaces follow-up questions and task suggestions the agent should consider.
+
+### Knowledge graph
+
+The L5 pipeline builds a living graph of entities and their relationships — not just keyword matches, but typed semantic connections you can query:
+
+<p align="center">
+  <img src="./assets/03-knowledge-graph.png" alt="Knowledge graph: 8 node types (user, facts, preferences, events, projects, constraints, decisions, goals) connected by typed semantic edges, with LINK / QUERY / TRACE / REASON operations" width="900" />
+</p>
+
+The graph centers on the user and connects to facts, preferences, projects, events, goals, decisions, and constraints — each with typed edges like "works on", "likes", "drives", "limited by". You can query it directly:
+
+- What are the user's top priorities?
+- Show all constraints affecting Project X.
+- What decisions influenced Goal Y?
+
+## Memory evolution
+
+HyAtlas-Memory doesn't just accumulate — it refines. Each `add` flows through a deterministic evolution pipeline:
+
+1. **Extract** — pull atomic facts, entities, and context from new material
+2. **Merge / dedupe** — combine duplicates, normalize, unify meaning
+3. **Resolve conflicts** — weigh recency, confidence, and user feedback
+4. **Stabilize identity** — update the long-term profile only when confidence crosses a threshold
+
+The result is a signal-to-noise ratio that improves with every session. Raw conversation fragments get distilled into a small, queryable, evolving model of the user.
+
+<p align="center">
+  <img src="./assets/04-memory-evolution.png" alt="Memory evolution: raw fragments flow through extract → merge/dedupe → resolve conflicts into a stable identity profile; signal rises, noise falls" width="900" />
+</p>
 
 ## Architecture
 
 ```text
+   ┌──────────── Hermes Agent CLI / TUI ────────────┐
+   │                                                │
+   │   conversation →  MemoryProvider interface     │
+   │                          │                     │
+   └──────────────────────────┼─────────────────────┘
+                              ▼
+   ┌────────── HyAtlas-Memory (this package) ──────────┐
+   │                                                    │
+   │   L1 raw  →  L2 fact  →  L3 summary (every 20)    │
+   │       │           │              │                 │
+   │       └───── L4 identity  ◄──────┘                 │
+   │                  │                                 │
+   │            L5 pipeline (async, Kuzu graph)         │
+   │            L6 schema                              │
+   │            L7 intention (proactive)                │
+   │                                                    │
+   └────────────────────────────────────────────────────┘
+```
+
+### Source layout
+
+```text
 src/hyatlas_memory/        # the plugin (Python package)
-  __init__.py              # HyMemoryProvider (entry point)
-  client.py                # HTTP client to the local server
-  patches.py               # the 9 carried patches (L1 dedup, L3 trigger, etc.)
-  context_pressure.py      # System2 context-budget enforcement
-  process.py               # subprocess management for the local server
-  embed_server.py          # local sentence-transformers embedder
-  init_wizard.py           # first-run setup wizard
-  installer.py             # one-time pip-deps install
-  cli.py                   # `python -m hyatlas_memory ...`
+  __init__.py              # HyMemoryProvider — entry point, registers with Hermes
+  client.py                # HTTP client to the local server (urllib, zero deps)
+  patches.py               # 9 carried patches (L1 dedup, L3 trigger, rerank, etc.)
+  context_pressure.py      # 4-tier token budget monitor (fastpath → emergency)
+  process.py               # subprocess lifecycle for the local server
+  embed_server.py          # local SentenceTransformers embedder (OpenAI-compatible)
+  init_wizard.py           # first-run interactive setup wizard
+  installer.py             # one-time pip-deps installer
+  cli.py                   # `hermes hy-memory doctor|add|search|list|init|reset`
   plugin.yaml              # legacy plugin manifest (kept for back-compat)
 
 server/                    # standalone server (auto-started by plugin)
-  start_server.py          # uvicorn launcher
-  bin/                     # L5 pipeline scripts
-  dashboard/               # local web UI
+  start_server.py          # uvicorn launcher, reads hy_memory.json + .env
+  bin/                     # L5 pipeline scripts (7-step graph rebuild)
+  dashboard/               # local web UI (7 tabs, port 8765)
 
 tests/                     # pytest suite
 docs/                      # architecture + migration notes
-assets/                    # icons, banner
+assets/                    # infographic images
 ```
 
-<p align="center">
-  <img src="./assets/03-knowledge-graph.png" alt="HyAtlas-Memory knowledge graph: 8 node types (user, facts, preferences, events, projects, constraints, decisions, goals) connected by typed semantic edges, with LINK / QUERY / TRACE / REASON operations" width="900" />
-</p>
+### How the pieces fit
 
-## Memory evolution
-
-HyAtlas-Memory does not just append — it refines. Each `add` flows through a small, deterministic evolution pipeline that turns fragments of conversation into a stable identity profile:
-
-1. **Extract** entities, topics, preferences, intents from the new material.
-2. **Merge / dedupe** against existing facts (normalise, unify meaning).
-3. **Resolve conflicts** by weighing recency, confidence, and user feedback.
-4. **Update the stable identity profile** only when a value crosses a confidence threshold.
-
-The result is a signal/noise ratio that improves with every session rather than degrading. By the time the system has seen a few hundred interactions, raw conversation fragments have been distilled into a small, queryable, *evolving* model of the user.
-
-<p align="center">
-  <img src="./assets/04-memory-evolution.png" alt="HyAtlas-Memory memory evolution: raw conversation fragments flow through extract → merge/dedupe → resolve conflicts into a stable identity profile; a memory-evolution-over-time line graph shows signal rising and noise falling, with a memory maturity index of 87/100" width="900" />
-</p>
+- **Plugin** (`src/hyatlas_memory/`) is a thin client. It implements the `MemoryProvider` interface that Hermes Agent calls. It doesn't do heavy lifting — it talks to a local server over HTTP.
+- **Server** (auto-started on port 19527) runs the upstream `hy-memory` SDK. This is where embedding, LLM extraction, and vector search happen. The plugin manages its lifecycle as a subprocess.
+- **L5 pipeline** (`server/bin/`) is a 7-step batch job that rebuilds the Kuzu graph: stop server → extract facts → resolve entities → quality review → rebuild graph → export JSON → restart server. Runs async, takes minutes for thousands of facts.
+- **Context pressure** (`context_pressure.py`) monitors the agent's context window. At 50% usage it starts compressing old tool outputs to ref files. At 95% it aggressively prunes to prevent overflow. This is plugin-layer — no SDK changes needed.
+- **9 patches** (`patches.py`) are applied at import time. They fix upstream SDK issues: LLMConfig env-loading, cross-encoder rerank, in-process embedding, L3 trigger reachability, L1 dedup gate, and more. Each patch is idempotent and documented inline.
 
 ## Development
 
@@ -219,7 +276,7 @@ MIT. See `LICENSE`.
 
 ## Credits
 
-Built on the [official Hy-Memory framework](https://memory.hunyuan.tencent.com) by **Tencent Hunyuan**. This community implementation targets the [Hermes Agent](https://github.com/NousResearch/hermes-agent) runtime; the official framework also provides integrations for OpenClaw and OpenCode via the same SDK.
+Built by [Tuan Dev](https://tuancookiez-hub.github.io/tuandev-portfolio/). Architecture inspired by the [Hy-Memory framework](https://memory.hunyuan.tencent.com) (Tencent Hunyuan) and the cognitive-architecture literature on dual-process theory (Kahneman's System 1 / System 2). The L7 intention layer is an independent extension not part of the official spec.
 
 Uses:
 
@@ -228,6 +285,4 @@ Uses:
 - [SentenceTransformers](https://www.sbert.net/) — local embedding model
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) — the host agent runtime
 
-Architecture inspired by the cognitive-architecture literature on dual-process theory (Kahneman's System 1 / System 2) and by existing systems in the same family (Mnemosyne, Hindsight, OpenClaw's mem-agent).
-
-**Not affiliated with Tencent.** HyAtlas-Memory is an independent community project; the Hy-Memory name and the 6-layer model are referenced here for source-of-truth accuracy and to credit the canonical design.
+**Not affiliated with Tencent.** HyAtlas-Memory is an independent project; the Hy-Memory name is referenced to credit the architectural inspiration.
