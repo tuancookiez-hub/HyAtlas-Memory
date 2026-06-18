@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hy-Memory Dashboard</title>
+<title>HyAtlas Dashboard</title>
 <link rel="icon" type="image/png" sizes="32x32" href="/assets/hy-memory-favicon.png?v=4">
 <link rel="icon" type="image/png" sizes="16x16" href="/assets/hy-memory-favicon.png?v=4">
 <link rel="icon" type="image/png" sizes="48x48" href="/assets/hy-memory-favicon.png?v=4">
@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" sizes="180x180" href="/assets/hy-memory-favicon.png?v=4">
 <meta name="theme-color" content="#050505">
 <meta property="og:image" content="/assets/hy-memory-favicon.png?v=4">
-<meta property="og:title" content="Hy-Memory Dashboard">
+<meta property="og:title" content="HyAtlas Dashboard">
 <meta property="og:description" content="AI memory atlas — Qdrant + Kuzu cognitive store">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
@@ -490,14 +490,7 @@ h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 600; }
   border-bottom-color: var(--accent);
 }
 
-/* Page Sections */
-.page-section {
-  display: none;
-}
-
-.page-section.active {
-  display: block;
-}
+/* Page Sections — transition styles defined in loading section above */
 
 /* Utility */
 .flex { display: flex; }
@@ -554,7 +547,7 @@ h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 600; }
 }
 
 /* Graph Container */
-.graph-wrapper{position:relative;height:620px;background:linear-gradient(180deg,rgba(255,255,255,.025),transparent 32%),radial-gradient(circle at 52% 38%,rgba(212,197,163,.045),transparent 42%),#080808;border:1px solid rgba(255,255,255,.075);border-radius:12px;overflow:hidden;box-shadow:none}
+.graph-wrapper{position:relative;height:680px;background:linear-gradient(180deg,rgba(255,255,255,.025),transparent 32%),radial-gradient(circle at 52% 38%,rgba(212,197,163,.045),transparent 42%),#080808;border:1px solid rgba(255,255,255,.075);border-radius:12px;overflow:hidden;box-shadow:none}
 .graph-container{position:absolute;inset:0;width:100%;height:100%;background:transparent;overflow:hidden}
 .obs-layer-rail{position:absolute;left:18px;top:22px;display:flex;flex-direction:column;gap:7px;pointer-events:auto}.obs-layer-pill{border:1px solid transparent;background:rgba(5,5,5,.18);color:#e8e8e8;border-radius:999px;padding:8px 12px;font:10px 'JetBrains Mono',monospace;letter-spacing:.075em;line-height:1;text-transform:uppercase;cursor:pointer;min-width:218px;text-align:left;transition:background .15s,border-color .15s,color .15s,opacity .15s}.obs-layer-pill:hover{background:rgba(255,255,255,.025);color:#fff;border-color:transparent}.obs-layer-pill.active{border-color:transparent;color:#fff;background:rgba(255,255,255,.03);box-shadow:none}.obs-layer-pill.empty{opacity:.86}.obs-layer-pill.empty .obs-layer-name{color:#eeeeee}.obs-count-chip{float:right;color:var(--layer-color);font-variant-numeric:tabular-nums;font-weight:600}.obs-layer-id{display:inline-block;color:var(--layer-color);font-weight:700;margin-right:7px;min-width:18px}.obs-layer-name{color:#fff;font-weight:500}.obs-note{position:absolute;right:18px;bottom:18px;color:#6f6f6f;font:10px 'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase}.obs-tooltip{position:absolute;z-index:30;pointer-events:none;max-width:300px;padding:11px 13px;border:1px solid rgba(255,255,255,.10);border-radius:10px;background:rgba(13,13,13,.94);box-shadow:0 18px 44px rgba(0,0,0,.5);font:11px 'Inter',sans-serif;color:#ddd;display:none}.obs-tooltip-title{font-weight:500;margin-bottom:6px;line-height:1.35;color:#f1f1f1}.obs-tooltip-meta{font:10px 'JetBrains Mono',monospace;color:#8d8d8d;text-transform:uppercase;letter-spacing:.06em;line-height:1.55}
 
@@ -569,12 +562,12 @@ h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 600; }
 }
 
 .graph-legend {
-  position: absolute;
-  bottom: 20px;
-  left: 20px;
   display: flex;
   gap: 16px;
   flex-wrap: wrap;
+  padding: 10px 20px;
+  border-top: 1px solid rgba(255,255,255,.06);
+  margin-top: 4px;
 }
 
 .legend-item {
@@ -1196,16 +1189,48 @@ h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 600; }
 .form-input:focus {
   border-color: var(--accent, #7850c8);
 }
+
+/* ── Initial loading screen ── */
+.boot-screen{position:fixed;inset:0;z-index:99999;background:#060606;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;transition:opacity .5s ease}
+.boot-screen.gone{opacity:0;pointer-events:none}
+.boot-logo{font:700 28px/1 'JetBrains Mono',monospace;letter-spacing:.15em;color:#d4c5a3}
+.boot-sub{font:11px/1 'JetBrains Mono',monospace;color:#555;letter-spacing:.1em;text-transform:uppercase}
+.boot-bar{width:200px;height:2px;background:rgba(255,255,255,.06);border-radius:1px;overflow:hidden;position:relative}
+.boot-bar-fill{position:absolute;inset:0;background:linear-gradient(90deg,transparent,#d4c5a3,transparent);width:40%;animation:bootSlide 1s linear infinite}
+@keyframes bootSlide{0%{transform:translateX(-100%)}100%{transform:translateX(350%)}}
+
+/* ── Page transitions ── */
+.page-section{display:none;opacity:0;transform:translateY(8px);transition:opacity .25s ease,transform .25s ease}
+.page-section.active{display:block}
+.page-section.entered{opacity:1;transform:translateY(0)}
+
+/* ── Loading: Galaxy Seed (Observatory) ── */
+.seed-overlay{position:absolute;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;
+  background:#060606;pointer-events:none}
+.seed-dot{width:6px;height:6px;border-radius:50%;background:#d4c5a3;
+  box-shadow:0 0 12px 2px rgba(212,197,163,.8),0 0 40px 8px rgba(212,197,163,.3),0 0 80px 20px rgba(212,197,163,.1);
+  animation:seedPulse 1.2s ease-in-out infinite}
+.seed-ring{position:absolute;border-radius:50%;border:1px solid rgba(212,197,163,.15);
+  animation:seedRing 1.2s ease-out infinite}
+@keyframes seedPulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.4);opacity:.7}}
+@keyframes seedRing{0%{width:6px;height:6px;opacity:.6}100%{width:120px;height:120px;opacity:0}}
+.seed-fade-out{animation:seedFade .4s ease-out forwards}
+@keyframes seedFade{to{opacity:0;transform:scale(1.1)}}
 </style>
 </head>
 <body>
+<div class="boot-screen" id="boot-screen">
+  <div class="boot-logo">HyAtlas</div>
+  <div class="boot-sub">AI Memory Atlas</div>
+  <div class="boot-bar"><div class="boot-bar-fill"></div></div>
+</div>
 
 <!-- Left Sidebar -->
 <div class="sidebar">
   <div class="sidebar-logo">
     <img class="brand-mark" src="/assets/hy-memory-icon.png?v=2" alt="Hy-Memory">
     <div>
-      <h1>HY-MEMORY</h1>
+      <h1>HyAtlas</h1>
       <div class="tagline">AI MEMORY ATLAS</div>
       <div class="official-ref">
         <a href="https://memory.hunyuan.tencent.com" target="_blank" rel="noopener noreferrer" title="Official Hy-Memory framework by Tencent Hunyuan">official framework ↗</a>
@@ -1352,10 +1377,11 @@ h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 600; }
       
       <div class="graph-controls">
         <div class="control-group">
-          <button class="control-btn active" data-scope="25">Last 25</button>
+          <button class="control-btn" data-scope="25">Last 25</button>
           <button class="control-btn" data-scope="50">Last 50</button>
           <button class="control-btn" data-scope="100">Last 100</button>
-          <button class="control-btn" data-scope="500">Last 500</button>
+          <button class="control-btn active" data-scope="500">Last 500</button>
+          <button class="control-btn" id="reset-view-btn" title="Reset view (fit all)">&#x21BA; Reset</button>
         </div>
       </div>
       
@@ -1363,13 +1389,19 @@ h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 600; }
       
       <div class="graph-wrapper">
         <div class="graph-container" id="graph-container"></div>
+        <div class="seed-overlay" id="obs-seed" style="display:none">
+          <div class="seed-dot"></div>
+          <div class="seed-ring" style="animation-delay:0s"></div>
+          <div class="seed-ring" style="animation-delay:.4s"></div>
+          <div class="seed-ring" style="animation-delay:.8s"></div>
+        </div>
         <div class="graph-overlay">
           <div class="obs-layer-rail" id="obs-layer-rail"></div>
-          <div class="graph-legend" id="obs-legend"></div>
-          <div class="obs-note">REAL API DATA · ACTIVE LAYERS ONLY IN COUNT</div>
+          <div class="obs-note" id="obs-zoom-note">SCROLL TO ZOOM · DRAG TO PAN · +/− KEYS · 0 RESET</div>
           <div class="obs-tooltip" id="obs-tooltip"></div>
         </div>
       </div>
+      <div class="graph-legend" id="obs-legend"></div>
       
       <div class="text-xs text-muted mt-4">
         Drag to pan • Scroll to zoom • Click nodes to inspect
@@ -1615,27 +1647,83 @@ document.querySelectorAll('.nav-item').forEach(item => {
   });
 });
 
+function hideBootScreen(){const b=document.getElementById('boot-screen');if(!b)return;b.classList.add('gone');setTimeout(function(){b.style.display='none'},500)}
+function hideObsSeed(){const s=document.getElementById('obs-seed');if(!s)return;s.classList.add('seed-fade-out');setTimeout(function(){s.style.display='none'},400)}
+function showObsSeed(){const s=document.getElementById('obs-seed');if(!s)return;s.classList.remove('seed-fade-out');s.style.display='flex';s.style.opacity=''}
+function enterPage(page){const el=document.getElementById('page-'+page);if(!el)return;el.classList.remove('entered');el.offsetHeight;el.classList.add('entered')}
 function navigateTo(page) {
   currentPage = page;
+  const prev=document.querySelector('.page-section.entered');
 
   // Update nav
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.querySelector(`[data-page="${page}"]`).classList.add('active');
 
   // Update page sections
-  document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
-  document.getElementById(`page-${page}`).classList.add('active');
+  document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active','entered'));
+  const newEl=document.getElementById(`page-${page}`);
+  newEl.classList.add('active');
 
   // Update right sidebar
   updateRightSidebar(page);
 
+  // Transition: fade out old, fade in new
+  if(prev&&prev!==newEl){prev.classList.remove('entered');setTimeout(function(){enterPage(page)},150)}
+  else{enterPage(page)}
+
   // Page-specific init
-  if (page === 'observatory' && !sceneInitialized) {
-    setTimeout(initGraph, 100);
+  if (page === 'observatory') {
+    showObsSeed();
+    if (!sceneInitialized) {
+      setTimeout(initGraph, 100);
+    } else {
+      setTimeout(() => {
+        obsAnim = null;
+        obsPan = {x: 0, y: 0};
+        obsZoom = computeObservatoryFitZoom();
+        if (typeof updateCamera === 'function') updateCamera(false);
+        setTimeout(hideObsSeed, 800);
+      }, 50);
+    }
   }
   if (page === 'l5') {
     initL5Page();
   }
+}
+
+// Compute the obsZoom value that fits the full graph into the viewport.
+// Without this, fixed zoom values leave L6/L7 nodes off-screen.
+function computeObservatoryFitZoom() {
+  const c = document.getElementById('graph-container');
+  if (!c || !obsScene) return 1.0;
+  let maxRadius = 0;
+  let minY = Infinity, maxY = -Infinity;
+  if (window.__obsDebug && window.__obsDebug.nodes) {
+    for (const n of window.__obsDebug.nodes) {
+      if (n.placeholder) continue;
+      const r = Math.sqrt((n.x || 0) ** 2 + (n.z || 0) ** 2);
+      if (r > maxRadius) maxRadius = r;
+      if (typeof n.y === 'number') {
+        if (n.y < minY) minY = n.y;
+        if (n.y > maxY) maxY = n.y;
+      }
+    }
+  }
+  if (maxRadius < 1) maxRadius = 200;
+  maxRadius = Math.max(maxRadius, 80);
+  const galH = (maxY - minY) || 600;
+  const galCY = (maxY + minY) / 2 || 0;
+  const fovHalfRad = (42 / 2) * Math.PI / 180;
+  const tanFovHalf = Math.tan(fovHalfRad);
+  const viewW = c.clientWidth || 1;
+  const viewH = c.clientHeight || 1;
+  const aspect = viewW / viewH;
+  const baseZ = 420;
+  const fitByX = (maxRadius + 80) / (baseZ * tanFovHalf * aspect);
+  const fitByY = (galH / 2 + 140) / (baseZ * tanFovHalf);
+  const fit = Math.max(fitByX, fitByY);
+  window.__obsFitCenterY = galCY;
+  return Math.max(0.3, Math.min(5.0, fit));
 }
 
 // L5 Knowledge Graph page
@@ -1876,11 +1964,17 @@ async function loadAllData() {
     const l5Mems = (l5Graph && l5Graph.nodes) ? l5Graph.nodes.map(n => {
       const daysAgo = Math.min(180, Math.max(1, n.mention_count || 0));
       const ts = Math.floor(Date.now() / 1000) - (86400 * daysAgo);
+      const rawLayer = (n.layer || '').toLowerCase();
+      const layerMap = {
+        'l5_knowledge': 'l5_knowledge',
+        'l6_schema': 'l6_schema',
+        'l7_intention': 'l7_intention',
+      };
       return {
         memory_id:        'l5_' + n.node_id,
         user_id:          'l5_knowledge',
         agent_id:         'default',
-        layer:            'l5_knowledge',
+        layer:            layerMap[rawLayer] || 'l5_knowledge',
         content:          n.name,
         gmt_created:      ts,
         gmt_updated:      ts,
@@ -2203,64 +2297,127 @@ function renderOperations() {
 
 
 // Memory Observatory - Raw Three.js Implementation
-let graph3d=null,sceneInitialized=false,obsScene=null,obsCamera=null,obsRenderer=null,obsRaycaster=null,obsPointer=null,obsAnimationFrame=null,obsNodeMeshes=[],obsLayerObjects=[],obsEdges=[],obsCurrentScope=25,obsActiveLayer='ALL',obsHoveredNode=null,obsSelectedNode=null,obsPan={x:0,y:0},obsZoom=1,obsDragging=false,obsDragStart={x:0,y:0,panX:0,panY:0},obsAnim=null;
+let graph3d=null,sceneInitialized=false,obsScene=null,obsCamera=null,obsRenderer=null,obsRaycaster=null,obsPointer=null,obsAnimationFrame=null,obsNodeMeshes=[],obsLayerObjects=[],obsEdges=[],obsCurrentScope=500,obsActiveLayer='ALL',obsHoveredNode=null,obsSelectedNode=null,obsPan={x:0,y:0},obsZoom=0.6,obsDragging=false,obsDragStart={x:0,y:0,panX:0,panY:0},obsAnim=null;
+let obsStarfield=null,obsNodeBirthTime=0,obsNodesJustBuilt=false,obsIsFirstLoad=true;
+let obsMorph=null;
 const OBS_LAYER_ORDER=['l7_intention','l6_schema','l5_knowledge','l4_identity','l3_summary','l2_fact','l1_raw','l0_basic_info'];
 const OBS_VISUAL_COLORS={l7_intention:'#d4c5a3',l6_schema:'#8b7aa0',l5_knowledge:'#5e9b8a',l4_identity:'#c9b06d',l3_summary:'#5e7b9b',l2_fact:'#8b7aa0',l1_raw:'#5e9b8a',l0_basic_info:'#4f6174'};
+const ZOOM_FAR=0.3,ZOOM_MID=0.8;
 function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function hashString(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return Math.abs(h)}
 function makeRng(seed){let s=Math.abs(seed)%2147483647;if(!s)s=1;return()=>{s=s*16807%2147483647;return(s-1)/2147483646}}
 function getRealLayerKey(m){return String(m.layer||m.metadata?.layer||'unknown').trim()||'unknown'}
 function deriveLayerId(k){const m=String(k).toLowerCase().match(/l([0-7])/);return m?`L${m[1]}`:'UNK'}
 function getLayerInfo(k){const b=LAYERS[k]||{name:k,desc:'',color:'#666'};return{...b,color:OBS_VISUAL_COLORS[k]||b.color||'#666'}}
-function layerY(k){const i=OBS_LAYER_ORDER.indexOf(k),x=i>=0?i:7;return(7-x)*38-132}
+// Layer Y: 82px spacing between layers, centered around Y=0
+// L7 (i=0) at top, L0 (i=7) at bottom
+function layerY(k){const i=OBS_LAYER_ORDER.indexOf(k),x=i>=0?i:7;return(7-x)*95-333}
 function buildRealLayerSummary(mem){const c={};mem.forEach(m=>{const k=getRealLayerKey(m);c[k]=(c[k]||0)+1});return OBS_LAYER_ORDER.map(k=>({key:k,id:deriveLayerId(k),label:getLayerInfo(k).name,count:c[k]||0,color:getLayerInfo(k).color,empty:!c[k]}))}
 function sampleNodesForScope(m,s){
-  // Always include all L5 knowledge-graph entities (they're a fixed-size
-  // derivation, not part of the recent-memory stream) plus the most-recent
-  // `s` non-L5 memories. This way L5 is visible at any scope (25/50/100/500)
-  // without dominating small scopes.
-  const l5 = m.filter(x => x.layer === 'l5_knowledge');
-  const others = m.filter(x => x.layer !== 'l5_knowledge').slice(0, s);
-  return [...l5, ...others];
+  const kg = m.filter(x => x.layer === 'l5_knowledge' || x.layer === 'l6_schema' || x.layer === 'l7_intention');
+  const others = m.filter(x => x.layer !== 'l5_knowledge' && x.layer !== 'l6_schema' && x.layer !== 'l7_intention').slice(0, s);
+  return [...kg, ...others];
 }
 function deriveNodeTitle(m){const t=String(m.content||'').replace(/\s+/g,' ').trim();return t.length>72?`${t.slice(0,72)}…`:(t||m.memory_id||'Untitled memory')}
-function posNode(m,k,i,total,scope){const li=Math.max(0,OBS_LAYER_ORDER.indexOf(k)),rng=makeRng(hashString(`${scope}:${m.memory_id}:${k}`)),ang=i/Math.max(total,1)*Math.PI*2+(rng()-.5)*.72,d=Math.min(1,total/Math.max(scope,1)),rx=76+li*24+d*86,rz=24+li*8+d*42,rad=.48+rng()*.88;return{x:Math.cos(ang)*rx*rad+(rng()-.5)*28,y:layerY(k)+(rng()-.5)*11,z:Math.sin(ang)*rz*rad+(rng()-.5)*14}}
+// Galaxy layout: each layer gets wider orbital band proportional to its index
+// L0 (inner) rx≈50, L7 (outer) rx≈435
+function posNode(m,k,i,total,scope){const li=Math.max(0,OBS_LAYER_ORDER.indexOf(k)),rng=makeRng(hashString(`${scope}:${m.memory_id}:${k}`)),ang=i/Math.max(total,1)*Math.PI*2+(rng()-.5)*.72,d=Math.min(1,total/Math.max(scope,1)),scale=scope>100?0.45:1,rx=(50+li*55+d*30)*scale,rz=(30+li*22+d*18)*scale,rad=.48+rng()*.88;return{x:Math.cos(ang)*rx*rad+(rng()-.5)*22*scale,y:layerY(k)+(rng()-.5)*16*scale,z:Math.sin(ang)*rz*rad+(rng()-.5)*12*scale}}
 function buildObservatoryNodes(mem,scope){const g={};sampleNodesForScope(mem,scope).forEach(m=>(g[getRealLayerKey(m)]||=[]).push(m));const nodes=[];Object.entries(g).forEach(([k,a])=>a.forEach((m,i)=>nodes.push({id:m.memory_id,title:deriveNodeTitle(m),memory:m,sourceMemory:m,layerKey:k,visualLayer:deriveLayerId(k),color:getLayerInfo(k).color,placeholder:false,...posNode(m,k,i,a.length,scope)})));return nodes}
-function addEmptyLayerPlaceholders(sum,nodes){sum.forEach(l=>{if(l.empty)nodes.push({id:`placeholder-${l.key}`,title:'No memories in current scope',content:`${l.label} exists in the memory model but has no real memories in the selected scope.`,layerKey:l.key,visualLayer:l.id,color:l.color,placeholder:true,x:-172,y:layerY(l.key),z:0})})}
-function computeObservatoryEdges(nodes,scope){const real=nodes.filter(n=>!n.placeholder),stop=new Set(['the','and','that','this','with','from','have','will','would','could','should','about','there','their','user','hermes','memory','memories','into','using','uses','they','them','your']),kw=n=>new Set(String(n.memory?.content||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(w=>w.length>4&&!stop.has(w)).slice(0,80)),a=real.map(n=>({n,k:kw(n)})),cand=[];for(let i=0;i<a.length;i++)for(let j=i+1;j<a.length;j++){let sh=0;a[i].k.forEach(w=>{if(a[j].k.has(w))sh++});const dt=Math.abs((a[i].n.memory?.gmt_created||0)-(a[j].n.memory?.gmt_created||0)),adj=Math.abs(OBS_LAYER_ORDER.indexOf(a[i].n.layerKey)-OBS_LAYER_ORDER.indexOf(a[j].n.layerKey))<=1,score=sh*3+(dt<3600?4:0)+(adj?2:0);if(score>=8)cand.push({source:a[i].n.id,target:a[j].n.id,score})}return cand.sort((x,y)=>y.score-x.score).slice(0,scope<=25?45:scope<=50?80:130)}
-function initGraph(){const c=document.getElementById('graph-container');if(!c||!window.THREE)return;clearObservatoryScene(true);obsScene=new THREE.Scene;obsCamera=new THREE.PerspectiveCamera(42,c.clientWidth/c.clientHeight,.1,2000);obsRenderer=new THREE.WebGLRenderer({antialias:true,alpha:true});obsRenderer.setPixelRatio(Math.min(devicePixelRatio||1,2));obsRenderer.setSize(c.clientWidth,c.clientHeight);c.innerHTML='';c.appendChild(obsRenderer.domElement);obsRaycaster=new THREE.Raycaster;obsPointer=new THREE.Vector2;obsScene.add(new THREE.AmbientLight(0xffffff,.45));createStarfield();setupObservatoryInput(c);renderLayerFilters();sceneInitialized=true;updateGraph(25);animateObservatory();addEventListener('resize',resizeObservatory)}
+function addEmptyLayerPlaceholders(sum,nodes){const scope=obsCurrentScope;const scale=scope>100?0.45:1;sum.forEach(l=>{if(l.empty)nodes.push({id:`placeholder-${l.key}`,title:'No memories in current scope',content:`${l.label} exists in the memory model but has no real memories in the selected scope.`,layerKey:l.key,visualLayer:l.id,color:l.color,placeholder:true,x:-120*scale,y:layerY(l.key),z:0})})}
+function computeObservatoryEdges(nodes,scope){const real=nodes.filter(n=>!n.placeholder),stop=new Set(['the','and','that','this','with','from','have','will','would','could','should','about','there','their','user','hermes','memory','memories','into','using','uses','they','them','your']),kw=n=>new Set(String(n.memory?.content||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(w=>w.length>4&&!stop.has(w)).slice(0,80)),a=real.map(n=>({n,k:kw(n)})),cand=[];
+// Pass 1: keyword-based edges (same + cross layer)
+for(let i=0;i<a.length;i++)for(let j=i+1;j<a.length;j++){let sh=0;a[i].k.forEach(w=>{if(a[j].k.has(w))sh++});if(sh<1)continue;const cross=a[i].n.layerKey!==a[j].n.layerKey;const dt=Math.abs((a[i].n.memory?.gmt_created||0)-(a[j].n.memory?.gmt_created||0));const score=sh*3+(dt<3600?4:0)+(cross?5:0);if(score>=6)cand.push({source:a[i].n.id,target:a[j].n.id,score})}
+// Pass 2: structural cross-layer edges — connect each layer to its neighbors
+const byLayer={};real.forEach(n=>{(byLayer[n.layerKey]=byLayer[n.layerKey]||[]).push(n)});OBS_LAYER_ORDER.forEach((k,i)=>{const next=OBS_LAYER_ORDER[i+1];if(!next||!byLayer[k]||!byLayer[next])return;const a1=byLayer[k],a2=byLayer[next];const pairs=Math.min(8,a1.length,a2.length);for(let p=0;p<pairs;p++){const n1=a1[Math.floor(p*a1.length/pairs)];const n2=a2[Math.floor(p*a2.length/pairs)];if(n1&&n2)cand.push({source:n1.id,target:n2.id,score:2})}});
+// Ensure cross-layer edges aren't drowned out by high-scoring same-layer pairs
+const cross=cand.filter(e=>{const s=real.find(n=>n.id===e.source),t=real.find(n=>n.id===e.target);return s&&t&&s.layerKey!==t.layerKey});
+const same=cand.filter(e=>{const s=real.find(n=>n.id===e.source),t=real.find(n=>n.id===e.target);return s&&t&&s.layerKey===t.layerKey});
+const maxCross=scope<=25?30:scope<=50?50:90;
+const maxSame=scope<=25?30:scope<=50?50:90;
+return[...cross.sort((x,y)=>y.score-x.score).slice(0,maxCross),...same.sort((x,y)=>y.score-x.score).slice(0,maxSame)]}
+function initGraph(){const c=document.getElementById('graph-container');if(!c||!window.THREE)return;clearObservatoryScene(true);obsScene=new THREE.Scene;obsCamera=new THREE.PerspectiveCamera(42,c.clientWidth/c.clientHeight,.1,8000);obsRenderer=new THREE.WebGLRenderer({antialias:true,alpha:true});obsRenderer.setPixelRatio(Math.min(devicePixelRatio||1,2));obsRenderer.setSize(c.clientWidth,c.clientHeight);c.innerHTML='';c.appendChild(obsRenderer.domElement);obsRaycaster=new THREE.Raycaster;obsPointer=new THREE.Vector2;obsScene.add(new THREE.AmbientLight(0xffffff,.45));createStarfield();setupObservatoryInput(c);renderLayerFilters();sceneInitialized=true;obsIsFirstLoad=true;updateGraph(500);animateObservatory();setTimeout(hideObsSeed,800);addEventListener('resize',resizeObservatory)}
 function resizeObservatory(){const c=document.getElementById('graph-container');if(!c||!obsRenderer||!obsCamera)return;obsCamera.aspect=c.clientWidth/c.clientHeight;obsCamera.updateProjectionMatrix();obsRenderer.setSize(c.clientWidth,c.clientHeight)}
-function clearObservatoryScene(full=false){if(obsAnimationFrame)cancelAnimationFrame(obsAnimationFrame);if(obsRenderer)obsRenderer.dispose();obsNodeMeshes=[];obsLayerObjects=[];obsEdges=[];if(full)obsScene=obsCamera=obsRenderer=obsRaycaster=obsPointer=null}
-function createStarfield(){const n=520,g=new THREE.BufferGeometry,p=new Float32Array(n*3),r=makeRng(42);for(let i=0;i<n;i++){p[i*3]=(r()-.5)*720;p[i*3+1]=(r()-.5)*420;p[i*3+2]=-220+(r()-.5)*180}g.setAttribute('position',new THREE.BufferAttribute(p,3));obsScene.add(new THREE.Points(g,new THREE.PointsMaterial({color:0x9a927f,size:.55,transparent:true,opacity:.18,depthWrite:false})))}
-function createEllipseRing(l){const i=OBS_LAYER_ORDER.indexOf(l.key),rx=170+i*36,rz=48+i*14,curve=new THREE.EllipseCurve(0,0,rx,rz,0,Math.PI*2,false,0),pts=curve.getPoints(128).map(p=>new THREE.Vector3(p.x,layerY(l.key),p.y)),geo=new THREE.BufferGeometry().setFromPoints(pts),mat=new THREE.LineBasicMaterial({color:new THREE.Color(l.color),transparent:true,opacity:l.empty?.055:.18,depthWrite:false}),ring=new THREE.LineLoop(geo,mat);ring.userData.layerKey=l.key;obsScene.add(ring);obsLayerObjects.push(ring)}
-function createGlowNode(n){const size=n.placeholder?1.8:(n.layerKey==='l4_identity'?4.8:n.layerKey==='l0_basic_info'?2.4:3.6),color=new THREE.Color(n.color),grp=new THREE.Group,ops=[.88,.16,.045],muls=[1,1.75,3.2];muls.forEach((mul,i)=>grp.add(new THREE.Mesh(new THREE.SphereGeometry(size*mul,i?18:22,i?18:22),new THREE.MeshBasicMaterial({color,transparent:true,opacity:n.placeholder?ops[i]*.35:ops[i],side:i?THREE.BackSide:THREE.FrontSide,depthWrite:i!==2}))));grp.position.set(n.x,n.y,n.z);grp.userData.node=n;obsScene.add(grp);obsNodeMeshes.push(grp)}
-function createEdgeSegments(edges,nodes){const by=Object.fromEntries(nodes.map(n=>[n.id,n]));edges.forEach(e=>{const a=by[e.source],b=by[e.target];if(!a||!b)return;const mid=new THREE.Vector3((a.x+b.x)/2,(a.y+b.y)/2+10,(a.z+b.z)/2-8),curve=new THREE.QuadraticBezierCurve3(new THREE.Vector3(a.x,a.y,a.z),mid,new THREE.Vector3(b.x,b.y,b.z)),line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(curve.getPoints(18)),new THREE.LineBasicMaterial({color:0x77736b,transparent:true,opacity:.075,depthWrite:false}));line.userData={source:e.source,target:e.target};obsScene.add(line);obsEdges.push(line)})}
-function renderObservatoryScene(nodes,sum,edges){[...obsNodeMeshes,...obsLayerObjects,...obsEdges].forEach(o=>obsScene.remove(o));obsNodeMeshes=[];obsLayerObjects=[];obsEdges=[];sum.forEach(createEllipseRing);createEdgeSegments(edges,nodes);nodes.forEach(createGlowNode);updateCamera()}
-function updateGraph(scope){obsCurrentScope=scope;obsSelectedNode=null;obsHoveredNode=null;if(!obsScene)return;const sampled=sampleNodesForScope(allMemories,scope),sum=buildRealLayerSummary(sampled);let nodes=buildObservatoryNodes(allMemories,scope);addEmptyLayerPlaceholders(sum,nodes);const edges=computeObservatoryEdges(nodes,scope);renderObservatoryScene(nodes,sum,edges);renderLayerFilters(sum);renderObservatoryLegend(sum);window.__obsDebug={nodes,edges,layerSummary:sum,scope};const first=nodes.find(n=>!n.placeholder);if(first)renderObservatoryFieldNote(first)}
+function clearObservatoryScene(full=false){if(obsAnimationFrame)cancelAnimationFrame(obsAnimationFrame);if(obsRenderer)obsRenderer.dispose();obsNodeMeshes=[];obsLayerObjects=[];obsEdges=[];obsStarfield=null;if(full)obsScene=obsCamera=obsRenderer=obsRaycaster=obsPointer=null}
+// Starfield with drift animation
+function createStarfield(){const n=640,g=new THREE.BufferGeometry,p=new Float32Array(n*3),r=makeRng(42);for(let i=0;i<n;i++){p[i*3]=(r()-.5)*600;p[i*3+1]=(r()-.5)*500;p[i*3+2]=-280+(r()-.5)*240}g.setAttribute('position',new THREE.BufferAttribute(p,3));obsStarfield=new THREE.Points(g,new THREE.PointsMaterial({color:0x9a927f,size:.7,transparent:true,opacity:.2,depthWrite:false}));obsScene.add(obsStarfield)}
+// Ellipse rings scaled to galaxy layout: L0 inner, L7 outer
+function createEllipseRing(l){const scope=obsCurrentScope;const scale=scope>100?0.45:1;const i=OBS_LAYER_ORDER.indexOf(l.key),rx=(60+i*52)*scale,rz=(35+i*20)*scale,curve=new THREE.EllipseCurve(0,0,Math.max(1,rx),Math.max(1,rz),0,Math.PI*2,false,0),pts=curve.getPoints(128).map(p=>new THREE.Vector3(p.x,layerY(l.key),p.y)),geo=new THREE.BufferGeometry().setFromPoints(pts),mat=new THREE.LineBasicMaterial({color:new THREE.Color(l.color),transparent:true,opacity:l.empty?.04:.18,depthWrite:false}),ring=new THREE.LineLoop(geo,mat);ring.userData={layerKey:l.key,baseOpacity:l.empty?.04:.18};obsScene.add(ring);obsLayerObjects.push(ring)}
+function createGlowNode(n,fromCenter=false){const size=n.placeholder?1.8:(n.layerKey==='l4_identity'?4.8:n.layerKey==='l0_basic_info'?2.4:3.6),color=new THREE.Color(n.color),grp=new THREE.Group,density=window.__obsDebug?.layerSummary?.find(l=>l.key===n.layerKey)?.count||0,denScale=density>200?.7:density>100?.82:1,ops=[.88*denScale,.16*denScale,.045*denScale],muls=[1,1.75,3.2];muls.forEach((mul,i)=>grp.add(new THREE.Mesh(new THREE.SphereGeometry(Math.max(.1,size*mul),i?18:22,i?18:22),new THREE.MeshBasicMaterial({color,transparent:true,opacity:n.placeholder?ops[i]*.35:ops[i],side:i?THREE.BackSide:THREE.FrontSide,depthWrite:i!==2}))));grp.position.set(fromCenter?0:n.x,fromCenter?0:n.y,fromCenter?0:n.z);grp.userData.node=n;if(fromCenter)grp.userData.targetPos={x:n.x,y:n.y,z:n.z};obsScene.add(grp);obsNodeMeshes.push(grp)}
+function createEdgeSegments(edges,nodes){const by=Object.fromEntries(nodes.map(n=>[n.id,n]));edges.forEach(e=>{const a=by[e.source],b=by[e.target];if(!a||!b)return;const cross=a.layerKey!==b.layerKey;const mid=new THREE.Vector3((a.x+b.x)/2,(a.y+b.y)/2+12,(a.z+b.z)/2-8),curve=new THREE.QuadraticBezierCurve3(new THREE.Vector3(a.x,a.y,a.z),mid,new THREE.Vector3(b.x,b.y,b.z)),line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(curve.getPoints(18)),new THREE.LineBasicMaterial({color:cross?0x9a8d70:0x77736b,transparent:true,opacity:cross?.16:.09,depthWrite:false}));line.userData={source:e.source,target:e.target,baseOpacity:cross?.16:.09,crossLayer:cross};obsScene.add(line);obsEdges.push(line)})}
+function renderObservatoryScene(nodes,sum,edges,fromCenter=false){[...obsNodeMeshes,...obsLayerObjects,...obsEdges].forEach(o=>obsScene.remove(o));obsNodeMeshes=[];obsLayerObjects=[];obsEdges=[];sum.forEach(createEllipseRing);createEdgeSegments(edges,nodes);nodes.forEach(n=>createGlowNode(n,fromCenter));obsNodeBirthTime=performance.now();obsNodesJustBuilt=true;obsMorph=null;updateCamera()}
+function updateGraph(scope){obsCurrentScope=scope;obsSelectedNode=null;obsHoveredNode=null;if(!obsScene)return;const sampled=sampleNodesForScope(allMemories,scope),sum=buildRealLayerSummary(sampled);let nodes=buildObservatoryNodes(allMemories,scope);addEmptyLayerPlaceholders(sum,nodes);const edges=computeObservatoryEdges(nodes,scope);window.__obsDebug={nodes,edges,layerSummary:sum,scope};const isFirst=obsIsFirstLoad;obsIsFirstLoad=false;const oldPos=new Map();if(!isFirst){obsNodeMeshes.forEach(m=>{const n=m.userData.node;if(n)oldPos.set(n.id,{x:m.position.x,y:m.position.y,z:m.position.z})})}renderObservatoryScene(nodes,sum,edges,isFirst);renderLayerFilters(sum);renderObservatoryLegend(sum);const first=nodes.find(n=>!n.placeholder);if(first)renderObservatoryFieldNote(first);obsAnim=null;obsPan={x:0,y:window.__obsFitCenterY||0};obsZoom=computeObservatoryFitZoom();if(typeof updateCamera==='function')updateCamera(false);if(isFirst){obsMorph={startTime:performance.now(),duration:900,type:'entrance'}}else if(oldPos.size>0){const targets=[];obsNodeMeshes.forEach(m=>{const n=m.userData.node;if(!n)return;const old=oldPos.get(n.id);targets.push({mesh:m,from:old?{x:old.x,y:old.y,z:old.z}:{x:0,y:layerY(n.layerKey),z:0},to:{x:n.x,y:n.y,z:n.z}})});obsMorph={startTime:performance.now(),duration:650,type:'morph',targets}}}
 function renderLayerFilters(sum=buildRealLayerSummary(sampleNodesForScope(allMemories,obsCurrentScope))){const f=document.getElementById('layer-filters');if(f){f.innerHTML=`<button class="control-btn ${obsActiveLayer==='ALL'?'active':''}" data-layer="ALL">ALL</button>`+sum.map(l=>`<button class="control-btn ${obsActiveLayer===l.key?'active':''} ${l.empty?'opacity-50':''}" data-layer="${l.key}">${l.id}</button>`).join('');f.querySelectorAll('[data-layer]').forEach(b=>b.addEventListener('click',()=>{obsActiveLayer=b.dataset.layer;renderLayerFilters(sum);applyLayerVisibility()}))}const rail=document.getElementById('obs-layer-rail');if(rail){rail.innerHTML=sum.map(l=>`<button class="obs-layer-pill ${obsActiveLayer===l.key?'active':''} ${l.empty?'empty':''}" data-layer="${l.key}" style="--layer-color:${l.color};--layer-line:${l.color}${obsActiveLayer===l.key?'cc':'66'}"><span class="obs-layer-id">${l.id}</span><span class="obs-layer-name">${escapeHtml(l.label)}</span><span class="obs-count-chip">${l.count}</span></button>`).join('');rail.querySelectorAll('[data-layer]').forEach(b=>b.addEventListener('click',()=>{obsActiveLayer=b.dataset.layer;renderLayerFilters(sum);applyLayerVisibility()}))}document.querySelectorAll('[data-scope]').forEach(b=>{b.onclick=()=>{document.querySelectorAll('[data-scope]').forEach(x=>x.classList.remove('active'));b.classList.add('active');updateGraph(parseInt(b.dataset.scope))}})}
 function renderObservatoryLegend(sum){const el=document.getElementById('obs-legend');if(el)el.innerHTML=sum.filter(l=>l.count>0).map(l=>`<div class="legend-item"><span class="legend-dot" style="background:${l.color};color:${l.color}"></span><span>${escapeHtml(l.label)} <span style="color:#777">${l.count}</span></span></div>`).join('')}
-function applyLayerVisibility(){obsNodeMeshes.forEach(m=>{const n=m.userData.node,on=obsActiveLayer==='ALL'||n.layerKey===obsActiveLayer;m.traverse(ch=>{if(ch.material)ch.material.opacity=on?(n.placeholder?.35:1):.10})});obsLayerObjects.forEach(o=>o.material.opacity=obsActiveLayer==='ALL'||o.userData.layerKey===obsActiveLayer?.22:.04)}
-function setupObservatoryInput(c){c.addEventListener('pointerdown',e=>{obsDragging=true;obsDragStart={x:e.clientX,y:e.clientY,panX:obsPan.x,panY:obsPan.y};obsAnim=null});addEventListener('pointerup',()=>obsDragging=false);addEventListener('pointermove',e=>{if(obsDragging){const scale=.22*obsZoom;obsPan.x=obsDragStart.panX-(e.clientX-obsDragStart.x)*scale;obsPan.y=obsDragStart.panY+(e.clientY-obsDragStart.y)*scale*.78;clampObservatoryPan();updateCamera();return}handleObservatoryHover(e,c)});c.addEventListener('pointerleave',()=>clearObservatoryHover());c.addEventListener('wheel',e=>{e.preventDefault();zoomObservatoryAt(e,c)},{passive:false});c.addEventListener('click',e=>{const n=pickObservatoryNode(e,c);if(!n)return;if(obsSelectedNode?.id===n.id){obsSelectedNode=null;applyObservatoryHover(obsHoveredNode);animateObservatoryCamera(null);return}obsSelectedNode=n;renderObservatoryFieldNote(n);applyObservatoryHover(n);animateObservatoryCamera(n)})}
-function pickObservatoryNode(e,c){if(!obsRaycaster||!obsCamera)return null;const r=c.getBoundingClientRect();obsPointer.x=(e.clientX-r.left)/r.width*2-1;obsPointer.y=-(e.clientY-r.top)/r.height*2+1;obsRaycaster.setFromCamera(obsPointer,obsCamera);const hits=obsRaycaster.intersectObjects(obsNodeMeshes,true);if(!hits.length)return null;let o=hits[0].object;while(o&&!o.userData.node)o=o.parent;return o?.userData?.node||null}
-function handleObservatoryHover(e,c){const node=pickObservatoryNode(e,c);if(node?.id!==obsHoveredNode?.id){obsHoveredNode=node;applyObservatoryHover(node||obsSelectedNode)}positionObservatoryTooltip(e,node)}
-function clearObservatoryHover(){obsHoveredNode=null;applyObservatoryHover(obsSelectedNode);const t=document.getElementById('obs-tooltip');if(t)t.style.display='none'}
-function getPanBounds(){const zoomFactor=1/Math.max(.2,obsZoom);return{x:150+zoomFactor*300,y:90+zoomFactor*180}}
-function clampObservatoryPan(){const b=getPanBounds();obsPan.x=Math.max(-b.x,Math.min(b.x,obsPan.x));obsPan.y=Math.max(-b.y,Math.min(b.y,obsPan.y))}
-function getViewPlanePoint(e,c){if(!obsCamera||!obsRaycaster)return null;const rect=c.getBoundingClientRect();obsPointer.x=((e.clientX-rect.left)/rect.width)*2-1;obsPointer.y=-((e.clientY-rect.top)/rect.height)*2+1;obsRaycaster.setFromCamera(obsPointer,obsCamera);const plane=new THREE.Plane(new THREE.Vector3(0,0,1),0);const hit=new THREE.Vector3();return obsRaycaster.ray.intersectPlane(plane,hit)?hit:null}
-function zoomObservatoryAt(e,c){const before=getViewPlanePoint(e,c);const old=obsZoom;const factor=Math.exp(e.deltaY*.0012);obsZoom=Math.max(.2,Math.min(3.0,obsZoom*factor));if(obsZoom===old)return;obsAnim=null;updateCamera(false);const after=getViewPlanePoint(e,c);if(before&&after){obsPan.x+=before.x-after.x;obsPan.y+=before.y-after.y;clampObservatoryPan()}updateCamera(false)}
+function applyLayerVisibility(){obsNodeMeshes.forEach(m=>{const n=m.userData.node,on=obsActiveLayer==='ALL'||n.layerKey===obsActiveLayer;m.traverse(ch=>{if(ch.material){const base=ch.userData.baseOpacity??ch.material.opacity;ch.userData.baseOpacity=base;ch.material.opacity=on?base:.10}})});obsLayerObjects.forEach(o=>{const base=o.userData.baseOpacity||.18;o.material.opacity=obsActiveLayer==='ALL'||o.userData.layerKey===obsActiveLayer?base:.04})}
+// ── Input (single definition, no duplicates) ──
 function setupObservatoryInput(c){c.addEventListener('pointerdown',e=>{obsDragging=true;obsDragStart={x:e.clientX,y:e.clientY,panX:obsPan.x,panY:obsPan.y};obsAnim=null});addEventListener('pointerup',()=>obsDragging=false);addEventListener('pointermove',e=>{if(obsDragging){const rect=c.getBoundingClientRect();const dist=330*obsZoom;const viewH=2*Math.tan((obsCamera.fov*Math.PI/180)/2)*dist;const unitsPerPx=viewH/rect.height;obsPan.x=obsDragStart.panX-(e.clientX-obsDragStart.x)*unitsPerPx;obsPan.y=obsDragStart.panY+(e.clientY-obsDragStart.y)*unitsPerPx;clampObservatoryPan();updateCamera(false);return}handleObservatoryHover(e,c)});c.addEventListener('pointerleave',()=>clearObservatoryHover());c.addEventListener('wheel',e=>{e.preventDefault();zoomObservatoryAt(e,c)},{passive:false});c.addEventListener('click',e=>{const n=pickObservatoryNode(e,c);if(!n)return;if(obsSelectedNode?.id===n.id){obsSelectedNode=null;applyObservatoryHover(obsHoveredNode);animateObservatoryCamera(null);return}obsSelectedNode=n;renderObservatoryFieldNote(n);applyObservatoryHover(n);animateObservatoryCamera(n)})}
 function pickObservatoryNode(e,c){if(!obsRaycaster||!obsCamera)return null;const r=c.getBoundingClientRect();obsPointer.x=(e.clientX-r.left)/r.width*2-1;obsPointer.y=-(e.clientY-r.top)/r.height*2+1;obsRaycaster.setFromCamera(obsPointer,obsCamera);const hits=obsRaycaster.intersectObjects(obsNodeMeshes,true);if(!hits.length)return null;let o=hits[0].object;while(o&&!o.userData.node)o=o.parent;return o?.userData?.node||null}
 function handleObservatoryHover(e,c){const node=pickObservatoryNode(e,c);if(node?.id!==obsHoveredNode?.id){obsHoveredNode=node;applyObservatoryHover(node||obsSelectedNode)}positionObservatoryTooltip(e,node)}
 function clearObservatoryHover(){obsHoveredNode=null;applyObservatoryHover(obsSelectedNode);const t=document.getElementById('obs-tooltip');if(t)t.style.display='none'}
-function applyObservatoryHover(node){const activeNodes=[];if(obsSelectedNode)activeNodes.push(obsSelectedNode);if(node&&node.id!==obsSelectedNode?.id)activeNodes.push(node);const connected=new Set();const activeIds=new Set(activeNodes.map(n=>n.id));activeIds.forEach(id=>connected.add(id));obsEdges.forEach(edge=>{activeIds.forEach(id=>{if(edge.userData.source===id)connected.add(edge.userData.target);if(edge.userData.target===id)connected.add(edge.userData.source)})});const hasFocus=activeNodes.length>0;obsNodeMeshes.forEach(mesh=>{const n=mesh.userData.node;let op=1;if(hasFocus)op=connected.has(n.id)?(n.placeholder?.45:1):.12;else if(n.placeholder)op=.35;mesh.traverse(ch=>{if(ch.material){const base=ch.userData.baseOpacity??ch.material.opacity;ch.userData.baseOpacity=base;ch.material.opacity=op*base}})});obsEdges.forEach(edge=>{const hit=hasFocus&&activeIds.has(edge.userData.source)&&connected.has(edge.userData.target)||hasFocus&&activeIds.has(edge.userData.target)&&connected.has(edge.userData.source);edge.material.opacity=hasFocus?(hit?.62:.018):.075;edge.material.color.setHex(hit?0xd4c5a3:0x77736b)});const activeLayers=new Set(activeNodes.map(n=>n.layerKey));obsLayerObjects.forEach(o=>{o.material.opacity=hasFocus?(activeLayers.has(o.userData.layerKey)?.28:.04):(obsActiveLayer==='ALL'||o.userData.layerKey===obsActiveLayer?.22:.04)})}
+function applyObservatoryHover(node){const activeNodes=[];if(obsSelectedNode)activeNodes.push(obsSelectedNode);if(node&&node.id!==obsSelectedNode?.id)activeNodes.push(node);const connected=new Set();const activeIds=new Set(activeNodes.map(n=>n.id));activeIds.forEach(id=>connected.add(id));obsEdges.forEach(edge=>{activeIds.forEach(id=>{if(edge.userData.source===id)connected.add(edge.userData.target);if(edge.userData.target===id)connected.add(edge.userData.source)})});const hasFocus=activeNodes.length>0;obsNodeMeshes.forEach(mesh=>{const n=mesh.userData.node;let op=1;if(hasFocus)op=connected.has(n.id)?(n.placeholder?.45:1):.12;else if(n.placeholder)op=.35;mesh.traverse(ch=>{if(ch.material){const base=ch.userData.baseOpacity??ch.material.opacity;ch.userData.baseOpacity=base;ch.material.opacity=op*base}})});obsEdges.forEach(edge=>{const hit=hasFocus&&activeIds.has(edge.userData.source)&&connected.has(edge.userData.target)||hasFocus&&activeIds.has(edge.userData.target)&&connected.has(edge.userData.source);const base=edge.userData.baseOpacity||.09;edge.material.opacity=hasFocus?(hit?.65:.01):base;edge.material.color.setHex(hit?0xd4c5a3:0x77736b)});const activeLayers=new Set(activeNodes.map(n=>n.layerKey));obsLayerObjects.forEach(o=>{const base=o.userData.baseOpacity||.18;o.material.opacity=hasFocus?(activeLayers.has(o.userData.layerKey)?(base*1.4):.04):(obsActiveLayer==='ALL'||o.userData.layerKey===obsActiveLayer?base:.04)})}
+function getPanBounds(){const zoomFactor=1/Math.max(.2,obsZoom);return{x:200+zoomFactor*400,y:120+zoomFactor*240}}
+function clampObservatoryPan(){const b=getPanBounds();obsPan.x=Math.max(-b.x,Math.min(b.x,obsPan.x));obsPan.y=Math.max(-b.y,Math.min(b.y,obsPan.y))}
+function getViewPlanePoint(e,c){if(!obsCamera||!obsRaycaster)return null;const rect=c.getBoundingClientRect();obsPointer.x=((e.clientX-rect.left)/rect.width)*2-1;obsPointer.y=-((e.clientY-rect.top)/rect.height)*2+1;obsRaycaster.setFromCamera(obsPointer,obsCamera);const plane=new THREE.Plane(new THREE.Vector3(0,0,1),0);const hit=new THREE.Vector3();return obsRaycaster.ray.intersectPlane(plane,hit)?hit:null}
+function zoomObservatoryAt(e,c){const before=getViewPlanePoint(e,c);const old=obsZoom;const factor=Math.exp(e.deltaY*.0012);obsZoom=Math.max(.12,Math.min(5.0,obsZoom*factor));if(obsZoom===old)return;obsAnim=null;updateCamera(false);const after=getViewPlanePoint(e,c);if(before&&after){obsPan.x+=before.x-after.x;obsPan.y+=before.y-after.y;clampObservatoryPan()}updateCamera(false)}
 function positionObservatoryTooltip(e,node){const t=document.getElementById('obs-tooltip');if(!t)return;if(!node){t.style.display='none';return}const info=getLayerInfo(node.layerKey);const content=node.placeholder?node.content:(node.memory?.content||'');t.innerHTML=`<div class="obs-tooltip-title">${escapeHtml(node.title)}</div><div class="obs-tooltip-meta" style="color:${info.color}">${escapeHtml(node.visualLayer)} · ${escapeHtml(info.name)}${node.placeholder?' · placeholder':''}</div><div class="obs-tooltip-meta">${node.placeholder?'No real memories in scope':escapeHtml((content||'').slice(0,120))}${content.length>120?'…':''}</div>`;t.style.display='block';const wrap=document.querySelector('.graph-wrapper').getBoundingClientRect();t.style.left=Math.min(e.clientX-wrap.left+16,wrap.width-300)+'px';t.style.top=Math.max(12,Math.min(e.clientY-wrap.top+16,wrap.height-110))+'px'}
-function animateObservatoryCamera(targetNode){const nodes=window.__obsDebug?.nodes||[];const edges=window.__obsDebug?.edges||[];const connected=[];if(targetNode){connected.push(targetNode);edges.forEach(e=>{if(e.source===targetNode.id||e.target===targetNode.id){const other=nodes.find(n=>n.id===(e.source===targetNode.id?e.target:e.source));if(other)connected.push(other)}})}let cx=0,cy=0,cz=0;if(connected.length){connected.forEach(n=>{cx+=n.x;cy+=n.y;cz+=n.z||0});cx/=connected.length;cy/=connected.length;cz/=connected.length}const targetPan={x:cx,y:cy};let targetZoom=2.0;if(targetNode){const baseDistance=330;const depthOffset=cz*0.5;const effectiveDistance=baseDistance+depthOffset;if(connected.length>1){let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;connected.forEach(n=>{minX=Math.min(minX,n.x);maxX=Math.max(maxX,n.x);minY=Math.min(minY,n.y);maxY=Math.max(maxY,n.y)});const spreadX=maxX-minX;const spreadY=maxY-minY;const maxSpread=Math.max(spreadX,spreadY,100);const viewWidth=800;const viewHeight=600;const zoomForWidth=viewWidth/(maxSpread*1.5);const zoomForHeight=viewHeight/(maxSpread*1.5);targetZoom=Math.max(0.3,Math.min(1.2,Math.min(zoomForWidth,zoomForHeight)))}else{targetZoom=0.35}const depthFactor=effectiveDistance/330;targetZoom=Math.max(0.2,Math.min(1.5,targetZoom*depthFactor))}obsAnim={startPan:{x:obsPan.x,y:obsPan.y},startZoom:obsZoom,targetPan,targetZoom,startTime:performance.now(),duration:650}}
-function updateCamera(doClamp=true){if(!obsCamera)return;if(doClamp&&!obsAnim)clampObservatoryPan();const target=new THREE.Vector3(obsPan.x,obsPan.y,0);obsCamera.position.set(obsPan.x,obsPan.y+120*obsZoom,330*obsZoom);obsCamera.lookAt(target)}
-function animateObservatory(){obsAnimationFrame=requestAnimationFrame(animateObservatory);if(obsAnim){const elapsed=performance.now()-obsAnim.startTime;const t=Math.min(1,elapsed/obsAnim.duration);const ease=1-Math.pow(1-t,3);obsPan.x=obsAnim.startPan.x+(obsAnim.targetPan.x-obsAnim.startPan.x)*ease;obsPan.y=obsAnim.startPan.y+(obsAnim.targetPan.y-obsAnim.startPan.y)*ease;obsZoom=obsAnim.startZoom+(obsAnim.targetZoom-obsAnim.startZoom)*ease;if(t>=1)obsAnim=null;updateCamera(false)}if(obsRenderer&&obsScene&&obsCamera)obsRenderer.render(obsScene,obsCamera)}
+function animateObservatoryCamera(targetNode){const nodes=window.__obsDebug?.nodes||[];const edges=window.__obsDebug?.edges||[];const connected=[];if(targetNode){connected.push(targetNode);edges.forEach(e=>{if(e.source===targetNode.id||e.target===targetNode.id){const other=nodes.find(n=>n.id===(e.source===targetNode.id?e.target:e.source));if(other)connected.push(other)}})}let cx=0,cy=0,cz=0;if(connected.length){connected.forEach(n=>{cx+=n.x;cy+=n.y;cz+=n.z||0});cx/=connected.length;cy/=connected.length;cz/=connected.length}const targetPan={x:cx,y:cy};let targetZoom=2.0;if(targetNode){if(connected.length>1){let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;connected.forEach(n=>{minX=Math.min(minX,n.x);maxX=Math.max(maxX,n.x);minY=Math.min(minY,n.y);maxY=Math.max(maxY,n.y)});const spread=Math.max(maxX-minX,maxY-minY,80);const zoomForSpread=400/(spread*1.5);targetZoom=Math.max(.25,Math.min(1.0,zoomForSpread))}else{targetZoom=.4}}obsAnim={startPan:{x:obsPan.x,y:obsPan.y},startZoom:obsZoom,targetPan,targetZoom,startTime:performance.now(),duration:650}}
+function updateCamera(doClamp=true){if(!obsCamera)return;if(doClamp&&!obsAnim)clampObservatoryPan();const target=new THREE.Vector3(obsPan.x,obsPan.y,0);obsCamera.position.set(obsPan.x,obsPan.y+30*obsZoom,420*obsZoom);obsCamera.lookAt(target)}
+// Main render loop with progressive disclosure + animations
+function animateObservatory(){obsAnimationFrame=requestAnimationFrame(animateObservatory);const now=performance.now();const t=now*.001;
+// Camera animation
+if(obsAnim){const elapsed=now-obsAnim.startTime;const p=Math.min(1,elapsed/obsAnim.duration);const ease=1-Math.pow(1-p,3);obsPan.x=obsAnim.startPan.x+(obsAnim.targetPan.x-obsAnim.startPan.x)*ease;obsPan.y=obsAnim.startPan.y+(obsAnim.targetPan.y-obsAnim.startPan.y)*ease;obsZoom=obsAnim.startZoom+(obsAnim.targetZoom-obsAnim.startZoom)*ease;if(p>=1)obsAnim=null;updateCamera(false)}
+// Starfield drift
+if(obsStarfield){obsStarfield.rotation.y+=.00008;obsStarfield.rotation.x+=.00003}
+// Node entrance / morph animation
+if(obsMorph){const elapsed=now-obsMorph.startTime;const p=Math.min(1,elapsed/obsMorph.duration);const ease=1-Math.pow(1-p,3);
+if(obsMorph.type==='entrance'){const s=ease;obsNodeMeshes.forEach(m=>{m.scale.setScalar(s);const tp=m.userData.targetPos;if(tp){m.position.x=tp.x*ease;m.position.y=tp.y*ease;m.position.z=tp.z*ease}});if(p>=1){obsNodeMeshes.forEach(m=>{m.scale.setScalar(1);const tp=m.userData.targetPos;if(tp){m.position.set(tp.x,tp.y,tp.z);delete m.userData.targetPos}});obsMorph=null;obsNodesJustBuilt=false}}
+else if(obsMorph.type==='morph'){obsMorph.targets.forEach(t=>{t.mesh.position.x=t.from.x+(t.to.x-t.from.x)*ease;t.mesh.position.y=t.from.y+(t.to.y-t.from.y)*ease;t.mesh.position.z=t.from.z+(t.to.z-t.from.z)*ease});if(p>=1){obsMorph.targets.forEach(t=>t.mesh.position.set(t.to.x,t.to.y,t.to.z));obsMorph=null;obsNodesJustBuilt=false}}}
+// Legacy fallback
+else if(obsNodesJustBuilt){const age=now-obsNodeBirthTime;if(age<600){const s=Math.min(1,age/600);obsNodeMeshes.forEach(m=>m.scale.setScalar(s))}else{obsNodeMeshes.forEach(m=>m.scale.setScalar(1));obsNodesJustBuilt=false}}
+// Progressive disclosure by zoom level
+const z=obsZoom;
+// Ring pulse + zoom-adaptive opacity
+obsLayerObjects.forEach((ring,idx)=>{const base=ring.userData.baseOpacity||.18;const pulse=Math.sin(t*.4+idx*1.1)*.03;if(z<ZOOM_FAR){ring.material.opacity=Math.max(0,(base*1.8)+pulse)}else if(z<ZOOM_MID){ring.material.opacity=Math.max(0,base+pulse)}else{ring.material.opacity=Math.max(0,(base*1.2)+pulse)}});
+// Edge zoom-adaptive visibility (skip if focus-hover is active)
+const hasFocus=obsSelectedNode||obsHoveredNode;
+if(!hasFocus){obsEdges.forEach(edge=>{const base=edge.userData.baseOpacity||.09;if(z<ZOOM_FAR){edge.material.opacity=.005}else if(z<ZOOM_MID){edge.material.opacity=base}else{edge.material.opacity=base*1.6}})}
+// Node zoom-adaptive: subtle scale boost when close
+if(!obsNodesJustBuilt){const boost=z>=ZOOM_MID?1+.15*(z-ZOOM_MID)/2.2:1;obsNodeMeshes.forEach(m=>m.scale.setScalar(boost))}
+// Render
+if(obsRenderer&&obsScene&&obsCamera)obsRenderer.render(obsScene,obsCamera)}
 function relatedLayersForNode(node){const edges=(window.__obsDebug?.edges||[]).filter(e=>e.source===node.id||e.target===node.id),by=Object.fromEntries((window.__obsDebug?.nodes||[]).map(n=>[n.id,n])),layers=new Set;edges.forEach(e=>{const o=by[e.source===node.id?e.target:e.source];if(o&&o.layerKey!==node.layerKey)layers.add(o.layerKey)});return{edges,layers}}
 function renderObservatoryFieldNote(node){if(node.placeholder){document.getElementById('right-sidebar').innerHTML=`<div class="field-note"><div class="text-xs text-muted mb-2">FIELD NOTE</div><div class="field-note-title" style="font-family: Georgia, 'Times New Roman', serif; font-weight:400; line-height:1.18; color:#f2f2f2;">${escapeHtml(node.title)}</div><div class="field-note-section"><div class="field-note-label">LAYER</div><div class="field-note-content"><span class="badge badge-layer">${escapeHtml(node.visualLayer)} · ${escapeHtml(getLayerInfo(node.layerKey).name)}</span></div></div><div class="field-note-section"><div class="field-note-label">SOURCE</div><div class="field-note-content">System-generated visual placeholder</div></div><div class="field-note-section"><div class="field-note-label">DESCRIPTION</div><div class="field-note-content">${escapeHtml(node.content)}</div></div><div class="field-note-section"><div class="field-note-label">IMPORTANCE</div><div class="field-note-content">Empty layer · excluded from counts</div></div></div>`;return}const m=node.memory,info=getLayerInfo(node.layerKey),rel=relatedLayersForNode(node),ts=m.gmt_created||m.memory_at,updated=ts?new Date(ts*1000).toLocaleString():'Unknown',imp=m.score!=null?Number(m.score).toFixed(2):((m.content||'').length>500?'High detail':'Normal'),linked=Array.from(rel.layers).map(l=>`<span class="badge badge-layer" style="margin-right:4px;color:${getLayerInfo(l).color}">${deriveLayerId(l)} ${escapeHtml(getLayerInfo(l).name)}</span>`).join('')||'<span class="text-muted">No cross-layer links in current view</span>';document.getElementById('right-sidebar').innerHTML=`<div class="field-note"><div class="text-xs text-muted mb-2">FIELD NOTE</div><div class="field-note-title" style="font-family: Georgia, 'Times New Roman', serif; font-weight:400; line-height:1.18; color:#f2f2f2;">${escapeHtml(node.title)}</div><div class="field-note-section"><div class="field-note-label">LAYER</div><div class="field-note-content"><span class="badge badge-layer" style="color:${info.color}">${escapeHtml(node.visualLayer)} · ${escapeHtml(info.name)}</span></div></div><div class="field-note-section"><div class="field-note-label">ID</div><div class="field-note-content font-mono text-xs" style="color:#8b8b8b; word-break:break-all">${escapeHtml(m.memory_id)}</div></div><div class="field-note-section"><div class="field-note-label">CONTENT</div><div class="field-note-content">${escapeHtml(m.content||'—')}</div></div><div class="field-note-section"><div class="field-note-label">METRICS</div><div class="field-note-content"><div class="kv-item"><div class="kv-label">Connections</div><div class="kv-value">${rel.edges.length}</div></div><div class="kv-item"><div class="kv-label">Linked to</div><div class="kv-value">${rel.layers.size} layers</div></div><div class="kv-item"><div class="kv-label">Last updated</div><div class="kv-value">${escapeHtml(updated)}</div></div><div class="kv-item"><div class="kv-label">Importance</div><div class="kv-value" style="color:var(--accent)">${escapeHtml(imp)}</div></div></div></div><div class="field-note-section"><div class="field-note-label">LINKED LAYERS</div><div class="field-note-content">${linked}</div></div><button class="btn" style="width:100%;margin-top:16px;border-color:rgba(212,197,163,.35);color:#e8dcc0;background:rgba(212,197,163,.045)" onclick="navigateTo('explore')">View in Explorer</button></div>`}
 function showFieldNote(memory){renderObservatoryFieldNote({id:memory.memory_id,memory,layerKey:getRealLayerKey(memory),visualLayer:deriveLayerId(getRealLayerKey(memory)),title:deriveNodeTitle(memory),placeholder:false})}
 
+// Reset View button and keyboard shortcuts for Observatory
+document.getElementById('reset-view-btn')?.addEventListener('click', () => {
+  obsAnim = null;
+  obsPan = {x: 0, y: 0};
+  obsZoom = computeObservatoryFitZoom();
+  updateCamera(false);
+});
+
+document.addEventListener('keydown', e => {
+  if (!obsScene || document.getElementById('page-observatory')?.style.display === 'none') return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === '0') {
+    obsAnim = null;
+    obsPan = {x: 0, y: 0};
+    obsZoom = computeObservatoryFitZoom();
+    updateCamera(false);
+    e.preventDefault();
+  }
+  if (e.key === '+' || e.key === '=') {
+    obsZoom = Math.min(3.0, obsZoom * 1.3);
+    updateCamera(false);
+    e.preventDefault();
+  }
+  if (e.key === '-') {
+    obsZoom = Math.max(0.12, obsZoom / 1.3);
+    updateCamera(false);
+    e.preventDefault();
+  }
+});
 // Explore Memory
 let searchMode = 'semantic';
 let searchResults = [];
@@ -3002,6 +3159,8 @@ function debounce(fn, delay) {
 // Init
 loadAllData().then(() => {
   updateRightSidebar('overview');
+  enterPage('overview');
+  hideBootScreen();
 });
 
 // Auto-refresh

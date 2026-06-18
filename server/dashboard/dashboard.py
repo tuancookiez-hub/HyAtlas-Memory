@@ -1304,6 +1304,7 @@ HTML = r"""<!DOCTYPE html>
         <button class="obs-tool" data-tool="focus" title="Focus on selected">&#x25CE;</button>
         <button class="obs-tool" data-tool="expand" title="Expand neighbors">&#x229E;</button>
         <button class="obs-tool" data-tool="filter" title="Filter">&#x2299;</button>
+        <button class="obs-tool" data-tool="reset" title="Reset view (fit all)">&#x21BA;</button>
       </div>
       <div class="obs-tool-section">
         <div class="obs-tool-section-title">Link types</div>
@@ -1971,6 +1972,7 @@ async function loadToday() {
 let obsCyV17 = null;
 let currentV17Filter = 'ALL';
 let currentV17Scope = 100;
+let kuzuGraphNodes = []; // L5/L6/L7 nodes from Kuzu graph
 
 const OBS_CATS_V17 = [
   { key: 'L7_INTENTION',  label: 'WISDOM',    color: '#d4af37', layerIdx: 7 },
@@ -2037,6 +2039,16 @@ async function loadMemories(limit = 500) {
   });
   document.getElementById('footer-mem-count').textContent = allMemories.length;
   return allMemories;
+}
+
+async function loadKuzuGraph() {
+  try {
+    const data = await api('GET', '/api/l5/graph');
+    kuzuGraphNodes = data.nodes || [];
+  } catch (e) {
+    kuzuGraphNodes = [];
+  }
+  return kuzuGraphNodes;
 }
 
 // ============================================
@@ -2245,6 +2257,23 @@ function renderV17Graph() {
     groups[layer].push(m);
   });
 
+  // Merge L5/L6/L7 nodes from Kuzu graph (not in /api/memories)
+  if (kuzuGraphNodes && kuzuGraphNodes.length > 0) {
+    kuzuGraphNodes.forEach(node => {
+      const layer = (node.layer || '').toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+      const normalized = layer.startsWith('L') ? layer : 'L5_KNOWLEDGE';
+      if (groups[normalized]) {
+        groups[normalized].push({
+          memory_id: node.node_id || node.id,
+          layer: normalized,
+          content: node.content || node.name || '',
+          score: node.confidence || null,
+          is_kuzu: true,
+        });
+      }
+    });
+  }
+
   // Apply scope filter
   Object.keys(groups).forEach(key => {
     groups[key] = groups[key].slice(0, currentV17Scope);
@@ -2425,6 +2454,11 @@ function renderV17Graph() {
     wheelSensitivity: 0.3,
   });
 
+  // Fit the graph to the viewport with generous padding (default zoomed out)
+  obsCyV17.ready(() => {
+    obsCyV17.fit(undefined, 60);
+  });
+
   wireV17CyEvents();
 }
 
@@ -2568,6 +2602,7 @@ document.querySelectorAll('.obs-btn[data-scope]').forEach(btn => {
 // ============================================
 
 async function loadGraph() {
+  await loadKuzuGraph();
   await renderV17Graph();
   wireV17CyEvents();
   wireV17Controls();
@@ -2616,9 +2651,26 @@ async function loadSettings() {
   document.getElementById('settings-raw').textContent = JSON.stringify({status: s, info}, null, 2);
 }
 
+// --- Keyboard shortcuts for Observatory ---
+document.addEventListener('keydown', e => {
+  if (!obsCyV17 || currentTab !== 'graph') return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === '0') { obsCyV17.fit(undefined, 60); e.preventDefault(); }
+  if (e.key === '+' || e.key === '=') { obsCyV17.zoom({ level: obsCyV17.zoom() * 1.3, renderedPosition: { x: obsCyV17.width()/2, y: obsCyV17.height()/2 } }); e.preventDefault(); }
+  if (e.key === '-') { obsCyV17.zoom({ level: obsCyV17.zoom() / 1.3, renderedPosition: { x: obsCyV17.width()/2, y: obsCyV17.height()/2 } }); e.preventDefault(); }
+});
+
+// --- Reset view toolbar button ---
+document.querySelectorAll('.obs-tool[data-tool="reset"]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (obsCyV17) obsCyV17.fit(undefined, 60);
+  });
+});
+
 // --- Init ---
 loadOverview();
 loadMemories(500).then(() => { if (currentTab === 'graph') renderV17Graph(); });
+loadKuzuGraph().then(() => { if (currentTab === 'graph') renderV17Graph(); });
 </script>
 </body>
 </html>"""
@@ -2910,43 +2962,27 @@ class Handler(BaseHTTPRequestHandler):
                     n = 0
                 counts[layer] = n
                 total += n
-            # L5 lives in Kuzu but isn't in /api/v1/list — read from export JSON
-            # L6/L7 live in Kuzu and ARE in /api/v1/list — read from there
-            # (Stale-on-crash is OK for either: the bar just shows 0.)
+            # L5/L6/L7 live in Kuzu graph export JSON
+            # Count each layer separately from the node list
             try:
-                # L5 from export JSON
                 l5_export_path = os.path.join(
                     os.path.dirname(os.path.abspath(__file__)),
                     "logs", "l5_kuzu_export.json"
                 )
                 with open(l5_export_path, "r", encoding="utf-8") as f:
                     l5_data = json.loads(f.read())
-                counts["l5_knowledge"] = l5_data.get("node_count", 0)
+                graph_counts = {"l5_knowledge": 0, "l6_schema": 0, "l7_intention": 0}
+                for node in l5_data.get("nodes", []):
+                    layer = node.get("layer", "")
+                    if layer in graph_counts:
+                        graph_counts[layer] += 1
+                counts["l5_knowledge"] = graph_counts["l5_knowledge"]
+                counts["l6_schema"] = graph_counts["l6_schema"]
+                counts["l7_intention"] = graph_counts["l7_intention"]
             except (FileNotFoundError, json.JSONDecodeError):
                 counts["l5_knowledge"] = 0
-            # L6/L7 from SDK's /api/v1/list
-            try:
-                gc_req = urllib.request.Request(
-                    f"http://127.0.0.1:19527/api/v1/list",
-                    data=json.dumps({
-                        "user_id": "hermes-user",
-                        "agent_id": "default",
-                        "session_id": "default_session",
-                        "limit": 200,
-                    }).encode(),
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                gc_raw = json.loads(urllib.request.urlopen(gc_req, timeout=10).read())
-                gc_counts = {"l6_schema": 0, "l7_intention": 0}
-                for n in (gc_raw.get("graph") or {}).get("nodes") or []:
-                    layer = n.get("layer")
-                    if layer in gc_counts:
-                        gc_counts[layer] += 1
-                counts["l6_schema"] = gc_counts["l6_schema"]
-                counts["l7_intention"] = gc_counts["l7_intention"]
-            except Exception:
-                pass
+                counts["l6_schema"] = 0
+                counts["l7_intention"] = 0
             total = sum(counts.values())
             return self._json(200, {
                 "counts": counts,
@@ -2984,13 +3020,15 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             # L5 lives in Kuzu too, but isn't in /api/v1/list.
-            # Read from the export JSON.
+            # Read from the export JSON and count only L5_KNOWLEDGE nodes.
             l5_count = 0
             l5_export_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "l5_kuzu_export.json")
             try:
                 with open(l5_export_path, "r", encoding="utf-8") as f:
                     l5_data = json.loads(f.read())
-                l5_count = l5_data.get("node_count", 0)
+                for node in l5_data.get("nodes", []):
+                    if node.get("layer") == "l5_knowledge":
+                        l5_count += 1
             except (FileNotFoundError, json.JSONDecodeError):
                 pass
             return self._json(200, {
