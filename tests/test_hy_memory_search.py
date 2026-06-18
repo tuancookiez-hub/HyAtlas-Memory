@@ -14,20 +14,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hyatlas_memory import HyMemoryProvider, _format_memories
-
 # Skip entire module if hermes-agent isn't installed (CI)
-pytestmark = pytest.mark.skipif(
-    True,  # will be replaced by conftest check at collection time
-    reason="hermes-agent not installed"
-)
-
-# Re-evaluate at import time: if hermes-agent modules are available, run tests
-try:
-    import agent.memory_provider  # noqa: F401
-    pytestmark = pytest.mark.skipif(False, reason="hermes-agent available")
-except ImportError:
-    pass
+# The plugin imports from hermes-agent internals at module level,
+# so we must check BEFORE importing hyatlas_memory.
+pytest.importorskip("agent.memory_provider", reason="hermes-agent not installed")
+hm = pytest.importorskip("hyatlas_memory")
+HyMemoryProvider = hm.HyMemoryProvider
+_format_memories = hm._format_memories
 
 # ---------------------------------------------------------------------------
 # Fixtures

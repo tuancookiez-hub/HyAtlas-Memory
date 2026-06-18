@@ -2,14 +2,24 @@
 
 These run on CI even without a live Hermes installation."""
 
+import importlib.util
 import pytest
 from pathlib import Path
+
+# Load _version.py DIRECTLY without triggering __init__.py
+_VERSION_PATH = Path(__file__).parent.parent / "src" / "hyatlas_memory" / "_version.py"
+
+
+def _load_version():
+    spec = importlib.util.spec_from_file_location("_version", _VERSION_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.__version__
 
 
 def test_version_is_semver():
     """Package version follows semver (MAJOR.MINOR.PATCH)."""
-    from hyatlas_memory._version import __version__
-
+    __version__ = _load_version()
     parts = __version__.split(".")
     assert len(parts) == 3, f"Version {__version__!r} is not semver (expected 3 parts)"
     for p in parts:
@@ -18,7 +28,7 @@ def test_version_is_semver():
 
 def test_version_consistency():
     """All version sources agree: _version.py == pyproject.toml."""
-    from hyatlas_memory._version import __version__
+    __version__ = _load_version()
 
     import tomllib
 
@@ -33,7 +43,7 @@ def test_version_consistency():
 
 def test_plugin_yaml_version():
     """plugin.yaml version matches _version.py."""
-    from hyatlas_memory._version import __version__
+    __version__ = _load_version()
 
     try:
         import yaml
@@ -52,8 +62,7 @@ def test_plugin_yaml_version():
 
 
 def test_package_importable():
-    """The package can be imported (at least the _version module)."""
-    from hyatlas_memory._version import __version__
-
+    """The _version module loads correctly from disk."""
+    __version__ = _load_version()
     assert isinstance(__version__, str)
     assert len(__version__) > 0
