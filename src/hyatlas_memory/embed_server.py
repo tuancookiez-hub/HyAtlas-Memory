@@ -16,11 +16,9 @@ Usage::
 import argparse
 import logging
 import signal
-import sys
 import threading
 import time
 from pathlib import Path
-from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -32,11 +30,11 @@ class EmbeddingRequest(BaseModel):
     because pydantic v2 cannot resolve forward references for classes
     defined inside a function scope — the schema would never build and
     every request would 422 with ``loc=['query','req']``."""
-    input: List[str] = Field(..., min_length=1)
-    model: Optional[str] = None
+    input: list[str] = Field(..., min_length=1)
+    model: str | None = None
 
 
-def _build_logger(log_path: Optional[Path]) -> logging.Logger:
+def _build_logger(log_path: Path | None) -> logging.Logger:
     """File-only logger. errors='replace' so surrogate chars from
     upstream libs (uvicorn, sentence-transformers) don't crash the
     encoding on Windows. Parent process captures stdout separately."""
@@ -71,7 +69,7 @@ class EmbedServer:
     """Local sentence-transformers HTTP server with idle shutdown."""
 
     def __init__(self, model: str, port: int, idle_timeout: int = 300,
-                 device: str = "cpu", log_path: Optional[Path] = None):
+                 device: str = "cpu", log_path: Path | None = None):
         self.model = model
         self.port = port
         self.idle_timeout = idle_timeout
@@ -84,8 +82,8 @@ class EmbedServer:
         self._stop = threading.Event()
         self._ready = threading.Event()
         self._server = None
-        self._watchdog: Optional[threading.Thread] = None
-        self._loader: Optional[threading.Thread] = None
+        self._watchdog: threading.Thread | None = None
+        self._loader: threading.Thread | None = None
 
     # ------------------------------------------------------------------
     # Model loading
@@ -168,7 +166,7 @@ class EmbedServer:
                 vecs = model.encode(req.input, convert_to_numpy=True)
             except Exception as e:
                 self.log.exception("Embedding failed")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
             data = [
                 {"object": "embedding", "embedding": v.tolist(), "index": i}
                 for i, v in enumerate(vecs)

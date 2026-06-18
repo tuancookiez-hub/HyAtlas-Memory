@@ -44,17 +44,17 @@ should evaluate.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
-import re
 import tempfile
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Token counting
@@ -275,10 +275,8 @@ class RefsStore:
             except (ValueError, IndexError):
                 continue
         for p in deleted:
-            try:
+            with contextlib.suppress(OSError):
                 p.unlink()
-            except OSError:
-                pass
         if deleted:
             self._rebuild_index()
         return len(deleted)
@@ -427,7 +425,7 @@ class ContextPressureMonitor:
         session_id: str,
         refs_root: Path | None = None,
         on_compression: Callable[[PressureReport], None] | None = None,
-    ) -> "ContextPressureMonitor":
+    ) -> ContextPressureMonitor:
         cfg = PressureConfig(
             mild_ratio=float(os.environ.get("HERMES_CTX_MILD_RATIO", "0.50")),
             aggressive_ratio=float(os.environ.get("HERMES_CTX_AGGRESSIVE_RATIO", "0.85")),
@@ -574,10 +572,8 @@ class ContextPressureMonitor:
         now = time.time()
         if now - self._last_sweep_at < self.cfg.sweep_interval_secs:
             return
-        try:
+        with contextlib.suppress(OSError):
             self.refs.sweep(self.cfg.refs_ttl_days)
-        except OSError:
-            pass
         self._last_sweep_at = now
 
 
@@ -820,6 +816,6 @@ if __name__ == "__main__":
         assert "tool: exec" in out
         # Test missing ref
         assert "ref not found" in tool["handler"]("nonexistent_node_id")
-        print(f"[9] ref-read tool OK")
+        print("[9] ref-read tool OK")
 
         print("\nAll smoke tests passed.")

@@ -8,11 +8,8 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
-import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -247,12 +244,11 @@ class HyMemoryProcess:
 
     def is_running(self) -> bool:
         """Check if the server process is alive and responsive."""
-        if self._process is not None:
-            if self._process.poll() is not None:
-                # Process exited
-                self._process = None
-                self._started_by_us = False
-                return False
+        if self._process is not None and self._process.poll() is not None:
+            # Process exited
+            self._process = None
+            self._started_by_us = False
+            return False
 
         from .client import HyMemoryClient
         client = HyMemoryClient(self.base_url, timeout=3)

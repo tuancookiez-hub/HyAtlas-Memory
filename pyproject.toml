@@ -133,6 +133,14 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E402"]  # imports at non-top-level are common in tests
+"src/hyatlas_memory/patches.py" = [
+    "E402",   # late imports are intentional (lazy loading to avoid circular deps)
+    "N814",   # constant aliases for imported names are intentional
+    "F821",   # globals()["fast_cfg"] is set dynamically by design
+    "SIM102", # nested ifs are clearer for the monkey-patching logic
+    "SIM105", # try/except/pass is preferred over contextlib.suppress for readability in patches
+]
+"src/hyatlas_memory/installer.py" = ["E741"]  # `l` for line is fine in context
 
 [tool.mypy]
 python_version = "3.10"

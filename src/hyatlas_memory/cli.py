@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 HY Memory CLI for Hermes — `hermes hy-memory <subcommand>`
 
@@ -23,10 +22,8 @@ hermes config has memory.provider: hy_memory).
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
-from typing import Optional
 
 from hermes_constants import get_hermes_home
 
@@ -133,7 +130,7 @@ def register_cli(plugin_parser: argparse.ArgumentParser) -> None:
 # Client accessor
 # ---------------------------------------------------------------------------
 
-def _get_client(user_id: Optional[str] = None, agent_id: Optional[str] = None):
+def _get_client(user_id: str | None = None, agent_id: str | None = None):
     """Build a HyMemoryClient from current env vars + optional overrides."""
     # Lazy import — keeps the CLI importable even if hy_memory SDK is broken
     from .client import HyMemoryClient
@@ -217,7 +214,7 @@ def _cmd_doctor(args) -> int:
 
     # 5. Plugin discovery check
     try:
-        from plugins.memory import load_memory_provider, discover_memory_providers
+        from plugins.memory import discover_memory_providers
         providers = discover_memory_providers()
         active = next((p for p in providers if p[0] == "hy_memory"), None)
         if active:

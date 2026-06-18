@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Site-packages patch consolidation for hy-memory 1.2.18.
 
@@ -141,6 +140,7 @@ def apply_l3_summary_patch() -> bool:
         import json as _json
         import os
         from pathlib import Path
+
         from hy_memory.client import HyMemoryClient
     except Exception as e:
         logger.debug("[hy-memory/patches] l3_summary: cannot import deps: %s", e)
@@ -333,7 +333,7 @@ def apply_rerank_patches() -> bool:
             return patched
 
         # Replace the method on the class
-        cls = mod.__dict__.get(mod.__name__.split(".")[-1].title().replace("_", ""))
+        mod.__dict__.get(mod.__name__.split(".")[-1].title().replace("_", ""))
         # Search for the class that has the search method
         for attr_name in dir(mod):
             attr = getattr(mod, attr_name, None)
@@ -412,7 +412,7 @@ def apply_inprocess_embed_patch() -> bool:
     async def _patched_embed_openai(self, texts, **kwargs):
         """Replace the HTTP call with a direct in-process model call."""
         import asyncio as _asyncio
-        import numpy as np
+
         vecs = await _asyncio.to_thread(
             _local_embed_model.encode, texts, convert_to_numpy=True,
         )
@@ -854,8 +854,8 @@ def apply_l1_raw_shadow_patch() -> bool:
         return True
 
     try:
-        from hy_memory.pipelines.writer import MemoryWriter
         from hy_memory.models.memory import MemoryStatus
+        from hy_memory.pipelines.writer import MemoryWriter
     except ImportError as e:
         logger.debug("[hy-memory/patches] cannot import MemoryWriter / MemoryStatus: %s", e)
         return False
@@ -946,14 +946,13 @@ import contextlib
 
 
 def apply_llm_fast_smart_patch() -> bool:
-    from hy_memory.agent import llm_provider as _lp
-    from hy_memory.agent.extractor import Extractor
-    from hy_memory.pipelines.system2_writer import System2Writer
-
     # Read fast model from env (preferred) or config
     import json as _json
     import os as _os
     from pathlib import Path as _P
+
+    from hy_memory.agent.extractor import Extractor
+    from hy_memory.pipelines.system2_writer import System2Writer
 
     fast_model = _os.environ.get("HY_MEMORY_LLM_FAST_MODEL", "").strip() or None
     fast_base_url = _os.environ.get("HY_MEMORY_LLM_FAST_BASE_URL", "").strip() or None
@@ -1130,7 +1129,7 @@ def apply_l5_auto_trigger_patch() -> bool:
     # Wrap digest() (manual mode) — the explicit one-shot path
     # ----------------------------------------------------------------
     async def _digest_with_l5_trigger(self, user_id, agent_id="default_agent"):
-        request_id = str(__import__("uuid").uuid4())
+        str(__import__("uuid").uuid4())
         logger.info(
             f"[S2/L5] digest() wrapper entered for user={user_id} agent={agent_id}"
         )
@@ -1461,8 +1460,9 @@ def apply_disabled_cache_timing_patch() -> bool:
         return True
 
     try:
-        from hy_memory.data.cache_disabled import DisabledCache
         import inspect
+
+        from hy_memory.data.cache_disabled import DisabledCache
     except ImportError as e:
         logger.debug(
             "[hy-memory/patches] cannot import DisabledCache for timing patch: %s", e
@@ -1589,11 +1589,7 @@ def apply_disabled_cache_timing_patch() -> bool:
         if orig is None:
             # Method doesn't exist on DisabledCache at all — install a no-op shim.
             # This prevents AttributeError when background tasks call it.
-            if method_name == "store_metrics_minute":
-                async def shim(self, *args, **kwargs): return None
-            elif method_name == "store_metrics":
-                async def shim(self, *args, **kwargs): return None
-            elif method_name == "flush_metrics":
+            if method_name == "store_metrics_minute" or method_name == "store_metrics" or method_name == "flush_metrics":
                 async def shim(self, *args, **kwargs): return None
             else:
                 continue
@@ -1644,8 +1640,8 @@ def apply_l1_raw_normal_fallback_patch() -> bool:
         return True
 
     try:
-        from hy_memory.pipelines.reader_legacy import LegacyReadPipeline as _LRP
         from hy_memory.models.memory import MemoryLayer
+        from hy_memory.pipelines.reader_legacy import LegacyReadPipeline as _LRP
     except Exception as e:
         print(f"[patch-15] import failed: {e}")
         return False

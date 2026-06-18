@@ -27,6 +27,7 @@ Public API:
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import json
 import logging
@@ -34,13 +35,13 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from agent.memory_provider import MemoryProvider
 from hermes_constants import get_hermes_home
 from tools.registry import tool_error
 
-from hyatlas_memory._version import __version__
+from hyatlas_memory._version import __version__ as __version__
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +82,8 @@ def _load_config() -> dict:
     config_path = home / "hy_memory.json"
     config: dict[str, Any] = {}
     if config_path.exists():
-        try:
+        with contextlib.suppress(Exception):
             config = json.loads(config_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
 
     # Env var fallbacks for secrets
     if not config.get("llm", {}).get("api_key"):
@@ -124,7 +123,7 @@ class HyMemoryProvider(MemoryProvider):
         # Buffers N turns before flushing — saves LLM extraction calls
         # and prevents per-turn retry storms when the same content repeats.
         self._write_turn_window: int = _WRITE_TURN_WINDOW
-        self._turn_buffer: Dict[str, List[Dict[str, str]]] = {}
+        self._turn_buffer: dict[str, list[dict[str, str]]] = {}
         self._buffer_lock = threading.RLock()
         # Circuit breaker
         self._consecutive_failures = 0
@@ -373,7 +372,7 @@ class HyMemoryProvider(MemoryProvider):
     # Disk persistence (Hindsight-style: never lose a turn to a process kill)
     # ------------------------------------------------------------------
 
-    def _pending_dir(self) -> Optional[Path]:
+    def _pending_dir(self) -> Path | None:
         """Directory for per-session pending buffer files, or None if disabled."""
         if not self._user_id:
             return None
@@ -421,10 +420,8 @@ class HyMemoryProvider(MemoryProvider):
         d = self._pending_dir()
         if d is None:
             return
-        try:
+        with contextlib.suppress(Exception):
             (d / f"{self._safe_sid(sid)}.json").unlink(missing_ok=True)
-        except Exception:
-            pass
 
     def _replay_pending_buffers(self) -> int:
         """Scan pending dir and flush any orphaned buffers. Called at provider init.
@@ -443,10 +440,8 @@ class HyMemoryProvider(MemoryProvider):
             except Exception:
                 continue
             if not msgs:
-                try:
+                with contextlib.suppress(Exception):
                     path.unlink()
-                except Exception:
-                    pass
                 continue
             sid = path.stem  # inverse of _safe_sid (we don't recover the original,
                               # but server-side dedup will handle duplicates)
@@ -473,7 +468,7 @@ class HyMemoryProvider(MemoryProvider):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _flatten_memories(memories: Any) -> List[Dict[str, Any]]:
+    def _flatten_memories(memories: Any) -> list[dict[str, Any]]:
         """Flatten SDK search() return to a single ordered list.
 
         SDK returns either:
@@ -486,7 +481,7 @@ class HyMemoryProvider(MemoryProvider):
         in the prompt budget.
         """
         if isinstance(memories, dict):
-            out: List[Dict[str, Any]] = []
+            out: list[dict[str, Any]] = []
             for ch in ("profile", "proactive", "normal"):
                 out.extend(memories.get(ch) or [])
             return out
@@ -506,7 +501,7 @@ class HyMemoryProvider(MemoryProvider):
         except Exception:
             return ""
 
-    def _format_memories_for_prompt(self, memories: List[Dict[str, Any]]) -> str:
+    def _format_memories_for_prompt(self, memories: list[dict[str, Any]]) -> str:
         """Format memories as a system-prompt injection block.
 
         Rules (aligned with official hermes-hy-memory 0.2.7 / OpenClaw):
@@ -519,7 +514,7 @@ class HyMemoryProvider(MemoryProvider):
           - Single-entry cap: 800 chars to avoid one long memory eating
             the whole budget.
         """
-        items: List[str] = []
+        items: list[str] = []
         running = 0
         idx = 0
         for mem in memories:
@@ -533,7 +528,7 @@ class HyMemoryProvider(MemoryProvider):
             chain = mem.get("evolution_chain")
             if chain and isinstance(chain, list) and len(chain) > 1:
                 # chain[0] = newest, chain[-1] = oldest; expand oldest→newest
-                lines: List[str] = []
+                lines: list[str] = []
                 for i in range(len(chain) - 1, 0, -1):
                     c = chain[i] or {}
                     when = self._fmt_time(c.get("memory_at"))
@@ -572,7 +567,7 @@ class HyMemoryProvider(MemoryProvider):
             "</relevant-memories>"
         )
 
-    def _flush_session_buffer(self, session_id: Optional[str] = None) -> None:
+    def _flush_session_buffer(self, session_id: str | None = None) -> None:
         """Flush any pending turns below the write window.
 
         Called by on_session_end, on_pre_compress, and shutdown. With
@@ -580,7 +575,7 @@ class HyMemoryProvider(MemoryProvider):
         """
         with self._buffer_lock:
             if session_id is None:
-                pending: List[Tuple[str, List[Dict[str, str]]]] = [
+                pending: list[tuple[str, list[dict[str, str]]]] = [
                     (sid, msgs[:]) for sid, msgs in self._turn_buffer.items() if msgs
                 ]
                 self._turn_buffer.clear()
@@ -616,18 +611,18 @@ class HyMemoryProvider(MemoryProvider):
             return
         # Flush whatever's pending in the buffer (per official behavior)
         self._flush_session_buffer(None)
-        
+
         # Cross-session continuity summary
         if messages:
             try:
                 # Get final turn context
                 last_user = next((m for m in reversed(messages) if m.get('role') == 'user'), None)
                 last_assistant = next((m for m in reversed(messages) if m.get('role') == 'assistant'), None)
-                last_tool = next((m for m in reversed(messages) if m.get('role') == 'tool'), None)
+                next((m for m in reversed(messages) if m.get('role') == 'tool'), None)
                 turn_count = len([m for m in messages if m.get('role') in ('user', 'assistant')])
-                
+
                 summary_text = f"""SESSION_SUMMARY {_dt.datetime.now().isoformat()}
-                
+
 Session completed.
 Turn count: {turn_count}
 
@@ -653,7 +648,7 @@ This session ended. The next session will automatically load this summary.
                     },
                 )
                 logger.info(f"[hy-memory] wrote cross-session continuity summary, {len(summary_text)} chars")
-                
+
             except Exception as e:
                 logger.debug("[hy-memory] on_session_end write failed: %s", e)
 
@@ -808,10 +803,8 @@ This session ended. The next session will automatically load this summary.
         config_path = Path(hermes_home) / "hy_memory.json"
         existing: dict[str, Any] = {}
         if config_path.exists():
-            try:
+            with contextlib.suppress(Exception):
                 existing = json.loads(config_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
         existing.update(values)
         config_path.write_text(
             json.dumps(existing, indent=2, ensure_ascii=False) + "\n",
@@ -829,13 +822,13 @@ This session ended. The next session will automatically load this summary.
 
     def post_setup(self, hermes_home: str, config: dict) -> None:
         """Custom setup wizard for Hy-Memory."""
-        import subprocess
         import shutil
+        import subprocess
         import sys
 
         from hermes_cli.config import save_config
-        from hermes_cli.secret_prompt import masked_secret_prompt
         from hermes_cli.memory_setup import _curses_select
+        from hermes_cli.secret_prompt import masked_secret_prompt
 
         print("\n  Configuring Hy-Memory memory:\n")
 
@@ -862,7 +855,7 @@ This session ended. The next session will automatically load this summary.
         uv_path = shutil.which("uv")
         deps = ["hy-memory", "kuzu", "chromadb"]
         if not uv_path:
-            print(f"  ⚠ uv not found — install: curl -LsSf https://astral.sh/uv/install.sh | sh")
+            print("  ⚠ uv not found — install: curl -LsSf https://astral.sh/uv/install.sh | sh")
             print(f"  Then: uv pip install --python {sys.executable} {' '.join(deps)}")
         else:
             try:
@@ -992,7 +985,7 @@ This session ended. The next session will automatically load this summary.
         if env_writes:
             env_path = Path(hermes_home) / ".env"
             _write_env_vars(env_path, env_writes)
-            print(f"  ✓ API keys saved to .env")
+            print("  ✓ API keys saved to .env")
 
         # Write provider config
         self.save_config(provider_config, hermes_home)
@@ -1002,7 +995,7 @@ This session ended. The next session will automatically load this summary.
         save_config(config)
 
         print(f"\n  ✓ Hy-Memory activated (mode: {mode})")
-        print(f"  Start a new session to activate.\n")
+        print("  Start a new session to activate.\n")
 
 
 def _write_env_vars(env_path: Path, env_writes: dict) -> None:

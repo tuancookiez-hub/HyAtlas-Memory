@@ -12,11 +12,7 @@ where the plugin iterated the layered dict as a flat list.
 import json
 from unittest.mock import MagicMock
 
-import pytest
-
-from hyatlas_memory import HyMemoryProvider
-from hyatlas_memory import _format_memories
-
+from hyatlas_memory import HyMemoryProvider, _format_memories
 
 # ---------------------------------------------------------------------------
 # Fixtures

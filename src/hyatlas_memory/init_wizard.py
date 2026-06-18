@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 HY Memory init wizard for Hermes — `hermes hy-memory init`
 
@@ -18,10 +17,8 @@ For our local fork:
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
-from typing import Optional
 
 from hermes_constants import get_hermes_home
 

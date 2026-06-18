@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 HY Memory installer for Hermes — `hermes hy-memory install`
 
@@ -29,12 +28,11 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 from hermes_constants import get_hermes_home
 
 
-def _detect_hermes_python() -> Optional[str]:
+def _detect_hermes_python() -> str | None:
     """Find the Python interpreter Hermes runs under."""
     # 1. Try the `hermes` launcher on PATH
     hermes = shutil.which("hermes")
@@ -46,9 +44,8 @@ def _detect_hermes_python() -> Optional[str]:
             # Look for shebang or python path
             for line in content.splitlines():
                 ls = line.strip()
-                if ls.startswith("#!"):
-                    if "python" in ls:
-                        return ls[2:].strip().split()[-1]
+                if ls.startswith("#!") and "python" in ls:
+                    return ls[2:].strip().split()[-1]
                 if "venv" in line.lower() and "python" in line.lower():
                     # crude: "Scripts/python.exe" inside venv
                     import re
@@ -81,7 +78,7 @@ def _detect_hermes_python() -> Optional[str]:
     return sys.executable
 
 
-def run_install(hermes_python: Optional[str] = None) -> int:
+def run_install(hermes_python: str | None = None) -> int:
     """Verify the plugin is properly installed. For our local fork this is mostly a no-op + diagnostics."""
     print()
     print("=" * 64)
@@ -177,7 +174,7 @@ def run_install(hermes_python: Optional[str] = None) -> int:
         hy_vars = [l for l in env_text.splitlines() if l.startswith("HY_MEMORY_")]
         print(f"   ✓ ~/.hermes/.env exists with {len(hy_vars)} HY_MEMORY_* vars")
     else:
-        print(f"   ! No ~/.hermes/.env — run `hermes hy-memory init` to create one")
+        print("   ! No ~/.hermes/.env — run `hermes hy-memory init` to create one")
 
     print()
     print("Install / verify complete.")

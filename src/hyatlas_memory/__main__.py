@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Entry point for ``python -m hyatlas_memory`` (standalone CLI).
 

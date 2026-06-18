@@ -19,12 +19,13 @@ Endpoints (from hy_memory/server.py):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -62,10 +63,8 @@ class HyMemoryClient:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             body_text = ""
-            try:
+            with contextlib.suppress(Exception):
                 body_text = e.read().decode("utf-8", errors="replace")[:500]
-            except Exception:
-                pass
             raise RuntimeError(
                 f"Hy-Memory HTTP {e.code} on {method} {path}: {body_text}"
             ) from e
