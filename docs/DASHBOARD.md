@@ -155,8 +155,8 @@ The dashboard's HTTP server (`server/dashboard/dashboard.py`) exposes these endp
 | `GET` | `/api/memories?offset=0&limit=25` | Paginated memory list (deduped across user scopes, L1_RAW included) |
 | `GET` | `/api/memories?offset=0&limit=500` | Max 500 items |
 | `GET` | `/api/metrics?minutes=60` | Memory activity metrics |
-| `GET` | `/api/status` | Hy-Memory server status (VDB points, provider, collection) |
-| `GET` | `/api/info` | Hy-Memory server info |
+| `GET` | `/api/status` | Hy-Memory upstream server status (VDB points, provider, collection) |
+| `GET` | `/api/info` | Hy-Memory upstream server info |
 | `GET` | `/api/storage` | VDB stats + on-disk file sizes (`vector_db/`, `cache.db`, `kuzu_db/`) |
 | `GET` | `/api/health` | Dashboard health check (returns `{status: "ok", upstream: "..."}`) |
 | `GET` | `/api/coding-memories?limit=25` | Coding-session memories (from `server/bin/l5_*` pipeline output) |
@@ -208,7 +208,7 @@ python server/dashboard/dashboard.py
 
 ### "500 Internal Server Error" on API calls
 
-The upstream Hy-Memory server (port 19527) is likely down. Restart it:
+The upstream Hy-Memory SDK server (port 19527) is likely down. Restart it:
 ```bash
 python -m server.start_server
 ```

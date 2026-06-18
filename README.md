@@ -31,26 +31,17 @@ See it in action — a 19-second walkthrough of the live dashboard:
   <img src="./assets/dashboard-demo.gif" alt="HyAtlas-Memory dashboard demo: animated 19-second walkthrough showing the splash screen, Overview tab with KPI cards and L0-L7 memory composition bar chart, navigation to Memory Observatory with the layered knowledge graph visualization, and recent ingestion feed" width="100%" />
 </p>
 
-## How it works
-
-Memory flows through two parallel paths — a fast path for real-time awareness, and a slow path for deep consolidation:
-
-<p align="center">
-  <img src="./assets/02-dual-path-memory.png" alt="Dual-path memory: System 1 online fast path (L1 raw, L2 fact, fast recall injection) and System 2 background consolidation (L3 summary, L4 identity, L5 Kuzu graph, L6 schema, L7 intention)" width="900" />
-</p>
-
-**System 1 — Fast Path** handles every message you send. It captures raw text, extracts atomic facts via LLM, and injects relevant context back into the agent. This happens in milliseconds — you never wait for memory.
-
-**System 2 — Background Consolidation** runs asynchronously. It takes the accumulated facts and builds something deeper: session summaries, identity profiles, a relationship graph, domain schemas, and proactive intent detection. This is where raw data becomes understanding.
-
 ## Quick start
+
+### Install and configure
 
 ```bash
 # 1. Install alongside Hermes Agent
 pip install hermes-agent          # if not already installed
 pip install hyatlas-memory        # this package
 
-# 2. Edit ~/.hermes/config.yaml
+# 2. Tell Hermes to use it
+#    Edit ~/.hermes/config.yaml:
 memory:
   provider: hy_memory
 ```
@@ -62,9 +53,9 @@ That's it. On first launch, HyAtlas-Memory will:
 3. Prompt for one-time setup (vector store choice, LLM key)
 4. Start a local server on port 19527
 
-### Configuration
+### Configure (optional)
 
-Copy `hy_memory.json.example` to `~/.hy_memory/hy_memory.json`:
+If you want to customize before first run, copy `hy_memory.json.example` to `~/.hy_memory/hy_memory.json`:
 
 ```json
 {
@@ -87,9 +78,9 @@ Copy `hy_memory.json.example` to `~/.hy_memory/hy_memory.json`:
 }
 ```
 
-**Vector store options:** `qdrant` (default, fastest), `chroma` (simplest), `faiss` (no daemon).
+**Vector store:** `qdrant` (default, fastest) · `chroma` (simplest) · `faiss` (no daemon)
 
-**LLM options:** any OpenAI-compatible endpoint. Tested with OpenAI, OpenRouter, TokenRouter, DeepSeek, MiniMax, ByteDance. Use `base_url` to point to a local Ollama instance.
+**LLM:** any OpenAI-compatible endpoint. Tested with OpenAI, OpenRouter, DeepSeek, MiniMax, ByteDance, and local Ollama.
 
 **Three modes:**
 
@@ -99,19 +90,37 @@ Copy `hy_memory.json.example` to `~/.hy_memory/hy_memory.json`:
 | `pro` | LLM fact extraction + reconciliation | LLM calls per `add` |
 | `ultra` | Pro + System2 cognitive layer with Kuzu graph (default) | LLM calls + background pipeline |
 
-## Using it
-
-The plugin integrates automatically with Hermes Agent — no manual tool calls needed.
-
-### Dashboard
-
-Launch the local web UI with a single command:
+### Launch the dashboard
 
 ```bash
 python start.py
 ```
 
-This starts the full stack (Qdrant → upstream server → dashboard) with health checks, auto-cleanup of stale processes, and a live status display. Once running, open **http://127.0.0.1:8765**.
+This starts the full stack (Qdrant → upstream server → dashboard) with health checks, auto-cleanup of stale processes, and a live status display:
+
+```
+  ╔══════════════════════════════════════╗
+  ║          HyAtlas Memory              ║
+  ║       AI Memory Atlas v0.6           ║
+  ╚══════════════════════════════════════╝
+
+  Starting HyAtlas Memory stack...
+
+→ Starting Qdrant on port 6333...
+✔ Qdrant ready on port 6333  (2s)
+→ Starting Hy-Memory Server on port 19527...
+✔ Hy-Memory Server ready on port 19527  (8s)
+→ Starting Dashboard on port 8765...
+✔ Dashboard ready on port 8765  (1s)
+
+  🧠 Hy-Memory — running on :19527
+  📊 Dashboard          — running on :8765
+  🗄️  Qdrant             — running on :6333
+
+  Press Ctrl+C to stop all services
+```
+
+Then open **http://127.0.0.1:8765** — 7 tabs: Overview, Explore, Layers, Today, Graph, Activity, Settings.
 
 Other commands:
 
@@ -120,7 +129,7 @@ python start.py --status   # check what's running
 python start.py --stop     # stop all services
 ```
 
-Press **Ctrl+C** in the terminal to gracefully shut down all services. Logs are written to `logs/` in the project root.
+Press **Ctrl+C** in the terminal to gracefully shut down all services. Logs go to `logs/` in the project root.
 
 ### Memory recall is transparent
 
@@ -137,21 +146,6 @@ Agents (or you in the TUI) can explicitly search memories:
 [normal] Working on HyAtlas extraction (2026-06-16)
 ```
 
-### Dashboard
-
-```bash
-python -m server.dashboard.dashboard
-# open http://127.0.0.1:8765
-```
-
-7 tabs: Overview, Explore, Layers, Today, Graph, Activity, Settings. Reads the live server — no setup, no config.
-
-The Overview tab gives you a complete snapshot at a glance — total memories, layer distribution across L0–L7, ingestion activity over the last 7 days, and a live feed of recent writes:
-
-<p align="center">
-  <img src="./assets/dashboard-overview.png" alt="HyAtlas-Memory dashboard overview tab: dark-themed three-column layout with left navigation (Overview, Memory Observatory, Explore, Layers, Today, Settings, L5 Knowledge Graph), central KPI cards (3207 memories stored, 190 links, 8/8 layer coverage), an L0-L7 memory composition stacked bar chart, a 7-day ingestion line chart from Jun 11-17, and a right sidebar showing the most recent ingestion feed with filterable tabs (ALL, VDB, CODING, L1_RAW)" width="100%" />
-</p>
-
 ### CLI
 
 ```bash
@@ -162,6 +156,18 @@ hermes hy-memory list      # list recent memories
 hermes hy-memory init      # interactive setup wizard
 hermes hy-memory reset     # erase all memories (destructive)
 ```
+
+## How it works
+
+Memory flows through two parallel paths — a fast path for real-time awareness, and a slow path for deep consolidation:
+
+<p align="center">
+  <img src="./assets/02-dual-path-memory.png" alt="Dual-path memory: System 1 online fast path (L1 raw, L2 fact, fast recall injection) and System 2 background consolidation (L3 summary, L4 identity, L5 Kuzu graph, L6 schema, L7 intention)" width="900" />
+</p>
+
+**System 1 — Fast Path** handles every message you send. It captures raw text, extracts atomic facts via LLM, and injects relevant context back into the agent. This happens in milliseconds — you never wait for memory.
+
+**System 2 — Background Consolidation** runs asynchronously. It takes the accumulated facts and builds something deeper: session summaries, identity profiles, a relationship graph, domain schemas, and proactive intent detection. This is where raw data becomes understanding.
 
 ## The 7 memory layers
 
@@ -250,7 +256,7 @@ server/                    # standalone server (auto-started by plugin)
   bin/                     # L5 pipeline scripts (7-step graph rebuild)
   dashboard/               # local web UI (7 tabs, port 8765)
 
-tests/                     # pytest suite
+tests/                     # pytest suite (16 tests)
 docs/                      # architecture + migration notes
 assets/                    # infographic images
 ```
@@ -282,7 +288,7 @@ cd HyAtlas-Memory
 uv pip install -e ".[dev,test]"
 
 # 2. Run tests
-pytest                     # 12 tests, ~0.1s, no external deps
+pytest                     # 16 tests, ~0.1s, no external deps
 pytest -m integration      # needs running HyAtlas server
 
 # 3. Lint

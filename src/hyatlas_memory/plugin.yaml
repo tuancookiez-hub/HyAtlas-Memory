@@ -1,6 +1,6 @@
 name: hy_memory
 version: 0.6.0
-description: "Hy-Memory — 7-layer cognitive memory with System1/System2 dual processing, evolution chains, and Kuzu graph."
+description: "HyAtlas-Memory — 7-layer cognitive memory with System1/System2 dual processing, evolution chains, and Kuzu graph."
 pip_dependencies:
   - kuzu
   - chromadb

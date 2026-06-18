@@ -12,7 +12,7 @@
            │ HTTP
            ▼
 ┌─────────────────────┐  ← port 19527 (upstream SDK)
-│ Hy-Memory server    │     (uvicorn, upstream)
+│ Hy-Memory (upstream)│     (uvicorn, port 19527)
 │   - embedding       │
 │   - LLM extraction  │
 │   - vector search   │
@@ -35,11 +35,11 @@
 └─────────────────────┘
 ```
 
-The dashboard is a **thin aggregator** — it calls the upstream Hy-Memory server, merges data from Qdrant/Kuzu directly, and serves a single-page JS app.
+The dashboard is a **thin aggregator** — it calls the upstream Hy-Memory SDK server, merges data from Qdrant/Kuzu directly, and serves a single-page JS app.
 
 ---
 
-## Server 1: Upstream Hy-Memory (`127.0.0.1:19527`)
+## Server 1: Upstream Hy-Memory SDK (`127.0.0.1:19527`)
 
 This is the unmodified upstream SDK. You don't need to call it directly — the plugin and dashboard both proxy to it. Documented here for completeness.
 
@@ -369,7 +369,7 @@ Passthrough to upstream `/api/v1/search`.
 | `400` | Bad request (malformed params, path traversal, etc.) |
 | `404` | Endpoint not found |
 | `500` | Internal server error (e.g., sqlite/db failure) |
-| `502` | Upstream Hy-Memory server unreachable |
+| `502` | Upstream Hy-Memory SDK server unreachable |
 
 All error responses are JSON:
 ```json
