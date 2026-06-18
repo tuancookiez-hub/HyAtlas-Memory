@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hyatlas-memory"
 version = "0.6.0"
-description = "Community implementation of the official Hy-Memory 6-layer memory framework (Tencent Hunyuan, memory.hunyuan.tencent.com) for Hermes Agent. Includes the experimental L7 intention layer. MIT licensed."
+description = "Community implementation of the official Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan, memory.hunyuan.tencent.com) for Hermes Agent. Includes the experimental L7 intention layer. MIT licensed."
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
@@ -85,6 +85,10 @@ test = [
 # for back-compat with existing user configs.
 [project.entry-points."hermes.memory_provider"]
 hy_memory = "hyatlas_memory:HyMemoryProvider"
+
+# CLI entry point: `hyatlas start`, `hyatlas stop`, `hyatlas status`
+[project.scripts]
+hyatlas = "hyatlas_memory.start:main"
 
 [project.urls]
 Homepage = "https://github.com/tuancookiez-hub/HyAtlas-Memory"

@@ -33,17 +33,27 @@ See it in action — a 19-second walkthrough of the live dashboard:
 
 ## Quick start
 
-### Install and configure
+### Prerequisites
+
+| Tool | Why | Install |
+|------|-----|---------|
+| **Python 3.10+** | Runtime | [python.org](https://www.python.org/downloads/) |
+| **Qdrant** | Vector store backend | [Download](https://qdrant.tech/documentation/guides/install/) or `docker run -p 6333:6333 qdrant/qdrant` |
+| **LLM API key** | Fact extraction & embedding | OpenAI, OpenRouter, DeepSeek, or any OpenAI-compatible endpoint |
+
+### Install
 
 ```bash
-# 1. Install alongside Hermes Agent
-pip install hermes-agent          # if not already installed
-pip install hyatlas-memory        # this package
+# 1. Clone the repo
+git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
+cd HyAtlas-Memory
 
-# 2. Tell Hermes to use it
-#    Edit ~/.hermes/config.yaml:
-memory:
-  provider: hy_memory
+# 2. Install the package (editable mode)
+pip install -e ".[dev,test]"
+
+# 3. Configure Hermes to use it — edit ~/.hermes/config.yaml:
+#    memory:
+#      provider: hy_memory
 ```
 
 That's it. On first launch, HyAtlas-Memory will:
@@ -90,13 +100,21 @@ If you want to customize before first run, copy `hy_memory.json.example` to `~/.
 | `pro` | LLM fact extraction + reconciliation | LLM calls per `add` |
 | `ultra` | Pro + System2 cognitive layer with Kuzu graph (default) | LLM calls + background pipeline |
 
-### Launch the dashboard
+### Launch
 
 ```bash
-python start.py
+hyatlas            # start the full stack (Qdrant → server → dashboard)
+hyatlas --status   # check what's running
+hyatlas --stop     # stop all services
 ```
 
-This starts the full stack (Qdrant → upstream server → dashboard) with health checks, auto-cleanup of stale processes, and a live status display:
+Or, if you prefer the script directly:
+
+```bash
+python start.py            # same as: hyatlas
+python start.py --status   # same as: hyatlas --status
+python start.py --stop     # same as: hyatlas --stop
+```
 
 ```
   ╔══════════════════════════════════════╗
@@ -121,13 +139,6 @@ This starts the full stack (Qdrant → upstream server → dashboard) with healt
 ```
 
 Then open **http://127.0.0.1:8765** — 7 tabs: Overview, Explore, Layers, Today, Graph, Activity, Settings.
-
-Other commands:
-
-```bash
-python start.py --status   # check what's running
-python start.py --stop     # stop all services
-```
 
 Press **Ctrl+C** in the terminal to gracefully shut down all services. Logs go to `logs/` in the project root.
 
