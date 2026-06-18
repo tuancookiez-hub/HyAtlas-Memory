@@ -30,7 +30,10 @@ def test_version_consistency():
     """All version sources agree: _version.py == pyproject.toml."""
     __version__ = _load_version()
 
-    import tomllib
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib
 
     pyproject = Path(__file__).parent.parent / "pyproject.toml"
     with open(pyproject, "rb") as f:
