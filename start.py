@@ -164,7 +164,7 @@ def banner():
     print()
     print(f"  {BOLD}╔══════════════════════════════════════╗{RESET}")
     print(f"  {BOLD}║{RESET}          {BOLD}HyAtlas Memory{RESET}            {BOLD}║{RESET}")
-    print(f"  {BOLD}║{RESET}       AI Memory Atlas v0.1         {BOLD}║{RESET}")
+    print(f"  {BOLD}║{RESET}       AI Memory Atlas v0.6         {BOLD}║{RESET}")
     print(f"  {BOLD}╚══════════════════════════════════════╝{RESET}")
     print()
 
