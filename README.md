@@ -244,6 +244,16 @@ assets/                    # infographic images
 - **Context pressure** (`context_pressure.py`) monitors the agent's context window. At 50% usage it starts compressing old tool outputs to ref files. At 95% it aggressively prunes to prevent overflow. This is plugin-layer — no SDK changes needed.
 - **9 patches** (`patches.py`) are applied at import time. They fix upstream SDK issues: LLMConfig env-loading, cross-encoder rerank, in-process embedding, L3 trigger reachability, L1 dedup gate, and more. Each patch is idempotent and documented inline.
 
+## Documentation
+
+- **[docs/DASHBOARD.md](docs/DASHBOARD.md)** — Web UI reference (all 6 pages, Observatory controls, animations)
+- **[docs/API.md](docs/API.md)** — HTTP API reference (every endpoint, request/response shapes)
+- **[docs/LAYERS.md](docs/LAYERS.md)** — Per-layer deep-dive (L0–L7: what, where, when)
+- **[docs/architecture.md](docs/architecture.md)** — System design + layer mapping vs official spec
+- **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — Common issues + fixes
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — How to contribute, dev setup, PR process
+- **[CHANGELOG.md](CHANGELOG.md)** — Version history
+
 ## Development
 
 ```bash
