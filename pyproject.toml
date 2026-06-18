@@ -142,6 +142,11 @@ ignore = [
     "SIM105",  # try/except/pass is intentional for process management
     "SIM115",  # long-lived log files can't use context managers
 ]
+"server/dashboard/dashboard.py" = [
+    "E402",   # imports after env-var setup are intentional
+    "W293",   # whitespace in embedded JS strings
+    "SIM102",  # nested if for auth gate is clearer than combining
+]
 "src/hyatlas_memory/patches.py" = [
     "E402",   # late imports are intentional (lazy loading to avoid circular deps)
     "N814",   # constant aliases for imported names are intentional

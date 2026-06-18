@@ -377,7 +377,19 @@ def start_all():
     print()
     print(f"  {BOLD}{GREEN}All services running!{RESET}")
     print()
-    print(f"  {BOLD}Dashboard:{RESET}  http://127.0.0.1:{DASHBOARD_PORT}")
+    # Check if dashboard auth is enabled (bound to non-localhost)
+    dash_bind = os.environ.get("HY_DASH_BIND", "127.0.0.1")
+    dash_url = f"http://127.0.0.1:{DASHBOARD_PORT}"
+    if dash_bind not in ("127.0.0.1", "localhost", "::1"):
+        # Auth enabled — try to read the token
+        token_file = os.path.join(os.path.expanduser("~"), ".hy_memory", ".dashboard_token")
+        try:
+            with open(token_file) as f:
+                token = f.read().strip()
+            dash_url = f"{dash_url}/?token={token}"
+        except Exception:
+            pass
+    print(f"  {BOLD}Dashboard:{RESET}  {dash_url}")
     print(f"  {BOLD}Upstream:{RESET}   http://127.0.0.1:{UPSTREAM_PORT}")
     print(f"  {BOLD}Qdrant:{RESET}     http://127.0.0.1:{QDRANT_PORT}")
     print()

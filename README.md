@@ -163,6 +163,24 @@ Then open **http://127.0.0.1:8765** — 7 tabs: Overview, Explore, Layers, Today
 
 Press **Ctrl+C** in the terminal to gracefully shut down all services. Logs go to `logs/` in the project root.
 
+### Dashboard auth
+
+By default, the dashboard binds to `127.0.0.1` (localhost only) — no auth needed.
+
+To expose it on your network (e.g. for remote access):
+
+```bash
+HY_DASH_BIND=0.0.0.0 hyatlas    # or: HY_DASH_BIND=0.0.0.0 python start.py
+```
+
+When bound to a public interface, a **token is auto-generated** on first run and stored at `~/.hy_memory/.dashboard_token`. The startup output prints a URL with the token embedded:
+
+```
+  Dashboard:  http://0.0.0.0:8765/?token=F9asp-6x6-5emW719SEz85MvAgr34EFp
+```
+
+Click that URL once — it sets a cookie and redirects to the dashboard. All subsequent requests are authenticated via the cookie. The `/api/health` endpoint is exempt (for health checks).
+
 ### Memory recall is transparent
 
 When your agent receives a message, HyAtlas-Memory injects relevant memories into the prompt as a `<relevant-memories>` block. The agent sees your past context without you doing anything.

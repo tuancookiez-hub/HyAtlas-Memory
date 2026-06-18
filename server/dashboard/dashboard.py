@@ -34,16 +34,44 @@ from __future__ import annotations
 import json
 import os
 import sys
-import time
 import urllib.error
 import urllib.request
-from urllib.parse import parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs
 
 HY_MEMORY_BASE = os.environ.get("HY_MEMORY_BASE", "http://127.0.0.1:19527").rstrip("/")
 BIND_HOST = os.environ.get("HY_DASH_BIND", "127.0.0.1")
 BIND_PORT = int(os.environ.get("HY_DASH_PORT", "8765"))
 REFRESH_S = int(os.environ.get("HY_DASH_REFRESH_S", "30"))
+
+# Auth: when bound to 0.0.0.0 (exposed to network), a token is required.
+# When bound to 127.0.0.1 (local only), auth is skipped for convenience.
+# The token is auto-generated on first run and stored in ~/.hy_memory/.
+import pathlib as _pathlib
+import secrets as _secrets
+
+_DASH_TOKEN_FILE = _pathlib.Path.home() / ".hy_memory" / ".dashboard_token"
+DASH_TOKEN: str | None = None
+
+def _get_or_create_token() -> str:
+    """Load or generate the dashboard auth token."""
+    try:
+        _DASH_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if _DASH_TOKEN_FILE.exists():
+            token = _DASH_TOKEN_FILE.read_text().strip()
+            if token:
+                return token
+        token = _secrets.token_urlsafe(24)
+        _DASH_TOKEN_FILE.write_text(token)
+        _DASH_TOKEN_FILE.chmod(0o600)
+        return token
+    except Exception:
+        return ""
+
+# Auth is required when exposed to the network, optional when local
+AUTH_REQUIRED = BIND_HOST not in ("127.0.0.1", "localhost", "::1")
+if AUTH_REQUIRED:
+    DASH_TOKEN = _get_or_create_token()
 
 # Qdrant (used to fetch L1_RAW conversations that Hy-Memory's /api/v1/list
 # filters out by default — see hy-memory-setup skill: "L1_RAW is the raw
@@ -2684,6 +2712,56 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write(f"[dash] {self.address_string()} - {fmt % args}\n")
 
+    def _check_auth(self) -> bool:
+        """Return True if the request is authenticated (or auth is disabled)."""
+        if not AUTH_REQUIRED:
+            return True
+
+        # Check cookie
+        cookie = self.headers.get("Cookie", "")
+        if f"hyatlas_token={DASH_TOKEN}" in cookie:
+            return True
+
+        # Check query string (?token=...)
+        if "?" in self.path:
+            qs = parse_qs(self.path.split("?", 1)[1])
+            if qs.get("token", [None])[0] == DASH_TOKEN:
+                return True
+
+        return False
+
+    def _serve_login(self) -> None:
+        """Serve a minimal login page that accepts the token."""
+        html = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>HyAtlas — Login</title>
+<style>body{background:#0a0e1a;color:#c8d6e5;font-family:system-ui,sans-serif;
+display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+.box{background:#151b2b;padding:2rem;border-radius:12px;width:320px;text-align:center}
+h1{font-size:1.2rem;margin:0 0 1rem}input{width:100%;padding:0.6rem;margin:0.5rem 0;
+border:1px solid #2a3447;border-radius:6px;background:#0a0e1a;color:#c8d6e5;box-sizing:border-box}
+button{width:100%;padding:0.6rem;border:none;border-radius:6px;background:#4a6fa5;
+color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
+.err{color:#e74c3c;font-size:0.85rem;margin-top:0.5rem;display:none}</style>
+</head><body><div class="box">
+<h1>🧠 HyAtlas Dashboard</h1>
+<form method="POST" action="/auth">
+<input type="password" name="token" placeholder="Access token" autofocus>
+<button type="submit">Enter</button>
+<div class="err" id="err">Invalid token</div>
+</form></div></body></html>"""
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _redirect(self, location: str) -> None:
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _json(self, status: int, payload: object) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -2696,11 +2774,26 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
 
+        # Auth gate — /api/health is exempt (for start.py health checks)
+        if AUTH_REQUIRED and path != "/api/health":
+            if not self._check_auth():
+                # If token is in query string, set cookie and redirect to /
+                if "?" in self.path:
+                    qs = parse_qs(self.path.split("?", 1)[1])
+                    if qs.get("token", [None])[0] == DASH_TOKEN:
+                        self.send_response(302)
+                        self.send_header("Location", "/")
+                        self.send_header("Set-Cookie", f"hyatlas_token={DASH_TOKEN}; Path=/; HttpOnly; SameSite=Strict")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                return self._serve_login()
+
         if path == "/":
             # Serve from external file if available (for live iteration), else inline
             html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
             try:
-                with open(html_path, "r", encoding="utf-8") as f:
+                with open(html_path, encoding="utf-8") as f:
                     html = f.read().replace("__REFRESH_S__", str(REFRESH_S))
             except FileNotFoundError:
                 html = HTML.replace("__REFRESH_S__", str(REFRESH_S))
@@ -2969,7 +3062,7 @@ class Handler(BaseHTTPRequestHandler):
                     os.path.dirname(os.path.abspath(__file__)),
                     "logs", "l5_kuzu_export.json"
                 )
-                with open(l5_export_path, "r", encoding="utf-8") as f:
+                with open(l5_export_path, encoding="utf-8") as f:
                     l5_data = json.loads(f.read())
                 graph_counts = {"l5_knowledge": 0, "l6_schema": 0, "l7_intention": 0}
                 for node in l5_data.get("nodes", []):
@@ -3024,7 +3117,7 @@ class Handler(BaseHTTPRequestHandler):
             l5_count = 0
             l5_export_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "l5_kuzu_export.json")
             try:
-                with open(l5_export_path, "r", encoding="utf-8") as f:
+                with open(l5_export_path, encoding="utf-8") as f:
                     l5_data = json.loads(f.read())
                 for node in l5_data.get("nodes", []):
                     if node.get("layer") == "l5_knowledge":
@@ -3043,7 +3136,7 @@ class Handler(BaseHTTPRequestHandler):
             # the export JSON. The dashboard calls this for the L5 tab.
             l5_export_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "l5_kuzu_export.json")
             try:
-                with open(l5_export_path, "r", encoding="utf-8") as f:
+                with open(l5_export_path, encoding="utf-8") as f:
                     l5_data = json.loads(f.read())
             except FileNotFoundError:
                 return self._json(503, {"error": "L5 export not found — run bin/l5_export_json.py"})
@@ -3091,7 +3184,7 @@ class Handler(BaseHTTPRequestHandler):
             #   type - optional filter by entity type (TOOL/PROJECT/etc)
             l5_export_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "l5_kuzu_export.json")
             try:
-                with open(l5_export_path, "r", encoding="utf-8") as f:
+                with open(l5_export_path, encoding="utf-8") as f:
                     l5_data = json.loads(f.read())
             except (FileNotFoundError, json.JSONDecodeError):
                 return self._json(200, {"context": "(L5 knowledge graph not yet built)", "entities": []})
@@ -3137,6 +3230,30 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
+
+        # Auth endpoint — handles login form submission
+        if path == "/auth":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length).decode("utf-8") if length else ""
+            qs = parse_qs(body)
+            token = qs.get("token", [None])[0]
+            if token == DASH_TOKEN:
+                self.send_response(302)
+                self.send_header("Location", "/")
+                self.send_header("Set-Cookie", f"hyatlas_token={DASH_TOKEN}; Path=/; HttpOnly; SameSite=Strict")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            else:
+                self.send_response(401)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            return
+
+        # Auth gate for all other POST endpoints
+        if AUTH_REQUIRED and not self._check_auth():
+            return self._json(401, {"error": "unauthorized"})
+
         if path == "/api/search":
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -3150,13 +3267,19 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print(f"Hy-Memory Dashboard v2")
+    print("Hy-Memory Dashboard v2")
     print(f"  upstream:  {HY_MEMORY_BASE}")
     print(f"  listening: http://{BIND_HOST}:{BIND_PORT}")
-    print(f"  open in:   your browser at the URL above")
-    print(f"  stop with: Ctrl-C")
-    if BIND_HOST == "0.0.0.0":
-        print("  WARNING: bound to 0.0.0.0 - reachable from your LAN. Read-only by design.")
+    if AUTH_REQUIRED and DASH_TOKEN:
+        print("  auth:      enabled (token required)")
+        print(f"  open:      http://{BIND_HOST}:{BIND_PORT}/?token={DASH_TOKEN}")
+        print(f"  token file: {_DASH_TOKEN_FILE}")
+    else:
+        print("  open in:   your browser at the URL above")
+        print("  auth:      disabled (local only)")
+    print("  stop with: Ctrl-C")
+    if BIND_HOST == "0.0.0.0" and not AUTH_REQUIRED:
+        print("  WARNING: bound to 0.0.0.0 without auth — anyone on your LAN can read your memories.")
     try:
         server = ThreadingHTTPServer((BIND_HOST, BIND_PORT), Handler)
     except OSError as e:
