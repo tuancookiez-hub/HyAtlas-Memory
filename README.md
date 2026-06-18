@@ -48,8 +48,10 @@ See it in action — a 19-second walkthrough of the live dashboard:
 git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 cd HyAtlas-Memory
 
-# 2. Install the package (editable mode)
-pip install -e ".[dev,test]"
+# 2. Install the package
+pip install -e .                    # runtime only
+# or, if you plan to contribute:
+pip install -e ".[dev,test]"        # adds pytest, ruff, mypy
 
 # 3. Configure Hermes to use it — edit ~/.hermes/config.yaml:
 #    memory:
