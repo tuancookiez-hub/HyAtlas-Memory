@@ -103,6 +103,25 @@ Copy `hy_memory.json.example` to `~/.hy_memory/hy_memory.json`:
 
 The plugin integrates automatically with Hermes Agent — no manual tool calls needed.
 
+### Dashboard
+
+Launch the local web UI with a single command:
+
+```bash
+python start.py
+```
+
+This starts the full stack (Qdrant → upstream server → dashboard) with health checks, auto-cleanup of stale processes, and a live status display. Once running, open **http://127.0.0.1:8765**.
+
+Other commands:
+
+```bash
+python start.py --status   # check what's running
+python start.py --stop     # stop all services
+```
+
+Press **Ctrl+C** in the terminal to gracefully shut down all services. Logs are written to `logs/` in the project root.
+
 ### Memory recall is transparent
 
 When your agent receives a message, HyAtlas-Memory injects relevant memories into the prompt as a `<relevant-memories>` block. The agent sees your past context without you doing anything.
