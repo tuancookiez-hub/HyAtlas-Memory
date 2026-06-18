@@ -12,7 +12,22 @@ where the plugin iterated the layered dict as a flat list.
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
 from hyatlas_memory import HyMemoryProvider, _format_memories
+
+# Skip entire module if hermes-agent isn't installed (CI)
+pytestmark = pytest.mark.skipif(
+    True,  # will be replaced by conftest check at collection time
+    reason="hermes-agent not installed"
+)
+
+# Re-evaluate at import time: if hermes-agent modules are available, run tests
+try:
+    import agent.memory_provider  # noqa: F401
+    pytestmark = pytest.mark.skipif(False, reason="hermes-agent available")
+except ImportError:
+    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures
