@@ -25,6 +25,12 @@ It doesn't just store raw text either. Every message you send flows through a pi
 2. **It recalls.** When you start a new message, relevant memories are injected into the agent's context before it responds — no tool call needed.
 3. **It evolves.** Background processing merges duplicates, resolves contradictions, and refines the agent's model of you over time.
 
+See it in action — a 19-second walkthrough of the live dashboard:
+
+<p align="center">
+  <img src="./assets/dashboard-demo.gif" alt="HyAtlas-Memory dashboard demo: animated 19-second walkthrough showing the splash screen, Overview tab with KPI cards and L0-L7 memory composition bar chart, navigation to Memory Observatory with the layered knowledge graph visualization, and recent ingestion feed" width="100%" />
+</p>
+
 ## How it works
 
 Memory flows through two parallel paths — a fast path for real-time awareness, and a slow path for deep consolidation:
@@ -125,12 +131,6 @@ The Overview tab gives you a complete snapshot at a glance — total memories, l
 
 <p align="center">
   <img src="./assets/dashboard-overview.png" alt="HyAtlas-Memory dashboard overview tab: dark-themed three-column layout with left navigation (Overview, Memory Observatory, Explore, Layers, Today, Settings, L5 Knowledge Graph), central KPI cards (3207 memories stored, 190 links, 8/8 layer coverage), an L0-L7 memory composition stacked bar chart, a 7-day ingestion line chart from Jun 11-17, and a right sidebar showing the most recent ingestion feed with filterable tabs (ALL, VDB, CODING, L1_RAW)" width="100%" />
-</p>
-
-Or watch a 19-second walkthrough — splash → Overview tab → Memory Observatory graph:
-
-<p align="center">
-  <img src="./assets/dashboard-demo.gif" alt="HyAtlas-Memory dashboard demo: animated 19-second walkthrough showing the splash screen, Overview tab with KPI cards and L0-L7 memory composition bar chart, navigation to Memory Observatory with the layered knowledge graph visualization, and recent ingestion feed" width="100%" />
 </p>
 
 ### CLI
