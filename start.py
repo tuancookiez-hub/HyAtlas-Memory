@@ -199,13 +199,18 @@ def start_service(svc: dict) -> bool:
         os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, f"{name.lower().replace(' ', '_')}.log")
         log_file = open(log_path, "w")
+        # On Windows: CREATE_NO_WINDOW suppresses the blank console popup,
+        # CREATE_NEW_PROCESS_GROUP allows Ctrl+C isolation (Ctrl+Break sends to group)
+        flags = 0
+        if platform.system() == "Windows":
+            flags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         proc = subprocess.Popen(
             svc["cmd"],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             cwd=svc["cwd"],
             env=env,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if platform.system() == "Windows" else 0,
+            creationflags=flags,
         )
         children.append(proc)
         print(dim(f"  log: {log_path}"))
@@ -231,13 +236,16 @@ def start_service(svc: dict) -> bool:
                 os.makedirs(log_dir, exist_ok=True)
                 log_path = os.path.join(log_dir, f"{name.lower().replace(' ', '_')}.log")
                 log_file = open(log_path, "a")
+                flags = 0
+                if platform.system() == "Windows":
+                    flags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
                 proc = subprocess.Popen(
                     svc["cmd"],
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     cwd=svc["cwd"],
                     env=env,
-                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if platform.system() == "Windows" else 0,
+                    creationflags=flags,
                 )
                 children[-1] = proc  # replace the dead entry
             except Exception:
@@ -277,6 +285,19 @@ def start_all():
     print()
     print(dim("  Press Ctrl+C to stop all services"))
     print()
+
+    # Show a live memory status header (like Hermes gateway shows providers)
+    try:
+        mem_url = f"http://127.0.0.1:{UPSTREAM_PORT}/info"
+        with urllib.request.urlopen(mem_url, timeout=3) as resp:
+            info = json.loads(resp.read().decode("utf-8", errors="replace"))
+        version = info.get("version", "?")
+        print(f"  {CYAN}🧠 Hy-Memory v{version}{RESET} — running on :{UPSTREAM_PORT}")
+        print(f"  {CYAN}📊 Dashboard{RESET}          — running on :{DASHBOARD_PORT}")
+        print(f"  {CYAN}🗄️  Qdrant{RESET}              — running on :{QDRANT_PORT}")
+        print()
+    except Exception:
+        pass
 
     # Keep alive — monitor health endpoints instead of PIDs
     # (On Windows, child PIDs may exit while the actual service keeps running
