@@ -383,6 +383,10 @@ def stop_all():
 # ── Main ────────────────────────────────────────────────────────────────
 
 def main():
+    # Strip --internal (used for console window relaunch on Windows)
+    internal = "--internal" in sys.argv
+    sys.argv = [a for a in sys.argv if a != "--internal"]
+
     if len(sys.argv) > 1:
         arg = sys.argv[1]
         if arg == "--stop":
@@ -396,9 +400,32 @@ def main():
             print("Usage: python start.py [--stop|--status|--help]")
             sys.exit(1)
     else:
+        # On Windows: if we're not in our own console window, relaunch in one
+        # so the user always sees the live status terminal
+        if platform.system() == "Windows" and not internal:
+            script = os.path.abspath(__file__)
+            project_dir = os.path.dirname(script)
+            cmd = [sys.executable, script, "--internal"]
+            subprocess.Popen(
+                cmd,
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                cwd=project_dir,
+            )
+            time.sleep(1)
+            sys.exit(0)
+
         # Register signal handler for graceful shutdown
         signal.signal(signal.SIGINT, lambda *_: (print(), shutdown(), sys.exit(0)))
         start_all()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"\n  ✘ Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
+        print("\n  Press Enter to close...")
+        input()
