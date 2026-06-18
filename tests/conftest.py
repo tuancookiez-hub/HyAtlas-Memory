@@ -1,9 +1,8 @@
 """conftest — detect hermes-agent availability for conditional test collection."""
 
-import importlib
-import sys
 
 import pytest
+
 
 # Check if hermes-agent is actually available (not just mocked)
 def _hermes_available():

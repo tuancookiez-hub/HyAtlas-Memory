@@ -3,8 +3,9 @@
 These run on CI even without a live Hermes installation."""
 
 import importlib.util
-import pytest
 from pathlib import Path
+
+import pytest
 
 # Load _version.py DIRECTLY without triggering __init__.py
 _VERSION_PATH = Path(__file__).parent.parent / "src" / "hyatlas_memory" / "_version.py"
