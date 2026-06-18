@@ -1,0 +1,31 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.eggs/
+build/
+dist/
+
+.git/
+.github/
+.hermes/
+
+# Data — should not be baked into the image
+logs/
+*.log
+qdrant_data/
+
+# Dev files
+.env
+hy_memory.json
+*.md
+!README.md
+docs/
+assets/
+examples/
+scripts/
+tests/
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore

@@ -138,6 +138,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E402"]  # imports at non-top-level are common in tests
+"start.py" = [
+    "SIM105",  # try/except/pass is intentional for process management
+    "SIM115",  # long-lived log files can't use context managers
+]
 "src/hyatlas_memory/patches.py" = [
     "E402",   # late imports are intentional (lazy loading to avoid circular deps)
     "N814",   # constant aliases for imported names are intentional

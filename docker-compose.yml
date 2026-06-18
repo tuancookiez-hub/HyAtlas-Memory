@@ -1,0 +1,41 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:6333/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  server:
+    build: .
+    ports:
+      - "19527:19527"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+    volumes:
+      - hy_memory_data:/root/.hy_memory
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    command: python server/dashboard/dashboard.py
+    ports:
+      - "8765:8765"
+    depends_on:
+      - server
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
+  hy_memory_data:

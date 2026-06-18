@@ -18,28 +18,94 @@ Ctrl+C shuts down all services gracefully.
 
 from __future__ import annotations
 
+import json
 import os
-import sys
-import time
+import platform
 import signal
 import subprocess
-import urllib.request
+import sys
+import time
 import urllib.error
-import json
-import platform
+import urllib.request
 
 # ── Config ──────────────────────────────────────────────────────────────
 
-QDRANT_PORT = 6333
-UPSTREAM_PORT = 19527
-DASHBOARD_PORT = 8765
-
-QDRANT_BIN = r"C:\qdrant\qdrant.exe"
-QDRANT_CONFIG = r"C:\qdrant\config.yaml"
+QDRANT_PORT = int(os.environ.get("QDRANT_PORT", 6333))
+UPSTREAM_PORT = int(os.environ.get("UPSTREAM_PORT", 19527))
+DASHBOARD_PORT = int(os.environ.get("DASHBOARD_PORT", 8765))
 
 HEALTH_TIMEOUT = 2          # seconds per health-check attempt
 HEALTH_RETRIES = 20         # max attempts per service (upstream needs ~15s)
 HEALTH_DELAY = 1            # seconds between retries
+
+
+def _find_qdrant():
+    """Locate the Qdrant binary. Returns (path, config_path) or (None, None).
+
+    Search order:
+      1. QDRANT_BIN env var (explicit override)
+      2. `qdrant` on PATH (works if user installed it system-wide)
+      3. Common locations per OS
+    """
+    # 1. Explicit override
+    env_bin = os.environ.get("QDRANT_BIN")
+    if env_bin and os.path.isfile(env_bin):
+        env_cfg = os.environ.get("QDRANT_CONFIG", "")
+        return env_bin, env_cfg
+
+    # 2. On PATH
+    import shutil
+    path_bin = shutil.which("qdrant")
+    if path_bin:
+        return path_bin, ""
+
+    # 3. Common locations
+    if platform.system() == "Windows":
+        candidates = [
+            r"C:\qdrant\qdrant.exe",
+            os.path.expandvars(r"%PROGRAMFILES%\qdrant\qdrant.exe"),
+            os.path.expanduser(r"~\qdrant\qdrant.exe"),
+        ]
+        for c in candidates:
+            if os.path.isfile(c):
+                cfg = c.replace("qdrant.exe", "config.yaml")
+                return c, cfg if os.path.isfile(cfg) else ""
+    else:
+        candidates = [
+            "/usr/local/bin/qdrant",
+            "/usr/bin/qdrant",
+            "/opt/qdrant/qdrant",
+            os.path.expanduser("~/qdrant/qdrant"),
+        ]
+        for c in candidates:
+            if os.path.isfile(c):
+                cfg = c.replace("qdrant", "config.yaml")
+                return c, cfg if os.path.isfile(cfg) else ""
+
+    return None, None
+
+
+def _build_qdrant_cmd():
+    """Build the Qdrant start command, or None if Qdrant should be skipped.
+
+    Skips starting Qdrant if it's already running (e.g. via Docker) or
+    if the binary can't be found (user may have it running externally).
+    """
+    # Already running? Don't start a second instance
+    if is_port_listening(QDRANT_PORT):
+        return None
+
+    qbin, qcfg = _find_qdrant()
+    if not qbin:
+        return None
+
+    cmd = [qbin]
+    if qcfg:
+        cmd += ["--config-path", qcfg]
+    return cmd
+
+
+_qdrant_cmd = None  # resolved lazily in start_service
 
 SERVICES = [
     {
@@ -47,8 +113,9 @@ SERVICES = [
         "port": QDRANT_PORT,
         "url": f"http://127.0.0.1:{QDRANT_PORT}/collections",
         "expect": "collections",
-        "cmd": [QDRANT_BIN, "--config-path", QDRANT_CONFIG],
+        "cmd": None,  # resolved in start_service via _find_qdrant
         "cwd": None,
+        "external": False,  # set in start_service if Qdrant already running
     },
     {
         "name": "Hy-Memory Server",
@@ -57,6 +124,7 @@ SERVICES = [
         "expect": "hy-memory-server",
         "cmd": [sys.executable, "-m", "server.start_server"],
         "cwd": os.path.dirname(os.path.abspath(__file__)),
+        "external": False,
     },
     {
         "name": "Dashboard",
@@ -65,6 +133,7 @@ SERVICES = [
         "expect": "ok",
         "cmd": [sys.executable, "server/dashboard/dashboard.py"],
         "cwd": os.path.dirname(os.path.abspath(__file__)),
+        "external": False,
     },
 ]
 
@@ -173,15 +242,44 @@ def start_service(svc: dict) -> bool:
     name = svc["name"]
     port = svc["port"]
 
+    # Resolve Qdrant command lazily (needs is_port_listening which is
+    # defined below this function but called at runtime, not import time)
+    if name == "Qdrant" and svc["cmd"] is None:
+        if is_port_listening(port):
+            svc["external"] = True
+        else:
+            qbin, qcfg = _find_qdrant()
+            if qbin:
+                cmd = [qbin]
+                if qcfg:
+                    cmd += ["--config-path", qcfg]
+                svc["cmd"] = cmd
+            else:
+                svc["external"] = True  # can't start, treat as external/missing
+
     # Already running?
     if is_port_listening(port):
         if health_check(svc["url"], svc["expect"]):
             print(ok(f"{name} already running on port {port}"))
             return True
+        elif svc.get("external"):
+            # External service (e.g. Docker Qdrant) is on the port but
+            # health check failed — can't restart it, just report
+            print(fail(f"{name} on port {port} but unhealthy (external — check your Docker/container)"))
+            return False
         else:
             print(warn(f"Port {port} occupied but health check failed — killing stale process"))
             kill_on_port(port)
             time.sleep(1)
+    elif svc.get("external"):
+        # External service not running and we can't start it
+        if name == "Qdrant":
+            print(warn(f"{name} not found on port {port} and no local binary detected."))
+            print(dim("  Start Qdrant separately (e.g. 'docker run -p 6333:6333 qdrant/qdrant')"))
+            print(dim("  or install it and ensure it's on your PATH."))
+            print(dim("  Continuing without Qdrant — vector search will not work."))
+            return False
+        return False
 
     # Kill stale processes
     killed = kill_on_port(port)
@@ -226,7 +324,7 @@ def start_service(svc: dict) -> bool:
             if name == "Qdrant":
                 time.sleep(2)
             return True
-        
+
         # Check if the process crashed — restart it once
         if proc.poll() is not None and attempt <= 3:
             print(warn(f"{name} crashed, restarting..."))
@@ -250,7 +348,7 @@ def start_service(svc: dict) -> bool:
                 children[-1] = proc  # replace the dead entry
             except Exception:
                 pass
-        
+
         time.sleep(HEALTH_DELAY)
 
     print(fail(f"{name} failed to start after {HEALTH_RETRIES}s"))

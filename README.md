@@ -35,6 +35,14 @@ See it in action — a 19-second walkthrough of the live dashboard:
 
 ### Prerequisites
 
+**Option A — Docker (recommended, zero manual installs):**
+
+| Tool | Install |
+|------|---------|
+| **Docker** | [docker.com](https://www.docker.com/get-started) |
+
+**Option B — Local (no Docker):**
+
 | Tool | Why | Install |
 |------|-----|---------|
 | **Python 3.10+** | Runtime | [python.org](https://www.python.org/downloads/) |
@@ -104,19 +112,30 @@ If you want to customize before first run, copy `hy_memory.json.example` to `~/.
 
 ### Launch
 
+**Option A — Docker (one command, starts everything):**
+
+```bash
+docker-compose up -d              # starts Qdrant + server + dashboard
+docker-compose down               # stop everything
+```
+
+**Option B — Local:**
+
 ```bash
 hyatlas            # start the full stack (Qdrant → server → dashboard)
 hyatlas --status   # check what's running
 hyatlas --stop     # stop all services
 ```
 
-Or, if you prefer the script directly:
+Or with the script directly:
 
 ```bash
 python start.py            # same as: hyatlas
 python start.py --status   # same as: hyatlas --status
 python start.py --stop     # same as: hyatlas --stop
 ```
+
+If Qdrant is already running (e.g. via Docker separately), `hyatlas` detects it and skips launching a second instance. Set `QDRANT_BIN` env var to point to a non-standard Qdrant location.
 
 ```
   ╔══════════════════════════════════════╗
