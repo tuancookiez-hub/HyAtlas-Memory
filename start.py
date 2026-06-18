@@ -278,19 +278,24 @@ def start_all():
     print(dim("  Press Ctrl+C to stop all services"))
     print()
 
-    # Keep alive — wait for any child to exit
+    # Keep alive — monitor health endpoints instead of PIDs
+    # (On Windows, child PIDs may exit while the actual service keeps running
+    #  due to process forking / CREATE_NEW_PROCESS_GROUP behavior)
     try:
         while True:
-            for proc in children:
-                if proc.poll() is not None:
-                    name = "unknown"
-                    for svc in SERVICES:
-                        if proc in [p for p in children]:
-                            name = svc["name"]
-                    print(warn(f"{name} exited unexpectedly (code {proc.returncode})"))
-                    shutdown()
-                    sys.exit(1)
-            time.sleep(2)
+            # Only warn if a health check actually fails, not just PID exit
+            all_healthy = True
+            for svc in SERVICES:
+                if not health_check(svc["url"], svc["expect"]):
+                    if is_port_listening(svc["port"]):
+                        print(warn(f"{svc['name']} on port {svc['port']} — port occupied but unhealthy"))
+                    else:
+                        print(fail(f"{svc['name']} on port {svc['port']} — stopped"))
+                        all_healthy = False
+            if not all_healthy:
+                print(dim("  Run 'python start.py --stop' then 'python start.py' to restart."))
+                sys.exit(1)
+            time.sleep(5)
     except KeyboardInterrupt:
         print()
         print(dim("  Shutting down..."))
