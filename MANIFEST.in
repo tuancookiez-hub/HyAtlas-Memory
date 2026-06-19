@@ -1,0 +1,32 @@
+# HyAtlas-Memory — sdist manifest.
+# Ensures files outside the `src/` package tree ship in the source
+# distribution so PyPI users get a usable install (LICENSE, README,
+# docs/, pyproject.toml itself for source installs).
+
+include LICENSE
+include README.md
+include CHANGELOG.md
+include CONTRIBUTING.md
+include pyproject.toml
+
+recursive-include docs *.md
+recursive-include server/dashboard/templates *.html *.css *.js
+recursive-include server/dashboard/static *.js *.css *.png *.svg
+recursive-include tests *.py
+recursive-include tests *.json
+
+# Exclude dev-only scratch from sdist
+exclude scripts/*.py
+exclude .github
+exclude .gitignore
+exclude .dockerignore
+exclude Dockerfile
+exclude docker-compose.yml
+
+global-exclude __pycache__
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude *.pyd
+global-exclude .pytest_cache
+global-exclude .ruff_cache
+global-exclude .mypy_cache

@@ -2,6 +2,41 @@
 
 > All notable changes to HyAtlas-Memory are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-06-19
+
+### Added
+- **First stable release.** PyPI package `hyatlas-memory` installable via `pip install hyatlas-memory`.
+- `__all__` exports in `hyatlas_memory` (`HyMemoryProvider`, `__version__`).
+- `MANIFEST.in` ensures LICENSE, README, CHANGELOG, CONTRIBUTING, docs/, and tests ship in the sdist.
+- `hyatlas` console_scripts entry point — `pip install -e .` then `hyatlas start|--stop|--status` works from any directory.
+- `docker-compose.yml` — one-command full stack via `docker-compose up -d`.
+- `Dockerfile` (python:3.11-slim) and `.dockerignore`.
+- Token-based dashboard auth when bound to `0.0.0.0` (auto-generated 32-char token, stored at `~/.hy_memory/.dashboard_token`, cookie-based session, `/api/health` exempt).
+- `hyatlas_memory.start` module wrapping `start.py` for the entry point.
+- **Experimental layer-as-importance scoring** (on by default, set `HYATLAS_MEMORY_IMPORTANCE=0` to disable).
+  Upstream `hy-memory` ships a 4-factor `MemoryScorer`
+  (semantic 0.50 + recency 0.30 + importance 0.15 + access 0.05). The
+  `importance` and `access` inputs were never populated by the SDK, so the
+  0.15 and 0.05 terms effectively stayed zero. HyAtlas now writes a layer-derived
+  `importance` score (l4_identity=1.0, l2_fact=0.8, l3_summary=0.6,
+  l0_basic_info=0.5, l1_raw=0.3) on each new memory, restoring the full scorer.
+  No LLM cost.
+- **Access-count tracking** (on by default, set `HYATLAS_MEMORY_ACCESS_COUNT=0` to disable).
+  Increments `access_count` on every memory returned by a recall operation, so
+  the upstream `MemoryScorer` has a live access signal. Runs in a
+  fire-and-forget thread so it never blocks recall.
+
+### Changed
+- **Qdrant auto-detection** — removes hardcoded `C:\qdrant\qdrant.exe`; auto-detects via `QDRANT_BIN` env var → `PATH` → common OS locations. Skips launch if already running (Docker).
+- `pyproject.toml` — `[project.scripts]`, per-file ruff ignores, `long_description_content_type` is now auto-detected from `README.md`.
+- README — Quick Start moved above How It Works; prerequisites table added; `hyatlas` CLI command documented; runtime vs dev install separated.
+
+### Fixed
+- `start.py` path resolution broken when invoked via console_scripts (double dirname on `src/` layout).
+- README forcing dev/test deps on normal users (cleanly separated runtime vs dev).
+- Missing `__main__` guard in entry wrapper.
+- Startup script argv not forwarded (documented).
+
 ## [0.6.0] - 2026-06-18
 
 ### Added

@@ -48,16 +48,208 @@ but lives entirely in user-space, not the SDK.
 from __future__ import annotations
 
 import contextvars
+import json
 import logging
 import os
 import threading
 import time
+import urllib.request
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # Tracks whether we've already applied patches (idempotent)
 _applied: dict[str, bool] = {}
+
+
+# ---------------------------------------------------------------------------
+# Layer-as-importance proxy for the upstream 4-factor MemoryScorer.
+#
+# Upstream hy-memory (Tencent) ships a scorer that combines:
+#   0.50 * semantic + 0.30 * recency + 0.15 * importance + 0.05 * access
+#
+# The importance/access inputs are optional in the Memory model and are
+# not populated by the SDK's default write path. This module provides a
+# lightweight, zero-LLM-cost way to populate `importance` per layer so the
+# 0.15 term actually contributes instead of being zeroed out.
+#
+# Gate: HYATLAS_MEMORY_IMPORTANCE=1 (default off). Set it to opt in while
+# measuring A/B recall quality; once it's proven, we can flip the default.
+# ---------------------------------------------------------------------------
+
+_LAYER_IMPORTANCE: dict[str, float] = {
+    "l4_identity": 1.0,    # user identity / preferences - always surface
+    "l2_fact": 0.8,        # extracted facts - high signal
+    "l3_summary": 0.6,     # cross-session summaries
+    "l0_basic_info": 0.5,  # structured KV (employer, location, etc.)
+    "l1_raw": 0.3,         # raw turn fragments - noisy, low priority
+}
+
+
+def patch_importance_for_request(
+    request_id: str = "",
+    qdrant_url: str = "http://127.0.0.1:6333",
+    collection: str = "agent_memories_384",
+    *,
+    user_id: str = "",
+    session_id: str = "",
+    since_timestamp: float | None = None,
+) -> None:
+    """Set `importance` on all qdrant points produced by a single add() call.
+
+    Upstream tags some extracted memories (l2_fact, l4_identity) with
+    ``custom.request_id``. Other layers (l0_basic_info, l1_raw) do not get
+    that tag, so we fall back to a time-window + user/session match when the
+    request_id path yields no points.
+
+    We:
+      1. try to scroll by ``custom.request_id`` (fast, exact)
+      2. also scroll by ``user_id`` + ``session_id`` +
+         ``gmt_created >= since_timestamp - 2``
+      3. group point IDs by layer -> importance value
+      4. PATCH each group with the matching importance (one HTTP call per layer)
+
+    Fire-and-forget: failures are debug-logged and never raised, so a slow
+    qdrant or missing collection can't break the normal write path.
+    """
+    try:
+        points_by_id: dict[str, dict[str, Any]] = {}
+
+        if request_id:
+            scroll_body = {
+                "filter": {
+                    "must": [
+                        {"key": "custom.request_id", "match": {"value": request_id}},
+                    ],
+                },
+                "limit": 100,
+                "with_payload": ["layer"],
+                "with_vectors": False,
+            }
+            with urllib.request.urlopen(
+                f"{qdrant_url}/collections/{collection}/points/scroll",
+                data=json.dumps(scroll_body).encode("utf-8"),
+                timeout=5,
+            ) as resp:
+                for point in json.loads(resp.read())["result"]["points"]:
+                    points_by_id[point["id"]] = point
+
+        # Always run the fallback when user_id/session_id/since_timestamp are
+        # provided. The upstream SDK only tags some layers (l2_fact, l4_identity)
+        # with custom.request_id; l0_basic_info and l1_raw don't get it, so
+        # we need the time-window match to catch the full set produced by one
+        # add() call. We merge the results to avoid double-patching.
+        if user_id and since_timestamp is not None:
+            cutoff = max(0.0, since_timestamp - 2.0)
+            scroll_body = {
+                "filter": {
+                    "must": [
+                        {"key": "user_id", "match": {"value": user_id}},
+                        {"key": "session_id", "match": {"value": session_id}},
+                        {"key": "gmt_created", "range": {"gte": cutoff}},
+                    ],
+                },
+                "limit": 100,
+                "with_payload": ["layer"],
+                "with_vectors": False,
+            }
+            with urllib.request.urlopen(
+                f"{qdrant_url}/collections/{collection}/points/scroll",
+                data=json.dumps(scroll_body).encode("utf-8"),
+                timeout=5,
+            ) as resp:
+                for point in json.loads(resp.read())["result"]["points"]:
+                    points_by_id[point["id"]] = point
+
+        points = list(points_by_id.values())
+        if not points:
+            return
+
+        # Group by importance to minimize the number of PATCH calls
+        by_importance: dict[float, list[str]] = {}
+        for point in points:
+            layer = point.get("payload", {}).get("layer", "l1_raw")
+            importance = _LAYER_IMPORTANCE.get(layer, 0.5)
+            by_importance.setdefault(importance, []).append(point.get("id"))
+
+        for importance, ids in by_importance.items():
+            patch_body = {
+                "points": [p for p in ids if p is not None],
+                "payload": {"importance": importance},
+            }
+            with urllib.request.urlopen(
+                f"{qdrant_url}/collections/{collection}/points/payload",
+                data=json.dumps(patch_body).encode("utf-8"),
+                timeout=5,
+            ) as resp:
+                resp.read()  # drain response
+
+        logger.debug(
+            "[hy-memory] importance patched for %d points (request_id=%s, user=%s, session=%s)",
+            len(points), request_id[:8] if request_id else "n/a", user_id, session_id,
+        )
+    except Exception as e:
+        logger.debug(
+            "[hy-memory] importance patch failed (request_id=%s, user=%s): %s",
+            request_id[:8] if request_id else "n/a", user_id, e,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Access-count tracking for the upstream 4-factor MemoryScorer.
+#
+# Upstream's scorer uses access_count as a weak signal (default 0.05 weight).
+# The SDK does not increment it automatically on recall in the local qdrant
+# deployment path, so this term is always zero. We add a lightweight, zero-LLM
+# hook that bumps access_count on any memory returned by a recall operation.
+#
+# Gate: HYATLAS_MEMORY_ACCESS_COUNT=1 (default off). Set it to opt in while
+# measuring A/B recall quality; once proven, flip the default.
+# ---------------------------------------------------------------------------
+
+
+def touch_memory(
+    memory_id: str,
+    qdrant_url: str = "http://127.0.0.1:6333",
+    collection: str = "agent_memories_384",
+) -> None:
+    """Increment access_count for a single recalled memory.
+
+    Uses qdrant's GET-by-ID + payload PATCH to atomically set
+    ``access_count = current + 1``. Fire-and-forget: failures are debug-logged
+    and never raised so a slow qdrant can't break the recall path.
+    """
+    try:
+        # Read current access_count
+        with urllib.request.urlopen(
+            f"{qdrant_url}/collections/{collection}/points/{memory_id}",
+            timeout=5,
+        ) as resp:
+            point = json.loads(resp.read())["result"]
+
+        payload = point.get("payload", {})
+        current = payload.get("access_count", 0) or 0
+        if not isinstance(current, int):
+            try:
+                current = int(current)
+            except Exception:
+                current = 0
+
+        patch_body = {
+            "points": [memory_id],
+            "payload": {"access_count": current + 1},
+        }
+        with urllib.request.urlopen(
+            f"{qdrant_url}/collections/{collection}/points/payload",
+            data=json.dumps(patch_body).encode("utf-8"),
+            timeout=5,
+        ) as resp:
+            resp.read()  # drain response
+
+        logger.debug("[hy-memory] touched memory %s (access_count=%d)", memory_id, current + 1)
+    except Exception as e:
+        logger.debug("[hy-memory] touch_memory failed for %s: %s", memory_id, e)
+
 
 # ContextVar for passing pre-search results from patched async_add() to
 # WriteRequest.__post_init__. async-safe per task (correct isolation

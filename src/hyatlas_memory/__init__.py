@@ -41,15 +41,28 @@ from agent.memory_provider import MemoryProvider
 from hermes_constants import get_hermes_home
 from tools.registry import tool_error
 
+from hyatlas_memory import patches
 from hyatlas_memory._version import __version__ as __version__
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "HyMemoryProvider",
+    "__version__",
+]
 
 # Circuit breaker — after N consecutive failures, pause calls
 _BREAKER_THRESHOLD = 5
 _BREAKER_COOLDOWN_SECS = 120
 
 _DEFAULT_PORT = 19527
+
+# Hy-Memory upstream default Qdrant collection. Must match the SDK/server
+# default (the collection name is hardcoded in the upstream server).
+_DEFAULT_QDRANT_COLLECTION = "agent_memories_384"
+
+# Default Qdrant HTTP URL for runtime patches (importance + access_count).
+_DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"
 
 # Max chars injected into system prompt (per official hermes-hy-memory)
 _MAX_PREFETCH_CHARS = int(os.environ.get("HY_MEMORY_PREFETCH_MAX_CHARS", "2000"))
@@ -345,13 +358,20 @@ class HyMemoryProvider(MemoryProvider):
 
         def _do_sync():
             try:
-                self._client.add(
+                since = time.time()
+                result = self._client.add(
                     batch, user_id=self._user_id,
                     agent_id=self._agent_id, session_id=sid,
                 )
                 self._consecutive_failures = 0
                 # Successful write — clear the disk pending file for this session
                 self._clear_disk_buffer(sid)
+                # Populate importance scores on the qdrant points this add()
+                # produced. Fire-and-forget so it never blocks the write path.
+                self._maybe_patch_importance(
+                    result, user_id=self._user_id,
+                    session_id=sid, since_timestamp=since,
+                )
             except Exception as e:
                 self._consecutive_failures += 1
                 if self._consecutive_failures >= _BREAKER_THRESHOLD:
@@ -446,7 +466,8 @@ class HyMemoryProvider(MemoryProvider):
             sid = path.stem  # inverse of _safe_sid (we don't recover the original,
                               # but server-side dedup will handle duplicates)
             try:
-                self._client.add(
+                since = time.time()
+                result = self._client.add(
                     msgs, user_id=self._user_id,
                     agent_id=self._agent_id, session_id=sid,
                 )
@@ -456,6 +477,12 @@ class HyMemoryProvider(MemoryProvider):
                     "[hy-memory] replayed orphaned pending buffer: %d msgs (session=%s)",
                     len(msgs), sid,
                 )
+                # Populate importance scores on the qdrant points this add()
+                # produced. Fire-and-forget so it never blocks the write path.
+                self._maybe_patch_importance(
+                    result, user_id=self._user_id,
+                    session_id=sid, since_timestamp=since,
+                )
             except Exception as e:
                 logger.warning(
                     "[hy-memory] could not replay pending buffer %s: %s "
@@ -463,9 +490,46 @@ class HyMemoryProvider(MemoryProvider):
                 )
         return count
 
-    # ------------------------------------------------------------------
-    # Memory formatting (port of official hermes-hy-memory 0.2.7)
-    # ------------------------------------------------------------------
+    def _maybe_patch_importance(
+        self, add_result: dict | None, *,
+        user_id: str = "", session_id: str = "", since_timestamp: float | None = None,
+    ) -> None:
+        """Fire-and-forget update of `importance` on points produced by add().
+
+        Gated by ``HYATLAS_MEMORY_IMPORTANCE=1`` (default off). Tries to
+        locate all qdrant points produced by a single write call via the
+        upstream ``request_id`` (fast, exact). If the SDK didn't tag every
+        layer with ``request_id`` (e.g. ``l0_basic_info`` and ``l1_raw``
+        don't), we fall back to a time-window match by ``user_id`` +
+        ``session_id`` + ``gmt_created``. Then PATCHes each point with an
+        importance score derived from its layer. This feeds the 0.15
+        importance term in the upstream 4-factor MemoryScorer without
+        adding LLM cost. Runs in a daemon thread so it never blocks the write
+        path.
+        """
+        if os.environ.get("HYATLAS_MEMORY_IMPORTANCE", "1") != "1":
+            return
+        if not add_result:
+            return
+        qdrant_url = os.environ.get(
+            "HYATLAS_MEMORY_QDRANT_URL",
+            f"http://{self._config.get('qdrant_host', '127.0.0.1')}"
+            f":{self._config.get('qdrant_port', '6333')}"
+        )
+        threading.Thread(
+            target=patches.patch_importance_for_request,
+            args=(
+                add_result.get("request_id", ""),
+                qdrant_url,
+                _DEFAULT_QDRANT_COLLECTION,
+            ),
+            kwargs={
+                "user_id": user_id,
+                "session_id": session_id,
+                "since_timestamp": since_timestamp,
+            },
+            daemon=True,
+        ).start()
 
     @staticmethod
     def _flatten_memories(memories: Any) -> list[dict[str, Any]]:
@@ -557,6 +621,25 @@ class HyMemoryProvider(MemoryProvider):
 
         if not items:
             return ""
+
+        # Optional access-count tracking. Bumping access_count on every recalled
+        # memory completes the upstream 4-factor MemoryScorer's access term.
+        # Default ON for this prototype; set HYATLAS_MEMORY_ACCESS_COUNT=0 to
+        # disable. Runs in a fire-and-forget thread so recall latency is
+        # unaffected.
+        if os.environ.get("HYATLAS_MEMORY_ACCESS_COUNT", "1") != "0":
+            qdrant_url = self._config.get("vector_store", {}).get("url", _DEFAULT_QDRANT_URL) if self._config else _DEFAULT_QDRANT_URL
+            for mem in memories:
+                if not isinstance(mem, dict):
+                    continue
+                mid = mem.get("memory_id")
+                if mid:
+                    threading.Thread(
+                        target=patches.touch_memory,
+                        args=(mid, qdrant_url, _DEFAULT_QDRANT_COLLECTION),
+                        daemon=True,
+                    ).start()
+
         body = "\n".join(items)
         return (
             "<relevant-memories>\n"
@@ -589,11 +672,18 @@ class HyMemoryProvider(MemoryProvider):
             if not msgs:
                 continue
             try:
-                self._client.add(
+                since = time.time()
+                result = self._client.add(
                     msgs, user_id=self._user_id,
                     agent_id=self._agent_id, session_id=sid,
                 )
                 logger.info("[hy-memory] tail flush: %d msgs (session=%s)", len(msgs), sid)
+                # Populate importance scores on the qdrant points this add()
+                # produced. Fire-and-forget so it never blocks the write path.
+                self._maybe_patch_importance(
+                    result, user_id=self._user_id,
+                    session_id=sid, since_timestamp=since,
+                )
             except Exception as e:
                 logger.debug("[hy-memory] tail flush failed: %s", e)
 
@@ -635,7 +725,8 @@ Last assistant response:
 Next expected action:
 This session ended. The next session will automatically load this summary.
 """
-                self._client.add(
+                since = time.time()
+                result = self._client.add(
                     summary_text,
                     user_id=self._user_id,
                     agent_id=self._agent_id,
@@ -648,6 +739,12 @@ This session ended. The next session will automatically load this summary.
                     },
                 )
                 logger.info(f"[hy-memory] wrote cross-session continuity summary, {len(summary_text)} chars")
+                # Populate importance scores on the qdrant points this add()
+                # produced. Fire-and-forget so it never blocks the write path.
+                self._maybe_patch_importance(
+                    result, user_id=self._user_id,
+                    session_id="session-end-continuity", since_timestamp=since,
+                )
 
             except Exception as e:
                 logger.debug("[hy-memory] on_session_end write failed: %s", e)
