@@ -27,6 +27,7 @@ import sys
 import time
 import urllib.error  # noqa: I001  (urllib.error + urllib.request must be together)
 import urllib.request
+from urllib.parse import urlparse
 
 # ── Project root resolution ─────────────────────────────────────────────
 
@@ -176,6 +177,78 @@ def _services(project_root: str) -> list[dict]:
         },
     ]
     return _SERVICES
+
+
+# ── Config display ──────────────────────────────────────────────────────
+
+
+def _provider_from_url(base_url: str) -> str:
+    """Derive a friendly provider name from an OpenAI-compatible base_url."""
+    if not base_url:
+        return "?"
+    try:
+        host = urlparse(base_url).hostname or ""
+    except Exception:
+        host = ""
+    mapping = {
+        "api.openai.com": "OpenAI",
+        "api.deepseek.com": "DeepSeek",
+        "openrouter.ai": "OpenRouter",
+        "api.together.xyz": "Together",
+        "api.groq.com": "Groq",
+        "api.anthropic.com": "Anthropic",
+        "api.mistral.ai": "Mistral",
+        "api.perplexity.ai": "Perplexity",
+        "api.fireworks.ai": "Fireworks",
+        "api.x.ai": "xAI",
+        "api.tokenrouter.com": "TokenRouter",
+    }
+    if host in mapping:
+        return mapping[host]
+    return host or "custom"
+
+
+def _read_config() -> dict | None:
+    """Read ``~/.hermes/hy_memory.json`` if it exists. Returns parsed dict or None."""
+    try:
+        from hermes_constants import get_hermes_home
+    except ImportError:
+        return None
+    try:
+        path = os.path.join(get_hermes_home(), "hy_memory.json")
+    except Exception:
+        return None
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.loads(f.read())
+    except Exception:
+        return None
+
+
+def _print_config_summary() -> None:
+    """Print the LLM model + provider, embedder, mode, vector store from config."""
+    cfg = _read_config()
+    if not cfg:
+        return
+
+    llm = cfg.get("llm") or {}
+    embed = cfg.get("embedder") or {}
+    vs = cfg.get("vector_store") or {}
+
+    llm_model = llm.get("model") or "?"
+    llm_provider = _provider_from_url(llm.get("base_url", ""))
+    embed_model = embed.get("model") or "?"
+    embed_provider = embed.get("provider") or "?"
+    mode = cfg.get("mode") or "?"
+    vs_provider = vs.get("provider") or "?"
+
+    print()
+    print(f"  {CYAN}🧠 LLM{RESET}         {llm_model}  {DIM}via {llm_provider}{RESET}")
+    print(f"  {CYAN}📐 Embedder{RESET}    {embed_model}  {DIM}({embed_provider}){RESET}")
+    print(f"  {CYAN}🎯 Mode{RESET}        {mode}  {DIM}· vector store: {vs_provider}{RESET}")
+    print()
 
 
 # ── ANSI helpers ────────────────────────────────────────────────────────
@@ -438,6 +511,9 @@ def start_all():
     print()
     print(dim("  Press Ctrl+C to stop all services"))
     print()
+
+    # LLM / embedder / mode summary from ~/.hermes/hy_memory.json
+    _print_config_summary()
 
     try:
         mem_url = f"http://127.0.0.1:{UPSTREAM_PORT}/info"
