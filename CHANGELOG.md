@@ -25,6 +25,9 @@
   Increments `access_count` on every memory returned by a recall operation, so
   the upstream `MemoryScorer` has a live access signal. Runs in a
   fire-and-forget thread so it never blocks recall.
+- Integration tests in `tests/test_integration.py` covering the full local stack: Qdrant + upstream hy-memory server + `HyMemoryProvider`. Backfilled by default-on importance/access-count tracking.
+- `unit` and `integration` pytest markers so CI can run the fast suite without the live stack.
+- Dashboard front-end refactor: split the monolithic `app.js` into `app.js`, `js/l5.js`, and `js/observatory.js` to isolate the L5 knowledge graph and Three.js observatory modules; `server/dashboard/dashboard.py` now serves files under `/js/`.
 
 ### Changed
 - **Qdrant auto-detection** — removes hardcoded `C:\qdrant\qdrant.exe`; auto-detects via `QDRANT_BIN` env var → `PATH` → common OS locations. Skips launch if already running (Docker).

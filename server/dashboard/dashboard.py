@@ -2794,12 +2794,47 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
             try:
                 with open(html_path, encoding="utf-8") as f:
-                    html = f.read().replace("__REFRESH_S__", str(REFRESH_S))
+                    html = f.read()
             except FileNotFoundError:
-                html = HTML.replace("__REFRESH_S__", str(REFRESH_S))
+                html = HTML
+            html = html.replace("__REFRESH_S__", str(REFRESH_S)).replace("__USER_IDS__", HERMES_USER_IDS_JS)
             body = html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path in ("/styles.css", "/app.js") or path.startswith("/js/"):
+            # Static dashboard assets (CSS, JS). Files live next to dashboard.py.
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            if path == "/styles.css":
+                asset_path = os.path.join(base_dir, "styles.css")
+                content_type = "text/css; charset=utf-8"
+            elif path.startswith("/js/"):
+                rel = path[len("/js/"):]
+                if ".." in rel or rel.startswith("/") or "\\" in rel or not rel:
+                    self.send_response(404)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                asset_path = os.path.join(base_dir, "js", rel)
+                content_type = "application/javascript; charset=utf-8"
+            else:
+                asset_path = os.path.join(base_dir, "app.js")
+                content_type = "application/javascript; charset=utf-8"
+            try:
+                with open(asset_path, encoding="utf-8") as f:
+                    body = f.read().encode("utf-8")
+            except FileNotFoundError:
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
             self.end_headers()
