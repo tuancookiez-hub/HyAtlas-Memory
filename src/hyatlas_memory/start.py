@@ -1,41 +1,22 @@
-"""CLI entry point: `hyatlas`, `hyatlas --stop`, `hyatlas --status`.
+"""CLI entry point: ``hyatlas``, ``hyatlas --stop``, ``hyatlas --status``.
 
-Thin wrapper so the `hyatlas` console_scripts entry point works after
-`pip install -e .`. Delegates to the repo-root start.py which handles
-all the actual startup/shutdown/health-check logic.
+Delegates to :mod:`hyatlas_memory._start`, which contains the actual
+startup logic bundled inside the package. This thin wrapper exists so
+the ``[project.scripts]`` entry point in pyproject.toml resolves to a
+module the user can also import directly (``python -m
+hyatlas_memory.start``).
+
+Project root resolution (env var, cwd, or editable install) is handled
+inside ``_start.main()`` — see that module for details.
 """
+
 from __future__ import annotations
 
-import os
-import runpy
-import sys
-
-
-def _find_start_py() -> str | None:
-    # src/hyatlas_memory/start.py → 3 levels up = repo root (editable install)
-    here = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.dirname(os.path.dirname(here))
-    candidate = os.path.join(repo_root, "start.py")
-    if os.path.isfile(candidate):
-        return candidate
-
-    # Fallback: current working directory
-    candidate = os.path.join(os.getcwd(), "start.py")
-    if os.path.isfile(candidate):
-        return candidate
-
-    return None
+from hyatlas_memory import _start
 
 
 def main() -> None:
-    start_script = _find_start_py()
-    if not start_script:
-        print("Error: start.py not found.")
-        print("  Run from the HyAtlas-Memory project root, or install with: pip install -e .")
-        sys.exit(1)
-
-    ns = runpy.run_path(start_script, run_name="start")
-    ns["main"]()
+    _start.main()
 
 
 if __name__ == "__main__":

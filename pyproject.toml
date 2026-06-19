@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyatlas-memory"
-version = "1.0.0"
+version = "1.0.1"
 description = "Community implementation of the official Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan, memory.hunyuan.tencent.com) for Hermes Agent. Includes the experimental L7 intention layer. MIT licensed."
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -142,6 +142,10 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E402"]  # imports at non-top-level are common in tests
 "start.py" = [
+    "SIM105",  # try/except/pass is intentional for process management
+    "SIM115",  # long-lived log files can't use context managers
+]
+"src/hyatlas_memory/_start.py" = [
     "SIM105",  # try/except/pass is intentional for process management
     "SIM115",  # long-lived log files can't use context managers
 ]

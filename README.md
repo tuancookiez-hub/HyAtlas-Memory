@@ -5,6 +5,8 @@
 <p align="center">
   <a href="https://tuancookiez-hub.github.io/tuandev-portfolio/"><img src="https://img.shields.io/badge/Built%20by-Tuan%20Dev-blueviolet?style=for-the-badge" alt="Built by Tuan Dev"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
+  <a href="https://pypi.org/project/hyatlas-memory/"><img src="https://img.shields.io/pypi/v/hyatlas-memory?style=for-the-badge" alt="PyPI"></a>
+  <a href="https://github.com/tuancookiez-hub/HyAtlas-Memory/releases"><img src="https://img.shields.io/github/v/release/tuancookiez-hub/HyAtlas-Memory?style=for-the-badge" alt="GitHub release"></a>
 </p>
 
 <p align="center">
@@ -51,6 +53,16 @@ See it in action — a 19-second walkthrough of the live dashboard:
 
 ### Install
 
+**From PyPI (recommended for end users):**
+
+```bash
+pip install hyatlas-memory
+```
+
+That's it. The `hyatlas` CLI is on PATH. Run `hyatlas` to start the full stack.
+
+**From source (recommended for contributors):**
+
 ```bash
 # 1. Clone the repo
 git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
@@ -59,7 +71,7 @@ cd HyAtlas-Memory
 # 2. Install the package
 pip install -e .                    # runtime only
 # or, if you plan to contribute:
-pip install -e ".[dev,test]"        # adds pytest, ruff, mypy
+pip install -e ".[dev,test]"       # adds pytest, ruff, mypy
 
 # 3. Configure Hermes to use it — edit ~/.hermes/config.yaml:
 #    memory:
@@ -123,24 +135,26 @@ docker-compose down               # stop everything
 
 ```bash
 hyatlas            # start the full stack (Qdrant → server → dashboard)
-hyatlas --status   # check what's running
-hyatlas --stop     # stop all services
+hyatlas status     # check what's running (also: hyatlas --status)
+hyatlas stop       # stop all services     (also: hyatlas --stop)
 ```
 
 Or with the script directly:
 
 ```bash
 python start.py            # same as: hyatlas
-python start.py --status   # same as: hyatlas --status
-python start.py --stop     # same as: hyatlas --stop
+python start.py --status   # same as: hyatlas status
+python start.py --stop     # same as: hyatlas stop
 ```
+
+> **Note:** After `pip install hyatlas-memory`, the `hyatlas` command works from **any directory**. Set `HYATLAS_PROJECT_ROOT=F:\Projects\hyatlas-memory` if you want to run it from somewhere other than the project root.
 
 If Qdrant is already running (e.g. via Docker separately), `hyatlas` detects it and skips launching a second instance. Set `QDRANT_BIN` env var to point to a non-standard Qdrant location.
 
 ```
   ╔══════════════════════════════════════╗
   ║          HyAtlas Memory              ║
-  ║       AI Memory Atlas v0.6           ║
+  ║       AI Memory Atlas v1.0           ║
   ╚══════════════════════════════════════╝
 
   Starting HyAtlas Memory stack...
@@ -159,7 +173,7 @@ If Qdrant is already running (e.g. via Docker separately), `hyatlas` detects it 
   Press Ctrl+C to stop all services
 ```
 
-Then open **http://127.0.0.1:8765** — 7 tabs: Overview, Explore, Layers, Today, Graph, Activity, Settings.
+Then open **http://127.0.0.1:8765** — 7 pages: Overview, Memory Observatory, Explore Memory, Memory Layers, Today / Activity, Settings / System, L5 Knowledge Graph.
 
 Press **Ctrl+C** in the terminal to gracefully shut down all services. Logs go to `logs/` in the project root.
 
@@ -225,6 +239,7 @@ Every piece of memory lives in one of seven layers, each with a specific purpose
 
 | Layer | Purpose | Triggers |
 |-------|---------|----------|
+| **L0 basic info** | Stable user facts (location, employer, equipment) | automatic |
 | **L1 raw** | Verbatim session entries, time-ordered | every `add` |
 | **L2 fact** | Atomic facts extracted by LLM | every `add` |
 | **L3 summary** | Periodic L2 rollups (coherent narratives) | every 20 adds |
@@ -233,7 +248,36 @@ Every piece of memory lives in one of seven layers, each with a specific purpose
 | **L6 schema** | Typed entity/relationship schema | L5 step |
 | **L7 intention** | Proactive intent detection, async tasks | L5 step |
 
-L1–L2 run on the fast path (every message). L3–L7 run on the background path (async). L7 is an experimental extension — proactive intent detection that surfaces follow-up questions and task suggestions the agent should consider.
+L0–L2 run on the fast path (every message). L3–L7 run on the background path (async). L7 is an experimental extension — proactive intent detection that surfaces follow-up questions and task suggestions the agent should consider.
+
+### Retrieval scoring (4-factor MemoryScorer)
+
+The upstream `hy-memory` server ships a 4-factor `MemoryScorer` that ranks recalled memories:
+
+```
+0.50 × semantic    (vector similarity)
++ 0.30 × recency    (decay over time)
++ 0.15 × importance (per-memory score, this layer)
++ 0.05 × access     (recall-count boost)
+```
+
+HyAtlas-Memory populates the `importance` and `access` factors that upstream leaves zero by default, so the full scorer is active out of the box.
+
+| Field | How it's populated | Default |
+|---|---|---|
+| `importance` | Layer-derived: `l4_identity=1.0`, `l2_fact=0.8`, `l3_summary=0.6`, `l0_basic_info=0.5`, `l1_raw=0.3` | **ON** |
+| `access_count` | Incremented on every recall (fire-and-forget thread) | **ON** |
+
+Both run on existing points too — a one-shot backfill (`scripts/backfill_importance.py`) populates them across the corpus, and new memories pick them up automatically on write.
+
+**Disable either** with `=0`:
+
+```bash
+HYATLAS_MEMORY_IMPORTANCE=0    # disable layer-as-importance
+HYATLAS_MEMORY_ACCESS_COUNT=0  # disable access-count tracking
+```
+
+No LLM cost. No added latency. Just better recall ordering — high-priority identity/fact memories no longer get outranked by raw fragments.
 
 ### Knowledge graph
 
@@ -291,22 +335,39 @@ The result is a signal-to-noise ratio that improves with every session. Raw conv
 ```text
 src/hyatlas_memory/        # the plugin (Python package)
   __init__.py              # HyMemoryProvider — entry point, registers with Hermes
+  __main__.py              # `python -m hyatlas_memory` entry
+  _start.py                # full stack startup logic (bundled for `hyatlas` CLI)
+  _version.py              # version string (no-dep import)
   client.py                # HTTP client to the local server (urllib, zero deps)
-  patches.py               # 9 carried patches (L1 dedup, L3 trigger, rerank, etc.)
+  patches.py               # 9 carried patches + layer-as-importance + access-count
   context_pressure.py      # 4-tier token budget monitor (fastpath → emergency)
   process.py               # subprocess lifecycle for the local server
   embed_server.py          # local SentenceTransformers embedder (OpenAI-compatible)
   init_wizard.py           # first-run interactive setup wizard
   installer.py             # one-time pip-deps installer
   cli.py                   # `hermes hy-memory doctor|add|search|list|init|reset`
+  start.py                 # thin wrapper for `hyatlas` console_scripts entry
   plugin.yaml              # legacy plugin manifest (kept for back-compat)
 
 server/                    # standalone server (auto-started by plugin)
   start_server.py          # uvicorn launcher, reads hy_memory.json + .env
   bin/                     # L5 pipeline scripts (7-step graph rebuild)
-  dashboard/               # local web UI (7 tabs, port 8765)
+  dashboard/               # local web UI (port 8765)
+    dashboard.html         # HTML shell + page templates
+    dashboard.py           # http server, auth, API endpoints
+    app.js                 # shared state, navigation, overview, explore, layers, today, system
+    styles.css             # all CSS
+    js/l5.js               # L5 Knowledge Graph page
+    js/observatory.js      # Three.js memory observatory (split from app.js for size)
 
-tests/                     # pytest suite (16 tests)
+tests/                     # pytest suite (16 unit + 4 integration = 20 tests)
+  test_standalone.py       # version + plugin manifest + importable checks
+  test_hy_memory_search.py # recall formatting, layered response shape
+  test_integration.py      # end-to-end against live Qdrant + upstream server
+
+scripts/                   # one-off ops scripts (out of CI lint scope)
+  backfill_importance.py   # populate importance + access_count across corpus
+
 docs/                      # architecture + migration notes
 assets/                    # infographic images
 ```
@@ -338,8 +399,8 @@ cd HyAtlas-Memory
 uv pip install -e ".[dev,test]"
 
 # 2. Run tests
-pytest                     # 16 tests, ~0.1s, no external deps
-pytest -m integration      # needs running HyAtlas server
+pytest                     # 16 unit tests, ~0.1s, no external deps
+pytest -m integration      # 4 integration tests, needs Qdrant + upstream running
 
 # 3. Lint
 ruff check .

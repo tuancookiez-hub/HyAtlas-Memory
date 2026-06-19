@@ -2,6 +2,11 @@
 
 > All notable changes to HyAtlas-Memory are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-06-19
+
+### Fixed
+- **`hyatlas` CLI from any directory** — the `hyatlas start|--stop|--status` entry point now works regardless of the current working directory. Previously it failed with "start.py not found" when invoked outside the repo root after `pip install hyatlas-memory`. The startup logic was moved from the repo-root `start.py` into `hyatlas_memory._start` (bundled in the package) and resolves the project root via `HYATLAS_PROJECT_ROOT` env var → cwd → editable-install detection.
+
 ## [1.0.0] - 2026-06-19
 
 ### Added
