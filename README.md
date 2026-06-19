@@ -35,59 +35,85 @@ See it in action — a 19-second walkthrough of the live dashboard:
 
 ## Quick start
 
-### Prerequisites
+Two install paths. **Docker is easiest** (one command, everything isolated). **Local** is better for development.
 
-**Option A — Docker (recommended, zero manual installs):**
+### Path A — Docker (recommended)
 
-| Tool | Install |
-|------|---------|
-| **Docker** | [docker.com](https://www.docker.com/get-started) |
+**One command starts everything.** No Python setup, no Qdrant install, no env files.
 
-**Option B — Local (no Docker):**
+```bash
+# 1. Get docker-compose.yml (one-time)
+curl -O https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/docker-compose.yml
+
+# 2. Configure your LLM key (one-time)
+echo 'HY_MEMORY_LLM_API_KEY=sk-your-key-here' > .env
+
+# 3. Start the stack (Qdrant + upstream server + dashboard)
+docker-compose up -d
+
+# 4. Wait ~15s for the upstream server to finish booting, then verify
+curl http://127.0.0.1:8765/api/health    # → {"status":"ok",...}
+curl http://127.0.0.1:19527/info         # → {"name":"hy-memory-server",...}
+
+# 5. Open the dashboard
+open http://127.0.0.1:8765              # macOS
+# xdg-open http://127.0.0.1:8765        # Linux
+# start http://127.0.0.1:8765           # Windows
+```
+
+**That's it.** Three services running:
+- `:6333` — Qdrant (vector DB)
+- `:19527` — upstream `hy-memory` server
+- `:8765` — dashboard
+
+**Common commands:**
+
+```bash
+docker-compose ps           # what's running
+docker-compose logs -f      # follow all logs (Ctrl+C to exit)
+docker-compose logs -f dashboard   # just dashboard
+docker-compose restart      # restart everything
+docker-compose down         # stop (keeps data)
+docker-compose down -v      # stop AND wipe all data
+docker-compose pull         # pull new images, then: docker-compose up -d
+```
+
+**Where data lives:** the included `docker-compose.yml` mounts `./qdrant_storage` and `~/.hy_memory` to the host, so your data survives `docker-compose down`. To fully reset, use `down -v`.
+
+**Tell Hermes to use it:** edit `~/.hermes/config.yaml`:
+
+```yaml
+memory:
+  provider: hy_memory
+```
+
+That's it. Restart Hermes (or the next session picks it up).
+
+---
+
+### Path B — Local install (for development)
+
+**Prerequisites:**
 
 | Tool | Why | Install |
 |------|-----|---------|
 | **Python 3.10+** | Runtime | [python.org](https://www.python.org/downloads/) |
-| **Qdrant** | Vector store backend | [Download](https://qdrant.tech/documentation/guides/install/) or `docker run -p 6333:6333 qdrant/qdrant` |
-| **LLM API key** | Fact extraction & embedding | OpenAI, OpenRouter, DeepSeek, or any OpenAI-compatible endpoint |
+| **Qdrant** | Vector store | [Download](https://qdrant.tech/documentation/guides/install/) or `docker run -d -p 6333:6333 qdrant/qdrant` |
+| **LLM API key** | Fact extraction | OpenAI, OpenRouter, DeepSeek, or any OpenAI-compatible endpoint |
 
-### Install
-
-**From PyPI (recommended for end users):**
+**Install the package:**
 
 ```bash
+# End users — install from PyPI
 pip install hyatlas-memory
-```
 
-That's it. The `hyatlas` CLI is on PATH. Run `hyatlas` to start the full stack.
-
-**From source (recommended for contributors):**
-
-```bash
-# 1. Clone the repo
+# Contributors — clone and editable install
 git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 cd HyAtlas-Memory
-
-# 2. Install the package
-pip install -e .                    # runtime only
-# or, if you plan to contribute:
-pip install -e ".[dev,test]"       # adds pytest, ruff, mypy
-
-# 3. Configure Hermes to use it — edit ~/.hermes/config.yaml:
-#    memory:
-#      provider: hy_memory
+pip install -e ".[dev,test]"
 ```
 
-That's it. On first launch, HyAtlas-Memory will:
-
-1. Auto-create `~/.hy_memory/` (data directory)
-2. Initialize the Kuzu graph store
-3. Prompt for one-time setup (vector store choice, LLM key)
-4. Start a local server on port 19527
-
-### Configure (optional)
-
-If you want to customize before first run, copy `hy_memory.json.example` to `~/.hy_memory/hy_memory.json`:
+**Configure (optional):** copy `hy_memory.json.example` to `~/.hy_memory/hy_memory.json` and fill in your LLM key:
 
 ```json
 {
@@ -102,98 +128,77 @@ If you want to customize before first run, copy `hy_memory.json.example` to `~/.
     "provider": "local"
   },
   "mode": "ultra",
-  "vector_store": {
-    "provider": "qdrant",
-    "host": "127.0.0.1",
-    "port": 6333
-  }
+  "vector_store": {"provider": "qdrant", "host": "127.0.0.1", "port": 6333}
 }
 ```
 
-**Vector store:** `qdrant` (default, fastest) · `chroma` (simplest) · `faiss` (no daemon)
+> **Three modes:** `lite` (no LLM, embedding-only) · `pro` (LLM extraction per `add`) · `ultra` (pro + System 2 cognitive layer with Kuzu graph — default).
 
-**LLM:** any OpenAI-compatible endpoint. Tested with OpenAI, OpenRouter, DeepSeek, MiniMax, ByteDance, and local Ollama.
-
-**Three modes:**
-
-| Mode | What it does | Cost |
-|------|-------------|------|
-| `lite` | Embedding-only, zero LLM calls | Free |
-| `pro` | LLM fact extraction + reconciliation | LLM calls per `add` |
-| `ultra` | Pro + System2 cognitive layer with Kuzu graph (default) | LLM calls + background pipeline |
-
-### Launch
-
-**Option A — Docker (one command, starts everything):**
+**Start the stack:**
 
 ```bash
-docker-compose up -d              # starts Qdrant + server + dashboard
-docker-compose down               # stop everything
+hyatlas              # start Qdrant → upstream server → dashboard
 ```
 
-**Option B — Local:**
+The command works from **any directory** if you set `HYATLAS_PROJECT_ROOT`:
 
 ```bash
-hyatlas            # start the full stack (Qdrant → server → dashboard)
-hyatlas status     # check what's running (also: hyatlas --status)
-hyatlas stop       # stop all services     (also: hyatlas --stop)
+export HYATLAS_PROJECT_ROOT=/path/to/hyatlas-memory   # bash
+$env:HYATLAS_PROJECT_ROOT="C:\path\to\hyatlas-memory" # PowerShell
 ```
 
-Or with the script directly:
+Or `cd` into the project root and just run `hyatlas`.
+
+**Verify it works:**
 
 ```bash
-python start.py            # same as: hyatlas
-python start.py --status   # same as: hyatlas status
-python start.py --stop     # same as: hyatlas stop
+hyatlas status       # → ✔ Qdrant / ✔ Hy-Memory Server / ✔ Dashboard
+curl http://127.0.0.1:19527/info
+curl http://127.0.0.1:8765/api/health
 ```
 
-> **Note:** After `pip install hyatlas-memory`, the `hyatlas` command works from **any directory**. Set `HYATLAS_PROJECT_ROOT=F:\Projects\hyatlas-memory` if you want to run it from somewhere other than the project root.
-
-If Qdrant is already running (e.g. via Docker separately), `hyatlas` detects it and skips launching a second instance. Set `QDRANT_BIN` env var to point to a non-standard Qdrant location.
-
-```
-  ╔══════════════════════════════════════╗
-  ║          HyAtlas Memory              ║
-  ║       AI Memory Atlas v1.0           ║
-  ╚══════════════════════════════════════╝
-
-  Starting HyAtlas Memory stack...
-
-→ Starting Qdrant on port 6333...
-✔ Qdrant ready on port 6333  (2s)
-→ Starting Hy-Memory Server on port 19527...
-✔ Hy-Memory Server ready on port 19527  (8s)
-→ Starting Dashboard on port 8765...
-✔ Dashboard ready on port 8765  (1s)
-
-  🧠 Hy-Memory — running on :19527
-  📊 Dashboard          — running on :8765
-  🗄️  Qdrant             — running on :6333
-
-  Press Ctrl+C to stop all services
-```
-
-Then open **http://127.0.0.1:8765** — 7 pages: Overview, Memory Observatory, Explore Memory, Memory Layers, Today / Activity, Settings / System, L5 Knowledge Graph.
-
-Press **Ctrl+C** in the terminal to gracefully shut down all services. Logs go to `logs/` in the project root.
-
-### Dashboard auth
-
-By default, the dashboard binds to `127.0.0.1` (localhost only) — no auth needed.
-
-To expose it on your network (e.g. for remote access):
+**Common commands:**
 
 ```bash
-HY_DASH_BIND=0.0.0.0 hyatlas    # or: HY_DASH_BIND=0.0.0.0 python start.py
+hyatlas              # start
+hyatlas status       # check (also: hyatlas --status)
+hyatlas stop         # stop  (also: hyatlas --stop)
 ```
 
-When bound to a public interface, a **token is auto-generated** on first run and stored at `~/.hy_memory/.dashboard_token`. The startup output prints a URL with the token embedded:
+**Tell Hermes to use it:** same as Path A — edit `~/.hermes/config.yaml`:
 
-```
-  Dashboard:  http://0.0.0.0:8765/?token=F9asp-6x6-5emW719SEz85MvAgr34EFp
+```yaml
+memory:
+  provider: hy_memory
 ```
 
-Click that URL once — it sets a cookie and redirects to the dashboard. All subsequent requests are authenticated via the cookie. The `/api/health` endpoint is exempt (for health checks).
+Restart Hermes and you're set.
+
+---
+
+### What's running where
+
+| Service | Port | URL | Purpose |
+|---|---|---|---|
+| Qdrant | 6333 | `http://127.0.0.1:6333/dashboard` | Vector store (raw vectors + payload) |
+| Upstream hy-memory | 19527 | `http://127.0.0.1:19527/info` | Embedding + LLM extraction + search |
+| HyAtlas dashboard | 8765 | `http://127.0.0.1:8765` | Web UI: explore, observe, manage |
+
+The dashboard is the main thing you'll interact with. The other two are infrastructure.
+
+---
+
+### Next: see your memories
+
+Once running, your conversations automatically start filling the system with memories. To explore what's been captured:
+
+1. Open the dashboard at `http://127.0.0.1:8765`
+2. **Overview** — KPIs (total memories, by-layer breakdown, recent activity)
+3. **Memory Observatory** — visual 3D graph of your memory corpus
+4. **Explore Memory** — semantic search across all 7 layers
+5. **Layers / Today / Settings / L5 Knowledge Graph** — deeper views
+
+Logs go to `logs/` in the project root (local) or `docker-compose logs -f` (Docker).
 
 ### Memory recall is transparent
 
