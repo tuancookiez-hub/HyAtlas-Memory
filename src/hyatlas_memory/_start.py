@@ -512,8 +512,10 @@ def start_all():
     print(dim("  Press Ctrl+C to stop all services"))
     print()
 
-    # LLM / embedder / mode summary from ~/.hermes/hy_memory.json
-    _print_config_summary()
+    # LLM / embedder / mode summary from ~/.hermes/hy_memory.json.
+    # Opt-in: set HYATLAS_SHOW_CONFIG=1 to see it.
+    if os.environ.get("HYATLAS_SHOW_CONFIG") == "1":
+        _print_config_summary()
 
     try:
         mem_url = f"http://127.0.0.1:{UPSTREAM_PORT}/info"
