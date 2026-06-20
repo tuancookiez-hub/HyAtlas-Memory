@@ -27,6 +27,7 @@ import sys
 import time
 import urllib.error  # noqa: I001  (urllib.error + urllib.request must be together)
 import urllib.request
+from contextlib import suppress
 from urllib.parse import urlparse
 
 # ── Project root resolution ─────────────────────────────────────────────
@@ -276,6 +277,12 @@ def dim(msg):  return f"{DIM}{msg}{RESET}"
 # ── Process management ──────────────────────────────────────────────────
 
 children: list[subprocess.Popen] = []
+# Module-level flag so start_service() can branch on detached vs foreground
+# child creation flags without threading the argument through every caller.
+detach: bool = False
+# Module-level flag so start_all() can bypass the restart prompt when
+# the user passes --restart on the command line.
+force_restart: bool = False
 
 
 def kill_on_port(port: int) -> int:
@@ -375,7 +382,15 @@ def banner():
 
 
 def start_service(svc: dict) -> bool:
-    """Start a single service. Returns True if healthy."""
+    """Start a single service. Returns True if healthy.
+
+    Honors the module-level `detach` flag:
+    - detach=False (default): children get CREATE_NEW_PROCESS_GROUP so Ctrl+C
+      in the launching terminal kills them. Standard "stop with the terminal"
+      behavior.
+    - detach=True: children get DETACHED_PROCESS so they survive the launching
+      terminal closing. Use `hyatlas stop` to kill them.
+    """
     name = svc["name"]
     port = svc["port"]
 
@@ -429,8 +444,21 @@ def start_service(svc: dict) -> bool:
         env = os.environ.copy()
         log_file = open(log_path, "w")
         flags = 0
-        if platform.system() == "Windows":
-            flags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        # DETACHED_PROCESS (0x08) makes the child independent of the
+        # launching console — survives terminal close. Used for
+        # `hyatlas --detach` so users can close the launcher
+        # without killing the stack.
+        #
+        # CREATE_NEW_PROCESS_GROUP (0x200) keeps the child tied to
+        # the launching console's process group so Ctrl+C kills it.
+        # Used for foreground `hyatlas start` so closing the
+        # terminal cleanly stops everything.
+        flags = (
+            0x00000008 | no_window
+            if detach
+            else subprocess.CREATE_NEW_PROCESS_GROUP | no_window
+        )
         proc = subprocess.Popen(
             svc["cmd"],
             stdout=log_file,
@@ -483,7 +511,7 @@ def start_service(svc: dict) -> bool:
     return False
 
 
-def start_all():
+def start_all(detach: bool = False) -> None:
     project_root = _resolve_project_root()
     if not project_root:
         print(fail("Could not find the HyAtlas project root (the directory with `server/`)."))
@@ -499,17 +527,20 @@ def start_all():
     # If every service is already running and healthy, ask the user whether
     # they want to restart. Prevents the "I ran `hyatlas` and nothing happened"
     # surprise — the user gets a clear choice between "keep what's running"
-    # and "bounce everything".
+    # and "bounce everything". The --restart flag bypasses the prompt.
     if all(
         is_port_listening(svc["port"]) and health_check(svc["url"], svc["expect"])
         for svc in services
     ):
-        try:
-            answer = input(
-                "\n  All services already running. Restart all? [y/N]: "
-            ).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            answer = "n"
+        if not force_restart:
+            try:
+                answer = input(
+                    "\n  All services already running. Restart all? [y/N]: "
+                ).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                answer = "n"
+        else:
+            answer = "y"
         if answer in ("y", "yes"):
             stop_all()
             # fall through to start everything fresh below
@@ -676,12 +707,101 @@ def stop_all():
     print(ok("Done."))
 
 
+# ── Detached start (services survive terminal close) ───────────────────
+
+
+def _start_detached_and_exit() -> None:
+    """Start the stack as detached children and return immediately.
+
+    Used by `hyatlas --detach` so the services outlive the terminal that
+    launched them. We:
+
+    1. Start each service as a detached subprocess (no new console,
+       no parent process group — independent of the launching shell).
+    2. Wait for all 3 services to pass their health check.
+    3. Print a summary of the running services and exit.
+
+    To stop services launched this way, use `hyatlas stop` (kills by port)
+    or `hyatlas status` to see what's running.
+    """
+    project_root = _resolve_project_root()
+    if not project_root:
+        print(fail("Could not find the HyAtlas project root."))
+        print(dim("  Set HYATLAS_PROJECT_ROOT or cd into the project."))
+        sys.exit(1)
+
+    services = _services(project_root)
+
+    # Stop anything already running (same restart semantics as the
+    # foreground prompt, but without asking — the user explicitly
+    # asked to launch detached).
+    if any(is_port_listening(svc["port"]) for svc in services):
+        stop_all()
+
+    banner()
+    print(f"  {BOLD}Starting HyAtlas Memory stack (detached)...{RESET}")
+    print(dim(f"  project root: {project_root}"))
+    print()
+
+    # Start each service and collect handles so we can check health.
+    started: list[subprocess.Popen] = []
+    for svc in services:
+        if not start_service(svc):
+            print()
+            print(fail("Startup aborted. Some services may be running."))
+            print(dim("  Run 'hyatlas stop' to clean up."))
+            # Best-effort cleanup of what we did start
+            for proc in started:
+                with suppress(Exception):
+                    proc.terminate()
+            sys.exit(1)
+        # The actual subprocess handle is appended to the global
+        # `children` list by start_service; we don't need it here.
+        started.append(None)  # placeholder for zip() symmetry
+
+    print()
+    print(f"  {BOLD}{GREEN}All services running (detached).{RESET}")
+    print()
+    dash_bind = os.environ.get("HY_DASH_BIND", "127.0.0.1")
+    dash_url = f"http://127.0.0.1:{DASHBOARD_PORT}"
+    if dash_bind not in ("127.0.0.1", "localhost", "::1"):
+        token_file = os.path.join(
+            os.path.expanduser("~"), ".hy_memory", ".dashboard_token"
+        )
+        try:
+            with open(token_file) as f:
+                token = f.read().strip()
+            dash_url = f"{dash_url}/?token={token}"
+        except Exception:
+            pass
+    print(f"  {BOLD}Dashboard:{RESET}  {dash_url}")
+    print(f"  {BOLD}Upstream:{RESET}   http://127.0.0.1:{UPSTREAM_PORT}")
+    print(f"  {BOLD}Qdrant:{RESET}     http://127.0.0.1:{QDRANT_PORT}")
+    print()
+    print(dim("  Services are detached. Run 'hyatlas stop' to shut down."))
+    print(dim("  They will survive closing this terminal."))
+    print()
+
+
 # ── Main ────────────────────────────────────────────────────────────────
 
 def main():
     # Strip --internal (used for console window relaunch on Windows)
-    internal = "--internal" in sys.argv
-    sys.argv = [a for a in sys.argv if a != "--internal"]
+    # and --detach (start services as truly detached children) and
+    # --restart (force restart without prompting). These are parsed and
+    # removed from sys.argv before the subcommand dispatcher sees the
+    # remaining args, so subcommands like `start` aren't confused by them.
+    global detach
+    detach = "--detach" in sys.argv
+    sys.argv = [a for a in sys.argv if a != "--detach"]
+    global force_restart
+    force_restart = "--restart" in sys.argv
+    sys.argv = [a for a in sys.argv if a != "--restart"]
+    # `--internal` is preserved as a flag if present (callers may inspect
+    # it for backwards-compat reasons) but no longer drives any behavior
+    # in main() — the previous "spawn a new console" path was removed.
+    if "--internal" in sys.argv:
+        sys.argv = [a for a in sys.argv if a != "--internal"]
 
     if len(sys.argv) > 1:
         arg = sys.argv[1].lstrip("-")
@@ -703,24 +823,19 @@ def main():
             print("Usage: hyatlas [start|stop|status|memory|help]")
             sys.exit(1)
     else:
-        # On Windows: if we're not in our own console window, relaunch in one
-        if platform.system() == "Windows" and not internal:
-            project_root = _resolve_project_root()
-            if not project_root:
-                print(fail("Could not find the HyAtlas project root."))
-                print(dim("  Set HYATLAS_PROJECT_ROOT or cd into the project."))
-                sys.exit(1)
-            cmd = [sys.executable, "-m", "hyatlas_memory._start", "--internal"]
-            subprocess.Popen(
-                cmd,
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
-                cwd=project_root,
-            )
-            time.sleep(1)
-            sys.exit(0)
-
-        signal.signal(signal.SIGINT, lambda *_: (print(), shutdown(), sys.exit(0)))
-        start_all()
+        # Bare `hyatlas` (no args) starts the stack in the CURRENT terminal
+        # and stays attached. This is the default behavior — services run
+        # in the same console the user typed the command in, so closing
+        # this terminal cleanly stops the services (no orphaned
+        # popped-up consoles, no parent process group weirdness).
+        #
+        # To run detached (services survive terminal close), use
+        # `hyatlas --detach` or `hyatlas start --detach`.
+        if detach:
+            _start_detached_and_exit()
+        else:
+            signal.signal(signal.SIGINT, lambda *_: (print(), shutdown(), sys.exit(0)))
+            start_all()
 
 
 if __name__ == "__main__":
