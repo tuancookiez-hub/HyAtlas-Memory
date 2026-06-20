@@ -1227,3 +1227,106 @@ h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 600; }
 @keyframes seedRing{0%{width:6px;height:6px;opacity:.6}100%{width:120px;height:120px;opacity:0}}
 .seed-fade-out{animation:seedFade .4s ease-out forwards}
 @keyframes seedFade{to{opacity:0;transform:scale(1.1)}}
+
+/* ── Memory Detail Page (dedicated page on click) ── */
+
+/* When the memory-detail page is active, hide the right sidebar so the
+   detail can breathe across the full width of the main column. */
+body.memory-detail-active .right-sidebar { display: none; }
+body.memory-detail-active .content-area  { max-width: 100%; }
+
+/* Top of the memory-detail page: Back button + section label. */
+.memory-detail-page-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+}
+.back-btn .back-arrow {
+  font-size: 14px;
+  line-height: 1;
+  transition: transform .15s ease;
+}
+.back-btn:hover .back-arrow { transform: translateX(-2px); }
+
+/* Page-level wrapper inside the page-section. */
+.memory-detail-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 1000px;
+}
+
+/* Top row of badges + id. */
+.memory-detail-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* Section title used inside each panel. */
+.memory-detail-section-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+/* Section wrapper (used for non-panel sections like tags). */
+.memory-detail-section { margin-bottom: 4px; }
+
+/* The full content of the memory, untruncated. */
+.memory-detail-content-panel .memory-detail-content-text {
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* 4-factor scoring breakdown. */
+.scoring-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.scoring-row {
+  display: grid;
+  grid-template-columns: 110px 1fr 160px;
+  align-items: center;
+  gap: 12px;
+}
+.scoring-label {
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 500;
+}
+.scoring-bar {
+  height: 8px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.scoring-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-dim, var(--accent)));
+  transition: width .3s ease;
+}
+.scoring-value {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+}
+
+@media (max-width: 700px) {
+  .scoring-row { grid-template-columns: 90px 1fr 110px; }
+}
