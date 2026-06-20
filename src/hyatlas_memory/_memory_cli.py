@@ -135,13 +135,19 @@ def cmd_recall(args: list[str]) -> int:
 
 
 def cmd_list(args: list[str]) -> int:
-    """``hyatlas memory list`` — recent memories, newest first."""
+    """``hyatlas memory list`` — recent memories, newest first.
+
+    Queries Qdrant directly (with a server-side sort by gmt_created)
+    so the response is fast regardless of corpus size. The upstream
+    `/api/v1/list` endpoint is too slow on large corpora because it
+    post-processes every point.
+    """
     limit = 20
     layer = None
     for i, a in enumerate(args):
         if a == "--limit" and i + 1 < len(args):
             with suppress(ValueError):
-                limit = int(args[i + 1])
+                limit = min(int(args[i + 1]), 200)
         elif a == "--layer" and i + 1 < len(args):
             layer = args[i + 1]
         elif a == "--user-id" and i + 1 < len(args):
@@ -149,25 +155,83 @@ def cmd_list(args: list[str]) -> int:
             DEFAULT_USER_ID = args[i + 1]
 
     _ensure_stack()
-    provider, _ = _provider()
-    payload = provider._client.list_memories(user_id=DEFAULT_USER_ID, limit=limit)
-    mems = provider._flatten_memories(payload.get("memories") or payload.get("vdb", {}).get("memories") or [])
 
+    import json
+    import urllib.request as _ur
+
+    from hyatlas_memory._start import QDRANT_PORT
+    qdrant_url = f"http://127.0.0.1:{QDRANT_PORT}"
+    qdrant_collection = os.environ.get("HYATLAS_QDRANT_COLLECTION", "agent_memories_384")
+
+    # Build qdrant filter: user_id + optional layer.
+    must = [{"key": "user_id", "match": {"value": DEFAULT_USER_ID}}]
     if layer:
-        mems = [m for m in mems if m.get("layer") == layer]
+        must.append({"key": "layer", "match": {"value": layer}})
 
-    print(f"  Recent memories (limit={limit}, layer={layer or 'all'}):")
+    body = {
+        "filter": {"must": must},
+        "limit": limit,
+        "with_payload": ["layer", "user_id", "gmt_created", "importance",
+                         "access_count", "content", "memory_id", "session_id"],
+        "with_vectors": False,
+        # qdrant 1.7+ supports order_by for scroll; falls back to client-side
+        # sort if not supported. Wrapped in try/except below.
+        "order_by": {"key": "gmt_created", "direction": "desc"},
+    }
+
+    try:
+        req = _ur.Request(
+            f"{qdrant_url}/collections/{qdrant_collection}/points/scroll",
+            data=json.dumps(body).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        resp = json.loads(_ur.urlopen(req, timeout=15).read())
+        points = (resp.get("result") or {}).get("points") or []
+    except Exception:
+        # Older qdrant without order_by support: scroll then sort client-side.
+        body.pop("order_by", None)
+        points = []
+        offset = None
+        while len(points) < limit * 3:
+            b = dict(body)
+            if offset is not None:
+                b["offset"] = offset
+            req = _ur.Request(
+                f"{qdrant_url}/collections/{qdrant_collection}/points/scroll",
+                data=json.dumps(b).encode(),
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            resp = json.loads(_ur.urlopen(req, timeout=15).read())
+            points.extend((resp.get("result") or {}).get("points") or [])
+            offset = (resp.get("result") or {}).get("next_page_offset")
+            if offset is None:
+                break
+        points.sort(
+            key=lambda p: p.get("payload", {}).get("gmt_created", 0),
+            reverse=True,
+        )
+
+    print(f"  Recent memories (limit={limit}, layer={layer or 'all'}, user={DEFAULT_USER_ID}):")
     print()
-    for i, m in enumerate(mems, 1):
-        ts = m.get("gmt_created")
+    if not points:
+        print("  (no memories match the filter)")
+        return 0
+
+    for i, p in enumerate(points[:limit], 1):
+        pl = p.get("payload") or {}
+        ts = pl.get("gmt_created")
         if isinstance(ts, (int, float)):
             when = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
         else:
             when = "—"
-        layer = m.get("layer", "?")
-        content = str(m.get("content", "")).replace("\n", " ")[:100]
-        mid = m.get("memory_id", "?")
-        print(f"  {i:>2}. {when}  [{layer:13}]  id={mid[:8]}")
+        layer_s = pl.get("layer", "?")
+        content = str(pl.get("content", "")).replace("\n", " ")[:100]
+        mid = pl.get("memory_id") or p.get("id", "?")
+        imp = pl.get("importance")
+        imp_s = f" ★{imp:.1f}" if isinstance(imp, (int, float)) else ""
+        print(f"  {i:>2}. {when}  [{layer_s:13}]{imp_s}  id={str(mid)[:8]}")
         print(f"      {content}")
     return 0
 
