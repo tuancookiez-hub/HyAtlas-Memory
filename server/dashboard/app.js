@@ -43,12 +43,17 @@ function navigateTo(page) {
 
   // Update nav
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  document.querySelector(`[data-page="${page}"]`).classList.add('active');
+  const navEl = document.querySelector(`[data-page="${page}"]`);
+  if (navEl) navEl.classList.add('active');
 
   // Update page sections
   document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active','entered'));
   const newEl=document.getElementById(`page-${page}`);
+  if (!newEl) return;
   newEl.classList.add('active');
+
+  // Body class for memory-detail full-width styling (hides right sidebar).
+  document.body.classList.toggle('memory-detail-active', page === 'memory-detail');
 
   // Update right sidebar
   updateRightSidebar(page);
@@ -586,7 +591,7 @@ function renderSearchResults() {
   document.querySelectorAll('.search-result').forEach(el => {
     el.addEventListener('click', () => {
       const idx = parseInt(el.dataset.index);
-      showMemoryDetail(searchResults[idx]);
+      enterMemoryDetail(searchResults[idx].memory_id);
       document.querySelectorAll('.search-result').forEach(r => r.classList.remove('selected'));
       el.classList.add('selected');
     });
@@ -594,6 +599,10 @@ function renderSearchResults() {
 }
 
 function showMemoryDetail(memory) {
+  // Legacy panel renderer — kept so any out-of-tree code that still calls it
+  // (e.g. tests, embedded previews) renders into the right sidebar as before.
+  // New click flows route through enterMemoryDetail() which navigates to the
+  // dedicated memory-detail page instead.
   const title = (memory.content || '');
   const tagCounts = {};
   (memory.tags || []).forEach(tag => {
@@ -642,6 +651,240 @@ function showMemoryDetail(memory) {
   document.getElementById('right-sidebar').innerHTML = html;
 }
 
+// ---------------------------------------------------------------------------
+// Memory Detail page
+//
+// Clicking a memory card anywhere in the dashboard (recent ingestion, today
+// timeline, explore search, L5 graph, etc.) navigates to a dedicated page
+// rather than replacing the right sidebar. The URL gets a `?memory=<id>`
+// query param so refresh / shared links preserve state.
+//
+// Back behavior:
+//   - The in-page "Back" button returns to whichever page the user came
+//     from (Overview / Today / Explore / L5 / …) and clears the query.
+//   - The browser Back button does the same via the popstate listener.
+// ---------------------------------------------------------------------------
+
+// Page we came from when entering the memory-detail page; used by exitMemoryDetail().
+let memoryDetailReturnPage = 'overview';
+
+// Render the full memory detail into the dedicated page container.
+// Includes layer, importance, access_count, full (untruncated) content,
+// 4-factor scoring breakdown, provenance, tags, timestamps.
+function renderMemoryDetailPage(memory) {
+  const content = document.getElementById('memory-detail-content');
+  const titleEl = document.getElementById('memory-detail-title');
+  const subEl   = document.getElementById('memory-detail-subtitle');
+  if (!content || !titleEl || !subEl) return;
+
+  const fullContent = memory.content || '';
+  const preview = fullContent.length > 80 ? fullContent.substring(0, 80) + '…' : fullContent;
+  titleEl.textContent = preview || '(empty content)';
+  titleEl.title = fullContent;
+  const layerInfo = (memory.layer && LAYERS[memory.layer]) ? LAYERS[memory.layer] : null;
+  const layerLabel = layerInfo ? layerInfo.name : (memory.layer || 'unknown');
+  subEl.textContent  = `${layerLabel}${memory.user_id ? ' · ' + memory.user_id : ''}`;
+
+  const imp = typeof memory.importance === 'number' ? memory.importance : null;
+  const impCls = imp === null ? '' : imp >= 0.7 ? 'importance-high' : imp >= 0.4 ? 'importance-mid' : 'importance-low';
+  const impBadge = imp === null
+    ? `<span class="badge badge-importance">—</span>`
+    : `<span class="badge badge-importance ${impCls}" title="Importance (4-factor scorer, weight 0.15)">★ ${imp.toFixed(2)}</span>`;
+  const acc = typeof memory.access_count === 'number' ? memory.access_count : null;
+  const accBadge = acc === null
+    ? `<span class="badge badge-importance" title="Access count not available">↻ —</span>`
+    : `<span class="badge badge-importance" title="Times this memory has been recalled (4-factor scorer, weight 0.05)">↻ ${acc.toLocaleString()}</span>`;
+
+  // Compute the four 4-factor components from available fields. This is the
+  // best-effort explanation surfaced to the user; the backend may use a
+  // different runtime scorer, but the *weights* (0.50/0.30/0.15/0.05) and the
+  // *shape* are stable.
+  const semantic = 0.50;
+  const recency = 0.30;
+  const importanceWeight = 0.15;
+  const accessWeight = 0.05;
+  const impVal = imp === null ? null : imp.toFixed(2);
+  const accVal = acc === null ? '—' : String(acc);
+
+  const createdTs = memory.gmt_created ? new Date(memory.gmt_created * 1000) : null;
+  const updatedTs = memory.gmt_updated && (!memory.gmt_created || (memory.gmt_updated - memory.gmt_created > 60))
+    ? new Date(memory.gmt_updated * 1000) : null;
+  const createdStr = createdTs ? createdTs.toLocaleString() : '—';
+  const updatedStr = updatedTs ? updatedTs.toLocaleString() : null;
+
+  const tagsHtml = (memory.tags && memory.tags.length > 0)
+    ? `
+      <div class="memory-detail-section">
+        <div class="memory-detail-section-title">TAGS</div>
+        <div class="flex gap-2" style="flex-wrap: wrap;">${(memory.tags || []).map(t => `<span class="badge badge-tag">${escapeHtml(t)}</span>`).join('')}</div>
+      </div>`
+    : '';
+
+  const provenanceHtml = (memory.user_id || memory.session_id || memory.agent_id || memory.workspace_id || memory.branch)
+    ? `
+      <div class="memory-detail-section">
+        <div class="memory-detail-section-title">PROVENANCE</div>
+        ${memory.user_id     ? `<div class="kv-row"><div class="kv-label">user</div><div class="kv-value font-mono">${escapeHtml(memory.user_id)}</div></div>` : ''}
+        ${memory.session_id  ? `<div class="kv-row"><div class="kv-label">session</div><div class="kv-value font-mono">${escapeHtml(memory.session_id)}</div></div>` : ''}
+        ${memory.agent_id    ? `<div class="kv-row"><div class="kv-label">agent</div><div class="kv-value font-mono">${escapeHtml(memory.agent_id)}</div></div>` : ''}
+        ${memory.workspace_id ? `<div class="kv-row"><div class="kv-label">workspace</div><div class="kv-value font-mono">${escapeHtml(memory.workspace_id)}</div></div>` : ''}
+        ${memory.branch      ? `<div class="kv-row"><div class="kv-label">branch</div><div class="kv-value font-mono">${escapeHtml(memory.branch)}</div></div>` : ''}
+      </div>`
+    : '';
+
+  const l5Extras = (memory.entity_type || memory.mention_count || memory.aliases)
+    ? `
+      <div class="memory-detail-section">
+        <div class="memory-detail-section-title">L5 ENTITY</div>
+        ${memory.entity_type   ? `<div class="kv-row"><div class="kv-label">type</div><div class="kv-value font-mono">${escapeHtml(memory.entity_type)}</div></div>` : ''}
+        ${memory.mention_count ? `<div class="kv-row"><div class="kv-label">mention_count</div><div class="kv-value font-mono">${escapeHtml(String(memory.mention_count))}</div></div>` : ''}
+        ${(memory.aliases && memory.aliases.length) ? `<div class="kv-row"><div class="kv-label">aliases</div><div class="kv-value font-mono">${escapeHtml(memory.aliases.join(', '))}</div></div>` : ''}
+      </div>`
+    : '';
+
+  content.innerHTML = `
+    <div class="memory-detail-page">
+      <div class="memory-detail-meta-row">
+        <span class="badge badge-layer layer-${memory.layer || ''}">${escapeHtml(memory.layer || '—')}</span>
+        ${impBadge}
+        ${accBadge}
+        <span class="text-xs text-muted font-mono" title="Memory identifier">id: ${escapeHtml(memory.memory_id)}</span>
+      </div>
+
+      <div class="panel memory-detail-content-panel">
+        <div class="memory-detail-section-title">CONTENT</div>
+        <div class="memory-detail-content-text">${escapeHtml(fullContent)}</div>
+      </div>
+
+      <div class="panel">
+        <div class="memory-detail-section-title">SCORING (4-factor)</div>
+        <div class="scoring-grid">
+          <div class="scoring-row">
+            <div class="scoring-label">semantic</div>
+            <div class="scoring-bar"><div class="scoring-bar-fill" style="width: ${semantic*100}%"></div></div>
+            <div class="scoring-value font-mono">${semantic.toFixed(2)} (weight)</div>
+          </div>
+          <div class="scoring-row">
+            <div class="scoring-label">recency</div>
+            <div class="scoring-bar"><div class="scoring-bar-fill" style="width: ${recency*100}%"></div></div>
+            <div class="scoring-value font-mono">${recency.toFixed(2)} (weight)</div>
+          </div>
+          <div class="scoring-row">
+            <div class="scoring-label">importance</div>
+            <div class="scoring-bar"><div class="scoring-bar-fill" style="width: ${(imp === null ? 0 : imp)*100}%"></div></div>
+            <div class="scoring-value font-mono">${impVal === null ? '—' : impVal} × ${importanceWeight.toFixed(2)}</div>
+          </div>
+          <div class="scoring-row">
+            <div class="scoring-label">access</div>
+            <div class="scoring-bar"><div class="scoring-bar-fill" style="width: ${Math.min(100, (acc === null ? 0 : acc)*10)}%"></div></div>
+            <div class="scoring-value font-mono">${accVal} × ${accessWeight.toFixed(2)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="memory-detail-section-title">TIMESTAMPS</div>
+        <div class="kv-row"><div class="kv-label">created</div><div class="kv-value font-mono">${escapeHtml(createdStr)}</div></div>
+        ${updatedStr ? `<div class="kv-row"><div class="kv-label">updated</div><div class="kv-value font-mono">${escapeHtml(updatedStr)}</div></div>` : ''}
+      </div>
+
+      ${provenanceHtml}
+      ${l5Extras}
+      ${tagsHtml}
+    </div>
+  `;
+}
+
+// Navigate to the dedicated memory-detail page for `memoryId`.
+// Pushes URL state so refresh / shared links preserve the open memory,
+// and remembers the page we came from for the in-page Back button.
+function enterMemoryDetail(memoryId) {
+  if (!memoryId) return;
+  const mem = allMemories.find(m => m.memory_id === memoryId);
+  if (!mem) {
+    console.warn('enterMemoryDetail: memory not found', memoryId);
+    return;
+  }
+
+  // Remember where we came from so the Back button returns there
+  // (only record if we are not already on the memory-detail page,
+  // otherwise we'd overwrite the original return page).
+  if (currentPage !== 'memory-detail') {
+    memoryDetailReturnPage = currentPage || 'overview';
+  }
+
+  // Update URL: ?memory=<id>  (keeps the path the same; refreshable / shareable)
+  try {
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.set('memory', memoryId);
+    history.pushState(
+      { page: 'memory-detail', memoryId, returnPage: memoryDetailReturnPage },
+      '',
+      newUrl.toString()
+    );
+  } catch (e) {
+    // Older browsers / file:// — fall back to hash
+    history.pushState(
+      { page: 'memory-detail', memoryId, returnPage: memoryDetailReturnPage },
+      '',
+      '#memory=' + encodeURIComponent(memoryId)
+    );
+  }
+
+  // Render the page content BEFORE navigateTo so it is ready when the
+  // page-section becomes visible (navigateTo triggers a fade transition).
+  renderMemoryDetailPage(mem);
+
+  // Switch to the memory-detail page-section (hides other pages + right sidebar)
+  navigateTo('memory-detail');
+
+  // Scroll the content area to top so the back button + title are visible
+  const ca = document.querySelector('.content-area');
+  if (ca) ca.scrollTop = 0;
+}
+
+// Return from the memory-detail page to wherever the user came from.
+// Uses replaceState (not pushState) so we don't grow the back stack
+// when the in-page Back button is clicked. The browser's native Back
+// button still works via the popstate listener below.
+function exitMemoryDetail() {
+  const returnPage = memoryDetailReturnPage || 'overview';
+  try {
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.delete('memory');
+    history.replaceState({ page: returnPage }, '', newUrl.toString());
+  } catch (e) {
+    history.replaceState({ page: returnPage }, '', window.location.pathname);
+  }
+  navigateTo(returnPage);
+}
+
+// Wire the in-page Back button
+document.getElementById('memory-detail-back-btn').addEventListener('click', exitMemoryDetail);
+
+// Browser Back / Forward: keep the page in sync with history state.
+window.addEventListener('popstate', (e) => {
+  const state = e.state || {};
+  const params = new URL(window.location.href).searchParams;
+  const memId = params.get('memory');
+
+  if (memId) {
+    // Restoring a memory-detail entry from history
+    const mem = allMemories.find(m => m.memory_id === memId);
+    if (mem) {
+      memoryDetailReturnPage = state.returnPage || memoryDetailReturnPage || 'overview';
+      renderMemoryDetailPage(mem);
+      navigateTo('memory-detail');
+      return;
+    }
+  }
+  // Otherwise restore whichever top-level page the state points at.
+  const target = state.page && state.page !== 'memory-detail' ? state.page : (memoryDetailReturnPage || 'overview');
+  if (target !== currentPage) {
+    navigateTo(target);
+  }
+});
+
 // Event delegation for timeline-item and ingestion-item clicks.
 // One listener attached at document level handles all dynamically-rendered
 // timeline/ingestion items without needing inline onclick attributes.
@@ -649,17 +892,38 @@ document.addEventListener('click', (e) => {
   const item = e.target.closest('.timeline-item[data-memory-id], .ingestion-item[data-memory-id]');
   if (!item) return;
   const mid = item.getAttribute('data-memory-id');
-  if (mid) showMemoryDetailById(mid);
+  if (mid) enterMemoryDetail(mid);
 });
 
 window.__openMemoryDetail = function(memoryId) {
-  showMemoryDetailById(memoryId);
+  enterMemoryDetail(memoryId);
 };
 
 function showMemoryDetailById(memoryId) {
-  const mem = allMemories.find(m => m.memory_id === memoryId);
-  if (!mem) return;
-  showMemoryDetail(mem);
+  // Kept as a thin alias for backwards-compat (tests, external links).
+  enterMemoryDetail(memoryId);
+}
+
+// On boot, honor ?memory=<id> so a refresh / shared link keeps the
+// memory-detail page open. Called by the init code at the bottom of
+// app.js after loadAllData() finishes.
+function restoreMemoryDetailFromUrl() {
+  try {
+    const memId = new URL(window.location.href).searchParams.get('memory');
+    if (!memId) return;
+    const mem = allMemories.find(m => m.memory_id === memId);
+    if (!mem) return;
+    // Don't push a new history entry — replace current so Back works cleanly.
+    history.replaceState(
+      { page: 'memory-detail', memoryId: memId, returnPage: memoryDetailReturnPage },
+      '',
+      window.location.href
+    );
+    renderMemoryDetailPage(mem);
+    navigateTo('memory-detail');
+  } catch (e) {
+    console.warn('restoreMemoryDetailFromUrl failed', e);
+  }
 }
 
 // Memory Layers
@@ -1142,7 +1406,7 @@ function updateRightSidebar(page) {
   } else if (page === 'observatory') {
     // Field note shown on node click
   } else if (page === 'explore') {
-    // Memory detail shown on result click
+    // Memory detail is now a dedicated page; no in-sidebar panel needed.
   } else if (page === 'layers') {
     const layerCounts = {};
     allMemories.forEach(m => {
@@ -1156,6 +1420,10 @@ function updateRightSidebar(page) {
     renderTodaySummary(todayMemories);
   } else if (page === 'system') {
     // System page has its own layout
+    document.getElementById('right-sidebar').innerHTML = '';
+  } else if (page === 'memory-detail') {
+    // The dedicated Memory Detail page replaces the right sidebar entirely
+    // — clear it and let CSS hide the column for a full-width view.
     document.getElementById('right-sidebar').innerHTML = '';
   }
 }
@@ -1280,6 +1548,10 @@ loadAllData().then(() => {
   updateRightSidebar('overview');
   enterPage('overview');
   hideBootScreen();
+  // If the URL has ?memory=<id>, open the dedicated Memory Detail page
+  // (after data has loaded so allMemories is populated). Falls through
+  // silently if the memory is not in the current dataset.
+  restoreMemoryDetailFromUrl();
 });
 
 // Auto-refresh
