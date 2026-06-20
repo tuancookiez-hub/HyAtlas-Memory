@@ -134,6 +134,16 @@ pip install -e ".[dev,test]"
 
 > **Three modes:** `lite` (no LLM, embedding-only) · `pro` (LLM extraction per `add`) · `ultra` (pro + System 2 cognitive layer with Kuzu graph — default).
 
+<p align="center">
+  <img src="./assets/05-three-gear-modes.png" alt="Three-gear access: Lite touches L1 only (vector retrieval, zero LLM cost), Pro touches L1–L4 (synchronous MemAgent extraction/abstraction/reflection), Ultra touches L1–L6 with System 1 synchronous writes (L1–L4) and System 2 asynchronous precipitation (L5–L6)" width="900" />
+</p>
+
+| Mode | What it does | Layers | Cost |
+|------|-------------|--------|------|
+| `lite` | Embedding-only, zero LLM calls | L1 only | Free |
+| `pro` | LLM fact extraction + reconciliation | L1–L4 | LLM calls per `add` |
+| `ultra` | Pro + System 2 cognitive layer with Kuzu graph | L1–L6 | LLM calls + background pipeline |
+
 **Start the stack:**
 
 ```bash
