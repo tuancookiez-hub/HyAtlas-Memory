@@ -61,6 +61,21 @@ logger = logging.getLogger(__name__)
 # Tracks whether we've already applied patches (idempotent)
 _applied: dict[str, bool] = {}
 
+# Per-layer importance scores used by patch_importance_for_request().
+# These feed the 0.15 importance term in the upstream 4-factor MemoryScorer
+# without adding LLM cost. Tuned 2026-06-21: high-signal layers (identity,
+# basic_info) get higher weights than raw turns / summaries.
+_LAYER_IMPORTANCE: dict[str, float] = {
+    "l0_basic_info": 0.8,
+    "l1_raw": 0.3,
+    "l2_fact": 0.6,
+    "l3_summary": 0.5,
+    "l4_identity": 0.8,
+    "l5_knowledge": 0.6,
+    "l6_schema": 0.8,
+    "l7_intention": 0.5,
+}
+
 
 # ---------------------------------------------------------------------------
 # Patch 4 — bypass upstream's coding_judge routing.

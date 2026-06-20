@@ -542,6 +542,12 @@ class HyMemoryProvider(MemoryProvider):
         importance term in the upstream 4-factor MemoryScorer without
         adding LLM cost. Runs in a daemon thread so it never blocks the write
         path.
+
+        The upstream reconciler promotes l1_raw → l4_identity asynchronously,
+        often AFTER the patch thread fires. So we also schedule a delayed
+        retry (8s) to catch the reconciled points. The retry scans by
+        user_id + session_id + time-window — same fallback the patch uses
+        when request_id isn't set.
         """
         if os.environ.get("HYATLAS_MEMORY_IMPORTANCE", "1") != "1":
             return
@@ -552,20 +558,36 @@ class HyMemoryProvider(MemoryProvider):
             f"http://{self._config.get('qdrant_host', '127.0.0.1')}"
             f":{self._config.get('qdrant_port', '6333')}"
         )
+        patch_args = (
+            add_result.get("request_id", ""),
+            qdrant_url,
+            _DEFAULT_QDRANT_COLLECTION,
+        )
+        patch_kwargs = {
+            "user_id": user_id,
+            "session_id": session_id,
+            "since_timestamp": since_timestamp,
+        }
+
+        # Immediate patch — catches points created by add() itself (l1_raw,
+        # l2_fact when extracted in the same call).
         threading.Thread(
             target=patches.patch_importance_for_request,
-            args=(
-                add_result.get("request_id", ""),
-                qdrant_url,
-                _DEFAULT_QDRANT_COLLECTION,
-            ),
-            kwargs={
-                "user_id": user_id,
-                "session_id": session_id,
-                "since_timestamp": since_timestamp,
-            },
+            args=patch_args,
+            kwargs=patch_kwargs,
             daemon=True,
         ).start()
+
+        # Delayed retry — catches points created by the async reconciler
+        # (l4_identity, etc.) AFTER the initial patch already ran.
+        def _delayed_retry() -> None:
+            time.sleep(8.0)
+            with contextlib.suppress(Exception):
+                patches.patch_importance_for_request(
+                    *patch_args, **patch_kwargs,
+                )
+
+        threading.Thread(target=_delayed_retry, daemon=True).start()
 
     @staticmethod
     def _flatten_memories(memories: Any) -> list[dict[str, Any]]:

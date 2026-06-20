@@ -144,31 +144,62 @@ class TestMemoryLifecycle:
         assert "teal" in contents, f"'teal' not found in recalled memories: {contents}"
 
     def test_importance_and_access_count_are_populated(self):
-        """The 4-factor scorer fields should be present on new memories."""
+        """The 4-factor scorer fields should be present on new memories.
+
+        The upstream reconciles l1_raw → l4_identity asynchronously, which is
+        when ``memory_id`` first gets populated. Then the importance PATCH
+        runs in a fire-and-forget daemon thread. So we poll up to 60s for
+        the reconciled form, then poll again for the importance patch to
+        land. On a loaded box (3k+ existing memories) the original 15s
+        fixed sleep wasn't enough.
+        """
         self.provider.sync_turn(
             user_content="I prefer concise answers.",
             assistant_content="Got it.",
             session_id=self.session_id,
         )
-        time.sleep(15)
 
-        result = self.provider._client.search(
-            "concise answers",
-            user_ids=[self.user_id],
-            limit=5,
+        # Poll for the upstream to reconcile l1_raw → a layer with memory_id.
+        deadline = time.time() + 60
+        memories: list[dict] = []
+        while time.time() < deadline:
+            result = self.provider._client.search(
+                "concise answers",
+                user_ids=[self.user_id],
+                limit=5,
+            )
+            memories = [
+                m for m in self.provider._flatten_memories(result.get("memories"))
+                if m.get("memory_id")
+            ]
+            if memories:
+                break
+            time.sleep(2)
+        assert memories, (
+            "Upstream never reconciled l1_raw into a memory with a memory_id "
+            f"within 60s; last search returned {[m.get('layer') for m in self.provider._flatten_memories(result.get('memories'))]}"
         )
-        memories = self.provider._flatten_memories(result.get("memories"))
-        assert len(memories) >= 1
 
         # Formatting triggers the access_count increment thread.
         self.provider._format_memories_for_prompt(memories)
-        time.sleep(3)
 
         for m in memories:
-            mid = m.get("memory_id")
-            assert mid, f"Memory missing memory_id: {m}"
-            point = _qdrant_request(f"/points/{mid}")
-            payload = point["result"]["payload"]
+            mid = m["memory_id"]
+
+            # Poll for importance/access_count to land (fire-and-forget patch).
+            payload: dict = {}
+            patch_deadline = time.time() + 60
+            while time.time() < patch_deadline:
+                point = _qdrant_request(f"/points/{mid}")
+                payload = point["result"]["payload"]
+                if (
+                    payload.get("importance") is not None
+                    and payload.get("access_count") is not None
+                    and payload.get("layer") is not None
+                ):
+                    break
+                time.sleep(2)
+
             layer = payload.get("layer")
             importance = payload.get("importance")
             access_count = payload.get("access_count")
