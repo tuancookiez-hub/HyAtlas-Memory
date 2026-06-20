@@ -632,9 +632,12 @@ def main():
             show_status()
         elif arg == "help" or arg == "h":
             print(__doc__)
+        elif arg == "start":
+            # "hyatlas start" is equivalent to bare "hyatlas" — fall through
+            pass
         else:
             print(fail(f"Unknown argument: {sys.argv[1]}"))
-            print("Usage: hyatlas [start|--stop|--status|--help]")
+            print("Usage: hyatlas [start|stop|status|help]")
             sys.exit(1)
     else:
         # On Windows: if we're not in our own console window, relaunch in one
