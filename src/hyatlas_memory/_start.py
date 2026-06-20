@@ -318,7 +318,13 @@ def kill_on_port(port: int) -> int:
 
 
 def is_port_listening(port: int) -> bool:
-    """Check if a process is listening on `port`."""
+    """Check if a process is listening on `port`.
+
+    Only returns True for an actual LISTENING socket owned by a real PID.
+    Filters out TIME_WAIT / FIN_WAIT entries (which have PID 0 and no live
+    process) so the restart flow doesn't get confused by recently-killed
+    processes whose TCP connections haven't fully torn down yet.
+    """
     if platform.system() == "Windows":
         out = subprocess.run(
             ["netstat", "-ano"],
@@ -326,7 +332,13 @@ def is_port_listening(port: int) -> bool:
         ).stdout
         for line in out.splitlines():
             parts = line.split()
-            if len(parts) >= 5 and f":{port}" in parts[1] and "LISTENING" in parts[3]:
+            # format: Proto  LocalAddr  ForeignAddr  State  PID
+            if (
+                len(parts) >= 5
+                and f":{port}" in parts[1]
+                and "LISTENING" in parts[3]
+                and parts[4] != "0"  # PID 0 = TIME_WAIT, no real process
+            ):
                 return True
         return False
     else:
