@@ -217,14 +217,70 @@ Agents (or you in the TUI) can explicitly search memories:
 
 ### CLI
 
+**Stack management** — the bundled `hyatlas` entry point:
+
 ```bash
-hermes hy-memory doctor    # health check
-hermes hy-memory add       # manually add a memory
-hermes hy-memory search    # manual search
-hermes hy-memory list      # list recent memories
-hermes hy-memory init      # interactive setup wizard
-hermes hy-memory reset     # erase all memories (destructive)
+hyatlas              # start the full stack (Qdrant → server → dashboard)
+hyatlas start        # alias for the above
+hyatlas status       # check what's running
+hyatlas stop         # stop all services
+hyatlas --help       # show help
 ```
+
+**Provider config** — Hermes Agent's memory command:
+
+```bash
+hermes memory status   # show current memory provider config
+hermes memory setup    # interactive provider selection
+hermes memory off      # disable external provider
+hermes memory reset    # erase built-in MEMORY.md / USER.md (NOT VDB)
+```
+
+### Manually writing memories from another session
+
+The `hermes hy-memory doctor|add|search|list|init|reset` commands shown in
+older versions of this README are no longer shipped with Hermes. To write
+memories manually from a script, cron job, or external tool, use the
+Python provider directly:
+
+```python
+from hyatlas_memory import HyMemoryProvider
+
+provider = HyMemoryProvider()
+provider.initialize(
+    session_id="my-session-id",
+    user_id="hermes-user",
+    agent_identity="default",
+)
+
+# Write one or more turns — each call fires sync_turn, which extracts
+# a raw turn (l1_raw) and at least one fact (l2_fact) into Qdrant.
+provider.sync_turn(
+    user_content="The user prefers Vue 3 + Composition API for new projects.",
+    assistant_content="Noted.",
+    session_id="my-session-id",
+)
+```
+
+For full control (explicit layer, importance, access_count), hit the
+underlying client:
+
+```python
+result = provider._client.add(
+    data=[{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}],
+    user_id="hermes-user",
+    agent_id="default",
+    session_id="my-session-id",
+)
+print(result)
+```
+
+The upstream `hy-memory` server handles LLM-based fact extraction,
+importance scoring, and qdrant indexing automatically.
+
+**From any shell with `hyatlas-memory` installed**, the same code runs
+without needing to `cd` into the repo (provided the package's
+auto-installed patches are active).
 
 ## How it works
 

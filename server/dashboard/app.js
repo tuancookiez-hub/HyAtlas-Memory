@@ -594,45 +594,72 @@ function renderSearchResults() {
 }
 
 function showMemoryDetail(memory) {
-  const title = (memory.content || '').substring(0, 60) + '...';
+  const title = (memory.content || '');
   const tagCounts = {};
   (memory.tags || []).forEach(tag => {
     tagCounts[tag] = allMemories.filter(m => (m.tags || []).includes(tag)).length;
   });
-  
+
+  const imp = typeof memory.importance === 'number' ? memory.importance : null;
+  const impCls = imp === null ? '' : imp >= 0.7 ? 'importance-high' : imp >= 0.4 ? 'importance-mid' : 'importance-low';
+  const impBadge = imp === null ? '—' : `<span class="badge badge-importance ${impCls}">★ ${imp.toFixed(2)}</span>`;
+  const acc = typeof memory.access_count === 'number' ? memory.access_count : '—';
+
   const html = `
     <div class="memory-detail">
       <div class="text-xs text-muted mb-2">MEMORY DETAIL</div>
-      <span class="badge badge-layer layer-${memory.layer} mb-3">${memory.layer}</span>
-      
-      <div class="text-sm font-semibold mb-2">${title}</div>
+      <div class="flex gap-2 mb-3" style="flex-wrap: wrap; align-items: center;">
+        <span class="badge badge-layer layer-${memory.layer}">${memory.layer || '—'}</span>
+        ${impBadge}
+        <span class="badge badge-importance" title="Times this memory has been recalled">↻ ${acc}</span>
+      </div>
+
       <div class="text-xs text-muted font-mono mb-3">id: ${memory.memory_id}</div>
       <div class="text-xs text-muted mb-4">${new Date(memory.gmt_created * 1000).toLocaleString()}</div>
-      
-      <div class="text-sm mb-4">${memory.content || '—'}</div>
-      
-      <div class="mb-4">
-        <div class="text-xs text-muted mb-2">TAGS</div>
+
+      <div class="text-sm mb-4" style="white-space: pre-wrap; word-break: break-word;">${escapeHtml(title)}</div>
+
+      <div class="mb-3">
+        <div class="text-xs text-muted mb-1">SCORING (4-factor)</div>
+        <div class="text-xs font-mono">semantic 0.50 · recency 0.30 · importance ${imp === null ? '—' : imp.toFixed(2) + ' × 0.15'} · access ${acc} × 0.05</div>
+      </div>
+
+      ${(memory.user_id || memory.session_id) ? `
+      <div class="mb-3">
+        <div class="text-xs text-muted mb-1">PROVENANCE</div>
+        ${memory.user_id ? `<div class="text-xs font-mono">user: ${memory.user_id}</div>` : ''}
+        ${memory.session_id ? `<div class="text-xs font-mono">session: ${memory.session_id}</div>` : ''}
+      </div>` : ''}
+
+      ${(memory.tags || []).length > 0 ? `
+      <div class="mb-3">
+        <div class="text-xs text-muted mb-1">TAGS</div>
         ${(memory.tags || []).map(t => `<span class="badge badge-tag">${t}</span>`).join(' ')}
-      </div>
-      
-      <div class="mb-4">
-        <div class="text-xs text-muted mb-2">TAG FREQUENCY</div>
-        ${Object.entries(tagCounts).map(([tag, count]) => `
-          <div class="text-xs mb-1">${tag}: <span class="font-mono">${count}</span></div>
-        `).join('')}
-      </div>
-      
-      <div class="mb-4">
-        <div class="text-xs text-muted mb-2">SESSION</div>
-        <div class="text-xs font-mono">${memory.session_id || '—'}</div>
-      </div>
-      
-      <button class="btn" onclick="navigateTo('observatory')">Open in Observatory</button>
+      </div>` : ''}
     </div>
   `;
-  
+
   document.getElementById('right-sidebar').innerHTML = html;
+}
+
+// Event delegation for timeline-item and ingestion-item clicks.
+// One listener attached at document level handles all dynamically-rendered
+// timeline/ingestion items without needing inline onclick attributes.
+document.addEventListener('click', (e) => {
+  const item = e.target.closest('.timeline-item[data-memory-id], .ingestion-item[data-memory-id]');
+  if (!item) return;
+  const mid = item.getAttribute('data-memory-id');
+  if (mid) showMemoryDetailById(mid);
+});
+
+window.__openMemoryDetail = function(memoryId) {
+  showMemoryDetailById(memoryId);
+};
+
+function showMemoryDetailById(memoryId) {
+  const mem = allMemories.find(m => m.memory_id === memoryId);
+  if (!mem) return;
+  showMemoryDetail(mem);
 }
 
 // Memory Layers
@@ -775,25 +802,31 @@ function renderToday() {
   filtered.sort((a, b) => b.gmt_created - a.gmt_created);
   
   const html = filtered.slice(0, 20).map(m => {
-    const title = (m.content || '').substring(0, 60) + '...';
-    const time = new Date(m.gmt_created * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    const ago = Math.floor((Date.now() / 1000 - m.gmt_created) / 60);
-    const agoText = ago < 60 ? `${ago}m ago` : `${Math.floor(ago / 60)}h ago`;
-    
-    return `
-      <div class="timeline-item">
-        <div class="timeline-dot"></div>
-        <div class="timeline-content">
-          <div class="timeline-time">${time} • ${agoText}</div>
-          <div class="timeline-title">${title}</div>
-          <div class="flex gap-2 mt-2">
-            <span class="badge badge-layer layer-${m.layer}">${m.layer}</span>
-            ${(m.tags || []).slice(0, 3).map(t => `<span class="badge badge-tag">${t}</span>`).join('')}
+      const title = (m.content || '');
+      const preview = title.length > 100 ? title.substring(0, 100) + '…' : title;
+      const time = new Date(m.gmt_created * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      const ago = Math.floor((Date.now() / 1000 - m.gmt_created) / 60);
+      const agoText = ago < 60 ? `${ago}m ago` : `${Math.floor(ago / 60)}h ago`;
+
+      const imp = typeof m.importance === 'number' ? m.importance : null;
+      const impCls = imp === null ? '' : imp >= 0.7 ? 'importance-high' : imp >= 0.4 ? 'importance-mid' : 'importance-low';
+      const impBadge = imp === null ? '' : `<span class="badge badge-importance ${impCls}" title="Importance score (4-factor scorer)">★ ${imp.toFixed(2)}</span>`;
+
+      return `
+        <div class="timeline-item" data-memory-id="${m.memory_id}" onclick="window.__openMemoryDetail && window.__openMemoryDetail('${m.memory_id}')">
+          <div class="timeline-dot"></div>
+          <div class="timeline-content">
+            <div class="timeline-time">${time} • ${agoText}</div>
+            <div class="timeline-title">${escapeHtml(preview)}</div>
+            <div class="flex gap-2 mt-2" style="flex-wrap: wrap; align-items: center;">
+              <span class="badge badge-layer layer-${m.layer}">${m.layer}</span>
+              ${impBadge}
+              ${(m.tags || []).slice(0, 3).map(t => `<span class="badge badge-tag">${t}</span>`).join('')}
+            </div>
           </div>
         </div>
-      </div>
-    `;
-  }).join('');
+      `;
+    }).join('');
   
   document.getElementById('timeline').innerHTML = html || '<div class="text-muted">No events today</div>';
   
@@ -1190,14 +1223,15 @@ function renderOverviewSidebar() {
           : `Created ${new Date(m.gmt_created * 1000).toLocaleString()}`;
 
         return `
-          <div class="ingestion-item">
-            <div class="ingestion-title" title="${escapeHtml(titleAttr)}">${escapeHtml(title)}</div>
-            <div class="ingestion-meta">
-              <span class="badge badge-layer layer-${m.layer || 'l2_fact'}" style="font-size: 9px; padding: 2px 6px;">${m.layer || '—'}</span>
-              <span>${agoText}${wasUpdated ? ' <span style="color:#888;" title="Memory was updated, not created">⟳</span>' : ''}</span>
-            </div>
-          </div>
-        `;
+                  <div class="ingestion-item" data-memory-id="${m.memory_id}" onclick="window.__openMemoryDetail && window.__openMemoryDetail('${m.memory_id}')">
+                    <div class="ingestion-title" title="${escapeHtml(titleAttr)}">${escapeHtml(title)}</div>
+                    <div class="ingestion-meta">
+                      <span class="badge badge-layer layer-${m.layer || 'l2_fact'}" style="font-size: 9px; padding: 2px 6px;">${m.layer || '—'}</span>
+                      ${typeof m.importance === 'number' ? `<span class="badge badge-importance ${m.importance >= 0.7 ? 'importance-high' : m.importance >= 0.4 ? 'importance-mid' : 'importance-low'}" style="font-size: 9px; padding: 2px 6px;" title="Importance">★ ${m.importance.toFixed(2)}</span>` : ''}
+                      <span>${agoText}${wasUpdated ? ' <span style="color:#888;" title="Memory was updated, not created">⟳</span>' : ''}</span>
+                    </div>
+                  </div>
+                `;
       }).join('')}
     </div>
     

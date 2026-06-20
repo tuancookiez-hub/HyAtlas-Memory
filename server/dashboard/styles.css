@@ -314,6 +314,20 @@ h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 600; }
   color: white;
 }
 
+.badge-importance {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--panel-alt);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.badge-importance.importance-high { color: var(--accent); border-color: var(--accent); }
+.badge-importance.importance-mid { color: #d4a04a; border-color: #d4a04a; }
+.badge-importance.importance-low { color: var(--text-muted); }
+
 .badge-tag {
   background: var(--panel-alt);
   color: var(--text);
@@ -411,6 +425,16 @@ h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 600; }
 .timeline-item {
   position: relative;
   padding-bottom: 24px;
+  cursor: pointer;
+  padding-left: 4px;
+  margin-left: -4px;
+  padding-right: 4px;
+  border-radius: 4px;
+  transition: background-color 0.15s;
+}
+
+.timeline-item:hover {
+  background: var(--panel-alt);
 }
 
 .timeline-dot {
@@ -835,6 +859,12 @@ h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 600; }
 .ingestion-item {
   padding: 12px 0;
   border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.ingestion-item:hover {
+  background: var(--panel-alt);
 }
 
 .ingestion-item:last-child {

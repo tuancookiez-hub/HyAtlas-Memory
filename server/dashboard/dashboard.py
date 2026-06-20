@@ -146,15 +146,21 @@ def _extract_memories(payload: dict) -> list[dict]:
         items = [m for m in raw if isinstance(m, dict)]
     normalized = []
     for m in items:
+        meta = m.get("metadata") or {}
         normalized.append({
             "memory_id": m.get("memory_id") or m.get("id") or "",
-            "layer": m.get("layer") or (m.get("metadata") or {}).get("layer") or "",
+            "layer": m.get("layer") or meta.get("layer") or "",
             "score": m.get("score"),
             "content": m.get("content") or m.get("text") or m.get("document") or "",
-            "metadata": m.get("metadata") or {},
+            "metadata": meta,
             "status": m.get("status", ""),
             "memory_at": m.get("memory_at"),
             "gmt_created": m.get("gmt_created"),
+            "importance": m.get("importance") if m.get("importance") is not None else meta.get("importance"),
+            "access_count": m.get("access_count") if m.get("access_count") is not None else meta.get("access_count"),
+            "user_id": m.get("user_id") or meta.get("user_id") or "",
+            "session_id": m.get("session_id") or meta.get("session_id") or "",
+            "tags": m.get("tags") or meta.get("tags") or [],
         })
     return normalized
 
@@ -218,6 +224,52 @@ def _fetch_l1_raw_from_qdrant(limit_total: int = 1500) -> list[dict]:
             "_source":    "l1_raw",
         })
     return items
+
+
+def _enrich_with_qdrant_payload(memories: list[dict]) -> list[dict]:
+    """Enrich memories with `importance` and `access_count` from Qdrant.
+
+    Hy-Memory's `/api/v1/list` doesn't surface these fields — they live
+    in the qdrant payload alongside `layer`. This function batches a
+    qdrant scroll by point id and merges the missing fields back into
+    each memory dict. Silent no-op if qdrant is unreachable.
+    """
+    ids = [m.get("memory_id") for m in memories if m.get("memory_id")]
+    if not ids:
+        return memories
+    try:
+        # Filter by point id (qdrant uses point UUID as id, not payload.memory_id).
+        # has_id must be wrapped in `must` to work correctly.
+        body = {
+            "filter": {"must": [{"has_id": ids}]},
+            "limit": len(ids),
+            "with_payload": ["importance", "access_count"],
+            "with_vectors": False,
+        }
+        req = urllib.request.Request(
+            f"{QDRANT_BASE}/collections/{QDRANT_COLLECTION}/points/scroll",
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        resp = json.loads(urllib.request.urlopen(req, timeout=10).read())
+    except Exception:
+        return memories
+    by_id = {}
+    for p in (resp.get("result") or {}).get("points") or []:
+        pl = p.get("payload") or {}
+        mid = str(p.get("id") or "")
+        if mid:
+            by_id[mid] = {
+                "importance":   pl.get("importance"),
+                "access_count": pl.get("access_count"),
+            }
+    for m in memories:
+        mid = m.get("memory_id") or ""
+        if mid in by_id:
+            for k, v in by_id[mid].items():
+                if v is not None:
+                    m[k] = v
+    return memories
 
 
 # --------------------------------------------------------------------------
@@ -2948,6 +3000,9 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                         return 0.0
                 return 0.0
             deduped.sort(key=_ts, reverse=True)
+            # Enrich with importance + access_count from qdrant payload
+            # (upstream's /api/v1/list doesn't surface these fields)
+            deduped = _enrich_with_qdrant_payload(deduped)
             return self._json(200, {
                 "memories": deduped[:limit],
                 "total": total + l1_raw_total,
