@@ -541,28 +541,42 @@ def start_all(detach_requested: bool = False) -> None:
         else:
             answer = "y"
         if answer in ("y", "yes"):
-            # Restart path: stop the running services, then re-launch them
-            # as detached children so the user's terminal is freed up
-            # immediately. They get control of their shell back, the
-            # services keep running, and they can verify with `hyatlas
-            # status` or by opening the dashboard URL.
+            # Restart path: stop the running services, then spawn a
+            # watcher subprocess that waits for THIS process to exit
+            # and re-launches the stack detached. The watcher is a
+            # SIBLING of `hyatlas`, not a child, so it survives even
+            # if this process is killed (Ctrl+C, terminal close, system
+            # suspend) mid-shutdown. Once spawned, we return control
+            # to the user's terminal immediately.
+            #
+            # Pattern adopted from Hermes' gateway/restart flow
+            # (gateway/run.py lines 4690-4789).
             stop_all()
             print()
-            print(info("Re-launching services in detached mode..."))
+            print(info("Scheduling detached re-launch via restart watcher..."))
             print()
-            # Set the module-level flag so start_service uses
-            # DETACHED_PROCESS for the children it spawns below.
-            # Restore it on the way out (in case start_all is called
-            # again from the foreground path in this same process).
-            global detach
-            was_detach = detach
-            detach = True
+            # Re-launch argv the watcher will execute once we exit:
+            # `hyatlas --detach` — picks up where the previous run left off.
+            relaunch_argv = [sys.executable, "-m", "hyatlas_memory._start", "--detach"]
+            # Spawn the watcher as a fully-detached sibling.
+            from hyatlas_memory._restart_watcher import _detach_kwargs
             try:
-                _do_start(services, project_root, detached=True)
-            finally:
-                detach = was_detach
-            print(dim("  Restarted detached — your terminal is free."))
-            print(dim("  Run 'hyatlas stop' to shut down."))
+                subprocess.Popen(
+                    [sys.executable, "-m", "hyatlas_memory._restart_watcher",
+                     str(os.getpid()), *relaunch_argv],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    env=_watcher_env(),
+                    **_detach_kwargs(),
+                )
+            except Exception as e:
+                print(fail(f"Failed to spawn restart watcher: {e}"))
+                print(dim("  Stack will stay down. Run `hyatlas` to start it manually."))
+                sys.exit(1)
+            print(dim("  Restart watcher spawned. It will re-launch the stack"))
+            print(dim("  once this `hyatlas` process exits."))
+            print(dim("  Your terminal is free — close it whenever."))
             print()
             return
         else:
@@ -708,6 +722,17 @@ def show_status():
 
 
 # ── Stop ────────────────────────────────────────────────────────────────
+
+def _watcher_env() -> dict:
+    """Build env for spawning the restart watcher.
+
+    Inherits the current environment so the watcher sees
+    HYATLAS_PROJECT_ROOT and other vars the user has set, but strips
+    any in-process state that doesn't belong in the watcher's
+    environment (none today, but the helper is here for future use).
+    """
+    return os.environ.copy()
+
 
 def _wait_for_port_free(port: int, timeout: float = 10.0) -> bool:
     """Block until the port has no LISTENING socket, or timeout.
