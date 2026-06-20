@@ -6,14 +6,18 @@
 
 ### Changed
 - **Self-contained PyPI package** — moved `server/` (upstream SDK wrapper + dashboard) into `src/hyatlas_memory/server/` so `pip install hyatlas-memory` makes `hyatlas start` work from **any directory** without `cd` or `HYATLAS_PROJECT_ROOT`. Resolution order: env var → package install dir → legacy CWD walk.
+- **`hyatlas` restart flow** — TIME_WAIT PID-0 filter, foreground vs `--detach` modes, sync port-wait, Hermes-style restart watcher, Kuzu lock-free wait. Five commits refactored the entire start/stop/restart lifecycle.
 
 ### Fixed
 - **Missing `import re` in `l5_relation_prototype.py`** — would have failed at runtime on the LLM-response parsing path. Surfaced when the file got linted for the first time during the move.
 - **Redundant `import urllib.request` in `test_l5_trigger.py`** — shadowed the top-level import.
+- **Importance patch silently failing** — `patches.patch_importance_for_request` referenced `_LAYER_IMPORTANCE` which was never defined, so the entire fire-and-forget importance PATCH was NameError-swallowed by its try/except. New memories never got `importance` populated, breaking the 0.15 importance term in the upstream 4-factor MemoryScorer. Added the missing layer→score mapping.
+- **Importance patch missing reconciled points** — `_maybe_patch_importance` fired once per `add()` but the upstream reconciler promotes `l1_raw` → `l4_identity` asynchronously, often AFTER the patch ran. Reconciled points never got their importance set. Added an 8s delayed retry that re-scans the user/session/time-window.
 
 ### Internal
 - Added `package_data` to `pyproject.toml` + `MANIFEST.in` so non-Python files (HTML, CSS, JS, PNG, YAML) ship inside the wheel.
 - Per-file-ignores added for the moved `server/` files; pre-existing style issues ignored rather than churning the file.
+- `test_importance_and_access_count_are_populated` now polls up to 60s for both reconciliation (memory_id populated) and importance patch (fire-and-forget daemon) instead of fixed 15s sleep that wasn't enough on a loaded box with 3k+ existing memories.
 
 ## [1.1.0] - 2026-06-20
 
