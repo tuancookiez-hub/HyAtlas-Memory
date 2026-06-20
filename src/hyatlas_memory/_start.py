@@ -27,7 +27,6 @@ import sys
 import time
 import urllib.error  # noqa: I001  (urllib.error + urllib.request must be together)
 import urllib.request
-from contextlib import suppress
 from urllib.parse import urlparse
 
 # ── Project root resolution ─────────────────────────────────────────────
@@ -511,7 +510,7 @@ def start_service(svc: dict) -> bool:
     return False
 
 
-def start_all(detach: bool = False) -> None:
+def start_all(detach_requested: bool = False) -> None:
     project_root = _resolve_project_root()
     if not project_root:
         print(fail("Could not find the HyAtlas project root (the directory with `server/`)."))
@@ -542,8 +541,30 @@ def start_all(detach: bool = False) -> None:
         else:
             answer = "y"
         if answer in ("y", "yes"):
+            # Restart path: stop the running services, then re-launch them
+            # as detached children so the user's terminal is freed up
+            # immediately. They get control of their shell back, the
+            # services keep running, and they can verify with `hyatlas
+            # status` or by opening the dashboard URL.
             stop_all()
-            # fall through to start everything fresh below
+            print()
+            print(info("Re-launching services in detached mode..."))
+            print()
+            # Set the module-level flag so start_service uses
+            # DETACHED_PROCESS for the children it spawns below.
+            # Restore it on the way out (in case start_all is called
+            # again from the foreground path in this same process).
+            global detach
+            was_detach = detach
+            detach = True
+            try:
+                _do_start(services, project_root, detached=True)
+            finally:
+                detach = was_detach
+            print(dim("  Restarted detached — your terminal is free."))
+            print(dim("  Run 'hyatlas stop' to shut down."))
+            print()
+            return
         else:
             banner()
             print(f"  {BOLD}{GREEN}All services already running.{RESET}")
@@ -570,7 +591,7 @@ def start_all(detach: bool = False) -> None:
             return
 
     banner()
-    print(f"  {BOLD}Starting HyAtlas Memory stack...{RESET}")
+    print(f"  {BOLD}Starting HyAtlas Memory stack (foreground)...{RESET}")
     print(dim(f"  project root: {project_root}"))
     print()
 
@@ -688,6 +709,39 @@ def show_status():
 
 # ── Stop ────────────────────────────────────────────────────────────────
 
+def _wait_for_port_free(port: int, timeout: float = 10.0) -> bool:
+    """Block until the port has no LISTENING socket, or timeout.
+
+    Returns True if the port freed within the timeout, False otherwise.
+
+    On Windows, after `taskkill /F` the OS takes a moment to actually
+    release the TCP socket (it goes through TIME_WAIT, then CLOSED).
+    Without this wait, the next start command sees stale TIME_WAIT
+    entries and gets confused about whether the port is occupied.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not is_port_listening(port):
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def _kill_on_port_sync(port: int, timeout: float = 10.0) -> int:
+    """Kill anything on the port, then wait for the port to actually free.
+
+    Returns the number of processes that were killed, or 0 if none.
+    """
+    killed = kill_on_port(port)
+    if killed == 0:
+        # Nothing was on the port — no need to wait.
+        return 0
+    freed = _wait_for_port_free(port, timeout=timeout)
+    if not freed:
+        print(warn(f"Port {port} still occupied after {timeout}s — proceeding anyway."))
+    return killed
+
+
 def stop_all():
     services = _services(_resolve_project_root() or os.getcwd())
     banner()
@@ -696,7 +750,7 @@ def stop_all():
     for svc in reversed(services):
         port = svc["port"]
         if is_port_listening(port):
-            killed = kill_on_port(port)
+            killed = _kill_on_port_sync(port)
             if killed:
                 print(ok(f"{svc['name']} stopped (killed {killed} process(es))"))
             else:
@@ -738,26 +792,31 @@ def _start_detached_and_exit() -> None:
     if any(is_port_listening(svc["port"]) for svc in services):
         stop_all()
 
+    # Set the module-level flag so start_service uses DETACHED_PROCESS
+    # for the children it spawns below.
+    global detach
+    was_detach = detach
+    detach = True
+    try:
+        _do_start(services, project_root, detached=True)
+    finally:
+        detach = was_detach
+
+
+def _do_start(services: list, project_root: str, detached: bool) -> None:
+    """Shared start path used by both foreground and detached modes."""
     banner()
-    print(f"  {BOLD}Starting HyAtlas Memory stack (detached)...{RESET}")
+    label = "detached" if detached else "foreground"
+    print(f"  {BOLD}Starting HyAtlas Memory stack ({label})...{RESET}")
     print(dim(f"  project root: {project_root}"))
     print()
 
-    # Start each service and collect handles so we can check health.
-    started: list[subprocess.Popen] = []
     for svc in services:
         if not start_service(svc):
             print()
             print(fail("Startup aborted. Some services may be running."))
             print(dim("  Run 'hyatlas stop' to clean up."))
-            # Best-effort cleanup of what we did start
-            for proc in started:
-                with suppress(Exception):
-                    proc.terminate()
             sys.exit(1)
-        # The actual subprocess handle is appended to the global
-        # `children` list by start_service; we don't need it here.
-        started.append(None)  # placeholder for zip() symmetry
 
     print()
     print(f"  {BOLD}{GREEN}All services running (detached).{RESET}")
