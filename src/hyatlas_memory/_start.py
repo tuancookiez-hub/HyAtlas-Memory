@@ -483,6 +483,49 @@ def start_all():
         sys.exit(1)
 
     services = _services(project_root)
+
+    # If every service is already running and healthy, ask the user whether
+    # they want to restart. Prevents the "I ran `hyatlas` and nothing happened"
+    # surprise — the user gets a clear choice between "keep what's running"
+    # and "bounce everything".
+    if all(
+        is_port_listening(svc["port"]) and health_check(svc["url"], svc["expect"])
+        for svc in services
+    ):
+        try:
+            answer = input(
+                "\n  All services already running. Restart all? [y/N]: "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+        if answer in ("y", "yes"):
+            stop_all()
+            # fall through to start everything fresh below
+        else:
+            banner()
+            print(f"  {BOLD}{GREEN}All services already running.{RESET}")
+            print()
+            dash_bind = os.environ.get("HY_DASH_BIND", "127.0.0.1")
+            dash_url = f"http://127.0.0.1:{DASHBOARD_PORT}"
+            if dash_bind not in ("127.0.0.1", "localhost", "::1"):
+                token_file = os.path.join(
+                    os.path.expanduser("~"), ".hy_memory", ".dashboard_token"
+                )
+                try:
+                    with open(token_file) as f:
+                        token = f.read().strip()
+                    dash_url = f"{dash_url}/?token={token}"
+                except Exception:
+                    pass
+            print(f"  {BOLD}Dashboard:{RESET}  {dash_url}")
+            print(f"  {BOLD}Upstream:{RESET}   http://127.0.0.1:{UPSTREAM_PORT}")
+            print(f"  {BOLD}Qdrant:{RESET}     http://127.0.0.1:{QDRANT_PORT}")
+            print()
+            print(dim("  Run 'hyatlas stop' to shut down, or re-run with restart confirmation."))
+            print()
+            # Exit cleanly (no health check loop since we're not managing services)
+            return
+
     banner()
     print(f"  {BOLD}Starting HyAtlas Memory stack...{RESET}")
     print(dim(f"  project root: {project_root}"))

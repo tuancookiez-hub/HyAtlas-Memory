@@ -358,6 +358,42 @@ class HyMemoryProvider(MemoryProvider):
 
         def _do_sync():
             try:
+                # Reconnect-on-write: the upstream may have come up after
+                # this provider was initialized (e.g., user ran `hyatlas start`
+                # in another terminal mid-session). Check reachability before
+                # each batch flush so existing Hermes sessions auto-attach
+                # to a newly-started stack without a restart.
+                if not self._client or not self._client.is_reachable():
+                    # Wait briefly — upstream may be mid-startup
+                    if self._client and not self._client.is_reachable():
+                        for _ in range(6):  # up to ~3s
+                            time.sleep(0.5)
+                            if self._client.is_reachable():
+                                break
+                    if not self._client or not self._client.is_reachable():
+                        # Still not up — silently drop this batch. The buffer
+                        # is persisted to disk, so a future session can
+                        # replay it. The circuit breaker will also catch
+                        # repeated failures.
+                        self._consecutive_failures += 1
+                        if self._consecutive_failures >= _BREAKER_THRESHOLD:
+                            self._breaker_open_until = (
+                                time.time() + _BREAKER_COOLDOWN_SECS
+                            )
+                            logger.warning(
+                                "[hy-memory] Circuit breaker open: upstream "
+                                "not reachable at %s",
+                                getattr(self._client, "base_url", "?"),
+                            )
+                        else:
+                            logger.warning(
+                                "[hy-memory] sync_turn skipped (session=%s, "
+                                "%d msgs): upstream not reachable — buffer "
+                                "kept on disk for retry",
+                                sid, len(batch),
+                            )
+                        return
+
                 since = time.time()
                 result = self._client.add(
                     batch, user_id=self._user_id,
