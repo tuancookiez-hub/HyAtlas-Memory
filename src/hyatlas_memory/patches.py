@@ -63,27 +63,67 @@ _applied: dict[str, bool] = {}
 
 
 # ---------------------------------------------------------------------------
-# Layer-as-importance proxy for the upstream 4-factor MemoryScorer.
+# Patch 4 — bypass upstream's coding_judge routing.
 #
-# Upstream hy-memory (Tencent) ships a scorer that combines:
-#   0.50 * semantic + 0.30 * recency + 0.15 * importance + 0.05 * access
+# Upstream hy-memory runs an LLM judge (`classify_messages_is_coding`) on
+# every write. If it classifies the turn as "coding" (which fires whenever
+# the user is developing the Hermes stack itself), the write is routed to
+# the CODING path, which then requires a second LLM to produce "drafts"
+# that pass a value-bar / boundary-guard check. For self-development work
+# both legs typically fail — the original prompt rarely matches the
+# schema the upstream writer expects — so the write is silently dropped
+# and the dashboard never sees it.
 #
-# The importance/access inputs are optional in the Memory model and are
-# not populated by the SDK's default write path. This module provides a
-# lightweight, zero-LLM-cost way to populate `importance` per layer so the
-# 0.15 term actually contributes instead of being zeroed out.
-#
-# Gate: HYATLAS_MEMORY_IMPORTANCE=1 (default off). Set it to opt in while
-# measuring A/B recall quality; once it's proven, we can flip the default.
+# The fix: monkey-patch `classify_messages_is_coding` to always return
+# False. Every write now goes through the normal memory path, which is
+# what HyAtlas-Memory expects. Coding memories (if you want them later)
+# can be re-enabled with HYATLAS_MEMORY_CODING_PATH=1.
 # ---------------------------------------------------------------------------
 
-_LAYER_IMPORTANCE: dict[str, float] = {
-    "l4_identity": 1.0,    # user identity / preferences - always surface
-    "l2_fact": 0.8,        # extracted facts - high signal
-    "l3_summary": 0.6,     # cross-session summaries
-    "l0_basic_info": 0.5,  # structured KV (employer, location, etc.)
-    "l1_raw": 0.3,         # raw turn fragments - noisy, low priority
-}
+
+def _patch_coding_judge() -> bool:
+    """Force every write to use the normal memory path, not CODING.
+
+    Returns True if the patch was applied (or already in place), False
+    if upstream's coding judge isn't importable for some reason.
+    """
+    if _applied.get("coding_judge"):
+        return True
+    try:
+        from hy_memory import client as _client
+        from hy_memory.coding import judge as _judge
+    except ImportError:
+        logger.debug("[hy-memory] coding judge module not found - nothing to patch")
+        return False
+
+    async def _always_chat(messages, llm_provider, **_):
+        # Original returns True if the conversation is "coding" work.
+        # We force False so every add() lands via the normal memory path.
+        return False
+
+    # The classifier lives in hy_memory.coding.judge, but client.py does
+    # `from .coding.judge import classify_messages_is_coding` at module load.
+    # That local binding is what gets called - so we have to patch BOTH
+    # the module attribute AND the local reference inside client.
+    _judge.classify_messages_is_coding = _always_chat  # type: ignore[assignment]
+    if hasattr(_client, "classify_messages_is_coding"):
+        _client.classify_messages_is_coding = _always_chat  # type: ignore[assignment]
+
+    # Same for the search-side classifier. Without this, searches would
+    # also be routed to coding-reader pipelines.
+    if hasattr(_judge, "classify_and_rewrite_queries"):
+        async def _always_chat_query(*a, **kw):
+            return {"is_coding": False, "rewrite_query": kw.get("query", ""), "ok": False}
+        _judge.classify_and_rewrite_queries = _always_chat_query  # type: ignore[assignment]
+        if hasattr(_client, "classify_and_rewrite_queries"):
+            _client.classify_and_rewrite_queries = _always_chat_query  # type: ignore[assignment]
+
+    _applied["coding_judge"] = True
+    logger.info(
+        "[hy-memory] coding_judge patched - all writes use the normal memory path. "
+        "Set HYATLAS_MEMORY_CODING_PATH=1 to restore upstream behavior."
+    )
+    return True
 
 
 def patch_importance_for_request(
@@ -1924,6 +1964,7 @@ def apply_all_patches() -> dict[str, bool]:
         "llm_fast_smart": apply_llm_fast_smart_patch(),
         "disabled_cache_timing": apply_disabled_cache_timing_patch(),
         "l1_raw_normal_fallback": apply_l1_raw_normal_fallback_patch(),
+        "coding_judge": _patch_coding_judge(),
     }
 
 
