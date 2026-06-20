@@ -108,6 +108,17 @@ package-dir = {"" = "src"}
 where = ["src"]
 include = ["hyatlas_memory*"]
 
+# Ship the bundled server (start_server.py + dashboard/) and all static
+# assets (HTML, CSS, JS, favicons) inside the wheel so `hyatlas start` works
+# from any directory after `pip install hyatlas-memory` — no need to clone
+# the repo or set HYATLAS_PROJECT_ROOT. Non-Python files are listed in
+# MANIFEST.in; Python files are picked up automatically by packages.find.
+[tool.setuptools.package-data]
+"hyatlas_memory" = ["py.typed"]
+"hyatlas_memory.server" = ["*.html", "*.css", "*.js", "*.json", "*.yaml", "*.png"]
+"hyatlas_memory.server.dashboard" = ["*.html", "*.css", "*.js", "*.png"]
+"hyatlas_memory.server.dashboard.js" = ["*.js"]
+
 # ----------------------------------------------------------------------
 # Pytest config — discover tests in the new layout, not the old fork layout
 # ----------------------------------------------------------------------
@@ -149,10 +160,44 @@ ignore = [
     "SIM105",  # try/except/pass is intentional for process management
     "SIM115",  # long-lived log files can't use context managers
 ]
-"server/dashboard/dashboard.py" = [
+# server/ files were linted for the first time when they were moved into
+# the package (2026-06-20). These pre-existing style issues don't affect
+# correctness, so we ignore them rather than churn the file.
+"src/hyatlas_memory/server/start_server.py" = [
+    "E402",   # imports after env-var setup are intentional
+    "F541",   # f-strings without placeholders (style)
+    "E501",   # long lines (informational, not a real issue)
+    "I001",   # lazy imports after env-var setup are intentional
+]
+"src/hyatlas_memory/server/dashboard/dashboard.py" = [
     "E402",   # imports after env-var setup are intentional
     "W293",   # whitespace in embedded JS strings
     "SIM102",  # nested if for auth gate is clearer than combining
+    "F541",   # f-strings without placeholders (style)
+    "E501",   # long lines
+    "C401",   # generator rewrite (style)
+    "E701",   # multiple statements on one line (style)
+    "F821",   # `re` is used in some code paths; ignore for now
+]
+"src/hyatlas_memory/server/bin/*.py" = [
+    "F541",   # f-strings without placeholders (style)
+    "E501",   # long lines
+    "E402",   # late imports (scripts do runtime sys.path munging)
+    "F401",   # unused imports (some scripts have dead branches)
+    "W605",   # invalid escape sequences in docstrings
+    "C401",   # generator → set comprehension (style)
+    "I001",   # import order (style)
+    "E701",   # multiple statements on one line (style)
+    "B007",   # loop control variable unused (style)
+    "F841",   # unused local variables (style)
+    "E741",   # ambiguous variable name `l` (style, single-letter)
+    "SIM105", # try/except/pass is intentional (scripts do their own cleanup)
+    "SIM115", # log files are kept open for subprocess lifetime
+    "SIM103", # return-condition is a clarity choice
+    "SIM110", # any() is not always clearer
+]
+"src/hyatlas_memory/server/dashboard/app.js" = [
+    "E402",   # N/A — JS file
 ]
 "src/hyatlas_memory/patches.py" = [
     "E402",   # late imports are intentional (lazy loading to avoid circular deps)

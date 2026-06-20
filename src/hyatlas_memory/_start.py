@@ -35,34 +35,38 @@ from urllib.parse import urlparse
 def _resolve_project_root() -> str | None:
     """Find the directory containing the bundled ``server/`` module.
 
-    Returns the absolute path or None if not found.
+    Resolution order:
+
+    1. ``HYATLAS_PROJECT_ROOT`` env var (explicit override, legacy)
+    2. The package install directory itself — where ``server/`` is bundled.
+       Works for both ``pip install hyatlas-memory`` (PyPI wheel) and
+       ``pip install -e .`` (editable), because in both cases
+       ``server/`` sits next to ``_start.py`` inside the package.
+    3. Legacy: walk up from CWD looking for a ``server/`` dir, for
+       old repo layouts where ``server/`` was at the project root.
     """
     # 1. Explicit env var
     env_root = os.environ.get("HYATLAS_PROJECT_ROOT")
     if env_root and os.path.isdir(os.path.join(env_root, "server")):
         return os.path.abspath(env_root)
 
-    # 2. Current working directory (and a few parents)
+    # 2. Package install dir (works for both PyPI and editable installs).
+    #    __file__ = <pkg_root>/hyatlas_memory/_start.py
+    #    dirname(__file__) = <pkg_root>/hyatlas_memory/  ← this is the dir
+    #                                                 with server/ bundled inside
+    here = os.path.dirname(os.path.abspath(__file__))
+    if os.path.isdir(os.path.join(here, "server")):
+        return here
+
+    # 3. Legacy: CWD + a few parents (old repo layout).
     cwd = os.getcwd()
-    for _ in range(4):  # don't walk all the way up to C:\
+    for _ in range(4):
         if os.path.isdir(os.path.join(cwd, "server")):
             return cwd
         parent = os.path.dirname(cwd)
         if parent == cwd:
             break
         cwd = parent
-
-    # 3. The location of this package on disk (only useful in editable installs)
-    here = os.path.dirname(os.path.abspath(__file__))
-    for _ in range(4):
-        candidate = os.path.join(here, "..", "..", "..")  # src/hyatlas_memory/_start.py -> ../../..
-        candidate = os.path.abspath(candidate)
-        if os.path.isdir(os.path.join(candidate, "server")):
-            return candidate
-        parent = os.path.dirname(here)
-        if parent == here:
-            break
-        here = parent
 
     return None
 

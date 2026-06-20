@@ -17,7 +17,7 @@ os.environ["HY_MEMORY_MODE"] = "ultra"
 os.environ["MEMORY_SYSTEM2_TRIGGER_MODE"] = "manual"
 os.environ["HY_MEMORY_USER_ID"] = "hermes-user"
 os.environ["HY_MEMORY_AGENT_ID"] = "default"
-os.environ["MEMORY_LLM_API_KEY"] = "x"  # not used for digest trigger
+os.environ["HY_MEMORY_LLM_API_KEY"] = "x"  # not used for digest trigger
 
 print("=== Triggering digest() via SDK ===")
 print(f"  server URL: http://127.0.0.1:19527 (assumed)")
@@ -27,7 +27,6 @@ print(f"  server URL: http://127.0.0.1:19527 (assumed)")
 # So we use the SDK client directly.
 
 # Verify server is up
-import urllib.request
 try:
     r = urllib.request.urlopen("http://127.0.0.1:19527/healthz", timeout=5)
     print(f"  Server healthy: {r.read().decode()}")

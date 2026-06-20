@@ -2,7 +2,6 @@
 """Start hy_memory.server with the correct config from hy_memory.json."""
 import json
 import os
-import sys
 from pathlib import Path
 
 # Read config

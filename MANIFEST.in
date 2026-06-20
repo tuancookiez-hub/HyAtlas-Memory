@@ -1,32 +1,22 @@
-# HyAtlas-Memory — sdist manifest.
-# Ensures files outside the `src/` package tree ship in the source
-# distribution so PyPI users get a usable install (LICENSE, README,
-# docs/, pyproject.toml itself for source installs).
-
-include LICENSE
 include README.md
+include LICENSE
 include CHANGELOG.md
-include CONTRIBUTING.md
-include pyproject.toml
 
-recursive-include docs *.md
-recursive-include server/dashboard/templates *.html *.css *.js
-recursive-include server/dashboard/static *.js *.css *.png *.svg
-recursive-include tests *.py
-recursive-include tests *.json
+# Ship the bundled server (upstream + dashboard) so `pip install hyatlas-memory`
+# makes `hyatlas start` work from any directory. The package_data spec in
+# pyproject.toml covers Python-file discovery; this MANIFEST.in covers
+# everything that isn't a .py file.
 
-# Exclude dev-only scratch from sdist
-exclude scripts/*.py
-exclude .github
-exclude .gitignore
-exclude .dockerignore
-exclude Dockerfile
-exclude docker-compose.yml
+recursive-include src/hyatlas_memory/server *.html
+recursive-include src/hyatlas_memory/server *.css
+recursive-include src/hyatlas_memory/server *.js
+recursive-include src/hyatlas_memory/server *.json
+recursive-include src/hyatlas_memory/server *.yaml
+recursive-include src/hyatlas_memory/server *.png
 
-global-exclude __pycache__
-global-exclude *.pyc
-global-exclude *.pyo
-global-exclude *.pyd
-global-exclude .pytest_cache
-global-exclude .ruff_cache
-global-exclude .mypy_cache
+# Exclude runtime artifacts that should never ship
+prune **/__pycache__
+prune **/logs
+prune **/.pytest_cache
+prune **/*.pyc
+prune **/*.pyo
