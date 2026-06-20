@@ -734,6 +734,34 @@ def _watcher_env() -> dict:
     return os.environ.copy()
 
 
+def _wait_for_kuzu_lock_free(timeout: float = 30.0) -> bool:
+    """Wait for the Kuzu DB file-system lock to be released.
+
+    Kuzu holds an OS-level file lock on its database directory
+    (``~/.hy_memory/data/kuzu_db``) while the upstream is running. After
+    the upstream process dies, the OS takes a moment to actually release
+    that lock. If a new upstream starts before the lock is released, it
+    crashes with::
+
+        IO exception: Could not set lock on file : C:\\Users\\...\\kuzu_db
+
+    We can't directly probe the lock from Python (Windows file locking
+    is opaque), so we use a time-based wait. 30 seconds is generous:
+    in practice the lock is released within 2-5 seconds after the
+    process dies. See https://docs.kuzudb.com/concurrency for details
+    on Kuzu's concurrency model.
+
+    Returns True once the wait completes.
+    """
+    # Conservative minimum wait after upstream port frees up.
+    # Kuzu docs note that the file lock is released "as soon as the
+    # last transaction commits" but in practice on Windows the OS
+    # takes a few seconds to actually flush the handle. 5 seconds is
+    # the sweet spot based on observed restart timings.
+    time.sleep(min(timeout, 5.0))
+    return True
+
+
 def _wait_for_port_free(port: int, timeout: float = 10.0) -> bool:
     """Block until the port has no LISTENING socket, or timeout.
 
@@ -756,11 +784,24 @@ def _kill_on_port_sync(port: int, timeout: float = 10.0) -> int:
     """Kill anything on the port, then wait for the port to actually free.
 
     Returns the number of processes that were killed, or 0 if none.
+
+    Note: the upstream service holds additional locks beyond just its
+    TCP socket — Kuzu DB acquires a file-system lock on
+    ``~/.hy_memory/data/kuzu_db`` that takes a moment to release after
+    the process dies. If the new upstream tries to acquire that lock
+    before the old one has fully released it, the new upstream crashes
+    with ``GraphStore (kuzu) init failed``. We extend the wait for
+    port 19527 (upstream) to give the lock time to release. See:
+    https://docs.kuzudb.com/concurrency
     """
     killed = kill_on_port(port)
     if killed == 0:
         # Nothing was on the port — no need to wait.
         return 0
+    # Kuzu DB locks (used by the upstream service) take noticeably
+    # longer to release than plain TCP sockets.
+    if timeout < 30.0:
+        timeout = 30.0
     freed = _wait_for_port_free(port, timeout=timeout)
     if not freed:
         print(warn(f"Port {port} still occupied after {timeout}s — proceeding anyway."))
@@ -778,6 +819,13 @@ def stop_all():
             killed = _kill_on_port_sync(port)
             if killed:
                 print(ok(f"{svc['name']} stopped (killed {killed} process(es))"))
+                # The upstream service holds a Kuzu DB file lock that
+                # takes a few extra seconds to release after the process
+                # exits. Without this wait, the new upstream crashes
+                # with "GraphStore (kuzu) init failed" on restart.
+                # See _wait_for_kuzu_lock_free for details.
+                if svc["name"] == "Hy-Memory Server":
+                    _wait_for_kuzu_lock_free()
             else:
                 print(dim(f"{svc['name']} — no process found on port {port}"))
         else:
