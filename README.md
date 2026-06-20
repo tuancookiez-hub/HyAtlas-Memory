@@ -15,7 +15,7 @@
 
 ## What it is
 
-Hermes Agent is powerful, but every conversation starts from zero. You tell it your preferences, your project structure, your coding conventions — and by the next session, it's forgotten all of it.
+Hermes Agent is powerful. You tell it your preferences, your project structure, your coding conventions, but all of this only fits into 2200 char memory.md by default which is small. 
 
 HyAtlas-Memory fixes this. It's a memory provider plugin that drops into Hermes Agent and gives it **persistent, structured memory across sessions**. After a few conversations, your agent knows your name, your stack, your working style, your active projects, and the decisions you've made — without you repeating yourself.
 
