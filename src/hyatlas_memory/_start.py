@@ -635,9 +635,13 @@ def main():
         elif arg == "start":
             # "hyatlas start" is equivalent to bare "hyatlas" — fall through
             pass
+        elif arg == "memory":
+            # "hyatlas memory write|recall|list|reflect" — see _memory_cli.py
+            from hyatlas_memory import _memory_cli
+            sys.exit(_memory_cli.main(sys.argv[1:]))
         else:
             print(fail(f"Unknown argument: {sys.argv[1]}"))
-            print("Usage: hyatlas [start|stop|status|help]")
+            print("Usage: hyatlas [start|stop|status|memory|help]")
             sys.exit(1)
     else:
         # On Windows: if we're not in our own console window, relaunch in one

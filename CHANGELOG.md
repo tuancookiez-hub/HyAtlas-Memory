@@ -2,12 +2,19 @@
 
 > All notable changes to HyAtlas-Memory are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-06-20
+
+### Added
+- **`hyatlas memory write|recall|list|reflect` CLI** — manual memory operations from any shell, cron job, or another session. Mirrors Hindsight's `retain|recall|reflect` and Memories.sh's `add|search|recall` patterns. Aliases: `add`/`retain` for `write`, `search`/`find` for `recall`, `ls` for `list`. Supports `--limit`, `--layer`, `--user-id` flags.
+- **`hyatlas memory write`** goes through the same `sync_turn` → LLM fact-extraction → qdrant indexing pipeline as a Hermes conversation turn. ~8s indexing delay.
+- **`hyatlas memory reflect`** outputs the exact `<relevant-memories>` block the agent would inject into the system prompt for the same query — useful for debugging recall quality.
+
 ## [1.0.1] - 2026-06-19
 
 ### Fixed
 - **`hyatlas` CLI from any directory** — the `hyatlas start|--stop|--status` entry point now works regardless of the current working directory. Previously it failed with "start.py not found" when invoked outside the repo root after `pip install hyatlas-memory`. The startup logic was moved from the repo-root `start.py` into `hyatlas_memory._start` (bundled in the package) and resolves the project root via `HYATLAS_PROJECT_ROOT` env var → cwd → editable-install detection.
 
-## [1.0.0] - 2026-06-19
+## [1.1.0] - 2026-06-20
 
 ### Added
 - **First stable release.** PyPI package `hyatlas-memory` installable via `pip install hyatlas-memory`.

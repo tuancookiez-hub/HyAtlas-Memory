@@ -227,6 +227,33 @@ hyatlas stop         # stop all services
 hyatlas --help       # show help
 ```
 
+**Memory operations** — read/write memories from any shell, cron job,
+or another session. Mirrors Hindsight's `retain|recall|reflect` and
+Memories.sh's `add|search|recall` patterns:
+
+```bash
+hyatlas memory write    "the fact to remember"
+hyatlas memory recall   "your search query" --limit 5
+hyatlas memory list     [--layer l2_fact] [--limit 20]
+hyatlas memory reflect  "your query" --limit 10
+hyatlas memory status
+
+# Aliases for muscle memory:
+hyatlas memory add      "..."    # same as write
+hyatlas memory retain   "..."    # same as write (Hindsight-style)
+hyatlas memory search   "..."    # same as recall
+hyatlas memory find     "..."    # same as recall
+hyatlas memory ls                   # same as list
+```
+
+The `write` command goes through the same LLM fact-extraction pipeline
+as a Hermes conversation turn, so the memory lands in qdrant with proper
+`layer`, `importance`, and `access_count` populated.
+
+The `reflect` command outputs the exact `<relevant-memories>` block the
+agent would inject into the system prompt for the same query — useful
+for debugging recall quality.
+
 **Provider config** — Hermes Agent's memory command:
 
 ```bash
@@ -238,10 +265,8 @@ hermes memory reset    # erase built-in MEMORY.md / USER.md (NOT VDB)
 
 ### Manually writing memories from another session
 
-The `hermes hy-memory doctor|add|search|list|init|reset` commands shown in
-older versions of this README are no longer shipped with Hermes. To write
-memories manually from a script, cron job, or external tool, use the
-Python provider directly:
+If you prefer Python over a shell command (e.g., from a cron job, an
+agent script, or Jupyter):
 
 ```python
 from hyatlas_memory import HyMemoryProvider
@@ -253,8 +278,6 @@ provider.initialize(
     agent_identity="default",
 )
 
-# Write one or more turns — each call fires sync_turn, which extracts
-# a raw turn (l1_raw) and at least one fact (l2_fact) into Qdrant.
 provider.sync_turn(
     user_content="The user prefers Vue 3 + Composition API for new projects.",
     assistant_content="Noted.",
@@ -262,8 +285,11 @@ provider.sync_turn(
 )
 ```
 
-For full control (explicit layer, importance, access_count), hit the
-underlying client:
+The upstream `hy-memory` server handles LLM-based fact extraction,
+importance scoring, and qdrant indexing automatically. ~8s indexing
+delay before the memory shows on the dashboard.
+
+For thin-client control (no provider, just the HTTP wrapper):
 
 ```python
 result = provider._client.add(
@@ -272,15 +298,10 @@ result = provider._client.add(
     agent_id="default",
     session_id="my-session-id",
 )
-print(result)
 ```
 
-The upstream `hy-memory` server handles LLM-based fact extraction,
-importance scoring, and qdrant indexing automatically.
-
-**From any shell with `hyatlas-memory` installed**, the same code runs
-without needing to `cd` into the repo (provided the package's
-auto-installed patches are active).
+**Important:** `user_id` and `agent_identity` must match your Hermes
+profile. The default is `hermes-user` for the main profile.
 
 ## How it works
 
