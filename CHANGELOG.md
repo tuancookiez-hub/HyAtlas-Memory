@@ -2,6 +2,19 @@
 
 > All notable changes to HyAtlas-Memory are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-20
+
+### Changed
+- **Self-contained PyPI package** — moved `server/` (upstream SDK wrapper + dashboard) into `src/hyatlas_memory/server/` so `pip install hyatlas-memory` makes `hyatlas start` work from **any directory** without `cd` or `HYATLAS_PROJECT_ROOT`. Resolution order: env var → package install dir → legacy CWD walk.
+
+### Fixed
+- **Missing `import re` in `l5_relation_prototype.py`** — would have failed at runtime on the LLM-response parsing path. Surfaced when the file got linted for the first time during the move.
+- **Redundant `import urllib.request` in `test_l5_trigger.py`** — shadowed the top-level import.
+
+### Internal
+- Added `package_data` to `pyproject.toml` + `MANIFEST.in` so non-Python files (HTML, CSS, JS, PNG, YAML) ship inside the wheel.
+- Per-file-ignores added for the moved `server/` files; pre-existing style issues ignored rather than churning the file.
+
 ## [1.1.0] - 2026-06-20
 
 ### Added
