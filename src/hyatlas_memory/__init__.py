@@ -151,14 +151,37 @@ class HyMemoryProvider(MemoryProvider):
     # ------------------------------------------------------------------
 
     def is_available(self) -> bool:
-        """Check if Hy-Memory is configured with required credentials."""
-        cfg = _load_config()
-        if not cfg:
-            return False
-        # Need embedder key for all modes
-        emb_key = (cfg.get("embedder", {}).get("api_key")
-                   or os.environ.get("HY_MEMORY_EMBEDDER_API_KEY", ""))
-        return bool(emb_key)
+        """Plug-and-play: the provider is always installable.
+
+        Returns True as long as the provider class can be loaded and
+        configured. This is the answer to "is this provider usable in
+        principle" — NOT "is the upstream currently reachable". Use
+        :meth:`is_healthy` for runtime reachability.
+
+        Gating agent init on upstream reachability causes silent
+        stuck-agent failures when the upstream is briefly down at init
+        time: the consumer rejects the provider, the
+        ``MemoryManager`` ends up None, and every subsequent turn is a
+        no-op. Decoupling "installable" from "currently operational"
+        lets the consumer wire the provider in once and have the
+        provider self-heal at sync time.
+        """
+        # If we ever get here, the class loaded. Configuration may
+        # still be missing (no embedder key, no base URL) — but the
+        # provider is still "available" in the installability sense;
+        # sync_turn will surface a config error if it can't proceed.
+        return True
+
+    def is_healthy(self) -> bool:
+        """Runtime reachability check: is the upstream currently reachable?
+
+        Use this when you need to know "is the provider actually
+        working right now" — e.g., to show a "memory connected" UI
+        indicator or to gate a non-critical feature on memory being
+        available. Do NOT use this for agent-init gating (use
+        :meth:`is_available` for that).
+        """
+        return self._client is not None and self._client.is_reachable()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -297,6 +320,21 @@ class HyMemoryProvider(MemoryProvider):
     # Sync (background write)
     # ------------------------------------------------------------------
 
+    def _build_client(self):
+        """Construct the upstream client from current config (no-op if missing).
+
+        Used by :meth:`sync_turn` to lazy-initialize the client when the
+        consumer never called :meth:`initialize` (or it was skipped because
+        the upstream was down at the time). Falls back to the default
+        host/port if config is missing so a fresh install still works.
+        """
+        from .client import HyMemoryClient
+        if not getattr(self, "_config", None):
+            self._config = _load_config() or {}
+        host = self._config.get("server_host", "127.0.0.1")
+        port = self._config.get("server_port", _DEFAULT_PORT)
+        return HyMemoryClient(f"http://{host}:{port}")
+
     def sync_turn(self, user_content: str, assistant_content: str, *,
                   session_id: str = "", messages: list | None = None) -> None:
         """Buffer turn; flush to memory every N turns (per official 0.2.7).
@@ -317,14 +355,42 @@ class HyMemoryProvider(MemoryProvider):
         buffer. This closes the silent-data-loss window where a force-kill
         would drop the in-memory buffer.
         """
-        if not self._client or not user_content:
+        if not user_content:
             return
+
+        # Self-heal: if the consumer never called initialize() (or it failed
+        # silently because the upstream was down at init), the client is
+        # still None. Try to set it up now. This is the "plug and play"
+        # path — the provider works without the consumer having to wire
+        # up the lifecycle perfectly.
+        if self._client is None:
+            try:
+                self._client = self._build_client()
+            except Exception:
+                return  # No config to build from — silently drop.
 
         # Circuit breaker
         if self._consecutive_failures >= _BREAKER_THRESHOLD:
             if time.time() < self._breaker_open_until:
                 return
             self._consecutive_failures = 0
+
+        # Self-heal: if upstream is briefly down (recoverable outage,
+        # mid-startup, network blip), wait up to 3s before giving up.
+        # This closes the silent-stuck-agent window where the consumer
+        # is alive and the user is typing but the upstream is briefly
+        # unavailable. Without this, a 1s upstream blip silently drops
+        # every turn until the consumer restarts.
+        if not self._client.is_reachable():
+            for _ in range(6):  # up to ~3s
+                time.sleep(0.5)
+                if self._client.is_reachable():
+                    break
+            if not self._client.is_reachable():
+                self._consecutive_failures += 1
+                if self._consecutive_failures >= _BREAKER_THRESHOLD:
+                    self._breaker_open_until = time.time() + _BREAKER_COOLDOWN_SECS
+                return  # Drop this turn; buffer persists for retry on next.
 
         # Resolve session id (allow per-call override; default = current)
         sid = session_id or "default_session"

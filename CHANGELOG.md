@@ -1,3 +1,25 @@
+## 1.2.1 — 2026-06-21
+
+### Fixes
+
+- **Plug-and-play provider**: `is_available()` now returns `True` whenever the
+  class can be loaded, decoupling `installable` from `currently operational`.
+  Use `is_healthy()` for runtime reachability. Gating on upstream reachability
+  at init time caused silent stuck-agent failures: the consumer rejected the
+  provider, the `MemoryManager` ended up `None`, and every subsequent turn
+  was a no-op until the consumer restarted.
+
+- **Self-healing `sync_turn`**: if the client is `None` or the upstream is
+  briefly down, the provider lazy-initializes the client and waits up to 3s
+  for the upstream to come up before dropping. Closes the silent-stuck-agent
+  window where a 1s upstream blip would drop every turn.
+
+### Notes for consumers
+
+- No code changes needed in hermes-agent. Install via `pip install hyatlas-memory`
+  and configure (or let it auto-configure from `hy_memory.json`), and the
+  provider wires itself in and self-heals at sync time.
+
 # Changelog
 
 > All notable changes to HyAtlas-Memory are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
