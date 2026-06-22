@@ -22,26 +22,26 @@ Design constraints:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import queue
 import threading
-from typing import Any
 
-_REGISTRY: dict[int, "queue.Queue[logging.LogRecord]"] = {}
+_REGISTRY: dict[int, queue.Queue[logging.LogRecord]] = {}
 _REGISTRY_LOCK = threading.Lock()
 
 
-def subscribe() -> "queue.Queue[logging.LogRecord]":
+def subscribe() -> queue.Queue[logging.LogRecord]:
     """Return a private queue that will receive every log record from
     the ``hyatlas_memory`` logger tree. Caller is responsible for
     reading and unsubscribing (typically in the console process)."""
-    q: "queue.Queue[logging.LogRecord]" = queue.Queue(maxsize=10000)
+    q: queue.Queue[logging.LogRecord] = queue.Queue(maxsize=10000)
     with _REGISTRY_LOCK:
         _REGISTRY[id(q)] = q
     return q
 
 
-def unsubscribe(q: "queue.Queue[logging.LogRecord]") -> None:
+def unsubscribe(q: queue.Queue[logging.LogRecord]) -> None:
     with _REGISTRY_LOCK:
         _REGISTRY.pop(id(q), None)
 
@@ -69,13 +69,10 @@ class MemoryQueueHandler(logging.Handler):
             try:
                 q.put_nowait(record)
             except queue.Full:
-                try:
+                with contextlib.suppress(queue.Empty):
                     q.get_nowait()
-                except queue.Empty:
-                    pass
-                try:
+                with contextlib.suppress(queue.Full):
                     q.put_nowait(record)
-                except queue.Full:
                     pass
 
 

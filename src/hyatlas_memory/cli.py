@@ -469,23 +469,21 @@ def _cmd_console(args) -> int:
     ``Hermes_Gateway.cmd`` shim pattern.
     """
     if not args.no_start:
-        # Start the stack with visible windows so the user can see the
-        # three services come up in real time. This is a no-op if the
-        # stack is already running.
+        # Start the stack. This is a no-op if already running. Services
+        # run detached — safe to Ctrl+C after this returns.
         from .process import StackManager
         try:
             home = get_hermes_home()
         except Exception:
             home = None
-        from pathlib import Path as _P
         if home is None:
-            home = _P(os.environ.get("LOCALAPPDATA", str(_P.home()))) / "hermes"
+            home = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "hermes"
         manager = StackManager(
-            project_root=_P(__file__).parent,
+            project_root=Path(__file__).parent,
             hermes_home=home,
             log_dir=home / "logs",
         )
-        manager.start_visible()
+        manager.start()
 
     # Resolve the Python interpreter the user is currently running.
     # In editable mode this is the UV Python; in installed mode it's
@@ -503,7 +501,6 @@ def _cmd_console(args) -> int:
     # Spawn detached. ``start`` with a title opens a new console
     # window; without ``/WAIT`` it returns immediately. This is the
     # same pattern as ``Hermes_Gateway.cmd``.
-    title = "HyAtlas Memory Console"
     # CREATE_NEW_CONSOLE = 0x00000010
     flags = subprocess.CREATE_NEW_CONSOLE
     try:

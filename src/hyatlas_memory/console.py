@@ -38,6 +38,7 @@ Console) without configuration. If colors are unwanted, set
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import queue
@@ -47,7 +48,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from ._console_handler import subscribe, unsubscribe
 from ._version import __version__
@@ -252,32 +253,42 @@ def _tail_log_file(
     """
     if not log_path.exists():
         return
-    try:
-        f = open(log_path, "r", encoding="utf-8", errors="replace")
-    except OSError:
-        return
-    # Seek to end so we don't replay the entire log on launch.
-    f.seek(0, 2)
-    last_size = f.tell()
+
     import re as _re
     interesting = _re.compile(_INTERESTING_RE, _re.IGNORECASE)
+
+    def _open_at_end() -> IO[str] | None:
+        try:
+            f = open(log_path, encoding="utf-8", errors="replace")  # noqa: SIM115
+            f.seek(0, 2)
+            return f
+        except OSError:
+            return None
+
+    f = _open_at_end()
+    if f is None:
+        return
+    last_size = f.tell()
+
+    def _emit(line: str) -> None:
+        if not interesting.search(line):
+            return
+        formatted = _parse_log_line(line)
+        if formatted is None:
+            return
+        with state.lock:
+            state.current = formatted
+            state.current_version += 1
+            state.last_event_at = time.monotonic()
+            state.recent.append(formatted)
+            if len(state.recent) > 8:
+                del state.recent[: len(state.recent) - 8]
 
     while not stop_event.is_set():
         line = f.readline()
         if line:
             last_size = f.tell()
-            if not interesting.search(line):
-                continue
-            formatted = _parse_log_line(line)
-            if formatted is None:
-                continue
-            with state.lock:
-                state.current = formatted
-                state.current_version += 1
-                state.last_event_at = time.monotonic()
-                state.recent.append(formatted)
-                if len(state.recent) > 8:
-                    del state.recent[: len(state.recent) - 8]
+            _emit(line)
             continue
         # No line available. Sleep briefly, then re-check.
         time.sleep(0.2)
@@ -288,15 +299,11 @@ def _tail_log_file(
             cur = last_size
         if cur < last_size:
             f.close()
-            try:
-                f = open(log_path, "r", encoding="utf-8", errors="replace")
-            except OSError:
+            f = _open_at_end()
+            if f is None:
                 return
             last_size = 0
-    try:
-        f.close()
-    except Exception:
-        pass
+    f.close()
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +372,7 @@ def _row_static_bar(_state: _State) -> str:
 
 def _row_static_title(_state: _State) -> str:
     return (
-        _color("bold", f"  ✦ HyAtlas-Memory ")
+        _color("bold", "  ✦ HyAtlas-Memory ")
         + _color("bright_white", f"v{__version__}")
         + "  "
         + _color("dim", "— live status window")
@@ -379,15 +386,10 @@ def _row_static_section(label: str) -> str:
 def _row_health(key: str, state: _State) -> str:
     name, desc, port = _SERVICE_BY_KEY[key]
     up = state.health.get(port, False)
-    if up:
-        status = _color("green", "● healthy")
-    else:
-        status = _color("red", "○ down")
+    status = _color("green", "● healthy") if up else _color("red", "○ down")
     return (
         f"  {_color('cyan', name):<12} {desc:<22} :{port:<5}  {status}"
     )
-
-
 def _row_current(state: _State) -> str:
     if not state.current:
         return f"  {_color('dim', '— idle —')}"
@@ -517,7 +519,7 @@ class _State:
 
 
 def _consume_log_queue(
-    q: "queue.Queue[logging.LogRecord]",
+    q: queue.Queue[logging.LogRecord],
     state: _State,
     stop_event: threading.Event,
 ) -> None:
@@ -561,10 +563,7 @@ def _health_poll_loop(
                 if was is None or was == up:
                     continue
                 name = next(n for n, _, p in _SERVICES if p == port)
-                if was and not up:
-                    msg = f"{name} :{port} went DOWN"
-                else:
-                    msg = f"{name} :{port} came UP"
+                msg = f"{name} :{port} went DOWN" if was and not up else f"{name} :{port} came UP"
                 state.current = msg
                 state.current_version += 1
                 state.last_event_at = time.monotonic()
@@ -579,10 +578,8 @@ def _install_signal_handler(stop_event: threading.Event) -> None:
     def _handler(signum: int, frame: Any) -> None:
         stop_event.set()
     if sys.platform == "win32":
-        try:
+        with contextlib.suppress(ValueError, OSError):
             signal.signal(signal.SIGINT, _handler)
-        except (ValueError, OSError):
-            pass
     else:
         signal.signal(signal.SIGINT, _handler)
         signal.signal(signal.SIGTERM, _handler)
@@ -672,7 +669,6 @@ def main() -> int:
 
     last_health_version = -1
     last_current_version = -1
-    last_health_tick = 0.0
     last_paint = 0.0
 
     try:
@@ -680,7 +676,6 @@ def main() -> int:
         _render_once(state)
         last_health_version = state.health_version
         last_current_version = state.current_version
-        last_health_tick = time.monotonic()
         last_paint = time.monotonic()
 
         while not stop_event.is_set():
