@@ -155,14 +155,48 @@ def run_interactive() -> int:
 
     # === Next steps ===
     print("── Next steps ─────────────────────────────────────────")
-    print("  1. Run `hermes hy-memory doctor` to verify connectivity.")
-    print("  2. Run `hermes hy-memory add 'your first memory'` to test a write.")
-    print("  3. Run `hermes hy-memory search 'something'` to test a recall.")
+    print("  1. Run `hyatlas setup hermes` to activate the plugin.")
+    print("  2. Run `hyatlas doctor` to verify connectivity.")
+    print("  3. Run `hyatlas add 'your first memory'` to test a write.")
+    print("  4. Run `hyatlas search 'something'` to test a recall.")
     print()
     print("Tip: to use this config in your current shell, run:")
     print(f"  set -a; source {_env_path()}; set +a    # bash")
     print(f"  Get-Content {_env_path()} | ForEach {{ $name, $value = $_ -split '=', 2; Set-Item -Path \"Env:$name\" -Value $value }}    # PowerShell")
     print()
+    return 0
+
+
+def post_setup() -> int:
+    """Hermes ``hermes memory setup`` hook.
+
+    Called by Hermes after the user selects this provider in the memory setup
+    wizard. Creates a default config file and installs the plugin shim.
+    """
+    from .installer import _install_plugin_shim, _update_config
+
+    try:
+        home = get_hermes_home()
+    except Exception:
+        home = Path.home() / "AppData" / "Local" / "hermes"
+
+    home.mkdir(parents=True, exist_ok=True)
+    _env_path().parent.mkdir(parents=True, exist_ok=True)
+    env_path = _env_path()
+    if not env_path.exists():
+        env_path.write_text("HY_MEMORY_USER_ID=hermes-user\nHY_MEMORY_AGENT_ID=default\nHY_MEMORY_MODE=pro\n", encoding="utf-8")
+        print(f"✓ Created {env_path}")
+
+    if not _install_plugin_shim(home):
+        print("✗ Plugin shim installation failed")
+        return 1
+    print("✓ Plugin shim installed")
+
+    if not _update_config(home, "hy_memory"):
+        print("✗ Config update failed")
+        return 1
+    print("✓ Hermes config: memory.provider = hy_memory")
+
     return 0
 
 

@@ -80,6 +80,9 @@ node_modules/
 .next/
 .turbo/
 .parcel-cache/
+dist_final/
+dist_venv/
+plans/
 
 # Runtime
 .qdrant-initialized

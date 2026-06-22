@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyatlas-memory"
-version = "1.2.1"
+version = "1.4.0"
 description = "Community implementation of the official Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan, memory.hunyuan.tencent.com) for Hermes Agent. Includes the experimental L7 intention layer. MIT licensed."
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -115,9 +115,15 @@ include = ["hyatlas_memory*"]
 # MANIFEST.in; Python files are picked up automatically by packages.find.
 [tool.setuptools.package-data]
 "hyatlas_memory" = ["py.typed"]
+"hyatlas_memory.hermes_plugin_shim" = ["plugin.yaml"]
 "hyatlas_memory.server" = ["*.html", "*.css", "*.js", "*.json", "*.yaml", "*.png"]
 "hyatlas_memory.server.dashboard" = ["*.html", "*.css", "*.js", "*.png"]
 "hyatlas_memory.server.dashboard.js" = ["*.js"]
+
+[tool.setuptools.exclude-package-data]
+"hyatlas_memory" = ["_drainer.py", "_local_store.py"]
+# v1.4: Hindsight-style direct-upstream writes. The Mnemosyne local-first
+# SQLite WAL and background drainer (v1.3.0) are intentionally excluded.
 
 # ----------------------------------------------------------------------
 # Pytest config — discover tests in the new layout, not the old fork layout
@@ -158,6 +164,13 @@ ignore = [
 ]
 "src/hyatlas_memory/_start.py" = [
     "SIM105",  # try/except/pass is intentional for process management
+    "SIM115",  # long-lived log files can't use context managers
+]
+"src/hyatlas_memory/process.py" = [
+    "SIM105",  # try/except/pass is intentional for process management
+    "SIM115",  # long-lived lock/log files can't use context managers
+]
+"src/hyatlas_memory/cli.py" = [
     "SIM115",  # long-lived log files can't use context managers
 ]
 # server/ files were linted for the first time when they were moved into

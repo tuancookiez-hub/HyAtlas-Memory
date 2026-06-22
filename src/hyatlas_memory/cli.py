@@ -11,6 +11,7 @@ Subcommands:
   list            list recent N memories
   init            interactive setup wizard (writes ~/.hermes/.env)
   install         activate the plugin in Hermes (idempotent)
+  setup hermes    one-line install: plugin shim + config + auto-start
   reset           erase all memories for a user (DESTRUCTIVE)
 
 Hermes calls register_cli(subparser) at plugin-load time to attach these
@@ -23,7 +24,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import socket
+import subprocess
 import sys
+from pathlib import Path
 
 from hermes_constants import get_hermes_home
 
@@ -56,6 +60,20 @@ def _add_subcommands(sub: argparse._SubParsersAction) -> None:
         help="Re-verify (no-op for local fork)",
     )
     p_install.set_defaults(func=_cmd_install)
+
+    p_setup = sub.add_parser(
+        "setup-hermes",
+        help="One-line install: plugin shim, config, and auto-start"
+    )
+    p_setup.add_argument(
+        "--hermes-home",
+        help="Path to Hermes home directory (auto-detected if omitted)",
+    )
+    p_setup.add_argument(
+        "--yes", "-y", action="store_true",
+        help="Skip confirmation prompts",
+    )
+    p_setup.set_defaults(func=_cmd_setup_hermes)
 
     p_doctor = sub.add_parser("doctor", help="Health check (read-only diagnostic)")
     p_doctor.set_defaults(func=_cmd_doctor)
@@ -156,48 +174,20 @@ def _get_agent_id(args, env_var: str = "HY_MEMORY_AGENT_ID", default: str = "def
 # ---------------------------------------------------------------------------
 
 def _cmd_doctor(args) -> int:
-    """Run health checks: server reachable, VDB+embed+LLM ok, config sane."""
+    """Run comprehensive health checks for the v1.4 embedded stack."""
     print("[hy-memory] doctor — running health checks\n")
 
-    # 1. Server reachable
     try:
-        client = _get_client()
+        home = get_hermes_home()
     except Exception as e:
-        print(f"  ✗ Client init failed: {e}")
+        print(f"  ✗ Cannot determine Hermes home: {e}")
         return 1
 
-    if not client.is_reachable():
-        print("  ✗ Server not reachable on", client.base_url)
-        print("    Hint: run start_hy_memory_server.py or check HY_MEMORY_BASE_URL")
-        return 1
-    print(f"  ✓ Server reachable at {client.base_url}")
+    # 1. Package version
+    from hyatlas_memory._version import __version__
+    print(f"  • hyatlas-memory version: {__version__}")
 
-    # 2. Deep health (VDB + embed + LLM)
-    try:
-        status = client.status()
-        s = status.get("status", "unknown")
-        vdb = status.get("vdb", "unknown")
-        emb = status.get("embed", status.get("embedder", "unknown"))  # v1.2.18 uses 'embed'
-        llm = status.get("llm", "unknown")
-        cnt = status.get("vdb_points", status.get("points_count", status.get("vdb_count", "?")))
-        provider = status.get("vdb_provider", "?")
-        dims = status.get("embed_dims", "?")
-        print(
-            f"  ✓ Deep health: {s} "
-            f"(vdb={vdb}[{provider}], embed={emb}[{dims}d], llm={llm}, points={cnt})"
-        )
-    except Exception as e:
-        print(f"  ✗ Deep status failed: {e}")
-        return 1
-
-    # 3. Env config
-    user_id = os.environ.get("HY_MEMORY_USER_ID", "(not set)")
-    agent_id = os.environ.get("HY_MEMORY_AGENT_ID", "(not set)")
-    mode = os.environ.get("HY_MEMORY_MODE", "(not set, defaulting to pro)")
-    print(f"  • Env: HY_MEMORY_USER_ID={user_id}, AGENT_ID={agent_id}, MODE={mode}")
-
-    # 4. Hermes config integration
-    home = get_hermes_home()
+    # 2. Hermes config.yaml
     cfg = home / "config.yaml"
     if cfg.exists():
         try:
@@ -206,23 +196,80 @@ def _cmd_doctor(args) -> int:
             mem = data.get("memory", {}) or {}
             provider = mem.get("provider", "(not set)")
             enabled = mem.get("memory_enabled", "(not set)")
-            print(f"  • Hermes config.yaml: memory.provider={provider}, memory_enabled={enabled}")
+            print(f"  • Hermes config: memory.provider={provider}, memory_enabled={enabled}")
+            if provider != "hy_memory":
+                print("  ✗ memory.provider is not set to hy_memory — run `hyatlas setup hermes`")
         except Exception as e:
             print(f"  ! Could not parse config.yaml: {e}")
     else:
         print(f"  ! No config.yaml at {cfg}")
 
-    # 5. Plugin discovery check
-    try:
-        from plugins.memory import discover_memory_providers
-        providers = discover_memory_providers()
-        active = next((p for p in providers if p[0] == "hy_memory"), None)
-        if active:
-            print(f"  ✓ Plugin discovered: hy_memory (available={active[2]})")
+    # 3. Plugin directory
+    plugin_dir = home / "plugins" / "hy_memory"
+    if (plugin_dir / "__init__.py").exists() and (plugin_dir / "plugin.yaml").exists():
+        print(f"  ✓ Plugin shim installed at {plugin_dir}")
+    else:
+        print(f"  ✗ Plugin shim missing at {plugin_dir} — run `hyatlas setup hermes`")
+
+    # 4. Qdrant
+    from .process import StackManager
+    manager = StackManager(project_root=Path(__file__).parent, hermes_home=home, log_dir=home / "logs")
+    cfg = manager._read_hy_memory_json()
+    qdrant_port = int(cfg.get("qdrant", {}).get("port", 6333))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(1)
+        if sock.connect_ex(("127.0.0.1", qdrant_port)) == 0:
+            print(f"  ✓ Qdrant reachable on port {qdrant_port}")
         else:
-            print("  ! Plugin 'hy_memory' not in discovered providers list")
-    except Exception as e:
-        print(f"  ! Plugin discovery check failed: {e}")
+            print(f"  ✗ Qdrant not reachable on port {qdrant_port}")
+
+    # 5. Upstream server
+    client = _get_client()
+    if client.is_reachable():
+        print(f"  ✓ Upstream server reachable at {client.base_url}")
+    else:
+        print(f"  ✗ Upstream server not reachable at {client.base_url}")
+
+    # 6. Deep health
+    if client.is_reachable():
+        try:
+            status = client.status()
+            s = status.get("status", "unknown")
+            vdb = status.get("vdb", "unknown")
+            emb = status.get("embed", status.get("embedder", "unknown"))
+            llm = status.get("llm", "unknown")
+            cnt = status.get("vdb_points", status.get("points_count", status.get("vdb_count", "?")))
+            print(f"  ✓ Deep health: {s} (vdb={vdb}, embed={emb}, llm={llm}, points={cnt})")
+        except Exception as e:
+            print(f"  ✗ Deep status failed: {e}")
+
+    # 7. Dashboard
+    dash_port = int(cfg.get("dashboard", {}).get("port", 8765))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(1)
+        if sock.connect_ex(("127.0.0.1", dash_port)) == 0:
+            print(f"  ✓ Dashboard reachable on port {dash_port}")
+        else:
+            print(f"  ✗ Dashboard not reachable on port {dash_port}")
+
+    # 8. Stale tui_gateway processes
+    stale = 0
+    try:
+        if sys.platform == "win32":
+            r = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq tui_gateway.exe", "/FO", "CSV"],
+                capture_output=True, text=True, timeout=10,
+            )
+            stale = r.stdout.count("tui_gateway")
+        else:
+            r = subprocess.run(["pgrep", "-c", "tui_gateway"], capture_output=True, text=True, timeout=10)
+            stale = int(r.stdout.strip()) if r.returncode == 0 else 0
+    except Exception:
+        pass
+    if stale:
+        print(f"  ⚠ {stale} stale tui_gateway process(es) detected — restart Hermes TUI")
+    else:
+        print("  ✓ No stale tui_gateway processes")
 
     print("\n[hy-memory] doctor — done")
     return 0
@@ -401,6 +448,54 @@ def _cmd_install(args) -> int:
     return installer.run_install(
         hermes_python=getattr(args, "hermes_python", None),
     )
+
+
+def _cmd_setup_hermes(args) -> int:
+    """Install the Hermes plugin shim, set config, and test auto-start."""
+    from .installer import _install_plugin_shim, _update_config
+    from .process import StackManager
+
+    home = Path(args.hermes_home) if args.hermes_home else _find_hermes_home()
+    print(f"[hy-memory] setup-hermes using Hermes home: {home}")
+
+    if not args.yes:
+        confirm = input("This will install the hy_memory plugin shim and set memory.provider. Continue? [y/N]: ")
+        if confirm.strip().lower() != "y":
+            print("Aborted.")
+            return 1
+
+    # Install shim
+    if not _install_plugin_shim(home):
+        print("✗ Plugin shim installation failed")
+        return 1
+    print("✓ Plugin shim installed")
+
+    # Set active provider
+    if not _update_config(home, "hy_memory"):
+        print("✗ Config update failed")
+        return 1
+    print("✓ Hermes config memory.provider set to hy_memory")
+
+    # Optional: test auto-start
+    print("[hy-memory] Verifying auto-start...")
+    root = Path(__file__).parent
+    manager = StackManager(project_root=root, hermes_home=home, log_dir=home / "logs")
+    if manager.ensure_running():
+        print("✓ Stack auto-started successfully")
+    else:
+        print("! Stack auto-start failed — check logs and Qdrant availability")
+        return 1
+
+    print("\n[hy-memory] Setup complete. Restart Hermes TUI/CLI to load the new plugin.")
+    return 0
+
+
+def _find_hermes_home() -> Path:
+    """Return the Hermes home directory using the same logic as Hermes itself."""
+    try:
+        return get_hermes_home()
+    except Exception:
+        return Path.home() / "AppData" / "Local" / "hermes"
 
 
 # ---------------------------------------------------------------------------

@@ -41,8 +41,8 @@ from agent.memory_provider import MemoryProvider
 from hermes_constants import get_hermes_home
 from tools.registry import tool_error
 
-from hyatlas_memory import patches
-from hyatlas_memory._version import __version__ as __version__
+from . import patches
+from ._version import __version__ as __version__
 
 logger = logging.getLogger(__name__)
 
@@ -202,13 +202,8 @@ class HyMemoryProvider(MemoryProvider):
         self._user_id = kwargs.get("user_id", "") or "hermes-user"
         self._agent_id = kwargs.get("agent_identity", "") or "default"
 
-        # Auto-start server if configured
-        if self._config.get("auto_start", True):
-            from .process import HyMemoryProcess
-            self._process = HyMemoryProcess(self._config)
-            if not self._process.ensure_running():
-                logger.error("[hy-memory] Server failed to start")
-                return
+        # Auto-start the full stack on first use.
+        self._ensure_stack_running()
 
         # Create client
         from .client import HyMemoryClient
@@ -233,6 +228,29 @@ class HyMemoryProvider(MemoryProvider):
                 logger.debug("[hy-memory] replay pass failed: %s", e)
         else:
             logger.warning("[hy-memory] Server not reachable at %s:%d", host, port)
+
+    def _ensure_stack_running(self) -> None:
+        """Auto-start the Qdrant + upstream + dashboard stack.
+
+        Matches Hindsight's embedded daemon behavior: the provider owns
+        the lifecycle of its dependencies. No manual `hyatlas start` is
+        required for end users.
+        """
+        if not self._config.get("auto_start", True):
+            return
+        try:
+            home = get_hermes_home()
+        except Exception:
+            home = Path.home() / ".hermes"
+        root = Path(__file__).parent
+        from .process import StackManager
+        self._process = StackManager(
+            project_root=root,
+            hermes_home=home,
+            log_dir=home / "logs",
+        )
+        if not self._process.ensure_running():
+            logger.error("[hy-memory] Stack failed to start")
 
     def system_prompt_block(self) -> str:
         """Return static context about Hy-Memory status."""

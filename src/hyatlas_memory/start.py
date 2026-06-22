@@ -1,23 +1,21 @@
-"""CLI entry point: ``hyatlas``, ``hyatlas --stop``, ``hyatlas --status``.
+"""CLI entry point: ``hyatlas``, ``hyatlas start``, ``hyatlas stop``.
 
-Delegates to :mod:`hyatlas_memory._start`, which contains the actual
-startup logic bundled inside the package. This thin wrapper exists so
-the ``[project.scripts]`` entry point in pyproject.toml resolves to a
-module the user can also import directly (``python -m
-hyatlas_memory.start``).
-
-Project root resolution (env var, cwd, or editable install) is handled
-inside ``_start.main()`` — see that module for details.
+Delegates to :mod:`hyatlas_memory._cli`, which implements the unified
+subcommand parser. This thin wrapper exists so the ``[project.scripts]``
+entry point in pyproject.toml resolves to a module the user can also
+import directly (``python -m hyatlas_memory.start``).
 """
 
 from __future__ import annotations
 
-from hyatlas_memory import _start
+import sys
+
+from hyatlas_memory import _cli
 
 
 def main() -> None:
-    _start.main()
+    sys.exit(_cli.main())
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

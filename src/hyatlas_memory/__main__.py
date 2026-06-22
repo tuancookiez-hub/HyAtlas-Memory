@@ -19,7 +19,7 @@ that doesn't have hermes on PATH.
 
 import sys
 
-from .cli import _main_standalone
+from ._cli import main
 
 if __name__ == "__main__":
-    sys.exit(_main_standalone())
+    sys.exit(main())

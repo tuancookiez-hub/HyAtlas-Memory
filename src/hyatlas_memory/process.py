@@ -1,261 +1,287 @@
-"""Subprocess lifecycle manager for the Hy-Memory Python server.
+"""Subprocess lifecycle manager for the full HyAtlas-Memory stack.
 
-Spawns ``python -m hy_memory.server`` as a child process, manages health
-checks, and handles graceful shutdown.  Windows-compatible.
+Spawns Qdrant, the Hy-Memory upstream server, and the dashboard in
+background. Designed to be called from ``HyMemoryProvider.initialize()``
+and ``sync_turn()`` so the stack starts automatically on first use, like
+Hindsight's embedded daemon.
+
+Heavily inspired by ``hindsight_embed.daemon_embed_manager.DaemonEmbedManager``.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import socket
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
+from typing import IO
 
 logger = logging.getLogger(__name__)
 
-_VENV_NAME = "hy-memory-venv"
-_DEFAULT_PORT = 19527
-_HEALTH_POLL_INTERVAL = 1.0
-_HEALTH_POLL_TIMEOUT = 90  # first start may need to install deps
+_DEFAULT_PORTS = {
+    "qdrant": 6333,
+    "upstream": 19527,
+    "dashboard": 8765,
+}
+
+_HEALTH_TIMEOUT = 2
+_HEALTH_RETRIES = 60
+_HEALTH_DELAY = 1.0
+
+_LOCK_DIR = Path(tempfile.gettempdir()) / "hyatlas-memory"
 
 
-class HyMemoryProcess:
-    """Manages the Hy-Memory server subprocess."""
+def _port_open(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(1)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
 
-    def __init__(self, config: dict):
-        self._config = config
-        self._port = int(config.get("server_port", _DEFAULT_PORT))
-        self._host = config.get("server_host", "127.0.0.1")
-        self._process: subprocess.Popen | None = None
-        self._started_by_us = False
 
-    @property
-    def base_url(self) -> str:
-        return f"http://{self._host}:{self._port}"
-
-    # ------------------------------------------------------------------
-    # Python / venv resolution
-    # ------------------------------------------------------------------
-
-    def _venv_dir(self) -> Path:
-        """Return the venv directory path."""
-        from hermes_constants import get_hermes_home
-        return get_hermes_home() / _VENV_NAME
-
-    def _venv_python(self) -> str:
-        """Return path to the venv's Python executable."""
-        venv = self._venv_dir()
+def _pid_on_port(port: int) -> int | None:
+    try:
         if sys.platform == "win32":
-            return str(venv / "Scripts" / "python.exe")
-        return str(venv / "bin" / "python3")
+            r = subprocess.run(
+                ["netstat", "-ano", "-p", "TCP"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in r.stdout.splitlines():
+                if f"127.0.0.1:{port}" in line and "LISTENING" in line:
+                    return int(line.strip().split()[-1])
+        else:
+            r = subprocess.run(
+                ["lsof", "-ti", f":{port}", "-sTCP:LISTEN"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                return int(r.stdout.strip().split()[0])
+    except (subprocess.TimeoutExpired, ValueError, OSError, FileNotFoundError):
+        pass
+    return None
 
-    def _venv_exists(self) -> bool:
-        return Path(self._venv_python()).is_file()
 
-    def _ensure_venv(self) -> str:
-        """Create venv if needed, install hy-memory. Returns python path."""
-        venv = self._venv_dir()
-        python = self._venv_python()
+def _kill_pid(pid: int) -> bool:
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=10)
+        else:
+            os.kill(pid, 15)
+            for _ in range(50):
+                time.sleep(0.1)
+                try:
+                    os.kill(pid, 0)
+                except OSError:
+                    return True
+    except OSError:
+        return True
+    except Exception:
+        pass
+    return False
 
-        if self._venv_exists():
-            return python
 
-        logger.info("[hy-memory] Creating venv at %s", venv)
-        venv.mkdir(parents=True, exist_ok=True)
+def _detach_kwargs(log_handle: IO[bytes]) -> dict:
+    if sys.platform == "win32":
+        return {
+            "creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
+            "stdin": subprocess.DEVNULL,
+            "stdout": log_handle,
+            "stderr": subprocess.STDOUT,
+            "close_fds": True,
+        }
+    return {
+        "start_new_session": True,
+        "stdin": subprocess.DEVNULL,
+        "stdout": log_handle,
+        "stderr": subprocess.STDOUT,
+    }
 
-        # Create venv
-        subprocess.run(
-            [sys.executable, "-m", "venv", str(venv)],
-            check=True, capture_output=True, timeout=60,
-        )
 
-        # Install hy-memory + deps
-        logger.info("[hy-memory] Installing hy-memory in venv...")
-        pip = str(venv / "Scripts" / "pip.exe") if sys.platform == "win32" else str(venv / "bin" / "pip")
-        subprocess.run(
-            [pip, "install", "--quiet", "hy-memory", "kuzu", "chromadb"],
-            check=True, capture_output=True, timeout=300,
-        )
-        logger.info("[hy-memory] Venv ready")
-        return python
+class StackManager:
+    """Start/stop the Qdrant + upstream + dashboard stack."""
 
-    # ------------------------------------------------------------------
-    # Env var construction
-    # ------------------------------------------------------------------
-
-    def _build_env(self) -> dict:
-        """Build environment variables for the Hy-Memory server process.
-
-        Translates our config dict into the env vars that hy_memory reads.
-        """
-        env = os.environ.copy()
-
-        cfg = self._config
-
-        # Mode
-        mode = cfg.get("mode", "pro")
-        env["MEMORY_MODE"] = mode
-
-        # LLM
-        llm = cfg.get("llm", {})
-        if llm.get("provider"):
-            env["MEMORY_LLM_PROVIDER"] = llm["provider"]
-        if llm.get("model"):
-            env["MEMORY_LLM_MODEL"] = llm["model"]
-        if llm.get("api_key"):
-            env["MEMORY_LLM_API_KEY"] = llm["api_key"]
-        if llm.get("base_url"):
-            env["MEMORY_LLM_BASE_URL"] = llm["base_url"]
-        if llm.get("temperature") is not None:
-            env["MEMORY_LLM_TEMPERATURE"] = str(llm["temperature"])
-
-        # Embedder
-        emb = cfg.get("embedder", {})
-        if emb.get("provider"):
-            env["MEMORY_EMBEDDER_PROVIDER"] = emb["provider"]
-        if emb.get("model"):
-            env["MEMORY_EMBEDDER_MODEL"] = emb["model"]
-        if emb.get("api_key"):
-            env["MEMORY_EMBEDDER_API_KEY"] = emb["api_key"]
-        if emb.get("base_url"):
-            env["MEMORY_EMBEDDER_BASE_URL"] = emb["base_url"]
-        if emb.get("dims"):
-            env["MEMORY_EMBEDDING_DIMS"] = str(emb["dims"])
-
-        # Vector store
-        vs = cfg.get("vector_store", {})
-        if vs.get("provider"):
-            env["MEMORY_VECTOR_STORE"] = vs["provider"]
-
-        # Graph store
-        gs = cfg.get("graph_store", {})
-        if gs.get("provider"):
-            env["MEMORY_GRAPH_PROVIDER"] = gs["provider"]
-
-        # Cache
-        cache = cfg.get("cache", {})
-        if cache.get("backend"):
-            env["MEMORY_CACHE_BACKEND"] = cache["backend"]
-
-        # Data directory
-        data_dir = cfg.get("data_dir", "")
-        if data_dir:
-            env["MEMORY_DATA_DIR"] = os.path.expanduser(data_dir)
-
-        # Server port/host
-        env["HY_MEMORY_SERVER_PORT"] = str(self._port)
-        env["HY_MEMORY_SERVER_HOST"] = self._host
-
-        # Log level
-        log_level = cfg.get("log_level", "INFO")
-        env["MEMORY_LOG_LEVEL"] = log_level
-
-        # Thinking mode (for deepseek/kimi/hunyuan models)
-        thinking = cfg.get("thinking_mode", "")
-        if thinking:
-            env["HY_MEMORY_THINKING_MODE"] = thinking
-
-        return env
+    def __init__(self, *, project_root: str | Path, hermes_home: str | Path, log_dir: str | Path):
+        self._root = Path(project_root)
+        self._home = Path(hermes_home)
+        self._log_dir = Path(log_dir)
+        self._lock = _LOCK_DIR / "stack.lock"
+        self._lock_fd: IO | None = None
+        self._procs: list[subprocess.Popen] = []
+        self._log_path = self._log_dir / "hyatlas-memory.log"
 
     # ------------------------------------------------------------------
-    # Process lifecycle
+    # Config helpers
+    # ------------------------------------------------------------------
+
+    def _read_hy_memory_json(self) -> dict:
+        p = self._home / "hy_memory.json"
+        if not p.exists():
+            return {}
+        try:
+            import json
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _python(self) -> str:
+        return sys.executable
+
+    def _qdrant_paths(self) -> tuple[str | None, str | None]:
+        env_bin = os.environ.get("QDRANT_BIN")
+        if env_bin and Path(env_bin).is_file():
+            return env_bin, os.environ.get("QDRANT_CONFIG", "")
+        import shutil
+        path_bin = shutil.which("qdrant")
+        if path_bin:
+            return path_bin, ""
+        candidates = [
+            Path("C:/qdrant/qdrant.exe"),
+            Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "qdrant" / "qdrant.exe",
+            Path.home() / "qdrant" / "qdrant.exe",
+        ]
+        for c in candidates:
+            if c.is_file():
+                cfg = c.parent / "config.yaml"
+                return str(c), str(cfg) if cfg.exists() else ""
+        return None, None
+
+    def _wait_health(self, port: int, path: str, *, expected_status: int = 200, retries: int = _HEALTH_RETRIES) -> bool:
+        for _ in range(retries):
+            if _port_open(port):
+                try:
+                    import urllib.request
+                    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method="GET")
+                    with urllib.request.urlopen(req, timeout=_HEALTH_TIMEOUT) as resp:
+                        if resp.status == expected_status:
+                            return True
+                except Exception:
+                    pass
+            time.sleep(_HEALTH_DELAY)
+        return False
+
+    # ------------------------------------------------------------------
+    # Locking
+    # ------------------------------------------------------------------
+
+    def _acquire_lock(self) -> bool:
+        self._lock.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            import fcntl
+            self._lock_fd = open(self._lock, "w")
+            fcntl.flock(self._lock_fd, fcntl.LOCK_EX)
+            return True
+        except Exception:
+            pass
+        try:
+            import msvcrt
+            self._lock_fd = open(self._lock, "w")
+            msvcrt.locking(self._lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except Exception:
+            self._lock_fd = None
+            return False
+
+    def _release_lock(self) -> None:
+        if self._lock_fd is None:
+            return
+        with contextlib.suppress(Exception):
+            import fcntl
+            fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+        with contextlib.suppress(Exception):
+            self._lock_fd.close()
+        self._lock_fd = None
+
+    # ------------------------------------------------------------------
+    # Start / stop
     # ------------------------------------------------------------------
 
     def start(self) -> bool:
-        """Start the Hy-Memory server.
-
-        Returns True if the server is running (either we started it or
-        it was already running).
-        """
-        from .client import HyMemoryClient
-        client = HyMemoryClient(self.base_url, timeout=3)
-
-        # Already running?
-        if client.is_reachable():
-            logger.info("[hy-memory] Server already running at %s", self.base_url)
-            return True
-
-        # Ensure venv + deps
-        try:
-            python = self._ensure_venv()
-        except Exception as e:
-            logger.error("[hy-memory] Failed to prepare venv: %s", e)
-            return False
-
-        env = self._build_env()
-
-        # Spawn the server process
-        logger.info("[hy-memory] Starting server on %s:%d", self._host, self._port)
-
-        creationflags = 0
-        if sys.platform == "win32":
-            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        """Start the full stack. Idempotent."""
+        if not self._acquire_lock():
+            # Another process is starting; wait for it to finish.
+            for _ in range(30):
+                if self.is_running():
+                    return True
+                time.sleep(1)
+            return self.is_running()
 
         try:
-            self._process = subprocess.Popen(
-                [python, "-m", "hy_memory.server",
-                 "--port", str(self._port),
-                 "--host", self._host],
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=creationflags,
-            )
-            self._started_by_us = True
-        except Exception as e:
-            logger.error("[hy-memory] Failed to spawn server: %s", e)
-            return False
-
-        # Wait for health
-        logger.info("[hy-memory] Waiting for server health check...")
-        if client.wait_until_ready(timeout=_HEALTH_POLL_TIMEOUT):
-            logger.info("[hy-memory] Server ready")
-            return True
-
-        logger.error("[hy-memory] Server failed health check within %ds", _HEALTH_POLL_TIMEOUT)
-        self.stop()
-        return False
-
-    def stop(self):
-        """Stop the server if we started it."""
-        if self._process is None:
-            return
-
-        logger.info("[hy-memory] Stopping server (pid %d)...", self._process.pid)
-        try:
-            if sys.platform == "win32":
-                subprocess.run(
-                    ["taskkill", "/F", "/PID", str(self._process.pid)],
-                    capture_output=True, timeout=10,
-                )
-            else:
-                self._process.terminate()
-                try:
-                    self._process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self._process.kill()
-                    self._process.wait(timeout=3)
-        except Exception as e:
-            logger.warning("[hy-memory] Error stopping server: %s", e)
+            if self.is_running():
+                return True
+            return self._start_locked()
         finally:
-            self._process = None
-            self._started_by_us = False
+            self._release_lock()
+
+    def _start_locked(self) -> bool:
+        self._log_dir.mkdir(parents=True, exist_ok=True)
+        log = open(self._log_path, "ab")
+
+        cfg = self._read_hy_memory_json()
+        ports = {
+            "qdrant": int(cfg.get("qdrant", {}).get("port", _DEFAULT_PORTS["qdrant"])),
+            "upstream": int(cfg.get("server_port", _DEFAULT_PORTS["upstream"])),
+            "dashboard": int(cfg.get("dashboard", {}).get("port", _DEFAULT_PORTS["dashboard"])),
+        }
+
+        # Qdrant
+        qdrant_bin, qdrant_cfg = self._qdrant_paths()
+        if not _port_open(ports["qdrant"]):
+            if not qdrant_bin:
+                logger.error("[hy-memory] Qdrant binary not found")
+                return False
+            cmd = [qdrant_bin]
+            if qdrant_cfg:
+                cmd += ["--config-path", qdrant_cfg]
+            self._procs.append(subprocess.Popen(cmd, **_detach_kwargs(log)))
+            if not self._wait_health(ports["qdrant"], "/healthz"):
+                logger.error("[hy-memory] Qdrant failed to start")
+                return False
+            logger.info("[hy-memory] Qdrant ready on port %d", ports["qdrant"])
+
+        # Upstream server
+        if not _port_open(ports["upstream"]):
+            env = os.environ.copy()
+            env["HERMES_HOME"] = str(self._home)
+            cmd = [self._python(), "-m", "hyatlas_memory.server.start_server"]
+            self._procs.append(subprocess.Popen(cmd, env=env, cwd=str(self._root), **_detach_kwargs(log)))
+            if not self._wait_health(ports["upstream"], "/info"):
+                logger.error("[hy-memory] Upstream server failed to start")
+                return False
+            logger.info("[hy-memory] Upstream server ready on port %d", ports["upstream"])
+
+        # Dashboard
+        if not _port_open(ports["dashboard"]):
+            env = os.environ.copy()
+            env["HERMES_HOME"] = str(self._home)
+            cmd = [self._python(), str(self._root / "server" / "dashboard" / "dashboard.py")]
+            self._procs.append(subprocess.Popen(cmd, env=env, cwd=str(self._root), **_detach_kwargs(log)))
+            if not self._wait_health(ports["dashboard"], "/api/memories?offset=0&limit=1"):
+                logger.error("[hy-memory] Dashboard failed to start")
+                return False
+            logger.info("[hy-memory] Dashboard ready on port %d", ports["dashboard"])
+
+        return True
+
+    def stop(self) -> None:
+        for proc in self._procs:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+        self._procs = []
 
     def is_running(self) -> bool:
-        """Check if the server process is alive and responsive."""
-        if self._process is not None and self._process.poll() is not None:
-            # Process exited
-            self._process = None
-            self._started_by_us = False
-            return False
-
-        from .client import HyMemoryClient
-        client = HyMemoryClient(self.base_url, timeout=3)
-        return client.is_reachable()
+        cfg = self._read_hy_memory_json()
+        upstream_port = int(cfg.get("server_port", _DEFAULT_PORTS["upstream"]))
+        return _port_open(upstream_port)
 
     def ensure_running(self) -> bool:
-        """Start if not running. Returns True if server is available."""
         if self.is_running():
             return True
         return self.start()

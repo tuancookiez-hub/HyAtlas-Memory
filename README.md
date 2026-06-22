@@ -101,19 +101,25 @@ That's it. Restart Hermes (or the next session picks it up).
 | **Qdrant** | Vector store | [Download](https://qdrant.tech/documentation/guides/install/) or `docker run -d -p 6333:6333 qdrant/qdrant` |
 | **LLM API key** | Fact extraction | OpenAI, OpenRouter, DeepSeek, or any OpenAI-compatible endpoint |
 
-**Install the package:**
+**Install and activate:**
 
 ```bash
-# End users — install from PyPI
 pip install hyatlas-memory
+hyatlas setup hermes
+```
 
-# Contributors — clone and editable install
+`hyatlas setup hermes` installs the Hermes plugin shim, sets `memory.provider: hy_memory`, and tests the auto-start flow. The first time you run Hermes after setup, the provider automatically spawns Qdrant, the upstream server, and the dashboard in the background — no manual `hyatlas start` required.
+
+**Contributors — clone and editable install:**
+
+```bash
 git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 cd HyAtlas-Memory
 pip install -e ".[dev,test]"
+hyatlas setup hermes
 ```
 
-**Configure (optional):** copy `hy_memory.json.example` to `~/.hy_memory/hy_memory.json` and fill in your LLM key:
+**Configure (optional):** edit `~/.hermes/hy_memory.json` and add your LLM key:
 
 ```json
 {
@@ -144,45 +150,23 @@ pip install -e ".[dev,test]"
 | `pro` | LLM fact extraction + reconciliation | L1–L4 | LLM calls per `add` |
 | `ultra` | Pro + System 2 cognitive layer with Kuzu graph | L1–L6 | LLM calls + background pipeline |
 
-**Start the stack:**
-
-```bash
-hyatlas              # start Qdrant → upstream server → dashboard
-```
-
-The command works from **any directory** if you set `HYATLAS_PROJECT_ROOT`:
-
-```bash
-export HYATLAS_PROJECT_ROOT=/path/to/hyatlas-memory   # bash
-$env:HYATLAS_PROJECT_ROOT="C:\path\to\hyatlas-memory" # PowerShell
-```
-
-Or `cd` into the project root and just run `hyatlas`.
-
 **Verify it works:**
 
 ```bash
-hyatlas status       # → ✔ Qdrant / ✔ Hy-Memory Server / ✔ Dashboard
-curl http://127.0.0.1:19527/info
-curl http://127.0.0.1:8765/api/health
+hyatlas status        # show which services are running
+hyatlas doctor        # full config + connectivity health check
 ```
+
+The dashboard will be available at `http://127.0.0.1:8765` once the stack is running.
 
 **Common commands:**
 
 ```bash
-hyatlas              # start
-hyatlas status       # check (also: hyatlas --status)
-hyatlas stop         # stop  (also: hyatlas --stop)
+hyatlas status         # check
+hyatlas doctor         # diagnose config / connectivity
+hyatlas stop           # stop the background stack
+hyatlas init           # interactive setup wizard
 ```
-
-**Tell Hermes to use it:** same as Path A — edit `~/.hermes/config.yaml`:
-
-```yaml
-memory:
-  provider: hy_memory
-```
-
-Restart Hermes and you're set.
 
 ---
 
