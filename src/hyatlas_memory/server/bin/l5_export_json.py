@@ -31,7 +31,31 @@ import kuzu
 # Paths
 PROD_KUZU_PATH = Path(r"C:\Users\tuanc\.hy_memory\data\kuzu_db")
 TEST_KUZU_PATH = Path(r"C:\Users\tuanc\.hy_memory\data\kuzu_db_test")
-EXPORT_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_kuzu_export.json")
+
+
+def _resolve_export_path() -> Path:
+    """Resolve the L5 export path via Hermes' canonical home resolver.
+
+    Pre-1.4.1, this was hardcoded to a per-user Windows absolute path
+    (``C:\\Users\\<u>\\AppData\\Local\\hermes\\logs\\l5_kuzu_export.json``)
+    while the dashboard read from a different location, producing a
+    permanent 503 on ``/api/l5/graph``. 1.4.1 routes both writer and
+    reader through ``hermes_constants.get_hermes_home()`` so they
+    always agree, regardless of ``HERMES_HOME`` overrides or platform.
+    """
+    try:
+        from hermes_constants import get_hermes_home
+        home = Path(get_hermes_home())
+    except Exception:
+        if sys.platform == "win32":
+            home = Path.home() / "AppData" / "Local" / "hermes"
+        else:
+            home = Path.home() / ".local" / "share" / "hermes"
+    home.mkdir(parents=True, exist_ok=True)
+    return home / "logs" / "l5_kuzu_export.json"
+
+
+EXPORT_PATH = _resolve_export_path()
 HEALTH_URL = "http://127.0.0.1:19527/healthz"
 
 

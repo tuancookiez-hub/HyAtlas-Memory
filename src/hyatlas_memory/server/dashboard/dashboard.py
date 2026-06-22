@@ -79,6 +79,30 @@ if AUTH_REQUIRED:
 QDRANT_BASE = os.environ.get("QDRANT_BASE", "http://127.0.0.1:6333").rstrip("/")
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "agent_memories_384")
 
+
+def _l5_export_path() -> _pathlib.Path:
+    """Resolve the canonical path of the L5 Kuzu-graph export JSON.
+
+    Single source of truth shared by every L5 reader in the dashboard
+    AND by ``bin/l5_export_json.py`` (the writer). Centralizing the
+    resolution here means the writer and reader can never disagree
+    about where the export lives, regardless of ``HERMES_HOME``,
+    platform, or working directory.
+
+    Pre-1.4.1, the dashboard read from ``<dashboard_dir>/logs/l5_kuzu_export.json``
+    while the writer wrote to ``C:\\Users\\<user>\\AppData\\Local\\hermes\\logs\\...``,
+    which produced a permanent 503 on ``/api/l5/graph`` for every install.
+    """
+    try:
+        from hermes_constants import get_hermes_home
+        home = _pathlib.Path(get_hermes_home())
+    except Exception:
+        if sys.platform == "win32":
+            home = _pathlib.Path.home() / "AppData" / "Local" / "hermes"
+        else:
+            home = _pathlib.Path.home() / ".local" / "share" / "hermes"
+    return home / "logs" / "l5_kuzu_export.json"
+
 # Known user IDs × agent IDs for querying memories.
 # The Hermes agent writes with its own user identity (the agent_identity from
 # agent_init.py) and a chosen agent_id, both of which can vary across
@@ -3148,10 +3172,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             # L5/L6/L7 live in Kuzu graph export JSON
             # Count each layer separately from the node list
             try:
-                l5_export_path = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "logs", "l5_kuzu_export.json"
-                )
+                l5_export_path = str(_l5_export_path())
                 with open(l5_export_path, encoding="utf-8") as f:
                     l5_data = json.loads(f.read())
                 graph_counts = {"l5_knowledge": 0, "l6_schema": 0, "l7_intention": 0}
@@ -3205,7 +3226,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             # L5 lives in Kuzu too, but isn't in /api/v1/list.
             # Read from the export JSON and count only L5_KNOWLEDGE nodes.
             l5_count = 0
-            l5_export_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "l5_kuzu_export.json")
+            l5_export_path = str(_l5_export_path())
             try:
                 with open(l5_export_path, encoding="utf-8") as f:
                     l5_data = json.loads(f.read())
@@ -3224,12 +3245,12 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         if path == "/api/l5/graph":
             # Returns the L5 knowledge graph (entities + relations) from
             # the export JSON. The dashboard calls this for the L5 tab.
-            l5_export_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "l5_kuzu_export.json")
+            l5_export_path = str(_l5_export_path())
             try:
                 with open(l5_export_path, encoding="utf-8") as f:
                     l5_data = json.loads(f.read())
             except FileNotFoundError:
-                return self._json(503, {"error": "L5 export not found — run bin/l5_export_json.py"})
+                return self._json(503, {"error": "L5 export not found at " + l5_export_path + " — run bin/l5_export_json.py"})
             except json.JSONDecodeError as e:
                 return self._json(500, {"error": f"L5 export corrupt: {e}"})
 
@@ -3272,7 +3293,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             # Query params:
             #   n    - max entities to return (default 15, max 50)
             #   type - optional filter by entity type (TOOL/PROJECT/etc)
-            l5_export_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "l5_kuzu_export.json")
+            l5_export_path = str(_l5_export_path())
             try:
                 with open(l5_export_path, encoding="utf-8") as f:
                     l5_data = json.loads(f.read())
