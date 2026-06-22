@@ -131,9 +131,7 @@ def _format_record(record: logging.LogRecord) -> str:
     level = record.levelname
     name = record.name.replace("hyatlas_memory.", "")
     msg = record.getMessage()
-    line = f"  {_color('gray', ts)}  {_color('yellow', level):<8} {_color('magenta', name):<20} {msg}"
-    if record.exc_info:
-        line += f"\n{_color('red', self.format(record))}" if False else ""  # noqa: E501
+    line = f"{ts}  {level:<8} {name:<20} {msg}"
     return line
 
 
@@ -191,10 +189,7 @@ def _parse_log_line(line: str) -> str | None:
         ts, level, _trace, source, msg = m.groups()
         ts_short = ts.split(" ")[1][:8]  # HH:MM:SS
         source = source.replace("hy_memory.", "").replace("hyatlas_memory.", "")
-        return (
-            f"  {_color('gray', ts_short)}  {_color('yellow', level):<8} "
-            f"{_color('magenta', source):<24} {msg}"
-        )
+        return f"{ts_short}  {level:<8} {source:<24} {msg}"
 
     # Family 2 — Qdrant
     m = re.match(
@@ -212,10 +207,7 @@ def _parse_log_line(line: str) -> str | None:
             return None  # dashboard polling pings — noise
         if "actix_web::middleware::logger" in source and "POST" not in msg:
             return None
-        return (
-            f"  {_color('gray', ts_short)}  {_color('yellow', level):<8} "
-            f"{_color('cyan', 'qdrant.' + source.split('::')[-1]):<24} {msg}"
-        )
+        return f"{ts_short}  {level:<8} {source.split('::')[-1]:<24} {msg}"
 
     # Family 3 — dashboard access log
     if line.startswith("[dash] "):
@@ -224,10 +216,7 @@ def _parse_log_line(line: str) -> str | None:
         if '"GET / HTTP' in rest or '"GET /favicon' in rest:
             return None
         ts_short = datetime.now().strftime("%H:%M:%S")
-        return (
-            f"  {_color('gray', ts_short)}  {_color('yellow', 'INFO'):<8} "
-            f"{_color('cyan', 'dashboard'):<24} {rest}"
-        )
+        return f"{ts_short}  INFO    dashboard                  {rest}"
 
     return None
 
@@ -251,17 +240,15 @@ _INTERESTING_RE = (
 
 def _tail_log_file(
     log_path: Path,
-    out_lines: list[str],
-    out_lock: threading.Lock,
+    state: _State,
     stop_event: threading.Event,
 ) -> None:
-    """Background thread: tail ``log_path`` and append interesting
-    lines to the visible output buffer.
+    """Background thread: tail ``log_path`` and update ``state.current``.
 
     Bounded seek-and-read loop. The file may be rotated by
     Python's ``RotatingFileHandler`` (size-based); we handle that
     by re-opening on size-shrink. New lines are detected by
-    recording the inode-equivalent (file size) and reading forward.
+    recording the file size and reading forward.
     """
     if not log_path.exists():
         return
@@ -269,10 +256,9 @@ def _tail_log_file(
         f = open(log_path, "r", encoding="utf-8", errors="replace")
     except OSError:
         return
-    # Seek to end so we don't replay the entire 8 MB log on launch.
+    # Seek to end so we don't replay the entire log on launch.
     f.seek(0, 2)
-    pos = f.tell()
-    last_size = pos
+    last_size = f.tell()
     import re as _re
     interesting = _re.compile(_INTERESTING_RE, _re.IGNORECASE)
 
@@ -285,10 +271,13 @@ def _tail_log_file(
             formatted = _parse_log_line(line)
             if formatted is None:
                 continue
-            with out_lock:
-                out_lines.append(formatted)
-                if len(out_lines) > 500:
-                    del out_lines[: len(out_lines) - 500]
+            with state.lock:
+                state.current = formatted
+                state.current_version += 1
+                state.last_event_at = time.monotonic()
+                state.recent.append(formatted)
+                if len(state.recent) > 8:
+                    del state.recent[: len(state.recent) - 8]
             continue
         # No line available. Sleep briefly, then re-check.
         time.sleep(0.2)
@@ -310,44 +299,229 @@ def _tail_log_file(
         pass
 
 
-def _render_header() -> list[str]:
-    bar = _color("cyan", "═" * 78)
-    lines: list[str] = [
-        bar,
-        _color(
-            "bold",
-            f"  ✦ HyAtlas-Memory {_color('bright_white', f'v{__version__}')}  "
-            f"{_color('dim', '— live status window')}",
-        ),
-        bar,
-        "",
-    ]
-    lines.extend(_health_table())
-    lines.append("")
-    lines.append(
-        _color("dim", "  " + "─" * 76)
+# ---------------------------------------------------------------------------
+# Layout — fixed line positions, no scrolling
+# ---------------------------------------------------------------------------
+#
+# The screen is laid out as a fixed set of lines, each with a
+# known row number. The render loop moves the cursor to each row
+# with \x1b[<n>;1H and overwrites the line in place — no clearing
+# the screen, no reprinting the whole layout, no flash.
+#
+# Line numbers are 1-indexed. Rows below 12 are reserved for
+# the recent-events tail (8 lines, max). The terminal needs to be
+# at least ~20 rows tall; on a smaller window the bottom lines
+# may be clipped, which is acceptable.
+# ---------------------------------------------------------------------------
+
+# Each entry: (row, label, format_fn(state) -> str)
+# The render loop iterates this list and writes each row in place.
+_LAYOUT_TEMPLATE: list[tuple[str, str]] = [
+    # (kind, source) — kind is "static" or "health" or "current" or "recent"
+    ("bar",         ""),                                       # row 1
+    ("title",       ""),                                       # row 2
+    ("bar",         ""),                                       # row 3
+    ("blank",       ""),                                       # row 4
+    ("health",      "qdrant"),                                 # row 5
+    ("health",      "upstream"),                               # row 6
+    ("health",      "dashboard"),                              # row 7
+    ("blank",       ""),                                       # row 8
+    ("section",     "Currently doing"),                        # row 9
+    ("current",     ""),                                       # row 10
+    ("section",     "Last events"),                            # row 11
+    # rows 12-19: 8 recent-event slots (rendered by _render_recent)
+]
+
+
+_SERVICE_BY_KEY = {name.lower(): (name, desc, port) for name, desc, port in _SERVICES}
+
+
+def _ansi_move(row: int, col: int = 1) -> str:
+    """ANSI cursor-position: \x1b[<row>;<col>H (1-indexed)."""
+    return f"\x1b[{row};{col}H"
+
+
+def _ansi_clear_eol() -> str:
+    """ANSI: erase from cursor to end of line."""
+    return "\x1b[K"
+
+
+def _truncate(text: str, width: int) -> str:
+    """Trim ``text`` to ``width`` columns, adding an ellipsis if cut."""
+    if len(text) <= width:
+        return text
+    return text[: max(0, width - 1)] + "…"
+
+
+# Pre-compute width budget for the activity line. The terminal
+# default is 80 cols; on wider terminals the budget grows. Cap at
+# 120 so the layout stays visually balanced.
+_WIDTH = 78
+
+
+def _row_static_bar(_state: _State) -> str:
+    return _color("cyan", "═" * _WIDTH)
+
+
+def _row_static_title(_state: _State) -> str:
+    return (
+        _color("bold", f"  ✦ HyAtlas-Memory ")
+        + _color("bright_white", f"v{__version__}")
+        + "  "
+        + _color("dim", "— live status window")
     )
-    lines.append(
-        _color(
-            "dim",
-            f"  Activity  "
-            f"({_color('yellow', 'Ctrl+C')} to stop the entire memory system)",
-        )
+
+
+def _row_static_section(label: str) -> str:
+    return _color("dim", f"  ── {label} " + "─" * max(0, _WIDTH - len(label) - 6))
+
+
+def _row_health(key: str, state: _State) -> str:
+    name, desc, port = _SERVICE_BY_KEY[key]
+    up = state.health.get(port, False)
+    if up:
+        status = _color("green", "● healthy")
+    else:
+        status = _color("red", "○ down")
+    return (
+        f"  {_color('cyan', name):<12} {desc:<22} :{port:<5}  {status}"
     )
-    lines.append(
-        _color("dim", "  " + "─" * 76)
+
+
+def _row_current(state: _State) -> str:
+    if not state.current:
+        return f"  {_color('dim', '— idle —')}"
+    return _truncate(f"  {state.current}", _WIDTH)
+
+
+def _row_recent(idx: int, state: _State) -> str:
+    """Row 12+ : 8 slots for the most recent events (newest at idx 0)."""
+    if idx >= len(state.recent):
+        return ""
+    line = state.recent[-(idx + 1)]
+    return _truncate(f"  {_color('gray', '·')} {line}", _WIDTH)
+
+
+_ROW_FNS = {
+    "bar":     lambda state, kind: _row_static_bar(state),
+    "title":   lambda state, kind: _row_static_title(state),
+    "section": lambda state, kind: _row_static_section(kind),
+    "health":  lambda state, kind: _row_health(kind, state),
+    "current": lambda state, kind: _row_current(state),
+    "recent":  lambda state, kind: _row_recent(int(kind), state),
+    "blank":   lambda state, kind: "",
+}
+
+
+# Each rendered line is (row_number, text). The render loop writes
+# each row at its position. _RECENT_ROWS is filled at startup time
+# because it depends on the layout length.
+def _build_line_plan() -> list[tuple[int, str]]:
+    """Return [(row, text-factory-kind, kind-arg), ...] in row order."""
+    plan: list[tuple[int, str, str]] = []
+    row = 1
+    for kind, arg in _LAYOUT_TEMPLATE:
+        plan.append((row, kind, arg))
+        row += 1
+    # 8 recent-event rows
+    for i in range(8):
+        plan.append((row, "recent", str(i)))
+        row += 1
+    return plan
+
+
+_LINE_PLAN = _build_line_plan()
+_N_ROWS = _LINE_PLAN[-1][0]
+
+
+def _render_once(state: _State) -> None:
+    """Emit one full layout to the terminal, in place.
+
+    Uses absolute cursor positioning so this function can be called
+    any number of times. On the first call it draws the static
+    frame; on subsequent calls it just overwrites the live cells
+    with their current values.
+    """
+    out = []
+    for row, kind, arg in _LINE_PLAN:
+        fn = _ROW_FNS[kind]
+        out.append(_ansi_move(row) + fn(state, arg) + _ansi_clear_eol())
+    sys.stdout.write("".join(out))
+    sys.stdout.flush()
+
+
+def _update_lines(state: _State, last_health_version: int, last_current_version: int) -> tuple[int, int]:
+    """Refresh only the rows that have changed since last render.
+
+    Returns the new versions. Cheap to call: 3 health rows + 1 current
+    row + 8 recent rows = at most 12 short writes per tick.
+    """
+    writes: list[str] = []
+    # Health rows: only re-emit if the health snapshot changed
+    if state.health_version != last_health_version:
+        for row, kind, arg in _LINE_PLAN:
+            if kind == "health":
+                writes.append(_ansi_move(row) + _row_health(arg, state) + _ansi_clear_eol())
+    # Current + recent: only re-emit if the current event changed
+    if state.current_version != last_current_version:
+        for row, kind, arg in _LINE_PLAN:
+            if kind == "current":
+                writes.append(_ansi_move(row) + _row_current(state) + _ansi_clear_eol())
+            elif kind == "recent":
+                writes.append(_ansi_move(row) + _row_recent(int(arg), state) + _ansi_clear_eol())
+    if writes:
+        sys.stdout.write("".join(writes))
+        sys.stdout.flush()
+    return state.health_version, state.current_version
+
+
+# ---------------------------------------------------------------------------
+# Console state — one struct, no buffer, no scrolling
+# ---------------------------------------------------------------------------
+#
+# v1.4.2 redesign: the previous version cleared the whole screen and
+# reprinted the buffer every 1 s, which produced a visible flash and
+# a scrolling tail the user did not want. The fix is in-place
+# overwrite using ANSI cursor positioning: print the static layout
+# once, then update a small set of fixed lines by jumping the cursor
+# to each line, writing the new content, and \x1b[K-ing the rest.
+#
+# All workers write to ``State`` (a thread-safe struct) instead of
+# appending to a list. The render loop reads ``State`` and emits
+# only the deltas, never the whole screen.
+# ---------------------------------------------------------------------------
+
+class _State:
+    """Thread-shared snapshot of everything the console renders."""
+
+    __slots__ = (
+        "lock",
+        "health",          # {port: bool}
+        "health_version",  # bumped each successful probe; lets the
+                           # render loop skip no-op updates
+        "current",         # str — the "Currently:" line content
+        "current_version", # bumped on each new event
+        "last_event_at",   # float — monotonic timestamp of last event
+        "recent",          # list[str] — last few events for the
+                           # "Last events:" tail (small bounded ring)
     )
-    return lines
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.health: dict[int, bool] = {}
+        self.health_version: int = 0
+        self.current: str = "— idle —"
+        self.current_version: int = 0
+        self.last_event_at: float = 0.0
+        self.recent: list[str] = []
 
 
 def _consume_log_queue(
     q: "queue.Queue[logging.LogRecord]",
-    out_lines: list[str],
-    out_lock: threading.Lock,
+    state: _State,
     stop_event: threading.Event,
 ) -> None:
-    """Background thread: drain the in-process log queue and append to
-    the visible console output buffer."""
+    """Drain the in-process log queue and update ``state.current``."""
     while not stop_event.is_set():
         try:
             record = q.get(timeout=0.5)
@@ -357,53 +531,48 @@ def _consume_log_queue(
             line = _format_record(record)
         except Exception:
             continue
-        with out_lock:
-            out_lines.append(line)
-            # Bound the visible buffer so a long-running session does
-            # not exhaust memory. 500 lines is enough to read a few
-            # minutes of activity without scrolling.
-            if len(out_lines) > 500:
-                del out_lines[: len(out_lines) - 500]
+        with state.lock:
+            state.current = line
+            state.current_version += 1
+            state.last_event_at = time.monotonic()
+            state.recent.append(line)
+            if len(state.recent) > 8:
+                del state.recent[: len(state.recent) - 8]
 
 
 def _health_poll_loop(
-    out_lines: list[str],
-    out_lock: threading.Lock,
+    state: _State,
     stop_event: threading.Event,
 ) -> None:
-    """Background thread: refresh the health indicator every 2 s.
+    """Refresh the health indicator every 2 s and update ``state.health``.
 
-    Re-renders the full screen so the user sees the latest state even
-    if they aren't typing. This is the equivalent of the Hermes
-    Gateway's status heartbeat.
+    A health change is also surfaced as an activity event so the
+    "Currently:" line records transitions (Service went DOWN, came UP).
     """
-    last_status: dict[int, bool] = {}
     while not stop_event.is_set():
         time.sleep(2.0)
         if stop_event.is_set():
             break
-        current = {port: _probe_port(port) for _, _, port in _SERVICES}
-        if current != last_status:
-            transitions: list[str] = []
-            for port, up in current.items():
-                was = last_status.get(port)
-                name = next(n for n, _, p in _SERVICES if p == port)
-                if was is None:
+        new_health = {port: _probe_port(port) for _, _, port in _SERVICES}
+        with state.lock:
+            old = state.health
+            for port, up in new_health.items():
+                was = old.get(port)
+                if was is None or was == up:
                     continue
+                name = next(n for n, _, p in _SERVICES if p == port)
                 if was and not up:
-                    transitions.append(
-                        f"  {_color('gray', datetime.now().strftime('%H:%M:%S'))}  "
-                        f"{_color('red', '!!')}  {name} :{port} went DOWN"
-                    )
-                elif not was and up:
-                    transitions.append(
-                        f"  {_color('gray', datetime.now().strftime('%H:%M:%S'))}  "
-                        f"{_color('green', 'OK')}  {name} :{port} came UP"
-                    )
-            if transitions:
-                with out_lock:
-                    out_lines.extend(transitions)
-            last_status = current
+                    msg = f"{name} :{port} went DOWN"
+                else:
+                    msg = f"{name} :{port} came UP"
+                state.current = msg
+                state.current_version += 1
+                state.last_event_at = time.monotonic()
+                state.recent.append(msg)
+                if len(state.recent) > 8:
+                    del state.recent[: len(state.recent) - 8]
+            state.health = new_health
+            state.health_version += 1
 
 
 def _install_signal_handler(stop_event: threading.Event) -> None:
@@ -449,13 +618,18 @@ def main() -> int:
     stop_event = threading.Event()
     _install_signal_handler(stop_event)
 
+    state = _State()
     q = subscribe()
-    out_lines: list[str] = []
-    out_lock = threading.Lock()
+
+    # Prime the state with a current health snapshot so the first
+    # render is accurate, not "all down".
+    with state.lock:
+        state.health = {port: _probe_port(port) for _, _, port in _SERVICES}
+        state.health_version = 1
 
     consumer = threading.Thread(
         target=_consume_log_queue,
-        args=(q, out_lines, out_lock, stop_event),
+        args=(q, state, stop_event),
         daemon=True,
         name="hyatlas-log-consumer",
     )
@@ -463,16 +637,15 @@ def main() -> int:
 
     poller = threading.Thread(
         target=_health_poll_loop,
-        args=(out_lines, out_lock, stop_event),
+        args=(state, stop_event),
         daemon=True,
         name="hyatlas-health-poll",
     )
     poller.start()
 
     # Cross-process bridge: tail %LOCALAPPDATA%\hermes\logs\hyatlas-memory.log
-    # and inject interesting lines into the same output buffer the
-    # in-process queue handler fills. This is the only way the user
-    # sees writes that come from a different Python process.
+    # and feed interesting lines into state.current. This is the only
+    # way the user sees writes that come from a different Python process.
     try:
         from hermes_constants import get_hermes_home as _ghh
         _hermes_home = Path(_ghh())
@@ -483,20 +656,50 @@ def main() -> int:
     log_path = _hermes_home / "logs" / "hyatlas-memory.log"
     tailer = threading.Thread(
         target=_tail_log_file,
-        args=(log_path, out_lines, out_lock, stop_event),
+        args=(log_path, state, stop_event),
         daemon=True,
         name="hyatlas-log-tailer",
     )
     tailer.start()
 
-    last_render = 0.0
+    # Hide the cursor, clear the screen, draw the initial frame.
     try:
+        sys.stdout.write("\x1b[?25l")  # hide cursor
+        sys.stdout.write("\x1b[2J\x1b[H")
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+    last_health_version = -1
+    last_current_version = -1
+    last_health_tick = 0.0
+    last_paint = 0.0
+
+    try:
+        # First full render
+        _render_once(state)
+        last_health_version = state.health_version
+        last_current_version = state.current_version
+        last_health_tick = time.monotonic()
+        last_paint = time.monotonic()
+
         while not stop_event.is_set():
-            now = time.monotonic()
-            if now - last_render >= 1.0:
-                last_render = now
-                _redraw(out_lines, out_lock)
             time.sleep(0.1)
+            now = time.monotonic()
+
+            # Health poll drives the poller thread; the thread bumps
+            # state.health_version. We only need to call _render_once
+            # when the health snapshot or the current event changed.
+            if now - last_paint >= 0.25:  # 4 fps cap — fast enough for
+                                          # perceived instant update, slow
+                                          # enough that the user never
+                                          # sees a flash
+                last_paint = now
+                new_h, new_c = _update_lines(
+                    state, last_health_version, last_current_version
+                )
+                last_health_version = new_h
+                last_current_version = new_c
     except KeyboardInterrupt:
         stop_event.set()
     finally:
@@ -505,33 +708,16 @@ def main() -> int:
         consumer.join(timeout=2.0)
         poller.join(timeout=2.0)
         tailer.join(timeout=2.0)
+        # Restore cursor, clear screen, leave a clean goodbye.
+        try:
+            sys.stdout.write("\x1b[?25h\x1b[2J\x1b[H")
+            sys.stdout.flush()
+        except Exception:
+            pass
 
-    _clear_screen()
     _stop_stack()
     print(_color("cyan", "HyAtlas-Memory console exited cleanly."), flush=True)
     return 0
-
-
-def _clear_screen() -> None:
-    try:
-        sys.stdout.write("\x1b[2J\x1b[H")
-        sys.stdout.flush()
-    except Exception:
-        pass
-
-
-def _redraw(out_lines: list[str], out_lock: threading.Lock) -> None:
-    _clear_screen()
-    try:
-        for line in _render_header():
-            print(line, flush=False)
-        with out_lock:
-            tail = list(out_lines[-200:])
-        for line in tail:
-            print(line, flush=False)
-        sys.stdout.flush()
-    except Exception:
-        pass
 
 
 if __name__ == "__main__":

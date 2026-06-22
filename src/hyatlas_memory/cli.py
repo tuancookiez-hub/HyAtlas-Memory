@@ -461,6 +461,12 @@ def _cmd_console(args) -> int:
     attaches only — useful when the stack was already started by
     something else (e.g. ``hyatlas start`` or the plugin auto-start)
     and the user just wants the ticker.
+
+    Spawns a new console window via ``cmd.exe /c start`` and returns
+    immediately. The visible console runs in its own process group;
+    closing it does not affect the parent terminal, and the parent
+    terminal does not block on it. This matches the
+    ``Hermes_Gateway.cmd`` shim pattern.
     """
     if not args.no_start:
         # Start the stack with visible windows so the user can see the
@@ -481,8 +487,40 @@ def _cmd_console(args) -> int:
         )
         manager.start_visible()
 
-    from .console import main as console_main
-    return console_main()
+    # Resolve the Python interpreter the user is currently running.
+    # In editable mode this is the UV Python; in installed mode it's
+    # whatever ``sys.executable`` points to. Either way, the child
+    # console runs the same code.
+    py = sys.executable
+
+    # Build the inner command. Note: the inner ``python -m
+    # hyatlas_memory.console`` already handles ``--no-start`` being
+    # passed by the parent.
+    inner = [py, "-m", "hyatlas_memory.console"]
+    if getattr(args, "no_start", False):
+        inner.append("--no-start")
+
+    # Spawn detached. ``start`` with a title opens a new console
+    # window; without ``/WAIT`` it returns immediately. This is the
+    # same pattern as ``Hermes_Gateway.cmd``.
+    title = "HyAtlas Memory Console"
+    # CREATE_NEW_CONSOLE = 0x00000010
+    flags = subprocess.CREATE_NEW_CONSOLE
+    try:
+        subprocess.Popen(
+            inner,
+            creationflags=flags,
+            close_fds=True,
+            cwd=str(Path(__file__).parent),
+        )
+        print(_msg_green("HyAtlas-Memory console launched in a new window."))
+        print(_msg_dim("Close the console window to terminate it."))
+    except Exception as e:
+        print(_msg_yellow(f"Failed to launch console: {e}"))
+        print(_msg_dim("You can run it directly:"))
+        print(f"  {py} -m hyatlas_memory.console")
+        return 1
+    return 0
 
 
 # init / install delegate to wizard / installer modules (separate files)
@@ -536,6 +574,22 @@ def _cmd_setup_hermes(args) -> int:
 
     print("\n[hy-memory] Setup complete. Restart Hermes TUI/CLI to load the new plugin.")
     return 0
+
+
+def _ansi(code: str) -> str:
+    return f"\x1b[{code}m"
+
+
+def _msg_green(text: str) -> str:
+    return f"  \x1b[32m{text}\x1b[0m"
+
+
+def _msg_yellow(text: str) -> str:
+    return f"  \x1b[33m{text}\x1b[0m"
+
+
+def _msg_dim(text: str) -> str:
+    return f"  \x1b[90m{text}\x1b[0m"
 
 
 def _find_hermes_home() -> Path:

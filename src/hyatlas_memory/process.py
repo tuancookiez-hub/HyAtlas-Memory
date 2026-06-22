@@ -268,6 +268,9 @@ class StackManager:
             "dashboard": int(cfg.get("dashboard", {}).get("port", _DEFAULT_PORTS["dashboard"])),
         }
 
+        # Services ALWAYS use DETACHED_PROCESS so they survive window closure
+        detach = _detach_kwargs(log, visible=False)
+
         # Qdrant
         qdrant_bin, qdrant_cfg = self._qdrant_paths()
         if not _port_open(ports["qdrant"]):
@@ -277,7 +280,7 @@ class StackManager:
             cmd = [qdrant_bin]
             if qdrant_cfg:
                 cmd += ["--config-path", qdrant_cfg]
-            self._procs.append(subprocess.Popen(cmd, **_detach_kwargs(log, visible=visible)))
+            self._procs.append(subprocess.Popen(cmd, **detach))
             if not self._wait_health(ports["qdrant"], "/healthz"):
                 logger.error("[hy-memory] Qdrant failed to start")
                 return False
@@ -288,7 +291,7 @@ class StackManager:
             env = os.environ.copy()
             env["HERMES_HOME"] = str(self._home)
             cmd = [self._python(), "-m", "hyatlas_memory.server.start_server"]
-            self._procs.append(subprocess.Popen(cmd, env=env, cwd=str(self._root), **_detach_kwargs(log, visible=visible)))
+            self._procs.append(subprocess.Popen(cmd, env=env, cwd=str(self._root), **detach))
             if not self._wait_health(ports["upstream"], "/info"):
                 logger.error("[hy-memory] Upstream server failed to start")
                 return False
@@ -299,7 +302,7 @@ class StackManager:
             env = os.environ.copy()
             env["HERMES_HOME"] = str(self._home)
             cmd = [self._python(), str(self._root / "server" / "dashboard" / "dashboard.py")]
-            self._procs.append(subprocess.Popen(cmd, env=env, cwd=str(self._root), **_detach_kwargs(log, visible=visible)))
+            self._procs.append(subprocess.Popen(cmd, env=env, cwd=str(self._root), **detach))
             if not self._wait_health(ports["dashboard"], "/api/memories?offset=0&limit=1"):
                 logger.error("[hy-memory] Dashboard failed to start")
                 return False

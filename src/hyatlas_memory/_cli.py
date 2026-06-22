@@ -183,6 +183,9 @@ def main(argv: list[str] | None = None) -> int:
         + (["--yes"] if args.yes else [])
     ))
 
+    p_console = sub.add_parser("console", help="Show live status console (Ctrl+C to exit)")
+    p_console.set_defaults(func=lambda _: _memory_cli._cmd_console(argparse.Namespace(no_start=False)))
+
     args = parser.parse_args(argv)
     if not hasattr(args, "func"):
         # Bare `hyatlas` with no args — start in foreground (legacy behavior).
