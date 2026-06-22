@@ -159,14 +159,20 @@ hyatlas doctor        # full config + connectivity health check
 
 The dashboard will be available at `http://127.0.0.1:8765` once the stack is running.
 
-**Common commands:**
+**Managing the stack:** the `hyatlas` CLI controls the three services (Qdrant · upstream · dashboard).
 
 ```bash
-hyatlas status         # check
-hyatlas doctor         # diagnose config / connectivity
-hyatlas stop           # stop the background stack
-hyatlas init           # interactive setup wizard
+hyatlas start           # start the stack (Qdrant + upstream + dashboard)
+hyatlas stop            # stop the stack
+hyatlas status          # show what's running
+hyatlas console         # open the live status window (Ctrl+C to close)
+hyatlas doctor          # full config + connectivity health check
+hyatlas init            # interactive setup wizard
 ```
+
+> **`hyatlas start` is safe to close.** Once the stack is up, you can Ctrl+C the terminal or close the window — the services run detached and survive. Use `hyatlas stop` when you actually want to shut them down.
+
+> **`hyatlas console`** opens a separate status window that shows service health and the most recent memory activity (writes, recalls, errors) live. It's read-only — closing it does NOT stop the stack. Open it any time you want to see what the memory system is doing.
 
 ---
 
@@ -214,12 +220,19 @@ Agents (or you in the TUI) can explicitly search memories:
 **Stack management** — the bundled `hyatlas` entry point:
 
 ```bash
-hyatlas              # start the full stack (Qdrant → server → dashboard)
-hyatlas start        # alias for the above
-hyatlas status       # check what's running
-hyatlas stop         # stop all services
-hyatlas --help       # show help
+hyatlas start           # start the full stack (Qdrant → server → dashboard)
+hyatlas stop            # stop all services
+hyatlas status          # check what's running
+hyatlas console         # open live status window (Ctrl+C to close)
+hyatlas doctor          # full health check
+hyatlas setup hermes    # install plugin + config
+hyatlas init            # interactive setup wizard
+hyatlas --help          # show help
 ```
+
+> **`hyatlas start`** — services run **detached**, so it's safe to Ctrl+C or close the terminal window once you see "ready". Use `hyatlas stop` when you actually want to shut down.
+>
+> **`hyatlas console`** — read-only status window. Shows service health and live memory activity (writes, recalls, errors). Closing it does **not** stop the stack.
 
 **Memory operations** — read/write memories from any shell, cron job,
 or another session. Mirrors Hindsight's `retain|recall|reflect` and

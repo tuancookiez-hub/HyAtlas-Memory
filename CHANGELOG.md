@@ -1,3 +1,17 @@
+## [1.4.2] - 2026-06-23
+
+### Added
+- **`hyatlas console`** — visible status window that shows live service health (Qdrant · upstream · dashboard) and the most recent memory activity (writes, recalls, errors) with a live activity ticker. Read-only; closing it does NOT stop the stack. Open it any time you want to see what the memory system is doing at a glance. Available as `hyatlas console` (always visible) or `python -m hyatlas_memory.console --no-start` (attach to an already-running stack).
+- **Cross-process log tailer** in the console. Writes and recalls from any Python process (Hermes agent, dashboard, MCP, etc.) appear in the console ticker in real time — not just events from the console's own process. The log file `hyatlas-memory.log` is the inter-process pipe; the tailer handles rotation and filters noise (health pings, GET /favicon).
+- **In-process log queue handler** (`MemoryQueueHandler`) — optional bridge so in-process log records also show in the console. No-op when no console is listening.
+
+### Fixed
+- **`hyatlas start` is now safe to close.** Services used to inherit a parent process group from `start_visible()`. Closing the visible console window would send a kill signal to the entire stack (Qdrant + upstream + dashboard all died together). Services now always spawn with `DETACHED_PROCESS` regardless of console visibility — the visible console is now strictly read-only.
+- **Dashboard L5 graph 503** — writer (bin) and reader (dashboard) used different hardcoded paths for the L5 export JSON, and neither used Hermes' canonical home resolver. 4 reader sites in `dashboard.py` and 2 writer sites in `l5_export_json.py` now share a single `_l5_export_path()` helper.
+
+### Notes for consumers
+- No code changes needed. `hyatlas console` is opt-in — if you never run it, nothing changes. Existing auto-start flow is unchanged.
+
 ## 1.2.1 — 2026-06-21
 
 ### Fixes
