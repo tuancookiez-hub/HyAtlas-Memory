@@ -35,91 +35,30 @@ See it in action — a 19-second walkthrough of the live dashboard:
 
 ## Quick start
 
-Two install paths. **Docker is easiest** (one command, everything isolated). **Local** is better for development.
-
-### Path A — Docker (recommended)
-
-**One command starts everything.** No Python setup, no Qdrant install, no env files.
-
-```bash
-# 1. Get docker-compose.yml (one-time)
-curl -O https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/docker-compose.yml
-
-# 2. Configure your LLM key (one-time)
-echo 'HY_MEMORY_LLM_API_KEY=sk-your-key-here' > .env
-
-# 3. Start the stack (Qdrant + upstream server + dashboard)
-docker-compose up -d
-
-# 4. Wait ~15s for the upstream server to finish booting, then verify
-curl http://127.0.0.1:8765/api/health    # → {"status":"ok",...}
-curl http://127.0.0.1:19527/info         # → {"name":"hy-memory-server",...}
-
-# 5. Open the dashboard
-open http://127.0.0.1:8765              # macOS
-# xdg-open http://127.0.0.1:8765        # Linux
-# start http://127.0.0.1:8765           # Windows
-```
-
-**That's it.** Three services running:
-- `:6333` — Qdrant (vector DB)
-- `:19527` — upstream `hy-memory` server
-- `:8765` — dashboard
-
-**Common commands:**
-
-```bash
-docker-compose ps           # what's running
-docker-compose logs -f      # follow all logs (Ctrl+C to exit)
-docker-compose logs -f dashboard   # just dashboard
-docker-compose restart      # restart everything
-docker-compose down         # stop (keeps data)
-docker-compose down -v      # stop AND wipe all data
-docker-compose pull         # pull new images, then: docker-compose up -d
-```
-
-**Where data lives:** the included `docker-compose.yml` mounts `./qdrant_storage` and `~/.hy_memory` to the host, so your data survives `docker-compose down`. To fully reset, use `down -v`.
-
-**Tell Hermes to use it:** edit `~/.hermes/config.yaml`:
-
-```yaml
-memory:
-  provider: hy_memory
-```
-
-That's it. Restart Hermes (or the next session picks it up).
-
----
-
-### Path B — Local install (for development)
-
-**Prerequisites:**
-
-| Tool | Why | Install |
-|------|-----|---------|
-| **Python 3.10+** | Runtime | [python.org](https://www.python.org/downloads/) |
-| **Qdrant** | Vector store | [Download](https://qdrant.tech/documentation/guides/install/) or `docker run -d -p 6333:6333 qdrant/qdrant` |
-| **LLM API key** | Fact extraction | OpenAI, OpenRouter, DeepSeek, or any OpenAI-compatible endpoint |
-
-**Install and activate:**
-
 ```bash
 pip install hyatlas-memory
-hyatlas setup hermes
+hyatlas setup hermes        # installs plugin + config + tests auto-start
 ```
 
-`hyatlas setup hermes` installs the Hermes plugin shim, sets `memory.provider: hy_memory`, and tests the auto-start flow. The first time you run Hermes after setup, the provider automatically spawns Qdrant, the upstream server, and the dashboard in the background — no manual `hyatlas start` required.
+That's it. The first time you run Hermes after setup, the provider automatically starts Qdrant, the upstream server, and the dashboard in the background — no manual commands needed.
 
-**Contributors — clone and editable install:**
+**If you want to see what's happening:**
 
 ```bash
-git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
-cd HyAtlas-Memory
-pip install -e ".[dev,test]"
-hyatlas setup hermes
+hyatlas start           # start the stack (safe to Ctrl+C after "ready")
+hyatlas console         # open the live status window (Ctrl+C to close)
+hyatlas stop            # shut down the stack
 ```
 
-**Configure (optional):** edit `~/.hermes/hy_memory.json` and add your LLM key:
+> **`hyatlas start` is safe to close.** Once you see "ready", Ctrl+C or close the terminal — the services keep running detached. Use `hyatlas stop` when you actually want to shut them down.
+>
+> **`hyatlas console`** is read-only. Shows live service health and recent memory activity (writes, recalls, errors). Closing it does NOT stop the stack.
+
+**Need Qdrant?** The setup wizard detects whether Qdrant is installed and guides you through installing it (download from [qdrant.tech](https://qdrant.tech/documentation/guides/install/), or `docker run -d -p 6333:6333 qdrant/qdrant`).
+
+**Want Docker instead?** See [Path A — Docker](#path-a--docker-recommended) below.
+
+**Configure (optional):** edit `~/.hermes/hy_memory.json` to add your LLM key:
 
 ```json
 {
@@ -140,41 +79,41 @@ hyatlas setup hermes
 
 > **Three modes:** `lite` (no LLM, embedding-only) · `pro` (LLM extraction per `add`) · `ultra` (pro + System 2 cognitive layer with Kuzu graph — default).
 
-<p align="center">
-  <img src="./assets/05-three-gear-modes.png" alt="Three-gear access: Lite touches L1 only (vector retrieval, zero LLM cost), Pro touches L1–L4 (synchronous MemAgent extraction/abstraction/reflection), Ultra touches L1–L6 with System 1 synchronous writes (L1–L4) and System 2 asynchronous precipitation (L5–L6)" width="900" />
-</p>
-
-| Mode | What it does | Layers | Cost |
-|------|-------------|--------|------|
-| `lite` | Embedding-only, zero LLM calls | L1 only | Free |
-| `pro` | LLM fact extraction + reconciliation | L1–L4 | LLM calls per `add` |
-| `ultra` | Pro + System 2 cognitive layer with Kuzu graph | L1–L6 | LLM calls + background pipeline |
-
-**Verify it works:**
-
-```bash
-hyatlas status        # show which services are running
-hyatlas doctor        # full config + connectivity health check
-```
-
-The dashboard will be available at `http://127.0.0.1:8765` once the stack is running.
-
-**Managing the stack:** the `hyatlas` CLI controls the three services (Qdrant · upstream · dashboard).
-
-```bash
-hyatlas start           # start the stack (Qdrant + upstream + dashboard)
-hyatlas stop            # stop the stack
-hyatlas status          # show what's running
-hyatlas console         # open the live status window (Ctrl+C to close)
-hyatlas doctor          # full config + connectivity health check
-hyatlas init            # interactive setup wizard
-```
-
-> **`hyatlas start` is safe to close.** Once the stack is up, you can Ctrl+C the terminal or close the window — the services run detached and survive. Use `hyatlas stop` when you actually want to shut them down.
-
-> **`hyatlas console`** opens a separate status window that shows service health and the most recent memory activity (writes, recalls, errors) live. It's read-only — closing it does NOT stop the stack. Open it any time you want to see what the memory system is doing.
-
 ---
+
+### Path A — Docker (alternative)
+
+For users who prefer containers. Everything isolated, no Python/Qdrant setup on host.
+
+```bash
+# 1. Get docker-compose.yml (one-time)
+curl -O https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/docker-compose.yml
+
+# 2. Configure your LLM key (one-time)
+echo 'HY_MEMORY_LLM_API_KEY=***' > .env
+
+# 3. Start the stack (Qdrant + upstream server + dashboard)
+docker-compose up -d
+
+# 4. Wait ~15s, then verify
+curl http://127.0.0.1:8765/api/health
+curl http://127.0.0.1:19527/info
+
+# 5. Open the dashboard
+open http://127.0.0.1:8765
+```
+
+**Common commands:**
+
+```bash
+docker-compose ps           # what's running
+docker-compose logs -f      # follow all logs (Ctrl+C to exit)
+docker-compose restart      # restart everything
+docker-compose down         # stop (keeps data)
+docker-compose down -v      # stop AND wipe all data
+```
+
+Data lives in `./qdrant_storage` and `~/.hy_memory` (mounted to the host), so it survives `docker-compose down`. To fully reset, use `down -v`.
 
 ### What's running where
 
