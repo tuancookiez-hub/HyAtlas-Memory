@@ -137,6 +137,179 @@ def _format_record(record: logging.LogRecord) -> str:
     return line
 
 
+# ---------------------------------------------------------------------------
+# Log-file tailer — the cross-process bridge
+# ---------------------------------------------------------------------------
+#
+# v1.4.2: the in-process queue handler only sees events logged by THIS
+# Python process. Writes from a separate Hermes session (or from the
+# dashboard, the MCP, the agent, etc.) all write to
+# %LOCALAPPDATA%\hermes\logs\hyatlas-memory.log. Tail that file in a
+# background thread and feed formatted lines into the same output
+# buffer. This is the only practical way to give the user a single
+# "what is the memory system doing right now" surface that covers
+# all three services AND all client processes.
+#
+# Why a tail and not a listener: Windows does not have inotify
+# equivalents as portable as Linux. A 200ms read-and-seek loop is
+# the lowest-common-denominator that works on every supported
+# platform and every log rotation scheme.
+# ---------------------------------------------------------------------------
+
+def _parse_log_line(line: str) -> str | None:
+    """Convert a raw log line to the same visual format as the
+    in-process queue handler produces, or return None to skip.
+
+    Three line families are observed in the v1.4.x stack:
+
+    1. Upstream Python logs:
+         2026-06-22 23:40:24 [INFO] [trace-id] module.path: message
+    2. Qdrant (Rust) logs:
+         2026-06-22T15:40:18.818627Z  INFO actix_web::middleware::logger: ...
+    3. Dashboard (Tornado) logs:
+         [dash] 127.0.0.1 - "GET / HTTP/1.1" 200 -
+
+    Each is normalized to the same shape: time, level, source, message.
+    The visual filter that follows is the "interesting event"
+    predicate — we skip pure health pings (the user's ticker should
+    not be drowned in ``[dash] GET /`` lines) but keep writes,
+    recalls, extractions, L5 loads, and errors.
+    """
+    import re
+
+    line = line.rstrip()
+    if not line:
+        return None
+
+    # Family 1 — upstream Python
+    m = re.match(
+        r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(\w+)\] "
+        r"(?:\[([a-f0-9-]+)\] )?([\w.]+): (.*)$",
+        line,
+    )
+    if m:
+        ts, level, _trace, source, msg = m.groups()
+        ts_short = ts.split(" ")[1][:8]  # HH:MM:SS
+        source = source.replace("hy_memory.", "").replace("hyatlas_memory.", "")
+        return (
+            f"  {_color('gray', ts_short)}  {_color('yellow', level):<8} "
+            f"{_color('magenta', source):<24} {msg}"
+        )
+
+    # Family 2 — Qdrant
+    m = re.match(
+        r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+Z)?\s+"
+        r"(\w+)\s+([\w:]+): (.*)$",
+        line,
+    )
+    if m:
+        ts, level, source, msg = m.groups()
+        ts_short = ts.split("T")[1][:8]
+        # Drop pure actix middleware chatter; keep everything else.
+        if "actix_web::middleware::logger" in source and "GET /healthz" in msg:
+            return None
+        if "actix_web::middleware::logger" in source and 'GET / HTTP' in msg:
+            return None  # dashboard polling pings — noise
+        if "actix_web::middleware::logger" in source and "POST" not in msg:
+            return None
+        return (
+            f"  {_color('gray', ts_short)}  {_color('yellow', level):<8} "
+            f"{_color('cyan', 'qdrant.' + source.split('::')[-1]):<24} {msg}"
+        )
+
+    # Family 3 — dashboard access log
+    if line.startswith("[dash] "):
+        # Skip routine dashboard pings; keep writes.
+        rest = line[len("[dash] "):]
+        if '"GET / HTTP' in rest or '"GET /favicon' in rest:
+            return None
+        ts_short = datetime.now().strftime("%H:%M:%S")
+        return (
+            f"  {_color('gray', ts_short)}  {_color('yellow', 'INFO'):<8} "
+            f"{_color('cyan', 'dashboard'):<24} {rest}"
+        )
+
+    return None
+
+
+_INTERESTING_RE = (
+    # Anything that represents a real user-visible event.
+    r"extraction|recall|"
+    r"sync_turn|sync-turn|"
+    r"TRACE_PERF|"
+    r"pipeline|pipelines\.writer|"
+    r"L5.*load|L5.*export|"
+    r"vector-store.*(add|delete|update|query)|"
+    r"mem_agent|"
+    r"reconcil|"
+    r"ERROR|WARN|"
+    r"stack|started|stopped|"
+    r"went DOWN|came UP|"
+    r"\[trace\]"
+)
+
+
+def _tail_log_file(
+    log_path: Path,
+    out_lines: list[str],
+    out_lock: threading.Lock,
+    stop_event: threading.Event,
+) -> None:
+    """Background thread: tail ``log_path`` and append interesting
+    lines to the visible output buffer.
+
+    Bounded seek-and-read loop. The file may be rotated by
+    Python's ``RotatingFileHandler`` (size-based); we handle that
+    by re-opening on size-shrink. New lines are detected by
+    recording the inode-equivalent (file size) and reading forward.
+    """
+    if not log_path.exists():
+        return
+    try:
+        f = open(log_path, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    # Seek to end so we don't replay the entire 8 MB log on launch.
+    f.seek(0, 2)
+    pos = f.tell()
+    last_size = pos
+    import re as _re
+    interesting = _re.compile(_INTERESTING_RE, _re.IGNORECASE)
+
+    while not stop_event.is_set():
+        line = f.readline()
+        if line:
+            last_size = f.tell()
+            if not interesting.search(line):
+                continue
+            formatted = _parse_log_line(line)
+            if formatted is None:
+                continue
+            with out_lock:
+                out_lines.append(formatted)
+                if len(out_lines) > 500:
+                    del out_lines[: len(out_lines) - 500]
+            continue
+        # No line available. Sleep briefly, then re-check.
+        time.sleep(0.2)
+        # Rotation: if the file shrank, reopen and seek to start.
+        try:
+            cur = log_path.stat().st_size
+        except OSError:
+            cur = last_size
+        if cur < last_size:
+            f.close()
+            try:
+                f = open(log_path, "r", encoding="utf-8", errors="replace")
+            except OSError:
+                return
+            last_size = 0
+    try:
+        f.close()
+    except Exception:
+        pass
+
+
 def _render_header() -> list[str]:
     bar = _color("cyan", "═" * 78)
     lines: list[str] = [
@@ -296,6 +469,26 @@ def main() -> int:
     )
     poller.start()
 
+    # Cross-process bridge: tail %LOCALAPPDATA%\hermes\logs\hyatlas-memory.log
+    # and inject interesting lines into the same output buffer the
+    # in-process queue handler fills. This is the only way the user
+    # sees writes that come from a different Python process.
+    try:
+        from hermes_constants import get_hermes_home as _ghh
+        _hermes_home = Path(_ghh())
+    except Exception:
+        _hermes_home = Path(
+            os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+        ) / "hermes"
+    log_path = _hermes_home / "logs" / "hyatlas-memory.log"
+    tailer = threading.Thread(
+        target=_tail_log_file,
+        args=(log_path, out_lines, out_lock, stop_event),
+        daemon=True,
+        name="hyatlas-log-tailer",
+    )
+    tailer.start()
+
     last_render = 0.0
     try:
         while not stop_event.is_set():
@@ -311,6 +504,7 @@ def main() -> int:
         stop_event.set()
         consumer.join(timeout=2.0)
         poller.join(timeout=2.0)
+        tailer.join(timeout=2.0)
 
     _clear_screen()
     _stop_stack()
