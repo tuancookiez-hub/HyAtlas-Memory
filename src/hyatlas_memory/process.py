@@ -83,8 +83,29 @@ def _kill_pid(pid: int) -> bool:
     return False
 
 
-def _detach_kwargs(log_handle: IO[bytes]) -> dict:
+def _detach_kwargs(log_handle: IO[bytes], *, visible: bool = False) -> dict:
+    """Subprocess kwargs for spawning a stack service.
+
+    ``visible=False`` (default) gives the v1.4.0 behavior: completely
+    background, no console window, all output to the log file. This
+    is what auto-start uses so the user is not spammed with windows
+    on every plugin load.
+
+    ``visible=True`` opens a new console window for the subprocess.
+    Used by ``hyatlas console`` so the user can see Qdrant / upstream
+    / dashboard output in real time. On non-Windows platforms the
+    ``start_new_session`` flag is the closest equivalent (a new
+    session leader) and is preserved either way.
+    """
     if sys.platform == "win32":
+        if visible:
+            return {
+                "creationflags": subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
+                "stdin": subprocess.DEVNULL,
+                "stdout": log_handle,
+                "stderr": subprocess.STDOUT,
+                "close_fds": True,
+            }
         return {
             "creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
             "stdin": subprocess.DEVNULL,
@@ -215,7 +236,28 @@ class StackManager:
         finally:
             self._release_lock()
 
-    def _start_locked(self) -> bool:
+    def start_visible(self) -> bool:
+        """Start the stack with visible console windows.
+
+        v1.4.2: convenience wrapper for ``hyatlas console``. Spawns
+        Qdrant, upstream, and dashboard with ``CREATE_NEW_CONSOLE``
+        so the user can see their output. Behavior is otherwise
+        identical to :meth:`start`.
+        """
+        if not self._acquire_lock():
+            for _ in range(30):
+                if self.is_running():
+                    return True
+                time.sleep(1)
+            return self.is_running()
+        try:
+            if self.is_running():
+                return True
+            return self._start_locked(visible=True)
+        finally:
+            self._release_lock()
+
+    def _start_locked(self, *, visible: bool = False) -> bool:
         self._log_dir.mkdir(parents=True, exist_ok=True)
         log = open(self._log_path, "ab")
 
@@ -235,7 +277,7 @@ class StackManager:
             cmd = [qdrant_bin]
             if qdrant_cfg:
                 cmd += ["--config-path", qdrant_cfg]
-            self._procs.append(subprocess.Popen(cmd, **_detach_kwargs(log)))
+            self._procs.append(subprocess.Popen(cmd, **_detach_kwargs(log, visible=visible)))
             if not self._wait_health(ports["qdrant"], "/healthz"):
                 logger.error("[hy-memory] Qdrant failed to start")
                 return False
@@ -246,7 +288,7 @@ class StackManager:
             env = os.environ.copy()
             env["HERMES_HOME"] = str(self._home)
             cmd = [self._python(), "-m", "hyatlas_memory.server.start_server"]
-            self._procs.append(subprocess.Popen(cmd, env=env, cwd=str(self._root), **_detach_kwargs(log)))
+            self._procs.append(subprocess.Popen(cmd, env=env, cwd=str(self._root), **_detach_kwargs(log, visible=visible)))
             if not self._wait_health(ports["upstream"], "/info"):
                 logger.error("[hy-memory] Upstream server failed to start")
                 return False
@@ -257,7 +299,7 @@ class StackManager:
             env = os.environ.copy()
             env["HERMES_HOME"] = str(self._home)
             cmd = [self._python(), str(self._root / "server" / "dashboard" / "dashboard.py")]
-            self._procs.append(subprocess.Popen(cmd, env=env, cwd=str(self._root), **_detach_kwargs(log)))
+            self._procs.append(subprocess.Popen(cmd, env=env, cwd=str(self._root), **_detach_kwargs(log, visible=visible)))
             if not self._wait_health(ports["dashboard"], "/api/memories?offset=0&limit=1"):
                 logger.error("[hy-memory] Dashboard failed to start")
                 return False

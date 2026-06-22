@@ -78,6 +78,17 @@ def _add_subcommands(sub: argparse._SubParsersAction) -> None:
     p_doctor = sub.add_parser("doctor", help="Health check (read-only diagnostic)")
     p_doctor.set_defaults(func=_cmd_doctor)
 
+    p_console = sub.add_parser(
+        "console",
+        help="Open the visible status window (Ctrl+C stops the memory system)",
+    )
+    p_console.add_argument(
+        "--no-start",
+        action="store_true",
+        help="Do not auto-start the stack; just attach to whatever is already running",
+    )
+    p_console.set_defaults(func=_cmd_console)
+
     p_add = sub.add_parser("add", help="Manually add a memory")
     p_add.add_argument("text", help="Memory content")
     p_add.add_argument("--user-id", help="Override HY_MEMORY_USER_ID")
@@ -435,6 +446,43 @@ def _cmd_reset(args) -> int:
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
+
+
+# ---------------------------------------------------------------------------
+# Console — visible status window with live activity ticker
+# ---------------------------------------------------------------------------
+
+def _cmd_console(args) -> int:
+    """Open the visible HyAtlas-Memory status window.
+
+    v1.4.2: by default this also starts the stack with visible
+    console windows attached to Qdrant / upstream / dashboard, so the
+    user can see exactly what every process is doing. ``--no-start``
+    attaches only — useful when the stack was already started by
+    something else (e.g. ``hyatlas start`` or the plugin auto-start)
+    and the user just wants the ticker.
+    """
+    if not args.no_start:
+        # Start the stack with visible windows so the user can see the
+        # three services come up in real time. This is a no-op if the
+        # stack is already running.
+        from .process import StackManager
+        try:
+            home = get_hermes_home()
+        except Exception:
+            home = None
+        from pathlib import Path as _P
+        if home is None:
+            home = _P(os.environ.get("LOCALAPPDATA", str(_P.home()))) / "hermes"
+        manager = StackManager(
+            project_root=_P(__file__).parent,
+            hermes_home=home,
+            log_dir=home / "logs",
+        )
+        manager.start_visible()
+
+    from .console import main as console_main
+    return console_main()
 
 
 # init / install delegate to wizard / installer modules (separate files)

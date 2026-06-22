@@ -205,6 +205,16 @@ class HyMemoryProvider(MemoryProvider):
         # Auto-start the full stack on first use.
         self._ensure_stack_running()
 
+        # v1.4.2: install the in-process log bridge if any console
+        # subscriber is waiting (typically the `hyatlas console`
+        # subprocess). No-op when no one is listening, so this is
+        # safe for every existing install path.
+        try:
+            from ._console_handler import install_if_needed
+            install_if_needed(logger)
+        except Exception:
+            pass
+
         # Create client
         from .client import HyMemoryClient
         port = self._config.get("server_port", _DEFAULT_PORT)
@@ -233,7 +243,7 @@ class HyMemoryProvider(MemoryProvider):
         """Auto-start the Qdrant + upstream + dashboard stack.
 
         Matches Hindsight's embedded daemon behavior: the provider owns
-        the lifecycle of its dependencies. No manual `hyatlas start` is
+        the lifecycle of its dependencies. No manual 'hyatlas start' is
         required for end users.
         """
         if not self._config.get("auto_start", True):
@@ -251,6 +261,45 @@ class HyMemoryProvider(MemoryProvider):
         )
         if not self._process.ensure_running():
             logger.error("[hy-memory] Stack failed to start")
+            return
+
+        # v1.4.2: opt-in visible console. When HERMES_HYATLAS_CONSOLE=1
+        # is set, launch the console status window. Fires once per
+        # process (the first time initialize() is called) so a noisy
+        # agent loop does not stack up multiple console windows.
+        if os.environ.get("HERMES_HYATLAS_CONSOLE") == "1":
+            self._maybe_launch_console()
+
+    def _maybe_launch_console(self) -> None:
+        """Spawn the visible status window exactly once per process.
+
+        Idempotent via a class-level set of launched PIDs. Runs the
+        console in a fully detached process so closing the parent
+        does not kill the status window — that defeats the point of
+        a 'what is the memory system doing' surface.
+        """
+        import subprocess
+        import sys as _sys
+
+        if getattr(HyMemoryProvider, "_console_launched", False):
+            return
+        HyMemoryProvider._console_launched = True  # type: ignore[attr-defined]
+        try:
+            cmd = [_sys.executable, "-m", "hyatlas_memory.console"]
+            creationflags = 0
+            if _sys.platform == "win32":
+                creationflags = (
+                    subprocess.CREATE_NEW_CONSOLE
+                    | subprocess.CREATE_NEW_PROCESS_GROUP
+                )
+            subprocess.Popen(
+                cmd,
+                creationflags=creationflags,
+                close_fds=True,
+            )
+            logger.info("[hy-memory] Console launched (HERMES_HYATLAS_CONSOLE=1)")
+        except Exception as e:
+            logger.warning("[hy-memory] Console auto-launch failed: %s", e)
 
     def system_prompt_block(self) -> str:
         """Return static context about Hy-Memory status."""
