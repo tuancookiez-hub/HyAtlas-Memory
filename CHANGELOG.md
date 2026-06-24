@@ -1,3 +1,14 @@
+## [1.5.0] - 2026-06-25
+
+### Fixed
+- **Dashboard shows L5/L6/L7 from live Kuzu data, not from a stale JSON export.** v1.4.2 read layer counts from `l5_kuzu_export.json`, which was last refreshed on 2026-06-18. v1.5.0 reads from the upstream's `/api/v1/list` response and merges the `graph.nodes` array (L5/L6/L7) into the dashboard's per-layer counts. **All 8 layers (L0–L7) now appear in the Memory Layers main table, Memory Observatory layer stats, Overview Memory Composition bar, and Recent Ingestions feed.**
+- **Dashboard `/api/memories` includes L5/L6/L7 graph nodes** alongside L0–L4 VDB items. The dashboard's `_extract_memories()` now also iterates `payload.graph.nodes` and normalizes each into a memory dict with proper `layer`, `content`, `gmt_created` (Unix seconds), `user_id`, `agent_id`, etc. Click-to-view works on L5/L6/L7 items in the Recent Ingestions feed.
+- **Recent Ingestions puts L5/L6/L7 first** so they remain visible regardless of L2 fact volume. The merge logic dedupes by `memory_id`, separates graph vs. VDB items, sorts by `gmt_created` desc, then takes the first 50 graph items + 450 VDB items. The Time Ago label works because `gmt_created` is a Unix timestamp (was previously a string that broke `new Date(m.gmt_created * 1000)`).
+- **Memory Observatory 3D graph populates** with real L5/L6/L7 nodes from the same `/api/memories` pipeline, no longer empty. L5 is 0.3%, L6 is 11.0%, L7 is 0.4% of the memory corpus.
+
+### Notes for consumers
+- No code changes needed. Existing installations upgrade cleanly to v1.5.0. After upgrade, refresh the browser to see L5/L6/L7 counts.
+
 ## [1.4.2] - 2026-06-23
 
 ### Added

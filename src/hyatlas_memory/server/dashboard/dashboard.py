@@ -155,8 +155,39 @@ def hy(method: str, path: str, body: dict | None = None, timeout: float = 10.0) 
         return 0, {"error": f"{type(e).__name__}: {e}"}
 
 
+def _to_unix_ts(value):
+    """Convert a timestamp string to Unix seconds.
+
+    Accepts: ISO 8601 string (e.g. "2026-06-17 07:16:46.709220"),
+    numeric int/float, or None. Returns None for unparseable input.
+    Used to make the graph L5/L6/L7 nodes compatible with the
+    dashboard's `m.gmt_created * 1000` math in JS.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            from datetime import datetime
+            # Handle both "2026-06-17 07:16:46" and "2026-06-17T07:16:46Z" formats
+            s = value.replace("Z", "+00:00").replace(" ", "T") if " " in value else value
+            return int(datetime.fromisoformat(s).timestamp())
+        except Exception:
+            return None
+    return None
+
+
 def _extract_memories(payload: dict) -> list[dict]:
-    """Normalize the three response shapes into a flat list of memory dicts."""
+    """Normalize the three response shapes into a flat list of memory dicts.
+
+    v1.5.0: also include L5/L6/L7 graph nodes from the ``graph`` key
+    so the dashboard's Memory Layers and Recent Ingestions pages
+    actually surface the L5/L6/L7 data the upstream's
+    ``/api/v1/list`` returns. Without this, the graph items were
+    silently dropped and the dashboard always showed L5/L6/L7 as
+    0/0/0 even when hundreds of nodes existed in Kuzu.
+    """
     raw = (payload or {}).get("vdb") or {}
     items: list[dict] = []
     if isinstance(raw, dict) and isinstance(raw.get("memories"), list):
@@ -168,6 +199,46 @@ def _extract_memories(payload: dict) -> list[dict]:
                 items.append(mem)
     elif isinstance(raw, list):
         items = [m for m in raw if isinstance(m, dict)]
+
+    # Pull L5/L6/L7 nodes from the graph key. The upstream's
+    # /api/v1/list response includes them under "graph.nodes".
+    # Each graph node has shape:
+    #   { node_id, layer, content, isolation_key, user_id, agent_id,
+    #     status, gmt_created, content_type, ... }
+    graph = (payload or {}).get("graph") or {}
+    graph_nodes = graph.get("nodes") or []
+    if isinstance(graph_nodes, list):
+        for n in graph_nodes:
+            if not isinstance(n, dict):
+                continue
+            nmid = n.get("node_id") or n.get("_id") or ""
+            if not nmid:
+                continue
+            items.append({
+                "memory_id": nmid,
+                "layer": n.get("layer") or "",
+                "content": n.get("content") or "",
+                "status": n.get("status") or "active",
+                "memory_at": None,
+                # Graph nodes use created_at/valid_from, not gmt_created.
+                # Convert to Unix timestamp (seconds) so the
+                # dashboard's JS can do `m.gmt_created * 1000`
+                # without hitting NaN from a string.
+                "gmt_created": _to_unix_ts(
+                    n.get("created_at") or n.get("valid_from")
+                ),
+                "score": None,
+                "metadata": {
+                    "isolation_key": n.get("isolation_key"),
+                    "user_id": n.get("user_id"),
+                    "agent_id": n.get("agent_id"),
+                    "content_type": n.get("content_type"),
+                    "tags": n.get("tags") or [],
+                    "node_type": n.get("node_type"),
+                    "evidence": n.get("evidence") or [],
+                },
+            })
+
     normalized = []
     for m in items:
         meta = m.get("metadata") or {}
