@@ -928,39 +928,22 @@ function restoreMemoryDetailFromUrl() {
 
 // Memory Layers
 function renderLayers() {
-  // v1.5.0: prefer the merged layerCountsData (from /api/layer-counts,
-  // which now includes L5/L6/L7 from Kuzu) for the count column.
-  // Fall back to counting from allMemories (Qdrant sample) if the
-  // endpoint isn't loaded yet. Tag statistics still come from
-  // allMemories because that data isn't in layerCountsData.
   const layerCounts = {};
   const layerTagCounts = {};
-
-  const liveCounts = (typeof layerCountsData === 'object' && layerCountsData && layerCountsData.counts) || null;
-  if (liveCounts) {
-    Object.entries(liveCounts).forEach(([k, v]) => {
-      if (typeof v === 'number') layerCounts[k] = v;
-    });
-  }
+  
   allMemories.forEach(m => {
-    // If liveCounts didn't have this layer, fall back to the
-    // Qdrant sample so older data isn't lost.
-    if (!(m.layer in layerCounts)) {
-      layerCounts[m.layer] = (layerCounts[m.layer] || 0) + 1;
-    }
+    layerCounts[m.layer] = (layerCounts[m.layer] || 0) + 1;
     const tagCount = (m.tags || []).length;
     layerTagCounts[m.layer] = (layerTagCounts[m.layer] || 0) + tagCount;
   });
-
-  // Total = sum of all layer counts (now includes L5/L6/L7 from
-  // Kuzu, not just L0-L4 from the Qdrant sample).
-  const total = Object.values(layerCounts).reduce((a, b) => a + b, 0);
-
+  
+  const total = allMemories.length;
+  
   const rows = Object.entries(LAYERS).map(([key, info]) => {
     const count = layerCounts[key] || 0;
     const pct = total > 0 ? (count / total * 100).toFixed(1) : '0.0';
     const avgTags = count > 0 ? (layerTagCounts[key] / count).toFixed(1) : '0.0';
-
+    
     return `
       <tr>
         <td>
@@ -978,11 +961,11 @@ function renderLayers() {
       </tr>
     `;
   }).join('');
-
+  
   document.getElementById('layers-tbody').innerHTML = rows;
   document.getElementById('layers-total').textContent = `Total: ${total}`;
   document.getElementById('layers-active').textContent = `Layers Active: ${getActiveLayerCount()}`;
-
+  
   // Right sidebar - layer hierarchy
   renderLayerHierarchy(layerCounts);
 }
