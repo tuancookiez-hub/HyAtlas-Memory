@@ -3169,24 +3169,36 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                     n = 0
                 counts[layer] = n
                 total += n
-            # L5/L6/L7 live in Kuzu graph export JSON
-            # Count each layer separately from the node list
+            # L5/L6/L7 live in Kuzu (NOT in Qdrant).
+            # v1.5.0: read live counts via the upstream's
+            # ``/api/v1/list`` endpoint, which now includes all
+            # three graph layers (the upstream's _list_graph_bucket
+            # was patched by hyatlas_memory.patches to query
+            # without the broken isolation_key filter).
+            graph_counts = {"l5_knowledge": 0, "l6_schema": 0, "l7_intention": 0}
             try:
-                l5_export_path = str(_l5_export_path())
-                with open(l5_export_path, encoding="utf-8") as f:
-                    l5_data = json.loads(f.read())
-                graph_counts = {"l5_knowledge": 0, "l6_schema": 0, "l7_intention": 0}
-                for node in l5_data.get("nodes", []):
-                    layer = node.get("layer", "")
-                    if layer in graph_counts:
-                        graph_counts[layer] += 1
-                counts["l5_knowledge"] = graph_counts["l5_knowledge"]
-                counts["l6_schema"] = graph_counts["l6_schema"]
-                counts["l7_intention"] = graph_counts["l7_intention"]
-            except (FileNotFoundError, json.JSONDecodeError):
-                counts["l5_knowledge"] = 0
-                counts["l6_schema"] = 0
-                counts["l7_intention"] = 0
+                list_body = json.dumps({
+                    "user_id": "hermes-user",
+                    "session_id": "default_session",
+                    "limit": 10000,
+                }).encode()
+                list_req = urllib.request.Request(
+                    f"{HY_MEMORY_BASE}/api/v1/list",
+                    data=list_body,
+                    headers={"Content-Type": "application/json"},
+                )
+                raw = json.loads(
+                    urllib.request.urlopen(list_req, timeout=15).read()
+                )
+                for n in (raw.get("graph") or {}).get("nodes") or []:
+                    lyr = n.get("layer")
+                    if lyr in graph_counts:
+                        graph_counts[lyr] += 1
+            except Exception:
+                pass
+            counts["l5_knowledge"] = graph_counts["l5_knowledge"]
+            counts["l6_schema"] = graph_counts["l6_schema"]
+            counts["l7_intention"] = graph_counts["l7_intention"]
             total = sum(counts.values())
             return self._json(200, {
                 "counts": counts,

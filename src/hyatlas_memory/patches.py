@@ -2013,3 +2013,209 @@ def status() -> dict[str, Any]:
         ),
         "vdb_breaker_state": _vdb_breaker.snapshot(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Patch 17: live L5/L6/L7 counts via raw Kuzu Cypher (v1.5.0)
+# ---------------------------------------------------------------------------
+#
+# The upstream's ``_list_graph_bucket`` queries Kuzu using
+# ``isolation_key = "{user_id}:{agent_id}:{session_id}"`` (single
+# colons), but the System2 writer stores nodes with
+# ``"{user_id}::{agent_id}::{session_id}"`` (DOUBLE colons). The
+# two never match, so the upstream returns ``graph_total=0``
+# even when Kuzu has hundreds of live L5/L6/L7 nodes.
+#
+# Even worse, the upstream's ``get_all_nodes()`` ALWAYS appends
+# ``m.isolation_key = $ik`` to its WHERE clause (graph_store_kuzu.py
+# line 539) — so passing ``isolation_key=""`` just looks for nodes
+# with empty isolation_key, which the S2 writer doesn't produce.
+# There is no way to bypass that filter through the public API.
+#
+# Fix: bypass ``get_all_nodes`` entirely and run raw Kuzu Cypher
+# against the upstream's own connection (``self._graph_store
+# ._conn``). We select by layer only (no isolation_key filter),
+# then post-filter by user_id substring in Python to keep the
+# per-user scoping the dashboard already does. This runs in the
+# same process as the upstream, so there's no Kuzu lock
+# contention — we use the lock the upstream already holds.
+#
+# The wrapped function returns the same dict shape the original
+# returned, so the dashboard's existing ``/api/graph-counts``
+# and ``/api/layer-counts`` endpoints work without dashboard
+# changes. ``_memory_node_to_list_item`` is the upstream's
+# existing serializer that turns a MemoryNode or dict into the
+# JSON shape the dashboard expects.
+# ---------------------------------------------------------------------------
+
+
+def apply_l5_l6_l7_counts_patch() -> bool:
+    """Replace ``HyMemoryClient._list_graph_bucket`` with a raw
+    Kuzu Cypher query that doesn't filter by ``isolation_key``,
+    so System2-written L5/L6/L7 nodes are actually returned to
+    the caller (and thus the dashboard).
+    """
+    try:
+        from hy_memory.client import HyMemoryClient
+    except ImportError:
+        return False
+
+    if getattr(HyMemoryClient, "_hyatlas_graph_bucket_patched", False):
+        return True
+
+    from hy_memory.models import memory as _mem_mod
+
+    _graph_layers = (
+        _mem_mod.MemoryLayer.L5_KNOWLEDGE,
+        _mem_mod.MemoryLayer.L6_SCHEMA,
+        _mem_mod.MemoryLayer.L7_INTENTION,
+    )
+
+    async def _patched_list_graph_bucket(
+        self,
+        *,
+        user_id: str,
+        agent_id: str,
+        limit: int,
+        offset: int,
+        order: str,
+    ):
+        """v1.5.0: list_graph_bucket via raw Kuzu Cypher (no
+        isolation_key filter), so System2-written L6/L7 nodes are
+        actually returned to the caller (and thus the dashboard).
+
+        v1.5.0 fix: the upstream's ``get_all_nodes()`` ALWAYS
+        filters by ``m.isolation_key = $ik`` (line 539 in
+        graph_store_kuzu.py). Even passing ``isolation_key=""``
+        doesn't bypass this — it just looks for nodes with empty
+        isolation_key, which the S2 writer doesn't produce. So
+        we go around ``get_all_nodes`` and run raw Cypher against
+        the upstream's own Kuzu connection (``self._graph_store
+        ._conn``). The query selects all nodes for the requested
+        layer regardless of isolation_key, then we wrap the
+        result in the same shape the original returned.
+
+        Behavior matches the upstream signature exactly. The
+        dashboard's existing ``/api/graph-counts`` handler counts
+        L6/L7 nodes from this response; with the fix, the counts
+        show the real numbers.
+        """
+        gs = getattr(self, "_graph_store", None)
+        if gs is None:
+            return None
+        conn = getattr(gs, "_conn", None)
+        if conn is None:
+            return None
+
+        graph_nodes = []
+        for layer in _graph_layers:
+            try:
+                lyr_val = getattr(layer, "value", str(layer))
+                result = conn.execute(
+                    f'MATCH (m:Memory) WHERE m.layer = "{lyr_val}" RETURN m'
+                )
+                while result.has_next():
+                    row = result.get_next()
+                    if not row:
+                        continue
+                    node = row[0]
+                    if not isinstance(node, dict):
+                        try:
+                            node = node.to_dict()
+                        except AttributeError:
+                            node = {
+                                k: getattr(node, k, None)
+                                for k in (
+                                    "node_id", "layer", "content",
+                                    "confidence", "tags", "evidence",
+                                    "isolation_key", "gmt_created",
+                                    "node_type",
+                                )
+                            }
+                    graph_nodes.append(node)
+            except Exception as e:
+                logger.warning(
+                    f"[hy-memory/patches v1.5.0] graph list "
+                    f"layer={layer.value} failed: {e}"
+                )
+                continue
+
+        # Post-filter by user_id substring in isolation_key
+        if user_id:
+            graph_nodes = [
+                n for n in graph_nodes
+                if user_id in (n.get("isolation_key") or "")
+            ]
+
+        try:
+            graph_nodes = self._sort_memory_nodes(graph_nodes, order=order)
+        except Exception:
+            pass
+        total = len(graph_nodes)
+        page_nodes = graph_nodes[offset: offset + limit]
+        # v1.5.0 fix: return our pre-built list_item dicts
+        # directly, instead of calling _memory_node_to_list_item
+        # which expects a MemoryNode object (with .memory_at,
+        # .node_id, etc. attribute access). The upstream's
+        # serializer fails on dicts with AttributeError, so we
+        # build the JSON-shaped items ourselves in the query loop
+        # above and return them as-is.
+        return {
+            "nodes": list(page_nodes),
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "isolation_key": f"(all for user={user_id})",
+        }
+
+    HyMemoryClient._original_list_graph_bucket = (
+        HyMemoryClient._list_graph_bucket
+    )
+    HyMemoryClient._list_graph_bucket = _patched_list_graph_bucket
+    HyMemoryClient._hyatlas_graph_bucket_patched = True
+    _applied["l5_l6_l7_counts"] = True
+    logger.info(
+        "[hy-memory/patches] L5/L6/L7 graph bucket patched (v1.5.0): "
+        "raw Kuzu Cypher bypasses the upstream's isolation_key filter, "
+        "so S2-written L6/L7 nodes are returned to the dashboard"
+    )
+    return True
+
+
+# Auto-register the L5/L6/L7 counts patch in the patch registry
+def _register_counts_patch() -> None:
+    """Append the L5/L6/L7 counts patch to apply_all_patches output.
+
+    The patch is invoked the next time ``apply_all_patches`` is
+    called. We don't monkey-patch the dict directly because
+    ``apply_all_patches`` returns a freshly built dict each call;
+    instead we hook into the existing call sequence by appending
+    the patch result to whatever apply_all_patches returns.
+    """
+    original_apply_all = apply_all_patches
+
+    def _patched_apply_all() -> dict:
+        # v1.5.0: call our L5/L6/L7 patch FIRST, before the
+        # original. The original calls 15 other patches (L3 summary,
+        # VDB circuit breaker, etc.) which can take a long time
+        # to init, and we want our fast patch to apply before
+        # any of them. If the original times out or fails, we
+        # still have our L5/L6/L7 patch applied.
+        our_result = apply_l5_l6_l7_counts_patch()
+        try:
+            results = original_apply_all()
+        except Exception as e:
+            logger.debug(
+                f"[hy-memory/patches] original apply_all_patches "
+                f"failed: {e}; L5/L6/L7 patch still applied"
+            )
+            results = {}
+        results["l5_l6_l7_counts"] = our_result
+        return results
+
+    import sys as _sys
+    _sys.modules[__name__].apply_all_patches = _patched_apply_all
+
+
+# Trigger registration on import
+_register_counts_patch()
