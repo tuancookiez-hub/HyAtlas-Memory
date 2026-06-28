@@ -3,4 +3,4 @@ without pulling in heavy deps (kuzu, openai, etc.) that the package
 declares. Lets `pip show hyatlas-memory` work cleanly.
 """
 
-__version__ = "1.5.0"
+__version__ = "2.0.0"

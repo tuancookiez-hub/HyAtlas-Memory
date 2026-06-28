@@ -1437,6 +1437,199 @@ def apply_l5_auto_trigger_patch() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Patch 9b: L5 in-process extraction (replaces patch 9 for v2)
+# Hooks into _run_cross_domain_sweeper as a post-sweeper peer step.
+# Feature flag: MEMORY_L5_VERSION=2 enables this; =1 keeps old subprocess.
+# ---------------------------------------------------------------------------
+
+def apply_l5_inprocess_patch() -> bool:
+    """Hook L5 entity extraction into S2's sweeper cycle (in-process, no lock conflict)."""
+    import os
+    version = os.getenv("MEMORY_L5_VERSION", "").strip()
+
+    if version != "2":
+        logger.info(f"[hy-memory/patches] L5 in-process patch skipped (MEMORY_L5_VERSION={version!r}, need '2')")
+        return False
+
+    from hy_memory.pipelines.system2_writer import System2Writer
+
+    if getattr(System2Writer, "_l5_inprocess_wrapped", False):
+        return True  # idempotent
+
+    _original_sweeper = System2Writer._run_cross_domain_sweeper
+
+    async def _sweeper_with_l5(self, user_id, agent_id, llm_call, request_id):
+        # Original sweeper (L6/L7) — always runs first
+        result = await _original_sweeper(self, user_id, agent_id, llm_call, request_id)
+
+        # L5 extraction — non-blocking peer step
+        try:
+            from hyatlas_memory.l5_inprocess import run_l5_inprocess
+            l5_result = await run_l5_inprocess(
+                s2_writer=self,
+                user_id=user_id,
+                agent_id=agent_id,
+                llm_call=llm_call,
+                request_id=request_id,
+            )
+            if isinstance(result, dict):
+                result["l5_inprocess"] = l5_result
+        except Exception as e:
+            logger.warning(f"[L5] in-process patch failed (non-blocking): {e}")
+            # Never block S2 — swallow the error
+
+        return result
+
+    System2Writer._run_cross_domain_sweeper = _sweeper_with_l5
+    System2Writer._l5_inprocess_wrapped = True
+    _applied["l5_inprocess"] = True
+    logger.info("[hy-memory/patches] L5 in-process patch installed (patch #9b, v2 mode)")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Patch 10: L4 identity — pre-write dedup, identity_type, evolution in search
+# ---------------------------------------------------------------------------
+
+
+def apply_l4_identity_patch() -> bool:
+    """L4 shadow reduction + epistemic sub-typing (Phase 3)."""
+    if _applied.get("l4_identity"):
+        return True
+    try:
+        from hy_memory.pipelines.writer import MemoryWriter
+        from hy_memory.models.memory import MemoryLayer
+        from hy_memory.client import HyMemoryClient
+    except ImportError as e:
+        logger.debug("[hy-memory/patches] L4 patch import failed: %s", e)
+        return False
+
+    orig_collect = MemoryWriter._collect_new_memories
+
+    @staticmethod
+    def _collect_with_l4_meta(extracted_info):
+        texts, metas = orig_collect(extracted_info)
+        identities = [
+            x for x in (extracted_info.get("identity") or []) if isinstance(x, dict)
+        ]
+        id_i = 0
+        for meta in metas:
+            if meta.get("layer") != "L4_IDENTITY":
+                continue
+            item = identities[id_i] if id_i < len(identities) else {}
+            if id_i < len(identities):
+                id_i += 1
+            itype = (item.get("identity_type") or item.get("type") or "opinion").lower()
+            if itype not in ("world", "experience", "opinion"):
+                itype = "opinion"
+            meta["identity_type"] = itype
+            tags = list(meta.get("tags") or [])
+            tag = f"identity:{itype}"
+            if tag not in tags:
+                tags.append(tag)
+            meta["tags"] = tags
+        return texts, metas
+
+    MemoryWriter._collect_new_memories = _collect_with_l4_meta
+
+    orig_reconcile = MemoryWriter._reconcile_and_store
+
+    async def _reconcile_with_l4_dedup(
+        self, new_memory_texts, new_memories_meta, request, vector_store, req_id
+    ):
+        enabled = os.environ.get("MEMORY_L4_DEDUP_ENABLED", "true").lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        skip_th = float(os.environ.get("MEMORY_L4_DEDUP_SKIP", "0.90"))
+        if enabled and new_memories_meta:
+            kept_t, kept_m = [], []
+            for text, meta in zip(new_memory_texts, new_memories_meta):
+                if meta.get("layer") != "L4_IDENTITY":
+                    kept_t.append(text)
+                    kept_m.append(meta)
+                    continue
+                try:
+                    emb = await self.embed_service.embed_queued(text)
+                    hits = await vector_store.search(
+                        emb,
+                        user_id=request.user_id,
+                        layers=[MemoryLayer.L4_IDENTITY],
+                        limit=3,
+                        score_threshold=max(0.5, skip_th - 0.1),
+                    )
+                    top = hits[0].get("score", 0) if hits else 0
+                    if top >= skip_th:
+                        logger.info(
+                            "[L4 dedup] skipped near-duplicate (sim=%.3f >= %.3f)",
+                            top,
+                            skip_th,
+                        )
+                        continue
+                except Exception as exc:
+                    logger.debug("[L4 dedup] similarity check failed: %s", exc)
+                kept_t.append(text)
+                kept_m.append(meta)
+            new_memory_texts, new_memories_meta = kept_t, kept_m
+        return await orig_reconcile(
+            self, new_memory_texts, new_memories_meta, request, vector_store, req_id
+        )
+
+    MemoryWriter._reconcile_and_store = _reconcile_with_l4_dedup
+
+    if not getattr(HyMemoryClient, "_l4_evolution_patched", False):
+        orig_async_search = HyMemoryClient.async_search
+
+        async def _search_with_l4_evolution(self, query, **kwargs):
+            result = await orig_async_search(self, query, **kwargs)
+            try:
+                memories = (result or {}).get("memories") or {}
+                vs = getattr(self, "_vector_store", None)
+                if vs is None and hasattr(self, "_writer"):
+                    vs = getattr(self._writer, "_vector_store", None)
+                if not vs:
+                    return result
+                for ch in ("profile", "proactive", "normal"):
+                    for mem in memories.get(ch) or []:
+                        if not isinstance(mem, dict):
+                            continue
+                        layer = (mem.get("layer") or "").lower()
+                        if "l4" not in layer and layer != "l4_identity":
+                            continue
+                        if mem.get("evolution_chain"):
+                            continue
+                        mid = mem.get("memory_id") or mem.get("node_id")
+                        if not mid:
+                            continue
+                        chain_fn = getattr(vs, "get_evolution_chain", None)
+                        if not chain_fn:
+                            continue
+                        chain = await chain_fn(mid)
+                        if chain:
+                            mem["evolution_chain"] = chain
+                        if mem.get("identity_type"):
+                            continue
+                        payload = mem.get("payload") or {}
+                        itype = payload.get("identity_type")
+                        if itype:
+                            mem["identity_type"] = itype
+            except Exception as exc:
+                logger.debug("[L4 evolution] enrich failed: %s", exc)
+            return result
+
+        HyMemoryClient.async_search = _search_with_l4_evolution
+        HyMemoryClient._l4_evolution_patched = True
+
+    _applied["l4_identity"] = True
+    logger.info(
+        "[hy-memory/patches] L4 identity patch installed (dedup + identity_type + evolution enrich)"
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Patch 13: VDB circuit breaker (Severity 6 — Server Crash Cascade)
 # ---------------------------------------------------------------------------
 
@@ -1974,7 +2167,9 @@ def apply_all_patches() -> dict[str, bool]:
         "dedup_threshold": apply_dedup_threshold_patch(),
         "l1_raw_dedup_skip": apply_l1_raw_dedup_skip_patch(),
         "l1_raw_shadow": apply_l1_raw_shadow_patch(),
-        "l5_auto_trigger": apply_l5_auto_trigger_patch(),
+        "l5_auto_trigger": apply_l5_auto_trigger_patch() if os.getenv("MEMORY_L5_VERSION", "").strip() == "1" else False,
+        "l5_inprocess": apply_l5_inprocess_patch(),
+        "l4_identity": apply_l4_identity_patch(),
         "vdb_circuit_breaker": apply_vdb_circuit_breaker_patch(),
         "llm_fast_smart": apply_llm_fast_smart_patch(),
         "disabled_cache_timing": apply_disabled_cache_timing_patch(),

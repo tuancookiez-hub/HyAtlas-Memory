@@ -30,7 +30,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 10
-_SEARCH_TIMEOUT = 15
+_SEARCH_TIMEOUT = 180  # bge-large on CPU can be slow on first query
 _ADD_TIMEOUT = 60  # LLM extraction can take a while
 
 
@@ -126,7 +126,10 @@ class HyMemoryClient:
     def search(self, query: str, *, user_ids: list[str] | None = None,
                user_id: str = "", agent_ids: list[str] | None = None,
                session_ids: list[str] | None = None,
-               limit: int = 10, min_score: float = 0.4) -> dict:
+               limit: int = 10, min_score: float = 0.4,
+               profile_min_score: float | None = None,
+               profile_limit: int | None = None,
+               reader: str | None = None) -> dict:
         """POST /api/v1/search — semantic search across memories.
 
         Returns:
@@ -144,8 +147,14 @@ class HyMemoryClient:
             body["session_ids"] = session_ids
         if limit:
             body["limit"] = limit
-        if min_score:
+        if min_score is not None:
             body["min_score"] = min_score
+        if profile_min_score is not None:
+            body["profile_min_score"] = profile_min_score
+        if profile_limit is not None:
+            body["profile_limit"] = profile_limit
+        if reader:
+            body["reader"] = reader
         return self._request("POST", "/api/v1/search", body, timeout=_SEARCH_TIMEOUT)
 
     def get(self, memory_id: str) -> dict | None:

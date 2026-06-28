@@ -1,3 +1,18 @@
+## [2.0.0] - 2026-06-28 — S-Class memory upgrade
+
+### Added
+- **`l5_inprocess.py`** — L5 knowledge graph writer inside System2 digest (no subprocess batch lock). Gated by `MEMORY_L5_VERSION=2`; watermark in `l5_state.json`; multi-user Qdrant scroll for L2 backfill.
+- **`apply_l4_identity_patch()`** — L4 pre-write cosine dedup (`MEMORY_L4_DEDUP_*`), `identity_type` (world/experience/opinion), evolution chain enrich on search.
+- **Hybrid v2 + rerank** — documented env for `HY_MEMORY_READER=hybrid_v2` and `MEMORY_RERANK_*` (upstream reader; see migration doc).
+
+### Changed
+- **`patches.py` / `client.py`** — aligned with production S-class stack (search timeouts, patch registry).
+- **Default upgrade path** — 1024-d embeddings + Kuzu graph dims; see **`docs/MIGRATION_v2_SCLASS.md`**.
+
+### Notes for consumers
+- **Breaking for existing installs** on 384-d embeddings or old Kuzu graph without migration — read migration doc before upgrading production data.
+- After upgrade: `hyatlas stop` → install → clear `__pycache__` for `patches`/`l5_inprocess` if needed → single `hyatlas start` → confirm `l5_inprocess` + `l4_identity` in server log.
+
 ## [1.5.0] - 2026-06-25
 
 ### Fixed
