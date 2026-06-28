@@ -79,6 +79,8 @@ hyatlas stop            # shut down the stack
 
 > **Three modes:** `lite` (no LLM, embedding-only) · `pro` (LLM extraction per `add`) · `ultra` (pro + System 2 cognitive layer with Kuzu graph — default).
 
+> **New in 2.0 (S-Class):** hybrid_v2 retrieval + optional cross-encoder rerank, 1024-d embeddings, **in-process L5** knowledge-graph writer (no batch lock), and **L4 identity** dedup + evolution chains. Upgrading from 1.x with existing data? See **[`docs/MIGRATION_v2_SCLASS.md`](docs/MIGRATION_v2_SCLASS.md)**.
+
 ---
 
 ### Path A — Docker (alternative)
@@ -406,7 +408,7 @@ assets/                    # infographic images
 - **Server** (auto-started on port 19527) runs the upstream `hy-memory` SDK. This is where embedding, LLM extraction, and vector search happen. The plugin manages its lifecycle as a subprocess.
 - **L5 pipeline** (`server/bin/`) is a 7-step batch job that rebuilds the Kuzu graph: stop server → extract facts → resolve entities → quality review → rebuild graph → export JSON → restart server. Runs async, takes minutes for thousands of facts.
 - **Context pressure** (`context_pressure.py`) monitors the agent's context window. At 50% usage it starts compressing old tool outputs to ref files. At 95% it aggressively prunes to prevent overflow. This is plugin-layer — no SDK changes needed.
-- **9 patches** (`patches.py`) are applied at import time. They fix upstream SDK issues: LLMConfig env-loading, cross-encoder rerank, in-process embedding, L3 trigger reachability, L1 dedup gate, and more. Each patch is idempotent and documented inline.
+- **16 patches** (`patches.py`) are applied at import time. They fix and extend the upstream SDK: LLMConfig env-loading, cross-encoder rerank, in-process embedding, L1 dedup/shadow/rolling-delete, **L5 in-process knowledge-graph extraction** (`l5_inprocess.py`, gated by `MEMORY_L5_VERSION=2`), **L4 identity** (pre-write dedup, `identity_type`, evolution-chain enrichment), a VDB circuit breaker, and fast/smart LLM model split. Each patch is idempotent and documented inline. The active set is logged at startup.
 
 ## Documentation
 
@@ -454,7 +456,9 @@ pip install hyatlas-memory
 #    ~/.hy_memory.json  (config) -- the new package reads this unchanged
 ```
 
-No data migration needed. The Kuzu graph at `~/.hy_memory/data/kuzu_db` is forward-compatible. The 9 carried patches from the fork are now part of the package, applied at import time via the `patches.py` module.
+No data migration needed for the in-fork → package move. The Kuzu graph at `~/.hy_memory/data/kuzu_db` is forward-compatible. The carried patches from the fork are now part of the package, applied at import time via the `patches.py` module.
+
+> **Upgrading 1.x → 2.0?** The v2 S-Class stack changes the default embedding dimension (1024-d) and adds the in-process L5 writer. If you have an existing 384-d Qdrant collection or an old Kuzu graph, **read [`docs/MIGRATION_v2_SCLASS.md`](docs/MIGRATION_v2_SCLASS.md) before upgrading production data.**
 
 ## License
 
