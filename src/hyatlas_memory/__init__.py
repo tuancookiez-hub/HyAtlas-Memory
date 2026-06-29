@@ -86,7 +86,7 @@ _DEFAULT_PORT = 19527
 
 # Hy-Memory upstream default Qdrant collection. Must match the SDK/server
 # default (the collection name is hardcoded in the upstream server).
-_DEFAULT_QDRANT_COLLECTION = "agent_memories_384"
+_DEFAULT_QDRANT_COLLECTION = "agent_memories_1024"
 
 # Default Qdrant HTTP URL for runtime patches (importance + access_count).
 _DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"

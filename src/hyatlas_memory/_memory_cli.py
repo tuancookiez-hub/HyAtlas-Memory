@@ -161,7 +161,7 @@ def cmd_list(args: list[str]) -> int:
 
     from hyatlas_memory._start import QDRANT_PORT
     qdrant_url = f"http://127.0.0.1:{QDRANT_PORT}"
-    qdrant_collection = os.environ.get("HYATLAS_QDRANT_COLLECTION", "agent_memories_384")
+    qdrant_collection = os.environ.get("HYATLAS_QDRANT_COLLECTION", "agent_memories_1024")
 
     # Build qdrant filter: user_id + optional layer.
     must = [{"key": "user_id", "match": {"value": DEFAULT_USER_ID}}]

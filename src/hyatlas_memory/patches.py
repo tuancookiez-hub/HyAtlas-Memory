@@ -144,7 +144,7 @@ def _patch_coding_judge() -> bool:
 def patch_importance_for_request(
     request_id: str = "",
     qdrant_url: str = "http://127.0.0.1:6333",
-    collection: str = "agent_memories_384",
+    collection: str = "agent_memories_1024",
     *,
     user_id: str = "",
     session_id: str = "",
@@ -266,7 +266,7 @@ def patch_importance_for_request(
 def touch_memory(
     memory_id: str,
     qdrant_url: str = "http://127.0.0.1:6333",
-    collection: str = "agent_memories_384",
+    collection: str = "agent_memories_1024",
 ) -> None:
     """Increment access_count for a single recalled memory.
 
@@ -888,7 +888,7 @@ def apply_l1_raw_rolling_delete_patch() -> bool:
 
     host = os.environ.get("MEMORY_VECTOR_HOST", "127.0.0.1")
     port = int(os.environ.get("MEMORY_VECTOR_PORT", "6333"))
-    collection = os.environ.get("MEMORY_VECTOR_COLLECTION", "agent_memories_384")
+    collection = os.environ.get("MEMORY_VECTOR_COLLECTION", "agent_memories_1024")
     window_days = int(os.environ.get("MEMORY_RAW_WINDOW_DAYS", "30"))
     sweep_interval = int(os.environ.get("HY_MEMORY_RAW_SWEEP_INTERVAL_SECS", "21600"))
 
