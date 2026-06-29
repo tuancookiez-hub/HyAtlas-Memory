@@ -292,9 +292,9 @@ HyAtlas Memory v2.0.0 is currently tagged and working end-to-end for the author'
 | Phase | Status | Sessions Used | Next Action |
 |-------|--------|---------------|-------------|
 | 0: Assessment | ✅ Complete | 1 | ✅ Done |
-| 1: Critical Fixes | ✅ Complete | 1 | Move to Phase 2 |
-| 2: Migration/Docs | ⏳ Pending | 0 | Begin 384→1024 migration script |
-| 3: Testing | ⏳ Pending | 0 | Blocked on Phase 2 |
+| 1: Critical Fixes | ✅ Complete | 1 | ✅ Done |
+| 2: Core Tech Debt | ✅ Complete | 1 | ✅ Done |
+| 3: Testing | ⏳ Pending | 0 | Begin Docker compose setup |
 | 4: Release | ⏳ Pending | 0 | Blocked on Phase 3 |
 
 **Total Estimated Sessions:** 6-10  
@@ -306,7 +306,7 @@ HyAtlas Memory v2.0.0 is currently tagged and working end-to-end for the author'
 
 - **2026-06-29:** Initial roadmap created based on adversarial review findings
 - **2026-06-30:** Phase 1 completed - import crash fixed, hardcoded paths removed, clean install verified
-- **2026-06-30:** Phase 2 completed - collection migration to 1024-dim, Kuzu checkpoint limitation documented, env var parameterization verified
+- **2026-06-30:** Phase 2 completed - collection migration to 1024-dim, Kuzu checkpoint limitation documented, env var parameterization verified, README fixed for v2.0.0 accuracy
 
 ---
 
