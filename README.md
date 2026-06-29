@@ -68,10 +68,10 @@ hyatlas stop            # shut down the stack
     "base_url": "https://api.openai.com/v1"
   },
   "embedder": {
-    "model": "BAAI/bge-small-en-v1.5",
-    "dims": 384,
-    "provider": "local"
-  },
+      "model": "BAAI/bge-large-en-v1.5",
+      "dims": 1024,
+      "provider": "local"
+    },
   "mode": "ultra",
   "vector_store": {"provider": "qdrant", "host": "127.0.0.1", "port": 6333}
 }
@@ -408,7 +408,7 @@ assets/                    # infographic images
 - **Server** (auto-started on port 19527) runs the upstream `hy-memory` SDK. This is where embedding, LLM extraction, and vector search happen. The plugin manages its lifecycle as a subprocess.
 - **L5 pipeline** (`server/bin/`) is a 7-step batch job that rebuilds the Kuzu graph: stop server → extract facts → resolve entities → quality review → rebuild graph → export JSON → restart server. Runs async, takes minutes for thousands of facts.
 - **Context pressure** (`context_pressure.py`) monitors the agent's context window. At 50% usage it starts compressing old tool outputs to ref files. At 95% it aggressively prunes to prevent overflow. This is plugin-layer — no SDK changes needed.
-- **16 patches** (`patches.py`) are applied at import time. They fix and extend the upstream SDK: LLMConfig env-loading, cross-encoder rerank, in-process embedding, L1 dedup/shadow/rolling-delete, **L5 in-process knowledge-graph extraction** (`l5_inprocess.py`, gated by `MEMORY_L5_VERSION=2`), **L4 identity** (pre-write dedup, `identity_type`, evolution-chain enrichment), a VDB circuit breaker, and fast/smart LLM model split. Each patch is idempotent and documented inline. The active set is logged at startup.
+- **16 patches** (`patches.py`) are applied at import time. They fix and extend the upstream SDK: LLMConfig env-loading, cross-encoder rerank, in-process embedding, L1 dedup/shadow/rolling-delete, **L5 in-process knowledge-graph extraction** (`l5_inprocess.py`, gated by `MEMORY_L5_VERSION=2`), **L4 identity** (pre-write dedup, `identity_type`, evolution-chain enrichment), a VDB circuit breaker, fast/smart LLM model split, and **robust S2 JSON parsing** (`s2_operations_json`). Each patch is idempotent and documented inline. The active set is logged at startup.
 
 ## Documentation
 
