@@ -384,7 +384,7 @@ async def _entity_embeddings(s2_writer, names: list[str]) -> dict[str, list[floa
         resp.raise_for_status()
         vectors = resp.json()["data"]
         embeddings = [v["embedding"] for v in vectors]
-    return dict(zip(unique, embeddings))
+    return dict(zip(unique, embeddings, strict=False))
 
 
 async def _resolve_and_write_entities(
@@ -395,7 +395,7 @@ async def _resolve_and_write_entities(
     embed_by_name: dict[str, list[float]] | None = None,
 ) -> tuple[dict[str, str], int]:
     """Resolve entities against existing Kuzu nodes, write new ones. Returns (name→node_id, written)."""
-    from hy_memory.models.memory import MemoryNode, MemoryLayer, MemoryStatus, SourceType
+    from hy_memory.models.memory import MemoryLayer, MemoryNode, MemoryStatus, SourceType
 
     name_to_id = {}
     written = 0
@@ -490,6 +490,7 @@ async def _embed_entities_to_qdrant(
 ):
     """Embed entity content and write to Qdrant for semantic search."""
     import asyncio
+
     import requests
 
     if not entities:

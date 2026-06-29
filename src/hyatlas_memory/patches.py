@@ -1498,9 +1498,9 @@ def apply_l4_identity_patch() -> bool:
     if _applied.get("l4_identity"):
         return True
     try:
-        from hy_memory.pipelines.writer import MemoryWriter
-        from hy_memory.models.memory import MemoryLayer
         from hy_memory.client import HyMemoryClient
+        from hy_memory.models.memory import MemoryLayer
+        from hy_memory.pipelines.writer import MemoryWriter
     except ImportError as e:
         logger.debug("[hy-memory/patches] L4 patch import failed: %s", e)
         return False
@@ -1547,7 +1547,7 @@ def apply_l4_identity_patch() -> bool:
         skip_th = float(os.environ.get("MEMORY_L4_DEDUP_SKIP", "0.90"))
         if enabled and new_memories_meta:
             kept_t, kept_m = [], []
-            for text, meta in zip(new_memory_texts, new_memories_meta):
+            for text, meta in zip(new_memory_texts, new_memories_meta, strict=False):
                 if meta.get("layer") != "L4_IDENTITY":
                     kept_t.append(text)
                     kept_m.append(meta)
@@ -2172,7 +2172,6 @@ def apply_s2_operations_json_patch() -> bool:
 
     import json
     import re
-    from typing import Any, Dict, List, Optional
 
     def _strip_think(text: str) -> str:
         text = re.sub(r"⋖.*?⋗", "", text, flags=re.DOTALL)
@@ -2185,7 +2184,7 @@ def apply_s2_operations_json_patch() -> bool:
             )
         return text.strip()
 
-    def _parse_operations_json_robust(text: str) -> Optional[List[Dict[str, Any]]]:
+    def _parse_operations_json_robust(text: str) -> list[dict[str, Any]] | None:
         raw = text or ""
         text = _strip_think(raw)
         if not text:

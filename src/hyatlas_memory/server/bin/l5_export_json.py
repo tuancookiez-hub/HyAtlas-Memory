@@ -97,11 +97,11 @@ def stop_server() -> None:
     hermes_home = _resolve_hermes_home()
     python_exe = sys.executable  # Use current Python
     hymemory_script = hermes_home / "bin" / "hymemory.py"
-    
+
     if not hymemory_script.exists():
         print(f"  ⚠ hymemory.py not found at {hymemory_script}, skipping server stop")
         return
-    
+
     result = subprocess.run(
         [python_exe, str(hymemory_script), "server", "stop"],
         capture_output=True, text=True, timeout=30
@@ -119,11 +119,11 @@ def start_server() -> bool:
     hermes_home = _resolve_hermes_home()
     python_exe = sys.executable
     hymemory_script = hermes_home / "bin" / "hymemory.py"
-    
+
     if not hymemory_script.exists():
         print(f"  ⚠ hymemory.py not found at {hymemory_script}, skipping server start")
         return False
-    
+
     result = subprocess.run(
         [python_exe, str(hymemory_script), "server", "start"],
         capture_output=True, text=True, timeout=120

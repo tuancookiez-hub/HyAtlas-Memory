@@ -27,7 +27,6 @@ from pathlib import Path
 
 # ------------------------------------------------------------------
 import threading  # Required for HyMemoryProvider._prefetch_lock
-from pathlib import Path
 import os
 import sys
 

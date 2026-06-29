@@ -28,14 +28,12 @@ Public API:
 from __future__ import annotations
 
 import contextlib
+import datetime as _dt
 import json
 import logging
-import math
 import os
-import re
 import threading
 import time
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -51,15 +49,15 @@ except ImportError:
     class MemoryProvider:
         """Stub base class when hermes-agent is not installed."""
         pass
-    
+
     def get_hermes_home():
         """Fallback when hermes_constants is not available."""
         return os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
-    
+
     def tool_error(msg: str) -> str:
         """Fallback tool_error when tools.registry is not available."""
         return f"[ERROR] {msg}"
-    
+
     # Log warning at module level for diagnostics
     import warnings
     warnings.warn(

@@ -12,11 +12,10 @@ Tests critical paths of HyAtlas Memory installation:
 Usage:
     python tests/smoke_test.py [--skip-server]
 """
-import os
+import json
 import sys
 import time
 import urllib.request
-import json
 from pathlib import Path
 
 # Detect if running under pytest
@@ -38,7 +37,6 @@ def test_import():
     print("1. Import test...", end=" ")
     try:
         import hyatlas_memory
-        from hyatlas_memory import HyMemoryProvider
         print(f"✅ v{hyatlas_memory.__version__}")
         return True
     except Exception as e:
@@ -120,7 +118,7 @@ def test_no_hardcoded_paths():
     print("6. Hardcoded path scan...", end=" ")
     import hyatlas_memory
     pkg_dir = Path(hyatlas_memory.__file__).parent
-    
+
     bad = []
     for py_file in pkg_dir.rglob("*.py"):
         try:
@@ -134,7 +132,7 @@ def test_no_hardcoded_paths():
                 continue
             if "C:\\Users\\tuanc" in line or "C:/Users/tuanc" in line:
                 bad.append(f"{py_file.name}:{line_num}")
-    
+
     if bad:
         print(f"❌ Found {len(bad)} hardcoded paths")
         for b in bad[:5]:
@@ -148,45 +146,45 @@ def test_no_hardcoded_paths():
 def main():
     """Run all smoke tests."""
     skip_server = "--skip-server" in sys.argv
-    
+
     print("=" * 60)
     print("HyAtlas Memory — Smoke Test")
     print(f"Python: {sys.executable}")
     print(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
     print()
-    
+
     results = []
-    
+
     # Core tests (always run)
     results.append(("Import", test_import()))
     results.append(("Provider", test_provider()))
     results.append(("No hardcoded paths", test_no_hardcoded_paths()))
-    
+
     # Server tests (skip if --skip-server)
     if not skip_server:
         server_ok = test_server_health()
         if server_ok is not None:
             results.append(("Server health", server_ok))
-            
+
             dash_ok = test_dashboard_health()
             if dash_ok is not None:
                 results.append(("Dashboard health", dash_ok))
-                
+
                 graph_ok = test_graph_counts()
                 if graph_ok is not None:
                     results.append(("Graph counts", graph_ok))
-    
+
     # Summary
     print()
     print("=" * 60)
     print("SUMMARY")
     print("=" * 60)
-    
+
     passed = sum(1 for _, ok in results if ok is True)
     failed = sum(1 for _, ok in results if ok is False)
     skipped = sum(1 for _, ok in results if ok is None)
-    
+
     for name, ok in results:
         if ok is True:
             print(f"  ✅ {name}")
@@ -194,11 +192,11 @@ def main():
             print(f"  ❌ {name}")
         else:
             print(f"  ⏭️ {name} (skipped)")
-    
+
     print()
     print(f"  {passed} passed · {failed} failed · {skipped} skipped")
     print("=" * 60)
-    
+
     if failed > 0:
         print("❌ SMOKE TEST FAILED")
         return 1
