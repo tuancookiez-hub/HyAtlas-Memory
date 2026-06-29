@@ -1,18 +1,47 @@
-## [2.0.0] - 2026-06-28 — S-Class memory upgrade
+## [2.0.0] - 2026-06-30 — S-Class memory upgrade (public release)
 
 ### Added
 - **`l5_inprocess.py`** — L5 knowledge graph writer inside System2 digest (no subprocess batch lock). Gated by `MEMORY_L5_VERSION=2`; watermark in `l5_state.json`; multi-user Qdrant scroll for L2 backfill.
 - **`apply_s2_operations_json_patch()`** — Robust parse of System2 digest JSON ops (think blocks / fenced JSON) so `create_schema` reaches Kuzu; fixes perpetual `no L6 basics` when the LLM returns valid JSON inside noise.
 - **`apply_l4_identity_patch()`** — L4 pre-write cosine dedup (`MEMORY_L4_DEDUP_*`), `identity_type` (world/experience/opinion), evolution chain enrich on search.
 - **Hybrid v2 + rerank** — documented env for `HY_MEMORY_READER=hybrid_v2` and `MEMORY_RERANK_*` (upstream reader; see migration doc).
+- **`tests/smoke_test.py`** — 6-test smoke suite: import, provider, server health, dashboard health, graph counts, hardcoded path scan.
+- **`tests/test_clean_install.py`** — Wheel build + isolated venv install verification.
+- **`ROADMAP_v2_public.md`** — 4-phase release roadmap with acceptance criteria.
 
 ### Changed
 - **`patches.py` / `client.py`** — aligned with production S-class stack (search timeouts, patch registry).
 - **Default upgrade path** — 1024-d embeddings + Kuzu graph dims; see **`docs/MIGRATION_v2_SCLASS.md`**.
+- **Default Qdrant collection** — `agent_memories_384` → `agent_memories_1024` across all code.
+- **Dashboard `/api/graph-counts`** — limit increased from 200 → 10000 to show real L6/L7 counts.
+- **`__init__.py`** — hermes-agent imports (`agent.memory_provider`, `hermes_constants`, `tools.registry`) now optional with graceful fallback stubs. Clean `pip install` no longer crashes.
+- **All `bin/` scripts** — hardcoded `C:\Users\tuanc\` paths replaced with `HERMES_HOME` env var + `Path.home()` fallbacks. Cross-platform compatible.
+- **Dockerfile** — fixed module path to `hyatlas_memory.server.start_server`, updated COPY paths for v2.0.0 structure.
+- **docker-compose.yml** — added `MEMORY_VECTOR_HOST`/`PORT` env, `hermes_config` volume, fixed dashboard command.
+- **README.md** — embedder example updated to `bge-large-en-v1.5` (1024-dim), Docker section formatting fixed.
+
+### Breaking Changes
+1. **Embedding dimension: 384 → 1024.** Existing 384-d Qdrant collections are incompatible. See **`docs/MIGRATION_v2_SCLASS.md`** for migration steps.
+2. **Kuzu graph dims must match.** Old 384-d Kuzu graph DB is incompatible. Reset Kuzu if S2 logs show dimension mismatch.
+3. **New env defaults:** `HY_MEMORY_READER=hybrid_v2`, `MEMORY_L5_VERSION=2`, `MEMORY_L4_DEDUP_ENABLED=true`.
+
+### Migration from v1.x
+1. `hyatlas stop`
+2. `pip install -U hyatlas-memory`
+3. Re-embed Qdrant collection if on 384-d (or create new `agent_memories_1024` collection)
+4. Reset Kuzu if S2 logs show "Expected: 384, Actual: 1024"
+5. Clear `__pycache__/patches*.pyc` and `l5_inprocess*.pyc`
+6. `hyatlas start` — verify `l5_inprocess: True`, `l4_identity: True` in logs
+7. `curl http://127.0.0.1:19527/healthz` → 200
+
+### Known Limitations
+- **Kuzu WAL accumulates** during runtime (14MB+ observed). Only flushes on clean `hyatlas stop`. Recommend periodic restarts for long-running deployments.
+- **Dashboard `/api/layer-counts`** fetches up to 10,000 memories per refresh. Works fine for <10k memories; optimization deferred for larger deployments.
+- **`rerank_stage` patch** silently no-ops against current upstream reader API. Cross-encoder rerank can be re-enabled via `MEMORY_RERANK_ENABLED=true` when upstream reader API stabilizes.
 
 ### Notes for consumers
-- **Breaking for existing installs** on 384-d embeddings or old Kuzu graph without migration — read migration doc before upgrading production data.
 - After upgrade: `hyatlas stop` → install → clear `__pycache__` for `patches`/`l5_inprocess` if needed → single `hyatlas start` → confirm `l5_inprocess` + `l4_identity` in server log.
+- Run `python tests/smoke_test.py` to verify installation health.
 
 ## [1.5.0] - 2026-06-25
 
