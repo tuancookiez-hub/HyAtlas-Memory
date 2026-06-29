@@ -87,3 +87,5 @@ plans/
 # Runtime
 .qdrant-initialized
 storage/
+.git-commit-msg-*
+*-draft.txt

@@ -28,6 +28,7 @@ Public API:
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import math
 import os
