@@ -29,11 +29,11 @@ jobs:
           # Editable install of this package
           pip install -e ".[test]"
 
-      - name: Run pytest
+      - name: Run pytest (unit tests only)
         run: |
-          # Skip plugin-import tests if hermes-agent isn't available; the
-          # test suite self-skips these via importorskip.
-          pytest -v
+          # Integration tests require live Qdrant + hy-memory server
+          # which aren't available in CI. Run unit tests only.
+          pytest -v -m "not integration" --ignore=tests/test_integration.py
 
       - name: Lint with ruff
         run: |

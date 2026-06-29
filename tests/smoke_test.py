@@ -19,6 +19,13 @@ import urllib.request
 import json
 from pathlib import Path
 
+# Detect if running under pytest
+_is_pytest = "pytest" in sys.modules
+try:
+    import pytest
+except ImportError:
+    pytest = None
+
 # Ensure src is on path for dev installs
 repo_root = Path(__file__).parent.parent
 src_path = repo_root / "src"
@@ -66,6 +73,8 @@ def test_server_health():
                 return False
     except Exception:
         print("⚠️ not running (skip with --skip-server)")
+        if _is_pytest:
+            pytest.skip("Server not running")
         return None
 
 
@@ -82,6 +91,8 @@ def test_dashboard_health():
                 return False
     except Exception:
         print("⚠️ not running")
+        if _is_pytest:
+            pytest.skip("Dashboard not running")
         return None
 
 
@@ -99,6 +110,8 @@ def test_graph_counts():
             return True
     except Exception:
         print("⚠️ endpoint not available")
+        if _is_pytest:
+            pytest.skip("Graph counts endpoint not available")
         return None
 
 

@@ -19,6 +19,7 @@ Preconditions:
 from __future__ import annotations
 
 import json
+import os
 import socket
 import time
 import urllib.request
@@ -60,8 +61,11 @@ requires_stack = pytest.mark.skipif(
 )
 
 
+_QDRANT_COLLECTION = os.environ.get("HYATLAS_QDRANT_COLLECTION", "agent_memories_1024")
+
+
 def _qdrant_request(path: str, body: dict | None = None, method: str = "GET") -> dict:
-    url = f"http://127.0.0.1:6333/collections/agent_memories_384{path}"
+    url = f"http://127.0.0.1:6333/collections/{_QDRANT_COLLECTION}{path}"
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     if data is not None:
