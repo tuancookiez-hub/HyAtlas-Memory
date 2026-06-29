@@ -28,8 +28,9 @@ from pathlib import Path
 # ------------------------------------------------------------------
 # Load LLM config from hy_memory.json
 # ------------------------------------------------------------------
-CFG_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\hy_memory.json")
-SAMPLE_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l2_sample_200.json")
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / "AppData" / "Local" / "hermes")))
+CFG_PATH = HERMES_HOME / "hy_memory.json"
+SAMPLE_PATH = HERMES_HOME / "logs" / "l2_sample_200.json"
 
 cfg = json.loads(CFG_PATH.read_text(encoding="utf-8"))
 LLM_MODEL = cfg["llm"]["model"]

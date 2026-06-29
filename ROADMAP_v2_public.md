@@ -137,6 +137,10 @@ HyAtlas Memory v2.0.0 is currently tagged and working end-to-end for the author'
 - **Future work:** Add pagination + server-side aggregation endpoint
 - **Acceptance:** ✅ Deferred with clear criteria (optimize when >10k memories)
 
+#### 2.5 Server RAM Optimization ❌ Dropped
+- **Considered:** Slim upstream imports, switch to API-based embedder
+- **Decision:** Premature optimization. System handles 1.2GB fine. Risk of breaking patches outweighs benefit. Revisit only if RAM becomes a real constraint.
+
 ### Risk Mitigation
 - ✅ Tested collection name changes in production (no data loss)
 - ✅ Documented Kuzu limitation for users

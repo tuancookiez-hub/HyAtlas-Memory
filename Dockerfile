@@ -9,14 +9,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the package
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md LICENSE ./
 COPY src/ ./src/
-COPY server/ ./server/
-COPY start.py ./
+COPY MANIFEST.in ./
+COPY assets/ ./assets/
+COPY docs/ ./docs/
 
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir .
 
 # Default: start the upstream server
 EXPOSE 19527 8765
 
-CMD ["python", "-m", "server.start_server"]
+CMD ["python", "-m", "hyatlas_memory.server.start_server"]

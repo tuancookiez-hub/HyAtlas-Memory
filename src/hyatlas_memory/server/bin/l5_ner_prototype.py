@@ -11,6 +11,7 @@ Outputs:
   - 5-10 example entities with their source sentence
 """
 import json
+import os
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -20,7 +21,8 @@ import spacy
 # Load the small English model
 nlp = spacy.load("en_core_web_sm")
 
-SAMPLE_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l2_sample_200.json")
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / "AppData" / "Local" / "hermes")))
+SAMPLE_PATH = HERMES_HOME / "logs" / "l2_sample_200.json"
 facts = json.loads(SAMPLE_PATH.read_text(encoding="utf-8"))
 print(f"Loaded {len(facts)} L2_facts")
 

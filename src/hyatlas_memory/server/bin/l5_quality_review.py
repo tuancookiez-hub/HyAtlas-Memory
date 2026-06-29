@@ -10,9 +10,10 @@ import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
-ENTITY_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_resolved_entities.json")
-RELATION_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_resolved_relations.json")
-OUT_DIR = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs")
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / "AppData" / "Local" / "hermes")))
+ENTITY_PATH = HERMES_HOME / "logs" / "l5_resolved_entities.json"
+RELATION_PATH = HERMES_HOME / "logs" / "l5_resolved_relations.json"
+OUT_DIR = HERMES_HOME / "logs"
 
 ents = json.loads(ENTITY_PATH.read_text(encoding="utf-8"))
 rels = json.loads(RELATION_PATH.read_text(encoding="utf-8"))

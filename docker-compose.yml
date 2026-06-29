@@ -22,20 +22,25 @@ services:
         condition: service_healthy
     environment:
       - QDRANT_URL=http://qdrant:6333
+      - MEMORY_VECTOR_HOST=qdrant
+      - MEMORY_VECTOR_PORT=6333
     volumes:
       - hy_memory_data:/root/.hy_memory
-      - ./logs:/app/logs
+      - hermes_config:/root/.hermes
     restart: unless-stopped
 
   dashboard:
     build: .
-    command: python server/dashboard/dashboard.py
+    command: ["python", "-m", "hyatlas_memory.server.dashboard.dashboard"]
     ports:
       - "8765:8765"
     depends_on:
       - server
+    environment:
+      - HY_MEMORY_BASE=http://server:19527
     restart: unless-stopped
 
 volumes:
   qdrant_data:
   hy_memory_data:
+  hermes_config:

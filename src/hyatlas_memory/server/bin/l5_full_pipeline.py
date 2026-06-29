@@ -34,19 +34,23 @@ from datetime import datetime
 from pathlib import Path
 
 # ------------------------------------------------------------------
-# Config
+# Config: resolve paths dynamically
 # ------------------------------------------------------------------
-HERMES_HOME = Path(r"C:\Users\tuanc\AppData\Local\hermes")
+HERMES_HOME = Path(os.environ.get(
+    "HERMES_HOME",
+    str(Path.home() / "AppData" / "Local" / "hermes") if sys.platform == "win32"
+    else str(Path.home() / ".local" / "share" / "hermes")
+))
 HERMES_AGENT = HERMES_HOME / "hermes-agent"
-VENV_PYTHON = HERMES_AGENT / "venv" / "Scripts" / "python.exe"
+VENV_PYTHON = sys.executable
 LOG_PATH = HERMES_HOME / "logs" / "l5_pipeline_run.log"
-STATE_PATH = HERMES_HOME / "logs" / "l5_pipeline_state.json"  # {last_run_at, last_status}
+STATE_PATH = HERMES_HOME / "logs" / "l5_pipeline_state.json"
 LOCK_PATH = HERMES_HOME / "logs" / "l5_pipeline.lock"
 RUN_ID = f"l5_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
 # Server health endpoint
 HEALTH_URL = "http://127.0.0.1:19527/healthz"
-SERVER_CMD = [str(VENV_PYTHON), str(HERMES_HOME / "bin" / "hymemory.py")]
+SERVER_CMD = [VENV_PYTHON, str(HERMES_HOME / "bin" / "hymemory.py")]
 
 # Step scripts
 SCRIPTS = {
@@ -55,6 +59,15 @@ SCRIPTS = {
     "review":    HERMES_HOME / "bin" / "l5_quality_review.py",
     "ingest":    HERMES_HOME / "bin" / "l5_ingest_kuzu.py",
     "export":    HERMES_HOME / "bin" / "l5_export_json.py",
+}
+
+# Step output paths
+STEP_OUTPUTS = {
+    "digest":  HERMES_HOME / "logs" / "l5_full_stats.json",
+    "resolve": HERMES_HOME / "logs" / "l5_resolution_stats.json",
+    "review":  HERMES_HOME / "logs" / "l5_quality_review.json",
+    "ingest":  HERMES_HOME / "logs" / "l5_ingest_stats.json",
+    "export":  HERMES_HOME / "logs" / "l5_kuzu_export.json",
 }
 
 
@@ -170,13 +183,7 @@ def is_step_output_fresh(name: str, max_age_min: int = 60) -> bool:
     continue from X+1. This makes the auto-trigger reliable even when
     the parent process is killed externally.
     """
-    step_files = {
-        "digest":  Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_full_stats.json"),
-        "resolve": Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_resolution_stats.json"),
-        "review":  Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_quality_review.json"),
-        "ingest":  Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_ingest_stats.json"),
-        "export":  Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_kuzu_export.json"),
-    }
+    step_files = STEP_OUTPUTS
     path = step_files.get(name)
     if not path or not path.exists():
         return False

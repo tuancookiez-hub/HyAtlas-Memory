@@ -10,7 +10,7 @@ import urllib.request
 from pathlib import Path
 
 # Use the hermes-agent venv Python (where hy_memory is installed)
-sys.path.insert(0, r"C:\Users\tuanc\AppData\Local\hermes\hermes-agent\venv\Lib\site-packages")
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 # Set env vars (must match server config)
 os.environ["HY_MEMORY_MODE"] = "ultra"
@@ -38,7 +38,7 @@ except Exception as e:
 from hy_memory.client import HyMemoryClient
 
 # Find config
-config_path = r"C:\Users\tuanc\AppData\Local\hermes\hy_memory.json"
+config_path = str(Path(os.environ.get("HERMES_HOME", str(Path.home() / "AppData" / "Local" / "hermes"))) / "hy_memory.json")
 cfg = json.loads(Path(config_path).read_text())
 
 # Load the actual API key from config
@@ -68,7 +68,7 @@ print()
 print("=== Waiting 5s, then checking L5 pipeline state ===")
 time.sleep(5)
 
-state_path = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_pipeline_state.json")
+state_path = Path(os.environ.get("HERMES_HOME", str(Path.home() / "AppData" / "Local" / "hermes"))) / "logs" / "l5_pipeline_state.json"
 if state_path.exists():
     print(f"  L5 state file: {state_path.read_text(encoding='utf-8')}")
 else:
