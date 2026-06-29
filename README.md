@@ -5,7 +5,6 @@
 <p align="center">
   <a href="https://tuancookiez-hub.github.io/tuandev-portfolio/"><img src="https://img.shields.io/badge/Built%20by-Tuan%20Dev-blueviolet?style=for-the-badge" alt="Built by Tuan Dev"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
-  <a href="https://pypi.org/project/hyatlas-memory/"><img src="https://img.shields.io/pypi/v/hyatlas-memory?style=for-the-badge" alt="PyPI"></a>
   <a href="https://github.com/tuancookiez-hub/HyAtlas-Memory/releases"><img src="https://img.shields.io/github/v/release/tuancookiez-hub/HyAtlas-Memory?style=for-the-badge" alt="GitHub release"></a>
 </p>
 
@@ -36,7 +35,9 @@ See it in action — a 19-second walkthrough of the live dashboard:
 ## Quick start
 
 ```bash
-pip install hyatlas-memory
+git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
+cd HyAtlas-Memory
+pip install -e .
 hyatlas setup hermes        # installs plugin + config + tests auto-start
 ```
 
@@ -449,7 +450,9 @@ If you were running the previous in-fork version (`plugins/memory/hy_memory/` in
 mv hermes-agent/plugins/memory/hy_memory ~/hy_memory_archive_$(date +%Y%m%d)
 
 # 2. Install this package
-pip install hyatlas-memory
+git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
+cd HyAtlas-Memory
+pip install -e .
 
 # 3. Your config and data stay where they were
 #    ~/.hy_memory/      (data, Kuzu DB)

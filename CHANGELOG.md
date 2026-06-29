@@ -27,7 +27,7 @@
 
 ### Migration from v1.x
 1. `hyatlas stop`
-2. `pip install -U hyatlas-memory`
+2. `git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git && cd HyAtlas-Memory && pip install -e .`
 3. Re-embed Qdrant collection if on 384-d (or create new `agent_memories_1024` collection)
 4. Reset Kuzu if S2 logs show "Expected: 384, Actual: 1024"
 5. Clear `__pycache__/patches*.pyc` and `l5_inprocess*.pyc`

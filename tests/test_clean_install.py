@@ -2,7 +2,7 @@
 """
 Phase 1.4: Clean Install Verification Script
 
-This script simulates a fresh `pip install hyatlas-memory` scenario
+This script simulates a fresh `pip install -e .` scenario
 in an isolated virtual environment to verify that:
 1. The package installs successfully
 2. Imports work without hermes-agent installed
@@ -130,7 +130,7 @@ def verify_clean_install(tmpdir: Path, venv_dir: Path, repo_root: Path):
     )
     if result.returncode != 0:
         print("❌ FAILED: Import crashed")
-        print("   This would be a BLOCKER for users doing `pip install hyatlas-memory`")
+        print("   This would be a BLOCKER for users doing `pip install -e .`")
         return False
     print()
     
