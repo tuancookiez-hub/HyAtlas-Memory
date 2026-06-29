@@ -157,6 +157,21 @@ def _slugify(name: str) -> str:
     return f"l5_{s}"[:60]
 
 
+def _qdrant_point_id(node_id: str) -> str:
+    """Stable UUID for Qdrant (collection expects UUID-shaped ids)."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"hyatlas-l5:{node_id}"))
+
+
+def _resolve_embed_service(s2_writer) -> Any | None:
+    for obj in (s2_writer, getattr(s2_writer, "_writer", None)):
+        if obj is None:
+            continue
+        svc = getattr(obj, "_embed_service", None) or getattr(obj, "embed_service", None)
+        if svc is not None:
+            return svc
+    return None
+
+
 def _read_watermark() -> float:
     """Read last processed timestamp from state file."""
     try:
@@ -342,10 +357,44 @@ async def _llm_extract(facts: list[dict], llm_call) -> tuple[list[dict], list[di
     return entities, relations
 
 
+async def _entity_embeddings(s2_writer, names: list[str]) -> dict[str, list[float]]:
+    """Batch-embed entity names for Kuzu CREATE (indexed embedding column is required)."""
+    if not names:
+        return {}
+    import asyncio
+
+    unique = list(dict.fromkeys(names))
+    embeddings: list[list[float]] | None = None
+    embed_service = _resolve_embed_service(s2_writer)
+    if embed_service is not None:
+        embeddings = await embed_service.embed_batch(unique)
+    if embeddings is None:
+        try:
+            from hyatlas_memory import patches as _patches  # noqa: WPS433
+            model = getattr(_patches, "_local_embed_model", None)
+        except Exception:
+            model = None
+        if model is not None:
+            vecs = await asyncio.to_thread(model.encode, unique, convert_to_numpy=True)
+            embeddings = [v.tolist() for v in vecs]
+    if embeddings is None:
+        import requests
+        embed_url = os.getenv("MEMORY_L5_EMBED_URL", "http://127.0.0.1:19528/v1/embeddings")
+        resp = requests.post(embed_url, json={"input": unique}, timeout=60)
+        resp.raise_for_status()
+        vectors = resp.json()["data"]
+        embeddings = [v["embedding"] for v in vectors]
+    return dict(zip(unique, embeddings))
+
+
 async def _resolve_and_write_entities(
-    graph_store, entities: list[dict], user_id: str, agent_id: str
-) -> dict[str, str]:
-    """Resolve entities against existing Kuzu nodes, write new ones. Returns name→node_id map."""
+    graph_store,
+    entities: list[dict],
+    user_id: str,
+    agent_id: str,
+    embed_by_name: dict[str, list[float]] | None = None,
+) -> tuple[dict[str, str], int]:
+    """Resolve entities against existing Kuzu nodes, write new ones. Returns (name→node_id, written)."""
     from hy_memory.models.memory import MemoryNode, MemoryLayer, MemoryStatus, SourceType
 
     name_to_id = {}
@@ -380,15 +429,21 @@ async def _resolve_and_write_entities(
                 session_id="default_session",
                 layer=MemoryLayer.L5_KNOWLEDGE,
                 content=name,
-                content_type=f"ENTITY_{etype}",
                 status=MemoryStatus.ACTIVE,
-                version=1,
                 confidence=ent.get("confidence", 0.7),
-                source_type=SourceType.L5_DIGEST,
-                created_at=datetime.now(),
+                source_type=SourceType.INFERRED,
+                gmt_created=datetime.now(),
                 valid_from=datetime.now(),
-                custom={"entity_type": etype, "source_fact_id": ent.get("source_fact_id", "")},
+                custom={
+                    "entity_type": etype,
+                    "content_type": f"ENTITY_{etype}",
+                    "source_fact_id": ent.get("source_fact_id", ""),
+                },
+                tags=[f"ENTITY_{etype}"],
             )
+            emb = (embed_by_name or {}).get(name)
+            if emb:
+                node._graph_embedding = emb
             await graph_store.upsert_memory_node(node)
             name_to_id[name] = node_id
             written += 1
@@ -396,7 +451,7 @@ async def _resolve_and_write_entities(
             logger.warning(f"[L5] could not write entity {name}: {e}")
 
     logger.info(f"[L5] entities: {written} written, {merged} merged, {len(entities)} total")
-    return name_to_id
+    return name_to_id, written
 
 
 async def _write_relations(
@@ -426,28 +481,50 @@ async def _write_relations(
     return written
 
 
-async def _embed_entities_to_qdrant(entities: list[dict], name_to_id: dict[str, str], user_id: str, agent_id: str):
+async def _embed_entities_to_qdrant(
+    s2_writer,
+    entities: list[dict],
+    name_to_id: dict[str, str],
+    user_id: str,
+    agent_id: str,
+):
     """Embed entity content and write to Qdrant for semantic search."""
+    import asyncio
     import requests
 
     if not entities:
-        return
+        return False
 
     try:
-        # Use the local embed server
-        embed_url = "http://127.0.0.1:19528/v1/embeddings"
         texts = [ent["name"] for ent in entities]
-        resp = requests.post(embed_url, json={"input": texts}, timeout=30)
-        vectors = resp.json()["data"]
-        embeddings = [v["embedding"] for v in vectors]
+        embeddings: list[list[float]] | None = None
 
-        # Write to Qdrant
+        embed_service = _resolve_embed_service(s2_writer)
+        if embed_service is not None:
+            embeddings = await embed_service.embed_batch(texts)
+
+        if embeddings is None:
+            try:
+                from hyatlas_memory import patches as _patches  # noqa: WPS433
+                model = getattr(_patches, "_local_embed_model", None)
+            except Exception:
+                model = None
+            if model is not None:
+                vecs = await asyncio.to_thread(model.encode, texts, convert_to_numpy=True)
+                embeddings = [v.tolist() for v in vecs]
+
+        if embeddings is None:
+            embed_url = os.getenv("MEMORY_L5_EMBED_URL", "http://127.0.0.1:19528/v1/embeddings")
+            resp = requests.post(embed_url, json={"input": texts}, timeout=30)
+            vectors = resp.json()["data"]
+            embeddings = [v["embedding"] for v in vectors]
+
         points = []
         for i, ent in enumerate(entities):
             name = ent["name"]
             node_id = name_to_id.get(name, _slugify(name))
             points.append({
-                "id": node_id,  # Use same ID as Kuzu for cross-reference
+                "id": _qdrant_point_id(node_id),
                 "vector": embeddings[i],
                 "payload": {
                     "layer": "l5_knowledge",
@@ -468,11 +545,15 @@ async def _embed_entities_to_qdrant(entities: list[dict], name_to_id: dict[str, 
         )
         if resp.status_code == 200:
             logger.info(f"[L5] embedded {len(points)} entities to Qdrant")
-        else:
-            logger.warning(f"[L5] Qdrant embed write failed: {resp.status_code}")
+            return True
+        logger.warning(
+            f"[L5] Qdrant embed write failed: {resp.status_code} body={resp.text[:300]}"
+        )
+        return False
 
     except Exception as e:
         logger.warning(f"[L5] entity embedding failed: {e}")
+        return False
 
 
 async def run_l5_inprocess(
@@ -509,18 +590,24 @@ async def run_l5_inprocess(
         if not entities:
             return {"skipped": "no entities extracted", "facts": len(facts)}
 
-        # 4. Resolve + write entities to Kuzu
-        name_to_id = await _resolve_and_write_entities(graph_store, entities, user_id, agent_id)
+        # 4. Resolve + write entities to Kuzu (Kuzu CREATE requires content embedding)
+        embed_by_name = await _entity_embeddings(s2_writer, [e["name"] for e in entities])
+        name_to_id, ent_written = await _resolve_and_write_entities(
+            graph_store, entities, user_id, agent_id, embed_by_name
+        )
 
         # 5. Write relations to Kuzu
         rel_count = await _write_relations(graph_store, relations, name_to_id)
 
         # 6. Embed entities to Qdrant
-        await _embed_entities_to_qdrant(entities, name_to_id, user_id, agent_id)
+        qdrant_ok = await _embed_entities_to_qdrant(s2_writer, entities, name_to_id, user_id, agent_id)
 
-        # 7. Update watermark
+        # 7. Update watermark only when something actually persisted
         latest_ts = max(f["gmt_created"] for f in facts)
-        _write_watermark(latest_ts)
+        if ent_written > 0 or rel_count > 0 or qdrant_ok:
+            _write_watermark(latest_ts)
+        else:
+            logger.warning("[L5] watermark not advanced: no Kuzu/Qdrant writes succeeded")
 
         elapsed = time.time() - start
         result = {

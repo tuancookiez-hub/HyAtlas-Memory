@@ -77,7 +77,28 @@ if AUTH_REQUIRED:
 # filters out by default — see hy-memory-setup skill: "L1_RAW is the raw
 # input layer, hidden from the user-facing list by design")
 QDRANT_BASE = os.environ.get("QDRANT_BASE", "http://127.0.0.1:6333").rstrip("/")
-QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "agent_memories_384")
+QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "agent_memories_1024")
+
+
+def _qdrant_layer_count(layer: str, *, require_is_latest: bool = True) -> int:
+    """Count points in Qdrant for one layer (dashboard composition bar)."""
+    must = [{"key": "layer", "match": {"value": layer}}]
+    if require_is_latest:
+        must.append({"key": "is_latest", "match": {"value": True}})
+    elif layer == "l5_knowledge":
+        must.append({"key": "status", "match": {"value": "active"}})
+    body = {"filter": {"must": must}}
+    try:
+        req = urllib.request.Request(
+            f"{QDRANT_BASE}/collections/{QDRANT_COLLECTION}/points/count",
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        return int(
+            json.loads(urllib.request.urlopen(req, timeout=10).read())["result"]["count"]
+        )
+    except Exception:
+        return 0
 
 
 def _l5_export_path() -> _pathlib.Path:
@@ -3224,52 +3245,37 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             ]
             counts = {}
             total = 0
+            graph_layers = ("l5_knowledge", "l6_schema", "l7_intention")
             for layer in layer_keys:
-                body = {"filter": {"must": [
-                    {"key": "layer",    "match": {"value": layer}},
-                    {"key": "is_latest", "match": {"value": True}},
-                ]}}
-                try:
-                    req = urllib.request.Request(
-                        f"{QDRANT_BASE}/collections/{QDRANT_COLLECTION}/points/count",
-                        data=json.dumps(body).encode(),
-                        headers={"Content-Type": "application/json"},
-                    )
-                    n = json.loads(urllib.request.urlopen(req, timeout=10).read())["result"]["count"]
-                except Exception:
-                    n = 0
+                require_latest = layer not in graph_layers
+                n = _qdrant_layer_count(layer, require_is_latest=require_latest)
                 counts[layer] = n
                 total += n
-            # L5/L6/L7 live in Kuzu (NOT in Qdrant).
-            # v1.5.0: read live counts via the upstream's
-            # ``/api/v1/list`` endpoint, which now includes all
-            # three graph layers (the upstream's _list_graph_bucket
-            # was patched by hyatlas_memory.patches to query
-            # without the broken isolation_key filter).
+            # L5/L6/L7 also live in Kuzu; merge graph bucket (all known user scopes).
             graph_counts = {"l5_knowledge": 0, "l6_schema": 0, "l7_intention": 0}
             try:
-                list_body = json.dumps({
-                    "user_id": "hermes-user",
-                    "session_id": "default_session",
-                    "limit": 10000,
-                }).encode()
-                list_req = urllib.request.Request(
-                    f"{HY_MEMORY_BASE}/api/v1/list",
-                    data=list_body,
-                    headers={"Content-Type": "application/json"},
-                )
-                raw = json.loads(
-                    urllib.request.urlopen(list_req, timeout=15).read()
-                )
-                for n in (raw.get("graph") or {}).get("nodes") or []:
-                    lyr = n.get("layer")
-                    if lyr in graph_counts:
-                        graph_counts[lyr] += 1
+                for uid in HERMES_USER_IDS:
+                    list_body = json.dumps({
+                        "user_id": uid,
+                        "session_id": "default_session",
+                        "limit": 10000,
+                    }).encode()
+                    list_req = urllib.request.Request(
+                        f"{HY_MEMORY_BASE}/api/v1/list",
+                        data=list_body,
+                        headers={"Content-Type": "application/json"},
+                    )
+                    raw = json.loads(
+                        urllib.request.urlopen(list_req, timeout=15).read()
+                    )
+                    for n in (raw.get("graph") or {}).get("nodes") or []:
+                        lyr = n.get("layer")
+                        if lyr in graph_counts:
+                            graph_counts[lyr] += 1
             except Exception:
                 pass
-            counts["l5_knowledge"] = graph_counts["l5_knowledge"]
-            counts["l6_schema"] = graph_counts["l6_schema"]
-            counts["l7_intention"] = graph_counts["l7_intention"]
+            for lyr in graph_layers:
+                counts[lyr] = max(counts.get(lyr, 0), graph_counts[lyr])
             total = sum(counts.values())
             return self._json(200, {
                 "counts": counts,
@@ -3318,6 +3324,8 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                         l5_count += 1
             except (FileNotFoundError, json.JSONDecodeError):
                 pass
+            if l5_count == 0:
+                l5_count = _qdrant_layer_count("l5_knowledge", require_is_latest=False)
             return self._json(200, {
                 "l5_knowledge": l5_count,
                 "l6_schema": l6_count,

@@ -25,6 +25,7 @@ def _load_dotenv(path: Path) -> None:
             os.environ[key] = value
 
 _load_dotenv(home / ".env")
+_load_dotenv(Path.home() / ".hy_memory" / "pkg" / ".env")
 config = json.loads((home / "hy_memory.json").read_text(encoding="utf-8"))
 
 # Resolve LLM settings: JSON wins, fall back to HY_MEMORY_* env vars
@@ -96,6 +97,8 @@ try:
     _pm = importlib.import_module("hyatlas_memory.patches")
     _result = _pm.apply_all_patches()
     print(f"  Patches applied: {_result}")
+    if _result.get("user_identity"):
+        print("  User identity unification: ON (HYATLAS_USER_IDENTITY)")
 except ImportError as _e:
     print(f"  WARN: hyatlas_memory.patches not importable: {_e}")
 

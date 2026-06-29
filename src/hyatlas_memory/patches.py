@@ -2151,6 +2151,201 @@ def apply_l1_raw_normal_fallback_patch() -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Patch 18 — robust System2 operations JSON parse (Grok/reasoning models)
+#
+# Scheduled digest uses single-call JSON (create_schema / create_intention).
+# Nemotron/Grok often wrap output in think blocks or prose; upstream parser
+# returns None → zero Kuzu writes → sweeper always "no L6 basics".
+# ---------------------------------------------------------------------------
+
+
+def apply_s2_operations_json_patch() -> bool:
+    if _applied.get("s2_operations_json"):
+        return True
+    try:
+        from hy_memory.pipelines import system2_agent as _s2a
+    except ImportError:
+        logger.debug("[hy-memory] system2_agent not importable — s2 JSON patch skipped")
+        return False
+
+    import json
+    import re
+    from typing import Any, Dict, List, Optional
+
+    def _strip_think(text: str) -> str:
+        text = re.sub(r"⋖.*?⋗", "", text, flags=re.DOTALL)
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(r"```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        if text.strip().startswith("```"):
+            text = "\n".join(
+                line for line in text.split("\n")
+                if not line.strip().startswith("```")
+            )
+        return text.strip()
+
+    def _parse_operations_json_robust(text: str) -> Optional[List[Dict[str, Any]]]:
+        raw = text or ""
+        text = _strip_think(raw)
+        if not text:
+            return None
+        if text.strip() in ("[]", "```json\n[]\n```"):
+            return []
+
+        candidates: list[str] = []
+        for block in re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", raw, flags=re.IGNORECASE):
+            b = block.strip()
+            if b:
+                candidates.append(b)
+        m = re.search(r"\[\s*\{[\s\S]*\}\s*\]", text)
+        if m:
+            candidates.append(m.group(0))
+        start, end = text.find("["), text.rfind("]")
+        if start >= 0 and end > start:
+            candidates.append(text[start : end + 1])
+        candidates.append(text)
+
+        seen: set[str] = set()
+        for json_str in candidates:
+            json_str = json_str.strip()
+            if not json_str or json_str in seen:
+                continue
+            seen.add(json_str)
+            tries = [json_str]
+            for trim in range(len(json_str), max(len(json_str) - 4000, 0), -80):
+                sub = json_str[:trim].rstrip().rstrip(",")
+                if "[" in sub:
+                    need_b = sub.count("[") - sub.count("]")
+                    need_c = sub.count("{") - sub.count("}")
+                    tries.append(sub + "]" * max(need_b, 0) + "}" * max(need_c, 0))
+            for cand in tries:
+                try:
+                    result = json.loads(cand)
+                    if isinstance(result, list):
+                        logger.info(
+                            "[S2-agent-patch] parsed %d operations (len=%d)",
+                            len(result),
+                            len(cand),
+                        )
+                        return result
+                except json.JSONDecodeError:
+                    continue
+
+        logger.warning(
+            "[S2-agent-patch] operations JSON parse failed: %s",
+            text[:400].replace("\n", " "),
+        )
+        return None
+
+    _s2a._parse_operations_json = _parse_operations_json_robust
+    _applied["s2_operations_json"] = True
+    logger.info("[hy-memory] s2_operations_json patch applied")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# User identity unification (hybrid_v2 VDB search)
+#
+# Same person may appear as Discord id, hermes-user, system:handoff, etc.
+# Default isolation_key matching often misses stored 3-part keys. When
+# HYATLAS_USER_IDENTITY=1, force user_id MatchAny across alias list.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_USER_ALIASES = "221727702992945152,hermes-user,system:handoff"
+
+
+def _user_identity_enabled() -> bool:
+    return os.environ.get("HYATLAS_USER_IDENTITY", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _parse_user_alias_pool() -> list[str]:
+    raw = os.environ.get("HYATLAS_USER_ALIASES", _DEFAULT_USER_ALIASES).strip()
+    if not raw:
+        raw = _DEFAULT_USER_ALIASES
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _expand_user_ids_for_search(
+    user_ids: list[str] | None,
+    user_id: str | None,
+    alias_pool: list[str],
+) -> list[str]:
+    seed: list[str] = []
+    if user_ids:
+        seed.extend(user_ids)
+    if user_id:
+        seed.append(user_id)
+    expanded: set[str] = set(alias_pool)
+    for uid in seed:
+        if not uid:
+            continue
+        expanded.add(uid)
+        if uid in alias_pool:
+            expanded.update(alias_pool)
+    return sorted(expanded)
+
+
+def apply_user_identity_patch() -> bool:
+    """Unify user_id filters for hybrid_v2 VDB search (alias expansion).
+
+    Gated by HYATLAS_USER_IDENTITY=1. Idempotent monkey-patch on
+    HybridV2ReadPipeline._build_isolation_params.
+    """
+    if not _user_identity_enabled():
+        return False
+    if _applied.get("user_identity"):
+        return True
+
+    try:
+        from hy_memory.pipelines.reader_hybrid_v2 import HybridV2ReadPipeline
+    except ImportError as exc:
+        logger.warning(
+            "[hy-memory/patches] user_identity: HybridV2ReadPipeline missing, skip: %s",
+            exc,
+        )
+        return False
+
+    if getattr(HybridV2ReadPipeline, "_hyatlas_user_identity_patched", False):
+        _applied["user_identity"] = True
+        return True
+
+    alias_pool = _parse_user_alias_pool()
+    orig = HybridV2ReadPipeline._build_isolation_params
+
+    def _patched_build_isolation_params(self, request):
+        user_ids = (
+            request.user_ids
+            if request.user_ids
+            else ([request.user_id] if request.user_id else [])
+        )
+        expanded = _expand_user_ids_for_search(
+            user_ids,
+            request.user_id,
+            alias_pool,
+        )
+        return {
+            "isolation_key": "",
+            "isolation_keys": None,
+            "user_ids": expanded if expanded else None,
+            "agent_ids": ["default"],
+        }
+
+    HybridV2ReadPipeline._build_isolation_params = _patched_build_isolation_params
+    HybridV2ReadPipeline._hyatlas_user_identity_patched = True
+    HybridV2ReadPipeline._hyatlas_user_identity_orig = orig
+    _applied["user_identity"] = True
+    logger.info(
+        "[hy-memory/patches] user_identity patch active (hybrid_v2 user_id MatchAny): %s",
+        ", ".join(alias_pool),
+    )
+    return True
+
+
 # Master entry point
 # ---------------------------------------------------------------------------
 
@@ -2175,6 +2370,8 @@ def apply_all_patches() -> dict[str, bool]:
         "disabled_cache_timing": apply_disabled_cache_timing_patch(),
         "l1_raw_normal_fallback": apply_l1_raw_normal_fallback_patch(),
         "coding_judge": _patch_coding_judge(),
+        "s2_operations_json": apply_s2_operations_json_patch(),
+        "user_identity": apply_user_identity_patch(),
     }
 
 

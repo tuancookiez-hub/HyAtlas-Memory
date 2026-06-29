@@ -2,6 +2,7 @@
 
 ### Added
 - **`l5_inprocess.py`** — L5 knowledge graph writer inside System2 digest (no subprocess batch lock). Gated by `MEMORY_L5_VERSION=2`; watermark in `l5_state.json`; multi-user Qdrant scroll for L2 backfill.
+- **`apply_s2_operations_json_patch()`** — Robust parse of System2 digest JSON ops (think blocks / fenced JSON) so `create_schema` reaches Kuzu; fixes perpetual `no L6 basics` when the LLM returns valid JSON inside noise.
 - **`apply_l4_identity_patch()`** — L4 pre-write cosine dedup (`MEMORY_L4_DEDUP_*`), `identity_type` (world/experience/opinion), evolution chain enrich on search.
 - **Hybrid v2 + rerank** — documented env for `HY_MEMORY_READER=hybrid_v2` and `MEMORY_RERANK_*` (upstream reader; see migration doc).
 
