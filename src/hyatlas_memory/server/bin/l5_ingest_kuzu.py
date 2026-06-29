@@ -43,13 +43,33 @@ from pathlib import Path
 import kuzu
 
 # ------------------------------------------------------------------
-# Config
+# Config: resolve paths dynamically
 # ------------------------------------------------------------------
-PROD_KUZU_PATH = Path(r"C:\Users\tuanc\.hy_memory\data\kuzu_db")
-TEST_KUZU_PATH = Path(r"C:\Users\tuanc\.hy_memory\data\kuzu_db_test")
-REVIEW_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_quality_review.json")
-STATS_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_ingest_stats.json")
-SAMPLE_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_ingest_sample_query.txt")
+def _resolve_hy_memory_home() -> Path:
+    """Resolve hy_memory data directory (contains Kuzu DB)."""
+    home = Path.home() / ".hy_memory"
+    home.mkdir(parents=True, exist_ok=True)
+    return home
+
+
+def _resolve_hermes_home() -> Path:
+    """Resolve Hermes Agent home directory."""
+    try:
+        from hermes_constants import get_hermes_home
+        return Path(get_hermes_home())
+    except Exception:
+        # Fallback: use standard location based on platform
+        if sys.platform == "win32":
+            return Path.home() / "AppData" / "Local" / "hermes"
+        else:
+            return Path.home() / ".local" / "share" / "hermes"
+
+
+PROD_KUZU_PATH = _resolve_hy_memory_home() / "data" / "kuzu_db"
+TEST_KUZU_PATH = _resolve_hy_memory_home() / "data" / "kuzu_db_test"
+REVIEW_PATH = _resolve_hermes_home() / "logs" / "l5_quality_review.json"
+STATS_PATH = _resolve_hermes_home() / "logs" / "l5_ingest_stats.json"
+SAMPLE_PATH = _resolve_hermes_home() / "logs" / "l5_ingest_sample_query.txt"
 
 # Isolation key: use the same format as the SDK (user_id::agent_id::session_id)
 # Hermes TUI defaults: user_id=hermes-user, agent_id=default, session_id=default_session

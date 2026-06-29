@@ -23,7 +23,7 @@ What this wrapper does that the old kill_hy_mem.ps1 + raw python launch does not
   5. Logs go to ~/.hermes/logs/hymemory-{service}.log so you can debug failures
 
 Naming history (2026-06-13):
-  - hymemory — rejected for public name: collides with /c/Users/tuanc/bin/hymemory
+  - hymemory — rejected for public name: collides with existing local bin/hymemory
     (XAMPP MySQL launcher); kept as the internal/work-in-progress name
   - hymem    — rejected: sounds like "hymen" when said aloud
   - hyctl    — rejected: Unix-generic, doesn't fit the brand

@@ -26,12 +26,21 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 # ------------------------------------------------------------------
-# Config
-# ------------------------------------------------------------------
-ENTITY_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_full_entities.json")
-RELATION_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_full_relations.json")
-CFG_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\hy_memory.json")
-OUT_DIR = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs")
+import threading  # Required for HyMemoryProvider._prefetch_lock
+from pathlib import Path
+import os
+import sys
+
+HERMES_HOME = Path(os.environ.get(
+    "HERMES_HOME",
+    str(Path.home() / "AppData" / "Local" / "hermes") if sys.platform == "win32"
+    else str(Path.home() / ".hermes")
+))
+
+ENTITY_PATH = HERMES_HOME / "logs" / "l5_full_entities.json"
+RELATION_PATH = HERMES_HOME / "logs" / "l5_full_relations.json"
+CFG_PATH = HERMES_HOME / "hy_memory.json"
+OUT_DIR = HERMES_HOME / "logs"
 
 cfg = json.loads(CFG_PATH.read_text(encoding="utf-8"))
 LLM_MODEL = cfg["llm"]["model"]

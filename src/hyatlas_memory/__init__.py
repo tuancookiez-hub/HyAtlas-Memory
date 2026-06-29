@@ -28,18 +28,45 @@ Public API:
 from __future__ import annotations
 
 import contextlib
-import datetime as _dt
-import json
 import logging
+import math
 import os
+import re
 import threading
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from agent.memory_provider import MemoryProvider
-from hermes_constants import get_hermes_home
-from tools.registry import tool_error
+# Imports from hermes-agent (optional for standalone use):
+try:
+    from agent.memory_provider import MemoryProvider
+    from hermes_constants import get_hermes_home
+    from tools.registry import tool_error
+    _HERMES_AVAILABLE = True
+except ImportError:
+    _HERMES_AVAILABLE = False
+    # Provide stubs for standalone use (e.g., testing without hermes-agent)
+    class MemoryProvider:
+        """Stub base class when hermes-agent is not installed."""
+        pass
+    
+    def get_hermes_home():
+        """Fallback when hermes_constants is not available."""
+        return os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
+    
+    def tool_error(msg: str) -> str:
+        """Fallback tool_error when tools.registry is not available."""
+        return f"[ERROR] {msg}"
+    
+    # Log warning at module level for diagnostics
+    import warnings
+    warnings.warn(
+        "hermes-agent imports not available — running in standalone mode. "
+        "Some features may be limited. Install hermes-agent for full functionality.",
+        ImportWarning,
+        stacklevel=2
+    )
 
 from . import patches
 from ._version import __version__ as __version__

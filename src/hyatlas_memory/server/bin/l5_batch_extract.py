@@ -20,11 +20,19 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 # ------------------------------------------------------------------
-# Config
-# ------------------------------------------------------------------
-CFG_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\hy_memory.json")
-SAMPLE_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l2_sample_200.json")
-OUT_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_extraction_design_a.json")
+import threading  # Required for HyMemoryProvider._prefetch_lock
+from pathlib import Path
+import os
+
+HERMES_HOME = Path(os.environ.get(
+    "HERMES_HOME",
+    str(Path.home() / "AppData" / "Local" / "hermes") if sys.platform == "win32"
+    else str(Path.home() / ".hermes")
+))
+
+CFG_PATH = HERMES_HOME / "hy_memory.json"
+SAMPLE_PATH = HERMES_HOME / "logs" / "l2_sample_200.json"
+OUT_PATH = HERMES_HOME / "logs" / "l5_extraction_design_a.json"
 
 cfg = json.loads(CFG_PATH.read_text(encoding="utf-8"))
 LLM_MODEL = cfg["llm"]["model"]

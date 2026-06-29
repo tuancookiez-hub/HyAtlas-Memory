@@ -24,11 +24,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 # ------------------------------------------------------------------
-# Config
-# ------------------------------------------------------------------
-CFG_PATH = Path(r"C:\Users\tuanc\AppData\Local\hermes\hy_memory.json")
-SAMPLE_PATH = Path(r"C:\\Users\\tuanc\\AppData\\Local\\hermes\\logs\\l2_all_1011.json")  # 323 L2_facts (actual count)
-OUT_DIR = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs")
+import threading  # Required for HyMemoryProvider._prefetch_lock
+from pathlib import Path
+import os
+import sys
+
+HERMES_HOME = Path(os.environ.get(
+    "HERMES_HOME",
+    str(Path.home() / "AppData" / "Local" / "hermes") if sys.platform == "win32"
+    else str(Path.home() / ".hermes")
+))
+
+CFG_PATH = HERMES_HOME / "hy_memory.json"
+SAMPLE_PATH = HERMES_HOME / "logs" / "l2_all_1011.json"
+OUT_DIR = HERMES_HOME / "logs"
 ENTITIES_PATH = OUT_DIR / "l5_full_entities.json"
 RELATIONS_PATH = OUT_DIR / "l5_full_relations.json"
 STATS_PATH = OUT_DIR / "l5_full_stats.json"

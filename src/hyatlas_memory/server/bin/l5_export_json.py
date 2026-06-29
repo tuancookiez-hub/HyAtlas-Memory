@@ -29,8 +29,28 @@ from pathlib import Path
 import kuzu
 
 # Paths
-PROD_KUZU_PATH = Path(r"C:\Users\tuanc\.hy_memory\data\kuzu_db")
-TEST_KUZU_PATH = Path(r"C:\Users\tuanc\.hy_memory\data\kuzu_db_test")
+def _resolve_hy_memory_home() -> Path:
+    """Resolve hy_memory data directory (contains Kuzu DB)."""
+    home = Path.home() / ".hy_memory"
+    home.mkdir(parents=True, exist_ok=True)
+    return home
+
+
+PROD_KUZU_PATH = _resolve_hy_memory_home() / "data" / "kuzu_db"
+TEST_KUZU_PATH = _resolve_hy_memory_home() / "data" / "kuzu_db_test"
+
+
+def _resolve_hermes_home() -> Path:
+    """Resolve Hermes Agent home directory."""
+    try:
+        from hermes_constants import get_hermes_home
+        return Path(get_hermes_home())
+    except Exception:
+        # Fallback: use standard location based on platform
+        if sys.platform == "win32":
+            return Path.home() / "AppData" / "Local" / "hermes"
+        else:
+            return Path.home() / ".local" / "share" / "hermes"
 
 
 def _resolve_export_path() -> Path:
@@ -43,14 +63,7 @@ def _resolve_export_path() -> Path:
     reader through ``hermes_constants.get_hermes_home()`` so they
     always agree, regardless of ``HERMES_HOME`` overrides or platform.
     """
-    try:
-        from hermes_constants import get_hermes_home
-        home = Path(get_hermes_home())
-    except Exception:
-        if sys.platform == "win32":
-            home = Path.home() / "AppData" / "Local" / "hermes"
-        else:
-            home = Path.home() / ".local" / "share" / "hermes"
+    home = _resolve_hermes_home()
     home.mkdir(parents=True, exist_ok=True)
     return home / "logs" / "l5_kuzu_export.json"
 
@@ -81,10 +94,16 @@ def stop_server() -> None:
     Python (which has hy_memory installed) and run from the scripts dir.
     """
     print("Stopping server...")
+    hermes_home = _resolve_hermes_home()
+    python_exe = sys.executable  # Use current Python
+    hymemory_script = hermes_home / "bin" / "hymemory.py"
+    
+    if not hymemory_script.exists():
+        print(f"  ⚠ hymemory.py not found at {hymemory_script}, skipping server stop")
+        return
+    
     result = subprocess.run(
-        [r"C:\Users\tuanc\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe",
-         r"C:\Users\tuanc\AppData\Local\hermes\bin\hymemory.py",
-         "server", "stop"],
+        [python_exe, str(hymemory_script), "server", "stop"],
         capture_output=True, text=True, timeout=30
     )
     print(f"  rc={result.returncode}")
@@ -97,10 +116,16 @@ def stop_server() -> None:
 def start_server() -> bool:
     """Restart the hy-memory server via the hermes-agent venv Python."""
     print("Starting server...")
+    hermes_home = _resolve_hermes_home()
+    python_exe = sys.executable
+    hymemory_script = hermes_home / "bin" / "hymemory.py"
+    
+    if not hymemory_script.exists():
+        print(f"  ⚠ hymemory.py not found at {hymemory_script}, skipping server start")
+        return False
+    
     result = subprocess.run(
-        [r"C:\Users\tuanc\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe",
-         r"C:\Users\tuanc\AppData\Local\hermes\bin\hymemory.py",
-         "server", "start"],
+        [python_exe, str(hymemory_script), "server", "start"],
         capture_output=True, text=True, timeout=120
     )
     print(f"  rc={result.returncode}")
