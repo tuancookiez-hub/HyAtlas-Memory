@@ -2596,9 +2596,9 @@ def apply_s1_extractor_entity_type_patch() -> bool:
     _orig = Extractor._get_l5_context_for_prompt
 
     def _patched_get_l5_context(self, n=None):
+        import json as _json
         import os as _os
         from pathlib import Path as _P
-        import json as _json
 
         if n is None:
             try:
