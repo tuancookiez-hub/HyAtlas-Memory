@@ -2372,6 +2372,7 @@ def apply_all_patches() -> dict[str, bool]:
         "coding_judge": _patch_coding_judge(),
         "s2_operations_json": apply_s2_operations_json_patch(),
         "user_identity": apply_user_identity_patch(),
+        "s1_extractor_entity_type": apply_s1_extractor_entity_type_patch(),
     }
 
 
@@ -2570,6 +2571,75 @@ def apply_l5_l6_l7_counts_patch() -> bool:
         "[hy-memory/patches] L5/L6/L7 graph bucket patched (v1.5.0): "
         "raw Kuzu Cypher bypasses the upstream's isolation_key filter, "
         "so S2-written L6/L7 nodes are returned to the dashboard"
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Patch 20: S1 extractor entity_type KeyError fix (v2.0.0)
+# ---------------------------------------------------------------------------
+# Root cause: hy_memory SDK's Extractor._get_l5_context_for_prompt() reads
+# l5_kuzu_export.json nodes and accesses nd['entity_type'] directly. But the
+# export format uses 'type', not 'entity_type'. Every node is missing the key,
+# so every S1 extract call throws KeyError — killing all new L2 fact creation.
+# This silently blocks L6/L7 growth because S2 has no fresh facts to cluster.
+#
+# Fix: monkey-patch the method to use .get('entity_type') or .get('type').
+
+def apply_s1_extractor_entity_type_patch() -> bool:
+    try:
+        from hy_memory.agent.extractor import Extractor
+    except ImportError:
+        logger.debug("[hy-memory/patches] S1 extractor patch: hy_memory not importable")
+        return False
+
+    _orig = Extractor._get_l5_context_for_prompt
+
+    def _patched_get_l5_context(self, n=None):
+        import os as _os
+        from pathlib import Path as _P
+        import json as _json
+
+        if n is None:
+            try:
+                n = int(_os.environ.get("HY_MEMORY_L5_CONTEXT_N", "5"))
+            except ValueError:
+                n = 5
+        n = min(max(n, 0), 50)
+        if n == 0:
+            return ""
+        export_path = _P(_os.environ.get("HERMES_HOME", str(_P.home() / "AppData" / "Local" / "hermes"))) / "logs" / "l5_kuzu_export.json"
+        if not export_path.exists():
+            return ""
+        try:
+            data = _json.loads(export_path.read_text(encoding="utf-8"))
+        except Exception:
+            return ""
+        nodes = data.get("nodes", [])
+        if not nodes:
+            return ""
+        nodes = sorted(nodes, key=lambda x: -x.get("mention_count", 0))[:n]
+        lines = ["### Known entities from your knowledge graph (use as prior context):\n"]
+        for nd in nodes:
+            aliases = f" (aka: {', '.join(nd.get('aliases', []))})" if nd.get("aliases") else ""
+            mentions = nd.get("mention_count", 1)
+            etype = nd.get("entity_type") or nd.get("type") or "unknown"
+            lines.append(f"- {nd['name']} [{etype}] mentioned {mentions}×{aliases}")
+        if n >= 8:
+            relations = data.get("relations", [])
+            node_names = {nd["name"] for nd in nodes}
+            top_rels = [r for r in relations if r["a"] in node_names and r["b"] in node_names][:6]
+            if top_rels:
+                lines.append("\nNotable relations:")
+                for r in top_rels:
+                    lines.append(f"  {r['a']} {r.get('relation_type', 'relates to')} {r['b']}")
+        return "\n".join(lines) + "\n\n"
+
+    Extractor._get_l5_context_for_prompt = _patched_get_l5_context
+    _applied["s1_extractor_entity_type"] = True
+    logger.info(
+        "[hy-memory/patches] S1 extractor entity_type fix (v2.0.0): "
+        "L5 context builder now falls back to 'type' field when 'entity_type' is missing"
     )
     return True
 

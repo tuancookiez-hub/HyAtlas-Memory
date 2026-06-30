@@ -121,8 +121,16 @@ def _detach_kwargs(log_handle: IO[bytes], *, visible: bool = False) -> dict:
     }
 
 
+def _service_env(home: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env["HERMES_HOME"] = str(home)
+    env.pop("PYTHONHOME", None)
+    return env
+
+
 class StackManager:
     """Start/stop the Qdrant + upstream + dashboard stack."""
+
 
     def __init__(self, *, project_root: str | Path, hermes_home: str | Path, log_dir: str | Path):
         self._root = Path(project_root)
@@ -288,8 +296,7 @@ class StackManager:
 
         # Upstream server
         if not _port_open(ports["upstream"]):
-            env = os.environ.copy()
-            env["HERMES_HOME"] = str(self._home)
+            env = _service_env(self._home)
             cmd = [self._python(), "-m", "hyatlas_memory.server.start_server"]
             self._procs.append(subprocess.Popen(cmd, env=env, cwd=str(self._root), **detach))
             if not self._wait_health(ports["upstream"], "/info"):
@@ -299,8 +306,7 @@ class StackManager:
 
         # Dashboard
         if not _port_open(ports["dashboard"]):
-            env = os.environ.copy()
-            env["HERMES_HOME"] = str(self._home)
+            env = _service_env(self._home)
             cmd = [self._python(), str(self._root / "server" / "dashboard" / "dashboard.py")]
             self._procs.append(subprocess.Popen(cmd, env=env, cwd=str(self._root), **detach))
             if not self._wait_health(ports["dashboard"], "/api/memories?offset=0&limit=1"):

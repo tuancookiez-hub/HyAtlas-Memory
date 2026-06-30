@@ -183,6 +183,12 @@ def _services(project_root: str) -> list[dict]:
     return _SERVICES
 
 
+def _child_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.pop("PYTHONHOME", None)
+    return env
+
+
 # ── Config display ──────────────────────────────────────────────────────
 
 
@@ -440,7 +446,7 @@ def start_service(svc: dict) -> bool:
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, f"{name.lower().replace(' ', '_')}.log")
     try:
-        env = os.environ.copy()
+        env = _child_env()
         log_file = open(log_path, "w")
         flags = 0
         no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
@@ -483,7 +489,7 @@ def start_service(svc: dict) -> bool:
         if proc.poll() is not None and attempt <= 3:
             print(warn(f"{name} crashed, restarting..."))
             try:
-                env = os.environ.copy()
+                env = _child_env()
                 log_file = open(log_path, "a")
                 flags = 0
                 if platform.system() == "Windows":

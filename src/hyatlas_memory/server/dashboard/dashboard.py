@@ -3296,7 +3296,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                     body = json.dumps({
                         "user_id": uid,
                         "session_id": "default_session",
-                        "limit": 200,
+                        "limit": 10000,
                     }).encode()
                     req = urllib.request.Request(
                         f"{HY_MEMORY_BASE}/api/v1/list",
