@@ -170,6 +170,7 @@ class StackManager:
             Path("C:/qdrant/qdrant.exe"),
             Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "qdrant" / "qdrant.exe",
             Path.home() / "qdrant" / "qdrant.exe",
+            Path.home() / "AppData" / "Local" / "hermes" / "bin" / "qdrant" / "qdrant.exe",
         ]
         for c in candidates:
             if c.is_file():

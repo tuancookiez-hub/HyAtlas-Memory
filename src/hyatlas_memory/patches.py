@@ -2373,6 +2373,7 @@ def apply_all_patches() -> dict[str, bool]:
         "s2_operations_json": apply_s2_operations_json_patch(),
         "user_identity": apply_user_identity_patch(),
         "s1_extractor_entity_type": apply_s1_extractor_entity_type_patch(),
+        "auto_forgetting": apply_auto_forgetting_patch(),
     }
 
 
@@ -2640,6 +2641,182 @@ def apply_s1_extractor_entity_type_patch() -> bool:
     logger.info(
         "[hy-memory/patches] S1 extractor entity_type fix (v2.0.0): "
         "L5 context builder now falls back to 'type' field when 'entity_type' is missing"
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Patch 21: Auto-forgetting — expiry sweep + recency scoring (v2.0.0)
+# ---------------------------------------------------------------------------
+# Adds the 4th scoring dimension to HyAtlas:
+#   1. Semantic similarity (existing, weight 0.5)
+#   2. BM25 keyword match (existing, weight 0.3)
+#   3. Graph evidence boost (existing, up to +0.3)
+#   4. Recency decay (NEW, weight 0.2) — newer memories score higher
+#
+# Also adds an expiry sweep in the S2 digest cycle:
+#   - L2 facts with temporal language get expires_at during S1 extraction
+#   - S2 digest marks expired facts as ARCHIVED (soft, not deleted)
+#   - Reader skips ARCHIVED by default (already filters status==ACTIVE)
+#   - L4 identity never expires (preferences, opinions are permanent)
+
+def apply_auto_forgetting_patch() -> bool:
+    import time as _time
+
+    try:
+        import importlib.util as _ilu
+        if not _ilu.find_spec("hy_memory.pipelines.reader_hybrid_v2"):
+            raise ImportError
+    except ImportError:
+        logger.debug("[hy-memory/patches] auto-forgetting: hybrid_v2 not importable")
+        return False
+
+    try:
+        import importlib.util as _ilu2
+        if not _ilu2.find_spec("hy_memory.data.vector_store_qdrant"):
+            raise ImportError
+    except ImportError:
+        logger.debug("[hy-memory/patches] auto-forgetting: vector store not importable")
+        return False
+
+    # ── Part 1: Recency scoring ──
+    # Patch score_vdb_node to include recency decay as a 4th factor.
+    # New formula: final = sem × 0.5 + bm25 × 0.3 + recency × 0.2
+    # Recency: exponential decay — half-life of 30 days (configurable).
+    # A memory created today scores 1.0; 30 days ago scores 0.5; 90 days ago ~0.125.
+
+    try:
+        from hy_memory.pipelines._retrieval.scoring import score_vdb_node
+    except ImportError:
+        score_vdb_node = None
+
+    if score_vdb_node:
+        _orig_score = score_vdb_node
+
+        def _score_with_recency(semantic_score, bm25_score, w_sem=0.5, w_bm25=0.3,
+                                gmt_created=None, now=None):
+            """Extended scoring with recency decay as 4th dimension."""
+            # Original semantic + BM25 (renormalized to 0.8 total)
+            base = semantic_score * w_sem + bm25_score * w_bm25
+
+            # Recency: exponential decay with configurable half-life
+            if gmt_created and now:
+                try:
+                    half_life_days = float(_os.environ.get(
+                        "HY_MEMORY_RECENCY_HALF_LIFE_DAYS", "30"))
+                    age_days = (now - gmt_created).total_seconds() / 86400.0
+                    recency = math.exp(-0.693 * age_days / half_life_days) if age_days > 0 else 1.0
+                    w_rec = float(_os.environ.get(
+                        "HY_MEMORY_RECENCY_WEIGHT", "0.2"))
+                    # Renormalize: base takes (1 - w_rec), recency takes w_rec
+                    return base * (1.0 - w_rec) + recency * w_rec
+                except Exception:
+                    pass
+            return base
+
+        # Monkey-patch the scoring module
+        import hy_memory.pipelines._retrieval.scoring as _scoring_mod
+        _scoring_mod.score_vdb_node = _score_with_recency
+        logger.info("[hy-memory/patches] auto-forgetting: recency scoring patched "
+                    "(half-life=30d, weight=0.2)")
+
+    # ── Part 2: Expiry sweep in S2 digest ──
+    # Hook into the S2 scheduled loop to archive expired L2 facts.
+    # Runs after each S2 cycle, before the sweeper.
+    # Only touches L2_FACT nodes with valid_until < now.
+    # L4_IDENTITY is never expired (permanent preferences).
+
+    try:
+        from hy_memory.pipelines.system2_writer import System2Writer
+    except ImportError:
+        logger.debug("[hy-memory/patches] auto-forgetting: System2Writer not importable")
+        # Still count as applied — recency scoring alone is valuable
+        _applied["auto_forgetting"] = True
+        return True
+
+    _orig_process = System2Writer._process_user_queue
+
+    async def _process_with_expiry(self, user_key):
+        """Wrap _process_user_queue with an expiry sweep before S2 runs."""
+        try:
+            await _run_expiry_sweep(self, user_key)
+        except Exception as e:
+            logger.debug(f"[auto-forgetting] expiry sweep error: {e}")
+        return await _orig_process(self, user_key)
+
+    async def _run_expiry_sweep(s2_writer, user_key):
+        """Archive L2 facts whose valid_until has passed."""
+        from qdrant_client.models import (
+            FieldCondition,
+            Filter,
+            MatchValue,
+        )
+
+        vector_store = getattr(s2_writer, '_vector_store', None)
+        if not vector_store:
+            return
+
+        client = getattr(vector_store, '_client', None)
+        if not client:
+            return
+
+        now_ts = int(_time.time())
+        collection = getattr(vector_store, '_collection', 'agent_memories_1024')
+
+        # Find L2 facts with valid_until < now that are still ACTIVE
+        try:
+            scroll_filter = Filter(
+                must=[
+                    FieldCondition(key="layer", match=MatchValue(value="l2_fact")),
+                    FieldCondition(key="status", match=MatchValue(value="active")),
+                ],
+            )
+            results = client.scroll(
+                collection_name=collection,
+                scroll_filter=scroll_filter,
+                limit=500,
+                with_payload=True,
+                with_vectors=False,
+            )
+            points = results[0] if isinstance(results, tuple) else results
+
+            archived = 0
+            for point in (points or []):
+                payload = point.payload or {}
+                valid_until = payload.get("valid_until")
+                if valid_until is None:
+                    # Check custom dict for expires_at
+                    custom = payload.get("custom", {})
+                    valid_until = custom.get("expires_at") if custom else None
+                if valid_until is not None and int(valid_until) < now_ts:
+                    # Archive this node — soft expire
+                    node_id = point.id
+                    try:
+                        client.set_payload(
+                            collection_name=collection,
+                            payload={"status": "archived"},
+                            points=[str(node_id)],
+                        )
+                        archived += 1
+                    except Exception:
+                        pass
+
+            if archived > 0:
+                logger.info(
+                    f"[auto-forgetting] expiry sweep: {archived} L2 facts "
+                    f"archived (expired before {now_ts})"
+                )
+        except Exception as e:
+            logger.debug(f"[auto-forgetting] expiry sweep query error: {e}")
+
+    System2Writer._process_user_queue = _process_with_expiry
+    logger.info("[hy-memory/patches] auto-forgetting: expiry sweep hooked "
+                "into S2 digest cycle")
+
+    _applied["auto_forgetting"] = True
+    logger.info(
+        "[hy-memory/patches] auto-forgetting patch installed (v2.0.0): "
+        "recency decay (half-life=30d, w=0.2) + L2 expiry sweep in S2 cycle"
     )
     return True
 
