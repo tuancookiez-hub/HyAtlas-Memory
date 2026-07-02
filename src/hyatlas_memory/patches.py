@@ -1207,7 +1207,7 @@ def apply_llm_fast_smart_patch() -> bool:
 
     if not fast_model:
         # Try config file
-        cfg_path = _P(_os.environ.get("HERMES_HOME", str(Path.home() / "AppData" / "Local" / "hermes"))) / "hy_memory.json"
+        cfg_path = _P(_os.environ.get("HERMES_HOME", str(_P.home() / "AppData" / "Local" / "hermes"))) / "hy_memory.json"
         if cfg_path.exists():
             try:
                 cfg = _json.loads(cfg_path.read_text(encoding="utf-8"))
@@ -1316,7 +1316,7 @@ def apply_l5_auto_trigger_patch() -> bool:
     # Read env vars at patch time (so MEMORY_L5_AUTO can be toggled via .env)
     l5_auto = os.getenv("MEMORY_L5_AUTO", "true").lower() == "true"
     l5_min_interval_hours = float(os.getenv("MEMORY_L5_MIN_INTERVAL_HOURS", "12"))
-    _home = _os.environ.get("HERMES_HOME", str(Path.home() / "AppData" / "Local" / "hermes"))
+    _home = _os.environ.get("HERMES_HOME", str(_P.home() / "AppData" / "Local" / "hermes"))
     script_path = Path(_home) / "bin" / "l5_full_pipeline.py"
     state_path = Path(_home) / "logs" / "l5_pipeline_state.json"
 
