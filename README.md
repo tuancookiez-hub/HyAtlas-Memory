@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://tuancookiez-hub.github.io/tuandev-portfolio/"><img src="https://img.shields.io/badge/Built%20by-Tuan%20Dev-blueviolet?style=for-the-badge" alt="Built by Tuan Dev"></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge" alt="License: Apache 2.0"></a>
   <a href="https://github.com/tuancookiez-hub/HyAtlas-Memory/releases"><img src="https://img.shields.io/github/v/release/tuancookiez-hub/HyAtlas-Memory?style=for-the-badge" alt="GitHub release"></a>
 </p>
 
@@ -465,7 +465,7 @@ No data migration needed for the in-fork → package move. The Kuzu graph at `~/
 
 ## License
 
-MIT. See `LICENSE`.
+Apache 2.0. See `LICENSE`.
 
 ## Credits
 
