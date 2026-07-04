@@ -25,7 +25,7 @@ The official 6-layer spec maps roughly onto our 6 layers L1-L6 with one differen
 
 ### L1 — Raw
 - **What**: Verbatim user/agent message text, time-ordered.
-- **Where**: `~/.hy_memory/data/l1_raw.jsonl` (one JSON per line).
+- **Where**: `~/.hyatlas/data/l1_raw.jsonl` (one JSON per line).
 - **Why raw**: capture the exact words; downstream layers do interpretation.
 - **Dedup**: patch #6 + #7 — exact-duplicate detector uses the embedder
   to compute cosine similarity; if `sim > 0.95` for a recent window of

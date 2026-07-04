@@ -22,6 +22,8 @@ from pathlib import Path
 
 from hermes_constants import get_hermes_home
 
+from . import layout
+
 
 def _ask(prompt: str, default: str = "", secret: bool = False) -> str:
     """Prompt with default, optionally hiding input for secrets."""
@@ -39,7 +41,7 @@ def _ask(prompt: str, default: str = "", secret: bool = False) -> str:
 
 
 def _env_path() -> Path:
-    return get_hermes_home() / ".env"
+    return layout.envfile()
 
 
 def _read_existing_env() -> dict[str, str]:
@@ -96,7 +98,7 @@ def run_interactive() -> int:
     print()
     print("=" * 64)
     print("  Hy-Memory init wizard")
-    print("  Writes config to ~/.hermes/.env (Hermes dotenv format)")
+    print("  Writes config to ~/.hyatlas/config/.env (HyAtlas dotenv format)")
     print("=" * 64)
     print()
 
@@ -181,6 +183,7 @@ def post_setup() -> int:
         home = Path.home() / "AppData" / "Local" / "hermes"
 
     home.mkdir(parents=True, exist_ok=True)
+    layout.ensure()
     _env_path().parent.mkdir(parents=True, exist_ok=True)
     env_path = _env_path()
     if not env_path.exists():

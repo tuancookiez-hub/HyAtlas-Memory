@@ -209,7 +209,7 @@ Activity metrics. Proxies `/api/v1/metrics?minutes=N` upstream.
 
 ### `GET /api/coding-count`
 
-Count of coding-session memories. Reads from `~/.hy_memory/data/coding_memory.db` (sqlite).
+Count of coding-session memories. Reads from `~/.hyatlas/data/coding_memory.db` (sqlite).
 
 **Response:**
 ```json

@@ -19,7 +19,7 @@ xdg-open http://127.0.0.1:8765 # Linux
 start http://127.0.0.1:8765    # Windows
 ```
 
-The dashboard reads the same config as the plugin (`~/.hy_memory.json` for upstream URL, `HERMES_USER_IDS` for which user scopes to query).
+The dashboard reads the same config as the plugin (`~/.hyatlas/config/hy_memory.json` for upstream URL, `HERMES_USER_IDS` for which user scopes to query).
 
 ## Pages
 

@@ -17,7 +17,7 @@ curl http://127.0.0.1:19527/info
 curl http://127.0.0.1:8765/api/health
 
 # 4. Is the config valid?
-cat ~/.hy_memory.json
+cat ~/.hyatlas/config/hy_memory.json
 cat ~/.hermes/.env | grep -i memory
 ```
 
@@ -87,7 +87,7 @@ taskkill /F /PID <pid>
 
 ### `KeyError: 'OPENAI_API_KEY'`
 
-The upstream SDK needs an LLM API key. Set it in `~/.hy_memory.json` or `~/.hermes/.env`:
+The upstream SDK needs an LLM API key. Set it in `~/.hyatlas/config/hy_memory.json` or `~/.hermes/.env`:
 ```bash
 echo 'OPENAI_API_KEY=sk-...' >> ~/.hermes/.env
 ```
@@ -251,7 +251,7 @@ You'll lose all vector memories but keep L0 (raw JSONL) and L5+ (Kuzu graph).
 curl http://localhost:19527/api/v1/graph?n=5
 
 # Check fallback path — used only if the live endpoint fails
-ls -la ~/.hy_memory/data/kuzu_db
+ls -la ~/.hyatlas/data/kuzu_db
 ```
 
 **Fix:**
@@ -287,9 +287,9 @@ This takes 5-30 minutes for thousands of facts.
 
 If a previous run crashed, the lock file may be stale:
 ```bash
-rm ~/.hy_memory/data/kuzu_db/*.lock
+rm ~/.hyatlas/data/kuzu_db/*.lock
 # Or if a wal file is stuck:
-rm ~/.hy_memory/data/kuzu_db/*.wal
+rm ~/.hyatlas/data/kuzu_db/*.wal
 ```
 
 ---
@@ -300,8 +300,8 @@ rm ~/.hy_memory/data/kuzu_db/*.wal
 
 **Diagnosis:**
 ```bash
-ls -la ~/.hy_memory/data/coding_memory.db
-sqlite3 ~/.hy_memory/data/coding_memory.db "SELECT COUNT(*) FROM coding_memory_meta"
+ls -la ~/.hyatlas/data/coding_memory.db
+sqlite3 ~/.hyatlas/data/coding_memory.db "SELECT COUNT(*) FROM coding_memory_meta"
 ```
 
 **Fix:**
@@ -407,11 +407,11 @@ curl -X DELETE http://127.0.0.1:6333/collections/l1_raw
 # Repeat for l0_basic_info, l2_fact, l3_summary, l4_identity
 
 # Clear Kuzu graph
-rm -rf ~/.hy_memory/data/kuzu_db
-rm ~/.hy_memory/data/l5_kuzu_export.json
+rm -rf ~/.hyatlas/data/kuzu_db
+rm ~/.hyatlas/data/l5_kuzu_export.json
 
 # Clear raw JSONL
-rm ~/.hy_memory/data/l1_raw.jsonl
+rm ~/.hyatlas/data/l1_raw.jsonl
 
 # Restart everything
 python -m server.start_server
@@ -422,7 +422,7 @@ python server/dashboard/dashboard.py
 
 ```bash
 # Backs up config, wipes all data
-mv ~/.hy_memory ~/.hy_memory.backup.$(date +%Y%m%d)
+mv ~/.hyatlas ~/.hyatlas.backup.$(date +%Y%m%d)
 # Re-initialize
 hermes hy-memory init
 ```
@@ -431,7 +431,7 @@ hermes hy-memory init
 
 ```bash
 pip uninstall hyatlas-memory
-rm -rf ~/.hy_memory
+rm -rf ~/.hyatlas
 rm -rf ~/.hermes/hy_memory*  # old plugin artifacts
 ```
 
@@ -442,7 +442,7 @@ rm -rf ~/.hermes/hy_memory*  # old plugin artifacts
 If the troubleshooting steps don't resolve your issue:
 
 1. **Check the logs:**
-   - `~/.hy_memory/data/logs/` — upstream server logs
+   - `~/.hyatlas/data/logs/` — upstream server logs
    - `server/dashboard/logs/` — dashboard request logs
    - Your terminal where you launched the plugin
 

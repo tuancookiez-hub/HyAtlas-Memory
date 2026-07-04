@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyatlas-memory"
-version = "2.0.0"
+version = "2.1.0"
 description = "Community implementation of the official Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan, memory.hunyuan.tencent.com) for Hermes Agent. Includes the experimental L7 intention layer. Apache 2.0 licensed."
 readme = "README.md"
 license = {file = "LICENSE"}

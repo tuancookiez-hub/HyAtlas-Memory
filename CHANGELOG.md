@@ -1,11 +1,16 @@
 ## [Unreleased]
 
 ### Added
+- **Runtime layout consolidation (`HYATLAS_HOME`).** All runtime state now resolves under a single `~/.hyatlas` root. New `hyatlas config` subcommands (`show`, `model`, `embedder`, `validate`) and migration helpers (`hyatlas snapshot`, `hyatlas migrate layout --dry-run|--apply|--rollback`). Config precedence: CLI flags > env vars > `~/.hyatlas/config/.env` > `~/.hyatlas/config/hy_memory.json` > legacy `HERMES_HOME/hy_memory.json` > `~/.hy_memory/pkg/.env`.
+- **Multi-key LLM resilience.** `llm.api_keys` list is probed at startup; the first key that authenticates wins. Falls back to `llm.api_key` for backward compatibility.
+- **Legacy deprecation warnings.** `hyatlas config show` and `hyatlas status` warn when configs or data still live in `~/.hy_memory` or `~/.hermes/hy_memory.json`.
 - **Patch 23: Live graph endpoint `GET /api/v1/graph`.** Adds a server endpoint that queries Kuzu directly via the already-open `graph_store` connection. Eliminates the need for the `l5_kuzu_export.json` bridge file (which required stopping the server to regenerate and went stale between exports). Supports `n` (limit), `type` (entity filter), `q` (search), `rels` (include relations) query params.
 
 ### Changed
 - **Dashboard `/api/l5/graph` and `/api/l5/context`.** Now proxy to the live server endpoint first (`/api/v1/graph`); fall back to `l5_kuzu_export.json` only if the upstream server is unavailable. Response includes `"fallback": true|false` so callers can tell which path was used.
 - **S1 extractor `_get_l5_context_for_prompt`.** Same live-first / fallback pattern — fetches entities from the live endpoint and only reads the export file if the server is down. Added a `hasattr` guard so the patch no longer crashes when the SDK version lacks the method (this was preventing `apply_all_patches` from completing and blocking every patch listed after it in the registry).
+- **Qdrant and service logs** now default to `~/.hyatlas/qdrant/` and `~/.hyatlas/logs/` on Windows; the binary path is resolved from `QDRANT_BIN` / `PATH` / `~/.hyatlas/qdrant/`.
+- **Documentation** rewritten to reference `~/.hyatlas` paths instead of scattered `~/.hy_memory` and `~/.hermes/hy_memory.json` locations.
 
 ### Fixed
 - **L5 graph was invisible in the dashboard** despite a healthy Kuzu graph. The `l5_kuzu_export.json` file was last regenerated June 30 and used an older schema (`"edges"`/`"from"`/`"to"` keys) incompatible with the dashboard's reader (`"relations"`/`"a"`/`"b"`). The live endpoint now serves fresh data directly from Kuzu — the export file is no longer required for day-to-day viewing.

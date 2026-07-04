@@ -27,6 +27,8 @@ import uuid
 
 import pytest
 
+os.environ["HY_MEMORY_WRITE_TURN_WINDOW"] = "1"
+
 pytest.importorskip("agent.memory_provider", reason="hermes-agent not installed")
 hm = pytest.importorskip("hyatlas_memory")
 HyMemoryProvider = hm.HyMemoryProvider
@@ -120,6 +122,7 @@ class TestMemoryLifecycle:
             user_id=self.user_id,
             agent_identity="integration-test-agent",
         )
+        self.provider._write_turn_window = 1
         assert self.provider._client is not None
         assert self.provider._client.is_reachable()
 

@@ -26,7 +26,7 @@ This is a deep-dive reference. For a high-level overview, see the [Architecture 
 **What:** The rawest layer. Verbatim text of every user/agent message, time-ordered. This is the "I literally said this" layer — no interpretation.
 
 **Where it lives:**
-- `~/.hy_memory/data/l1_raw.jsonl` — one JSON per line (legacy flat-file log)
+- `~/.hyatlas/data/l1_raw.jsonl` — one JSON per line (legacy flat-file log)
 - Qdrant collection `l0_basic_info` — vector-indexed for similarity search
 
 **Why it exists:** Provides an immutable audit trail. Downstream layers (L1+) are interpretations that can be wrong; L0 is the ground truth. Also powers the dashboard's "Recent Ingestion" feed.
@@ -118,7 +118,7 @@ This is a deep-dive reference. For a high-level overview, see the [Architecture 
 **What:** The bridge from vector memory to graph memory. L5 is where atomic facts become **entities** in a typed relationship graph. "User" → "works on" → "Project X" → "uses" → "React".
 
 **Where it lives:**
-- Kuzu graph database at `~/.hy_memory/data/kuzu_db`
+- Kuzu graph database at `~/.hyatlas/data/kuzu_db`
 - Node types: `person`, `project`, `technology`, `concept`, `task`
 - Edge types: `works_on`, `uses`, `knows`, `prefers`, `related_to`
 
@@ -214,12 +214,12 @@ See `src/hyatlas_memory/client.py` for the actual recall query logic.
 
 | Layer | Store | File / Collection |
 |---|---|---|
-| L0 | Flat file + Qdrant | `~/.hy_memory/data/l1_raw.jsonl` + `l0_basic_info` |
+| L0 | Flat file + Qdrant | `~/.hyatlas/data/l1_raw.jsonl` + `l0_basic_info` |
 | L1 | Qdrant | `l1_raw` collection (yes, same name as old L1) |
 | L2 | Qdrant | `l2_fact` collection |
 | L3 | Qdrant | `l3_summary` collection |
 | L4 | Qdrant | `l4_identity` collection |
-| L5 | Kuzu | `~/.hy_memory/data/kuzu_db` (graph) |
+| L5 | Kuzu | `~/.hyatlas/data/kuzu_db` (graph) |
 | L6 | Kuzu | same graph, `node_type = "schema"` |
 | L7 | Kuzu | same graph, `node_type = "intention"` |
 

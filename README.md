@@ -1,6 +1,8 @@
 # HyAtlas-Memory
 
-> A 7-layer cognitive memory for [Hermes Agent](https://github.com/NousResearch/hermes-agent), with System1/System2 dual processing, evolution chains, and a Kuzu graph backend.
+A community implementation of the official Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan, `memory.hunyuan.tencent.com`) for Hermes Agent. Includes the experimental L7 intention layer. Apache 2.0 licensed.
+
+> **v2.1.0** introduces the `HYATLAS_HOME` runtime layout. All runtime state lives under `~/.hyatlas` with a single config file and migration helpers.
 
 <p align="center">
   <a href="https://tuancookiez-hub.github.io/tuandev-portfolio/"><img src="https://img.shields.io/badge/Built%20by-Tuan%20Dev-blueviolet?style=for-the-badge" alt="Built by Tuan Dev"></a>
@@ -59,7 +61,7 @@ hyatlas stop            # shut down the stack
 
 **Want Docker instead?** See [Path A — Docker](#path-a--docker-recommended) below.
 
-**Configure (optional):** edit `~/.hermes/hy_memory.json` to add your LLM key:
+**Configure (optional):** edit `~/.hyatlas/config/hy_memory.json` to add your LLM key:
 
 ```json
 {
@@ -116,7 +118,7 @@ docker-compose down         # stop (keeps data)
 docker-compose down -v      # stop AND wipe all data
 ```
 
-Data lives in `./qdrant_storage` and `~/.hy_memory` (mounted to the host), so it survives `docker-compose down`. To fully reset, use `down -v`.
+Data lives in `./qdrant_storage` and `~/.hyatlas` (mounted to the host), so it survives `docker-compose down`. To fully reset, use `down -v`.
 
 ### What's running where
 
@@ -455,11 +457,11 @@ cd HyAtlas-Memory
 pip install -e .
 
 # 3. Your config and data stay where they were
-#    ~/.hy_memory/      (data, Kuzu DB)
-#    ~/.hy_memory.json  (config) -- the new package reads this unchanged
+#    ~/.hyatlas/        (config, data, logs, Kuzu DB, Qdrant storage)
+#    ~/.hyatlas/config/hy_memory.json  (config)
 ```
 
-No data migration needed for the in-fork → package move. The Kuzu graph at `~/.hy_memory/data/kuzu_db` is forward-compatible. The carried patches from the fork are now part of the package, applied at import time via the `patches.py` module.
+No data migration needed for the in-fork → package move. The Kuzu graph at `~/.hyatlas/data/kuzu_db` (or legacy `~/.hy_memory/data/kuzu_db`) is forward-compatible. The carried patches from the fork are now part of the package, applied at import time via the `patches.py` module.
 
 > **Upgrading 1.x → 2.0?** The v2 S-Class stack changes the default embedding dimension (1024-d) and adds the in-process L5 writer. If you have an existing 384-d Qdrant collection or an old Kuzu graph, **read [`docs/MIGRATION_v2_SCLASS.md`](docs/MIGRATION_v2_SCLASS.md) before upgrading production data.**
 

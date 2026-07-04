@@ -21,6 +21,8 @@ import time
 from pathlib import Path
 from typing import IO
 
+from . import layout
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_PORTS = {
@@ -124,6 +126,7 @@ def _detach_kwargs(log_handle: IO[bytes], *, visible: bool = False) -> dict:
 def _service_env(home: Path) -> dict[str, str]:
     env = os.environ.copy()
     env["HERMES_HOME"] = str(home)
+    env.setdefault("HYATLAS_HOME", str(layout.home()))
     env.pop("PYTHONHOME", None)
     return env
 
@@ -146,36 +149,22 @@ class StackManager:
     # ------------------------------------------------------------------
 
     def _read_hy_memory_json(self) -> dict:
-        p = self._home / "hy_memory.json"
-        if not p.exists():
-            return {}
-        try:
-            import json
-            return json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
+        return layout.read_config()
 
     def _python(self) -> str:
         return sys.executable
 
     def _qdrant_paths(self) -> tuple[str | None, str | None]:
-        env_bin = os.environ.get("QDRANT_BIN")
+        # Delegate to the central layout resolver so CLI and embedded auto-start
+        # agree on binary/config discovery. The migrated HYATLAS_HOME config is
+        # always passed unless the user explicitly set QDRANT_CONFIG.
+        env_bin = os.environ.get("HYATLAS_QDRANT_BIN") or os.environ.get("QDRANT_BIN")
         if env_bin and Path(env_bin).is_file():
-            return env_bin, os.environ.get("QDRANT_CONFIG", "")
-        import shutil
-        path_bin = shutil.which("qdrant")
-        if path_bin:
-            return path_bin, ""
-        candidates = [
-            Path("C:/qdrant/qdrant.exe"),
-            Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "qdrant" / "qdrant.exe",
-            Path.home() / "qdrant" / "qdrant.exe",
-            Path.home() / "AppData" / "Local" / "hermes" / "bin" / "qdrant" / "qdrant.exe",
-        ]
-        for c in candidates:
-            if c.is_file():
-                cfg = c.parent / "config.yaml"
-                return str(c), str(cfg) if cfg.exists() else ""
+            env_cfg = os.environ.get("HYATLAS_QDRANT_CONFIG") or os.environ.get("QDRANT_CONFIG")
+            return env_bin, str(env_cfg) if env_cfg else str(layout.qcfg())
+        qbin, qcfg = layout.find_qdrant()
+        if qbin and qbin.exists():
+            return str(qbin), str(qcfg) if qcfg and qcfg.exists() else str(layout.qcfg())
         return None, None
 
     def _wait_health(self, port: int, path: str, *, expected_status: int = 200, retries: int = _HEALTH_RETRIES) -> bool:

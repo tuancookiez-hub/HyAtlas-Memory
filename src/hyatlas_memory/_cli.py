@@ -29,7 +29,7 @@ from pathlib import Path
 
 from hermes_constants import get_hermes_home
 
-from . import _start, init_wizard
+from . import _start, config_cli, layout, migrate_cli
 from . import cli as _memory_cli
 from .installer import _install_plugin_shim, _update_config
 from .process import StackManager
@@ -91,7 +91,7 @@ def _run_setup_hermes(args) -> int:
 
     print("[hyatlas] Verifying auto-start...")
     root = Path(__file__).parent
-    manager = StackManager(project_root=root, hermes_home=home, log_dir=home / "logs")
+    manager = StackManager(project_root=root, hermes_home=home, log_dir=layout.logs())
     if manager.ensure_running():
         print("✓ Stack auto-started successfully")
     else:
@@ -132,7 +132,10 @@ def main(argv: list[str] | None = None) -> int:
     p_setup_hermes.set_defaults(func=_run_setup_hermes)
 
     p_init = sub.add_parser("init", help="Interactive setup wizard")
-    p_init.set_defaults(func=lambda _: init_wizard.run_interactive())
+    p_init.set_defaults(func=config_cli.init)
+
+    config_cli.register(sub)
+    migrate_cli.register(sub)
 
     p_doctor = sub.add_parser("doctor", help="Run health checks")
     p_doctor.set_defaults(func=lambda _: _memory_cli._main_standalone(["doctor"]))

@@ -61,9 +61,9 @@ python -m server.dashboard.dashboard
 All scripts read the same config as the plugin:
 
 ```text
-~/.hy_memory/hy_memory.json   # primary config (mode, vector store, etc.)
+~/.hyatlas/config/hy_memory.json   # primary config (mode, vector store, etc.)
 ~/.env                        # API keys (HY_MEMORY_LLM_API_KEY, etc.)
 ```
 
-The server uses `~/.hy_memory/` as its data directory by default. Override
+The server uses `~/.hyatlas/` as its data directory by default. Override
 with `HERMES_HOME=/path/to/alt/home` if needed.

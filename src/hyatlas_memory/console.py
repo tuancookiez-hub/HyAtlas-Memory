@@ -591,18 +591,13 @@ def _stop_stack() -> None:
     launched even when the package import path is unusual.
     """
     try:
+        from . import layout
         from .process import StackManager
-        try:
-            from hermes_constants import get_hermes_home
-            home = Path(get_hermes_home())
-        except Exception:
-            home = Path.home() / ".hermes" if sys.platform != "win32" else Path(
-                os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
-            ) / "hermes"
+        home = layout.hermes()
         manager = StackManager(
             project_root=Path(__file__).parent,
             hermes_home=home,
-            log_dir=home / "logs",
+            log_dir=layout.logs(),
         )
         manager.stop()
         print(_color("green", "  ✓ Stack stopped."), flush=True)
@@ -644,13 +639,12 @@ def main() -> int:
     # and feed interesting lines into state.current. This is the only
     # way the user sees writes that come from a different Python process.
     try:
-        from hermes_constants import get_hermes_home as _ghh
-        _hermes_home = Path(_ghh())
+        from . import layout
+        log_path = layout.logs() / "hyatlas-memory.log"
     except Exception:
-        _hermes_home = Path(
+        log_path = Path(
             os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
-        ) / "hermes"
-    log_path = _hermes_home / "logs" / "hyatlas-memory.log"
+        ) / "hermes" / "logs" / "hyatlas-memory.log"
     tailer = threading.Thread(
         target=_tail_log_file,
         args=(log_path, state, stop_event),

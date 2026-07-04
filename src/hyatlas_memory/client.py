@@ -129,7 +129,7 @@ class HyMemoryClient:
                limit: int = 10, min_score: float = 0.4,
                profile_min_score: float | None = None,
                profile_limit: int | None = None,
-               reader: str | None = None) -> dict:
+               reader: str | None = "legacy") -> dict:
         """POST /api/v1/search — semantic search across memories.
 
         Returns:

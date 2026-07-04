@@ -29,6 +29,8 @@ import urllib.error  # noqa: I001  (urllib.error + urllib.request must be togeth
 import urllib.request
 from urllib.parse import urlparse
 
+from . import layout
+
 # ── Project root resolution ─────────────────────────────────────────────
 
 
@@ -86,23 +88,35 @@ def _find_qdrant():
     """Locate the Qdrant binary. Returns (path, config_path) or (None, None).
 
     Search order:
-      1. QDRANT_BIN env var (explicit override)
-      2. `qdrant` on PATH (works if user installed it system-wide)
-      3. Common locations per OS
-    """
-    # 1. Explicit override
-    env_bin = os.environ.get("QDRANT_BIN")
-    if env_bin and os.path.isfile(env_bin):
-        env_cfg = os.environ.get("QDRANT_CONFIG", "")
-        return env_bin, env_cfg
+      1. HYATLAS_QDRANT_BIN env var (explicit new override)
+      2. Migrated binary under HYATLAS_HOME/vector/qdrant
+      3. QDRANT_BIN env var (legacy override)
+      4. `qdrant` on PATH
+      5. Common locations per OS
 
-    # 2. On PATH
+    The migrated HYATLAS_HOME config is always used unless the user
+    explicitly sets HYATLAS_QDRANT_CONFIG / QDRANT_CONFIG.
+    """
+    def _cfg():
+        env_cfg = os.environ.get("HYATLAS_QDRANT_CONFIG") or os.environ.get("QDRANT_CONFIG")
+        return str(env_cfg) if env_cfg else str(layout.qcfg())
+
+    env_new = os.environ.get("HYATLAS_QDRANT_BIN")
+    if env_new and os.path.isfile(env_new):
+        return env_new, _cfg()
+
+    if layout.qbin().is_file():
+        return str(layout.qbin()), _cfg()
+
+    env_legacy = os.environ.get("QDRANT_BIN")
+    if env_legacy and os.path.isfile(env_legacy):
+        return env_legacy, _cfg()
+
     import shutil
     path_bin = shutil.which("qdrant")
     if path_bin:
-        return path_bin, ""
+        return path_bin, _cfg()
 
-    # 3. Common locations
     if platform.system() == "Windows":
         candidates = [
             r"C:\qdrant\qdrant.exe",
@@ -111,8 +125,7 @@ def _find_qdrant():
         ]
         for c in candidates:
             if os.path.isfile(c):
-                cfg = c.replace("qdrant.exe", "config.yaml")
-                return c, cfg if os.path.isfile(cfg) else ""
+                return c, _cfg()
     else:
         candidates = [
             "/usr/local/bin/qdrant",
@@ -122,8 +135,7 @@ def _find_qdrant():
         ]
         for c in candidates:
             if os.path.isfile(c):
-                cfg = c.replace("qdrant", "config.yaml")
-                return c, cfg if os.path.isfile(cfg) else ""
+                return c, _cfg()
 
     return None, None
 
@@ -219,22 +231,43 @@ def _provider_from_url(base_url: str) -> str:
 
 
 def _read_config() -> dict | None:
-    """Read ``~/.hermes/hy_memory.json`` if it exists. Returns parsed dict or None."""
+    """Read the active HyAtlas config if it exists."""
+    cfg = layout.read_config()
+    return cfg or None
+
+
+def _collection(cfg: dict | None) -> str:
+    if not cfg:
+        return os.environ.get("MEMORY_VECTOR_COLLECTION", "agent_memories_1024")
+    vec = cfg.get("vector_store") or {}
+    if vec.get("collection"):
+        return str(vec["collection"])
+    dims = (cfg.get("embedder") or {}).get("dims", 1024)
+    return os.environ.get("MEMORY_VECTOR_COLLECTION", f"agent_memories_{dims}")
+
+
+def _qdrant_collection_status(port: int, cfg: dict | None) -> tuple[str, int | None, int | None]:
+    name = _collection(cfg)
     try:
-        from hermes_constants import get_hermes_home
-    except ImportError:
-        return None
-    try:
-        path = os.path.join(get_hermes_home(), "hy_memory.json")
-    except Exception:
-        return None
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.loads(f.read())
-    except Exception:
-        return None
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/collections/{name}", timeout=3
+        ) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return f"collection {name} missing", None, None
+        return f"collection {name} check failed: HTTP {e.code}", None, None
+    except Exception as e:
+        return f"collection {name} check failed: {e}", None, None
+    res = data.get("result") or {}
+    points = res.get("points_count")
+    size = ((res.get("config") or {}).get("params") or {}).get("vectors", {}).get("size")
+    expected = (cfg.get("embedder") or {}).get("dims") if cfg else None
+    if expected and size and int(size) != int(expected):
+        return f"collection {name} dimension mismatch: {size} != {expected}", points, size
+    if points == 0 and layout.active_config_path() in layout.legacy_cfgs():
+        return f"collection {name} is empty; possible wrong storage for existing legacy install", points, size
+    return f"collection {name}: {points} points, {size} dims", points, size
 
 
 def _print_config_summary() -> None:
@@ -442,7 +475,7 @@ def start_service(svc: dict) -> bool:
 
     # Start
     print(info(f"Starting {name} on port {port}..."))
-    log_dir = os.path.join(svc["cwd"] or os.getcwd(), "logs")
+    log_dir = str(layout.logs())
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, f"{name.lower().replace(' ', '_')}.log")
     try:
@@ -704,13 +737,32 @@ def shutdown():
 
 # ── Status ──────────────────────────────────────────────────────────────
 
-def show_status():
+def _warn_legacy_paths() -> None:
+    from . import layout
+    warnings = []
+    cfg = layout.active_config_path()
+    if cfg and cfg in layout.legacy_cfgs():
+        warnings.append(f"using legacy config at {cfg}")
+    for p in (Path.home() / ".hy_memory", Path("C:/qdrant-data") if sys.platform == "win32" else Path.home() / "qdrant-data"):
+        if p.exists():
+            warnings.append(f"legacy data still present at {p}")
+    if warnings:
+        print(warn("Legacy paths detected:"))
+        for w in warnings:
+            print(warn(f"  - {w}"))
+        print(dim("  Run `hyatlas migrate layout --apply` to consolidate into HYATLAS_HOME."))
+
+
+def show_status() -> None:
+    """Print the status table for each managed service."""
+    _warn_legacy_paths()
     project_root = _resolve_project_root()
     if not project_root:
         print(fail("Could not find the HyAtlas project root."))
         print(dim("  Set HYATLAS_PROJECT_ROOT or cd into the project."))
         sys.exit(1)
     services = _services(project_root)
+    cfg = _read_config()
     banner()
     print(f"  {BOLD}Service Status{RESET}")
     print()
@@ -720,6 +772,12 @@ def show_status():
         healthy = health_check(svc["url"], svc["expect"]) if listening else False
         if healthy:
             print(ok(f"{svc['name']:20s} port {port}  healthy"))
+            if svc["name"] == "Qdrant":
+                detail, points, _ = _qdrant_collection_status(port, cfg)
+                if points is None or (points == 0 and layout.active_config_path() in layout.legacy_cfgs()):
+                    print(warn(f"{'':23s}{detail}"))
+                else:
+                    print(dim(f"{'':23s}{detail}"))
         elif listening:
             print(warn(f"{svc['name']:20s} port {port}  listening but unhealthy"))
         else:

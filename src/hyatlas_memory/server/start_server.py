@@ -2,43 +2,37 @@
 """Start hy_memory.server with the correct config from hy_memory.json."""
 import json
 import os
-from pathlib import Path
+
+from hyatlas_memory import layout
 
 # Read config
-home = Path(os.environ.get("HERMES_HOME", Path.home() / "AppData/Local/hermes"))
+root = layout.home()
 
-# Load ~/.hermes/.env before constructing MemoryConfig-derived env.
+# Load HyAtlas config env before constructing MemoryConfig-derived env.
 # Hy-Memory v2 operational flags (MEMORY_CACHE_BACKEND,
-# MEMORY_HISTORY_ENABLE, MEMORY_SYSTEM2_TRIGGER_MODE, MEMORY_VECTOR_*) live
-# there; without this, the standalone launcher silently ignores them.
-def _load_dotenv(path: Path) -> None:
-    if not path.exists():
-        return
-    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
+# MEMORY_HISTORY_ENABLE, MEMORY_SYSTEM2_TRIGGER_MODE, MEMORY_VECTOR_*) can live
+# in HYATLAS_HOME/config/.env. Legacy Hermes/.hy_memory env files are loaded as
+# fallback by layout.load_envs().
 
-_load_dotenv(home / ".env")
-_load_dotenv(Path.home() / ".hy_memory" / "pkg" / ".env")
-config = json.loads((home / "hy_memory.json").read_text(encoding="utf-8"))
+layout.load_envs()
+config_path = layout.active_config_path()
+if config_path is None:
+    raise FileNotFoundError(
+        f"No hy_memory.json found. Expected {layout.cfgfile()} or one of "
+        f"{', '.join(str(p) for p in layout.legacy_cfgs())}"
+    )
+config = json.loads(config_path.read_text(encoding="utf-8"))
 
-# Resolve LLM settings: JSON wins, fall back to HY_MEMORY_* env vars
-# (the herm TUI "memory setup" screen writes to HY_MEMORY_LLM_* env vars,
-# not to hy_memory.json — this lets the TUI's settings actually take effect
-# on the next server restart without the user having to re-enter them.)
+# Resolve LLM settings. The active runtime config wins; HY_MEMORY_LLM_*
+# env vars are legacy fallback only. A stale shell env key can otherwise
+# silently override the user's `hyatlas config model` choice and break auth.
 def _resolve(key, default=""):
     json_val = config.get("llm", {}).get(key, "")
     env_val = os.environ.get(f"HY_MEMORY_LLM_{key.upper()}", "")
-    if env_val and env_val != json_val:
-        return env_val, f"env:HY_MEMORY_LLM_{key.upper()}"
     if json_val:
         return json_val, "json"
+    if env_val:
+        return env_val, f"env:HY_MEMORY_LLM_{key.upper()}"
     return default, "default"
 
 model, model_src = _resolve("model", "dola-seed-2.0-lite")
@@ -46,6 +40,8 @@ api_key, key_src = _resolve("api_key")
 base_url, url_src = _resolve("base_url")
 
 os.environ["MEMORY_MODE"] = os.environ.get("MEMORY_MODE_OVERRIDE") or config.get("mode", "ultra")
+os.environ["MEMORY_DATA_DIR"] = os.environ.get("MEMORY_DATA_DIR") or str(layout.home())
+os.environ["MEMORY_LOG_DIR"] = os.environ.get("MEMORY_LOG_DIR") or str(layout.logs())
 os.environ["MEMORY_PIPELINE_DEFAULT_VERSION"] = os.environ.get("MEMORY_PIPELINE_DEFAULT_VERSION") or "ultra"
 os.environ["MEMORY_SUMMARY_ENABLED_IN_SYS2"] = os.environ.get("MEMORY_SUMMARY_ENABLED_IN_SYS2") or "true"
 os.environ["MEMORY_READER_ENABLE_SUMMARY"] = os.environ.get("MEMORY_READER_ENABLE_SUMMARY") or "true"
@@ -72,7 +68,8 @@ os.environ["MEMORY_EMBEDDING_DIMS"] = str(emb.get("dims", 384))
 vs = config.get("vector_store", {})
 os.environ["MEMORY_VECTOR_STORE"] = os.environ.get("MEMORY_VECTOR_STORE") or vs.get("provider", "chroma")
 
-print(f"Starting hy_memory.server with config from {home / 'hy_memory.json'}")
+print(f"Starting hy_memory.server with config from {config_path}")
+print(f"  HyAtlas home: {root}")
 print(f"  Mode: {os.environ['MEMORY_MODE']}")
 print(f"  LLM: {os.environ['MEMORY_LLM_MODEL']} (key from {key_src}, url from {url_src})")
 print(f"  Embedder: {os.environ['MEMORY_EMBEDDER_MODEL']} ({os.environ['MEMORY_EMBEDDING_DIMS']}d)")

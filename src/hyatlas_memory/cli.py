@@ -31,6 +31,8 @@ from pathlib import Path
 
 from hermes_constants import get_hermes_home
 
+from . import layout
+
 
 def _add_subcommands(sub: argparse._SubParsersAction) -> None:
     """Attach init / install / doctor / add / search / list / reset."""
@@ -224,7 +226,7 @@ def _cmd_doctor(args) -> int:
 
     # 4. Qdrant
     from .process import StackManager
-    manager = StackManager(project_root=Path(__file__).parent, hermes_home=home, log_dir=home / "logs")
+    manager = StackManager(project_root=Path(__file__).parent, hermes_home=home, log_dir=layout.logs())
     cfg = manager._read_hy_memory_json()
     qdrant_port = int(cfg.get("qdrant", {}).get("port", 6333))
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -481,7 +483,7 @@ def _cmd_console(args) -> int:
         manager = StackManager(
             project_root=Path(__file__).parent,
             hermes_home=home,
-            log_dir=home / "logs",
+            log_dir=layout.logs(),
         )
         manager.start()
 
@@ -562,7 +564,7 @@ def _cmd_setup_hermes(args) -> int:
     # Optional: test auto-start
     print("[hy-memory] Verifying auto-start...")
     root = Path(__file__).parent
-    manager = StackManager(project_root=root, hermes_home=home, log_dir=home / "logs")
+    manager = StackManager(project_root=root, hermes_home=home, log_dir=layout.logs())
     if manager.ensure_running():
         print("✓ Stack auto-started successfully")
     else:
