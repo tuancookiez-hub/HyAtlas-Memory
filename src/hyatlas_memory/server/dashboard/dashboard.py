@@ -3334,47 +3334,63 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             })
 
         if path == "/api/l5/graph":
-            # Returns the L5 knowledge graph (entities + relations) from
-            # the export JSON. The dashboard calls this for the L5 tab.
-            l5_export_path = str(_l5_export_path())
-            try:
-                with open(l5_export_path, encoding="utf-8") as f:
-                    l5_data = json.loads(f.read())
-            except FileNotFoundError:
-                return self._json(503, {"error": "L5 export not found at " + l5_export_path + " — run bin/l5_export_json.py"})
-            except json.JSONDecodeError as e:
-                return self._json(500, {"error": f"L5 export corrupt: {e}"})
-
+            # Proxy to the server's live /api/v1/graph endpoint (queries
+            # Kuzu directly — no stale export file needed).
             qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
-            entity_type = qs.get("type", [None])[0]
+            etype = qs.get("type", [None])[0]
             search = qs.get("q", [None])[0]
-
-            nodes = l5_data.get("nodes", [])
-            relations = l5_data.get("relations", [])
-
-            if entity_type:
-                nodes = [n for n in nodes if n.get("entity_type") == entity_type]
-                node_names = {n["name"] for n in nodes}
-                relations = [r for r in relations if r["a"] in node_names and r["b"] in node_names]
-
+            params = {}
+            if etype:
+                params["type"] = etype
             if search:
-                sl = search.lower()
-                nodes = [n for n in nodes if sl in n["name"].lower()
-                         or any(sl in a.lower() for a in n.get("aliases", []))]
-                node_names = {n["name"] for n in nodes}
-                relations = [r for r in relations if r["a"] in node_names and r["b"] in node_names]
+                params["q"] = search
+            status, data = hy("GET", "/api/v1/graph", None)
+            if status == 200 and isinstance(data, dict):
+                self._json(200, data)
+            else:
+                # Fallback to export file if server endpoint unavailable
+                l5_export_path = str(_l5_export_path())
+                try:
+                    with open(l5_export_path, encoding="utf-8") as f:
+                        l5_data = json.loads(f.read())
+                except (FileNotFoundError, json.JSONDecodeError):
+                    self._json(503, {"error": "graph endpoint unavailable and export file missing"})
+                    return
 
-            # Sort nodes by mention_count desc
-            nodes = sorted(nodes, key=lambda n: -n.get("mention_count", 0))
-            return self._json(200, {
-                "exported_at": l5_data.get("exported_at"),
-                "node_count": len(nodes),
-                "relation_count": len(relations),
-                "nodes": nodes,
-                "relations": relations,
-                "type_distribution": l5_data.get("type_distribution", {}),
-                "relation_type_distribution": l5_data.get("relation_type_distribution", {}),
-            })
+                nodes = l5_data.get("nodes", [])
+                relations = l5_data.get("relations", [])
+                if not relations:
+                    relations = [
+                        {"a": e.get("from", ""), "b": e.get("to", ""),
+                         "relation_type": e.get("type", e.get("relation_type", "related_to")),
+                         "confidence": e.get("weight", e.get("confidence", 0.8))}
+                        for e in l5_data.get("edges", [])
+                    ]
+
+                if etype:
+                    nodes = [n for n in nodes if n.get("entity_type") == etype]
+                    node_names = {n["name"] for n in nodes}
+                    relations = [r for r in relations if r["a"] in node_names and r["b"] in node_names]
+
+                if search:
+                    sl = search.lower()
+                    nodes = [n for n in nodes if sl in n["name"].lower()
+                             or any(sl in a.lower() for a in n.get("aliases", []))]
+                    node_names = {n["name"] for n in nodes}
+                    relations = [r for r in relations if r["a"] in node_names and r["b"] in node_names]
+
+                nodes = sorted(nodes, key=lambda n: -n.get("mention_count", 0))
+                self._json(200, {
+                    "exported_at": l5_data.get("exported_at"),
+                    "node_count": len(nodes),
+                    "relation_count": len(relations),
+                    "nodes": nodes,
+                    "relations": relations,
+                    "type_distribution": l5_data.get("type_distribution", {}),
+                    "relation_type_distribution": l5_data.get("relation_type_distribution", {}),
+                    "fallback": True,
+                })
+            return
 
         if path == "/api/l5/context":
             # Returns the top L5 entities formatted for injection into the
@@ -3384,36 +3400,57 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             # Query params:
             #   n    - max entities to return (default 15, max 50)
             #   type - optional filter by entity type (TOOL/PROJECT/etc)
-            l5_export_path = str(_l5_export_path())
-            try:
-                with open(l5_export_path, encoding="utf-8") as f:
-                    l5_data = json.loads(f.read())
-            except (FileNotFoundError, json.JSONDecodeError):
-                return self._json(200, {"context": "(L5 knowledge graph not yet built)", "entities": []})
-
             qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
             try:
                 n = int(qs.get("n", ["15"])[0])
                 n = min(max(n, 1), 50)
             except ValueError:
                 n = 15
-            entity_type = qs.get("type", [None])[0]
+            etype = qs.get("type", [None])[0]
 
-            nodes = l5_data.get("nodes", [])
-            if entity_type:
-                nodes = [n for n in nodes if n.get("entity_type") == entity_type]
+            # Try live endpoint first
+            graph_params = {"n": str(n), "rels": "false"}
+            if etype:
+                graph_params["type"] = etype
+            query_str = "&".join(f"{k}={v}" for k, v in graph_params.items())
+            status, data = hy("GET", f"/api/v1/graph?{query_str}", None)
+
+            if status == 200 and isinstance(data, dict) and data.get("nodes"):
+                nodes = data.get("nodes", [])
+            else:
+                # Fallback to export file
+                l5_export_path = str(_l5_export_path())
+                try:
+                    with open(l5_export_path, encoding="utf-8") as f:
+                        l5_data = json.loads(f.read())
+                except (FileNotFoundError, json.JSONDecodeError):
+                    return self._json(200, {"context": "(L5 knowledge graph not yet built)", "entities": []})
+
+                nodes = l5_data.get("nodes", [])
+                if etype:
+                    nodes = [nd for nd in nodes if nd.get("entity_type") == etype]
+                nodes = sorted(nodes, key=lambda x: -x.get("mention_count", 0))[:n]
+
             # Sort by mention count desc (importance proxy)
             nodes = sorted(nodes, key=lambda x: -x.get("mention_count", 0))[:n]
 
             # Format as a context block the LLM can use
             lines = ["Known entities from your knowledge graph (use these as prior context):"]
-            for n in nodes:
-                aliases = f" (aka: {', '.join(n.get('aliases', []))})" if n.get('aliases') else ""
-                mentions = n.get('mention_count', 1)
-                lines.append(f"- {n['name']} [{n['entity_type']}] mentioned {mentions}×{aliases}")
-            relations = l5_data.get('relations', [])
-            # Show top 10 relations among the selected entities
-            node_names = {n['name'] for n in nodes}
+            for nd in nodes:
+                aliases = f" (aka: {', '.join(nd.get('aliases', []))})" if nd.get('aliases') else ""
+                mentions = nd.get('mention_count', 1)
+                et = nd.get("entity_type", nd.get("type", "unknown"))
+                lines.append(f"- {nd['name']} [{et}] mentioned {mentions}×{aliases}")
+
+            # Get relations from live endpoint or export
+            relations = data.get("relations", []) if status == 200 else l5_data.get('relations', [])
+            if not relations and status != 200:
+                relations = [
+                    {"a": e.get("from", ""), "b": e.get("to", ""),
+                     "relation_type": e.get("type", e.get("relation_type", "related_to"))}
+                    for e in l5_data.get("edges", [])
+                ]
+            node_names = {nd['name'] for nd in nodes}
             top_rels = [r for r in relations if r['a'] in node_names and r['b'] in node_names][:10]
             if top_rels:
                 lines.append("")
@@ -3421,11 +3458,14 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 for r in top_rels:
                     lines.append(f"  {r['a']} {r['relation_type']} {r['b']}")
 
+            total_nodes = data.get("node_count", 0) if status == 200 else l5_data.get("node_count", 0)
+            total_rels = data.get("relation_count", 0) if status == 200 else l5_data.get("relation_count", 0)
+
             return self._json(200, {
                 "context": "\n".join(lines),
-                "entities": [{"name": n["name"], "type": n["entity_type"], "mentions": n.get("mention_count", 1)} for n in nodes],
-                "total_entities_in_graph": l5_data.get("node_count", 0),
-                "total_relations_in_graph": l5_data.get("relation_count", 0),
+                "entities": [{"name": nd["name"], "type": nd.get("entity_type", nd.get("type", "unknown")), "mentions": nd.get("mention_count", 1)} for nd in nodes],
+                "total_entities_in_graph": total_nodes,
+                "total_relations_in_graph": total_rels,
             })
 
         self._json(404, {"error": "not found"})

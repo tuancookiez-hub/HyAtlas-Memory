@@ -2346,6 +2346,171 @@ def apply_user_identity_patch() -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Patch 23: Live graph endpoint — /api/v1/graph (replaces l5_kuzu_export.json)
+# ---------------------------------------------------------------------------
+# The dashboard and S1 extractor both need L5 knowledge graph data (nodes +
+# relations). Previously this required a JSON export file produced by
+# l5_export_json.py, which stops the server to snapshot Kuzu — clunky and
+# goes stale. This patch adds GET /api/v1/graph to the upstream server,
+# querying Kuzu directly via the already-open graph_store connection.
+#
+# Query params:
+#   n       - max nodes to return (default 0 = all, sorted by mention_count)
+#   type    - filter by entity type (e.g. CONCEPT, PERSON, TECHNOLOGY)
+#   q       - search filter on node name/aliases
+#   rels    - include relations? (default true; set false for node-only)
+# ---------------------------------------------------------------------------
+
+
+def apply_graph_endpoint_patch() -> bool:
+    if _applied.get("graph_endpoint"):
+        return True
+
+    try:
+        from hy_memory.server import (
+            MemoryHTTPHandler,
+            _get_client,
+            _json_response,
+        )
+    except ImportError as e:
+        logger.debug(f"[hy-memory/patches] cannot import server for graph endpoint: {e}")
+        return False
+
+    orig_do_get = MemoryHTTPHandler.do_GET
+
+    def patched_do_get(self):  # type: ignore[no-redef]
+        try:
+            raw = self.path.split("?")[0].rstrip("/")
+            if raw == "/api/v1/graph":
+                _handle_graph(self)
+                return
+        except Exception:
+            pass
+        return orig_do_get(self)
+
+    def _handle_graph(handler):
+        from urllib.parse import parse_qs, urlparse
+
+        qs = parse_qs(urlparse(handler.path).query)
+        max_n = int(qs.get("n", ["0"])[0])
+        etype = qs.get("type", [None])[0]
+        search = qs.get("q", [None])[0]
+        include_rels = qs.get("rels", ["true"])[0].lower() not in ("false", "0", "no")
+
+        client = _get_client()
+        gs = getattr(client, "_graph_store", None)
+        if gs is None or not getattr(gs, "_available", False):
+            _json_response(handler, 503, {"error": "graph_store unavailable"})
+            return
+
+        conn = getattr(gs, "_conn", None)
+        if conn is None:
+            _json_response(handler, 503, {"error": "kuzu connection not initialized"})
+            return
+
+        import json as _json
+
+        # Query L5 nodes
+        nodes = []
+        node_q = (
+            "MATCH (m:Memory) WHERE m.layer = 'l5_knowledge' "
+            "RETURN m.node_id AS id, m.content AS name, m.content_type AS ct, "
+            "m.confidence AS conf, m.extra_json AS extra, m.created_at AS ca"
+        )
+        try:
+            result = conn.execute(node_q)
+            while result.has_next():
+                row = result.get_next()
+                try:
+                    extra = _json.loads(row[4]) if row[4] else {}
+                except Exception:
+                    extra = {}
+                nodes.append({
+                    "node_id": row[0],
+                    "name": row[1],
+                    "content_type": row[2],
+                    "confidence": row[3],
+                    "entity_type": extra.get("entity_type", "CONCEPT"),
+                    "mention_count": extra.get("mention_count", 1),
+                    "aliases": extra.get("aliases", []),
+                    "source": extra.get("source", "l5_digest"),
+                    "created_at": str(row[5]) if row[5] else None,
+                })
+        except Exception as e:
+            _json_response(handler, 500, {"error": f"node query failed: {e}"})
+            return
+
+        # Filter by entity type
+        if etype:
+            nodes = [n for n in nodes if n.get("entity_type") == etype]
+
+        # Filter by search
+        if search:
+            sl = search.lower()
+            nodes = [n for n in nodes if sl in n["name"].lower()
+                     or any(sl in a.lower() for a in n.get("aliases", []))]
+
+        # Sort by mention_count desc
+        nodes = sorted(nodes, key=lambda n: -n.get("mention_count", 0))
+
+        # Limit
+        if max_n > 0:
+            nodes = nodes[:max_n]
+
+        # Query relations among the (filtered) node set
+        relations = []
+        if include_rels and nodes:
+            node_names = {n["name"] for n in nodes}
+            rel_q = (
+                "MATCH (a:Memory)-[r:RELATED_TO]->(b:Memory) "
+                "WHERE a.layer = 'l5_knowledge' AND b.layer = 'l5_knowledge' "
+                "RETURN a.content AS a_name, b.content AS b_name, "
+                "r.relation_type AS rtype, r.weight AS weight"
+            )
+            try:
+                result = conn.execute(rel_q)
+                while result.has_next():
+                    row = result.get_next()
+                    a_name = row[0]
+                    b_name = row[1]
+                    if a_name in node_names and b_name in node_names:
+                        relations.append({
+                            "a": a_name,
+                            "b": b_name,
+                            "relation_type": row[2] or "related_to",
+                            "confidence": row[3] if row[3] is not None else 0.8,
+                        })
+            except Exception as e:
+                logger.warning(f"[graph-endpoint] relation query failed: {e}")
+
+        # Type distribution
+        type_dist = {}
+        for n in nodes:
+            t = n.get("entity_type", "CONCEPT")
+            type_dist[t] = type_dist.get(t, 0) + 1
+
+        # Relation type distribution
+        rel_type_dist = {}
+        for r in relations:
+            t = r.get("relation_type", "related_to")
+            rel_type_dist[t] = rel_type_dist.get(t, 0) + 1
+
+        _json_response(handler, 200, {
+            "node_count": len(nodes),
+            "relation_count": len(relations),
+            "nodes": nodes,
+            "relations": relations,
+            "type_distribution": type_dist,
+            "relation_type_distribution": rel_type_dist,
+        })
+
+    MemoryHTTPHandler.do_GET = patched_do_get
+    _applied["graph_endpoint"] = True
+    logger.info("[hy-memory/patches] graph endpoint patch installed (patch #23): GET /api/v1/graph")
+    return True
+
+
 # Master entry point
 # ---------------------------------------------------------------------------
 
@@ -2372,8 +2537,9 @@ def apply_all_patches() -> dict[str, bool]:
         "coding_judge": _patch_coding_judge(),
         "s2_operations_json": apply_s2_operations_json_patch(),
         "user_identity": apply_user_identity_patch(),
-        "s1_extractor_entity_type": apply_s1_extractor_entity_type_patch(),
         "auto_forgetting": apply_auto_forgetting_patch(),
+        "graph_endpoint": apply_graph_endpoint_patch(),
+        "s1_extractor_entity_type": apply_s1_extractor_entity_type_patch(),
     }
 
 
@@ -2594,6 +2760,10 @@ def apply_s1_extractor_entity_type_patch() -> bool:
         logger.debug("[hy-memory/patches] S1 extractor patch: hy_memory not importable")
         return False
 
+    if not hasattr(Extractor, "_get_l5_context_for_prompt"):
+        logger.debug("[hy-memory/patches] S1 extractor patch: _get_l5_context_for_prompt not found on this SDK version")
+        return False
+
     _orig = Extractor._get_l5_context_for_prompt
 
     def _patched_get_l5_context(self, n=None):
@@ -2609,6 +2779,43 @@ def apply_s1_extractor_entity_type_patch() -> bool:
         n = min(max(n, 0), 50)
         if n == 0:
             return ""
+
+        # Try live /api/v1/graph endpoint first (queries Kuzu directly,
+        # no stale export file). Falls back to export file if server
+        # is down or the endpoint patch isn't installed.
+        try:
+            import urllib.request as _urllib
+            port = _os.environ.get("HY_MEMORY_SERVER_PORT", "19527")
+            url = f"http://127.0.0.1:{port}/api/v1/graph?n={n}&rels=false"
+            with _urllib.urlopen(url, timeout=3) as resp:
+                if resp.status == 200:
+                    data = _json.loads(resp.read())
+                    nodes = data.get("nodes", [])
+                    if nodes:
+                        lines = ["### Known entities from your knowledge graph (use as prior context):\n"]
+                        for nd in nodes:
+                            aliases = f" (aka: {', '.join(nd.get('aliases', []))})" if nd.get("aliases") else ""
+                            mentions = nd.get("mention_count", 1)
+                            etype = nd.get("entity_type") or nd.get("type") or "unknown"
+                            lines.append(f"- {nd['name']} [{etype}] mentioned {mentions}×{aliases}")
+                        if n >= 8:
+                            # Fetch relations in a second call
+                            rel_url = f"http://127.0.0.1:{port}/api/v1/graph?n={n}"
+                            with _urllib.urlopen(rel_url, timeout=3) as rel_resp:
+                                if rel_resp.status == 200:
+                                    rel_data = _json.loads(rel_resp.read())
+                                    relations = rel_data.get("relations", [])
+                                    node_names = {nd["name"] for nd in nodes}
+                                    top_rels = [r for r in relations if r["a"] in node_names and r["b"] in node_names][:6]
+                                    if top_rels:
+                                        lines.append("\nNotable relations:")
+                                        for r in top_rels:
+                                            lines.append(f"  {r['a']} {r.get('relation_type', 'relates to')} {r['b']}")
+                        return "\n".join(lines) + "\n\n"
+        except Exception:
+            pass
+
+        # Fallback: read from export file
         export_path = _P(_os.environ.get("HERMES_HOME", str(_P.home() / "AppData" / "Local" / "hermes"))) / "logs" / "l5_kuzu_export.json"
         if not export_path.exists():
             return ""
@@ -2628,6 +2835,12 @@ def apply_s1_extractor_entity_type_patch() -> bool:
             lines.append(f"- {nd['name']} [{etype}] mentioned {mentions}×{aliases}")
         if n >= 8:
             relations = data.get("relations", [])
+            if not relations:
+                relations = [
+                    {"a": e.get("from", ""), "b": e.get("to", ""),
+                     "relation_type": e.get("type", e.get("relation_type", "related_to"))}
+                    for e in data.get("edges", [])
+                ]
             node_names = {nd["name"] for nd in nodes}
             top_rels = [r for r in relations if r["a"] in node_names and r["b"] in node_names][:6]
             if top_rels:
