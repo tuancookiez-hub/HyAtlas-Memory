@@ -113,6 +113,10 @@ def _l5_export_path() -> _pathlib.Path:
     Pre-1.4.1, the dashboard read from ``<dashboard_dir>/logs/l5_kuzu_export.json``
     while the writer wrote to ``C:\\Users\\<user>\\AppData\\Local\\hermes\\logs\\...``,
     which produced a permanent 503 on ``/api/l5/graph`` for every install.
+
+    Since v2.0.0 (Patch 23), the dashboard reads live from the server's
+    ``/api/v1/graph`` endpoint by default. This export file is only used
+    as a fallback when the live endpoint is unavailable.
     """
     try:
         from hermes_constants import get_hermes_home

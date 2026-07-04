@@ -295,6 +295,11 @@ Counts for L5/L6/L7 from the Kuzu graph.
 
 Full L5 knowledge graph (nodes + relations).
 
+> **v2.0.0+ (Patch 23):** the dashboard proxies to the live server endpoint
+> `GET /api/v1/graph`, which queries Kuzu directly via the server's open
+> graph-store connection. Returns real-time data — no stale export file.
+> Falls back to `l5_kuzu_export.json` only if the upstream server is down.
+
 **Response:**
 ```json
 {

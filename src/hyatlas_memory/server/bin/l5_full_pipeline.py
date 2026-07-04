@@ -13,12 +13,14 @@ Steps:
   3. Run l5_entity_resolver.py  (dedup)
   4. Run l5_quality_review.py   (filter noise)
   5. Run l5_ingest_kuzu.py --rebuild  (wipe + write to Kuzu)
-  6. Run l5_export_json.py      (re-export JSON for dashboard)
+  6. Run l5_export_json.py      (snapshot/backup of graph state)
   7. Restart the hy-memory server
 
-Each step logs to logs/l5_pipeline_run.log. The dashboard proxy can be
-checked at /api/l5/graph while this runs to see partial state — the
-endpoint serves from the LAST export, not the in-progress Kuzu state.
+Each step logs to logs/l5_pipeline_run.log. Since v2.0.0 (Patch 23), the
+dashboard reads live from the server's /api/v1/graph endpoint — no export
+needed for day-to-day viewing. The export in step 6 remains useful as a
+snapshot/backup. The dashboard proxy can be checked at /api/l5/graph while
+this runs; it will serve live data once the server restarts in step 7.
 
 Failure handling: if any step fails, the script tries to restart the
 server before exiting, so the system doesn't get stuck with the server

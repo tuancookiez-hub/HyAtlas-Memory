@@ -1,3 +1,15 @@
+## [Unreleased]
+
+### Added
+- **Patch 23: Live graph endpoint `GET /api/v1/graph`.** Adds a server endpoint that queries Kuzu directly via the already-open `graph_store` connection. Eliminates the need for the `l5_kuzu_export.json` bridge file (which required stopping the server to regenerate and went stale between exports). Supports `n` (limit), `type` (entity filter), `q` (search), `rels` (include relations) query params.
+
+### Changed
+- **Dashboard `/api/l5/graph` and `/api/l5/context`.** Now proxy to the live server endpoint first (`/api/v1/graph`); fall back to `l5_kuzu_export.json` only if the upstream server is unavailable. Response includes `"fallback": true|false` so callers can tell which path was used.
+- **S1 extractor `_get_l5_context_for_prompt`.** Same live-first / fallback pattern — fetches entities from the live endpoint and only reads the export file if the server is down. Added a `hasattr` guard so the patch no longer crashes when the SDK version lacks the method (this was preventing `apply_all_patches` from completing and blocking every patch listed after it in the registry).
+
+### Fixed
+- **L5 graph was invisible in the dashboard** despite a healthy Kuzu graph. The `l5_kuzu_export.json` file was last regenerated June 30 and used an older schema (`"edges"`/`"from"`/`"to"` keys) incompatible with the dashboard's reader (`"relations"`/`"a"`/`"b"`). The live endpoint now serves fresh data directly from Kuzu — the export file is no longer required for day-to-day viewing.
+
 ## [2.0.0] - 2026-06-30 — S-Class memory upgrade (public release)
 
 ### Added

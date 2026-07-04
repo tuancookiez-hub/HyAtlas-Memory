@@ -3,15 +3,15 @@
 **Created:** 2026-06-29  
 **Status:** Planning Phase  
 **Owner:** @tuancookiez  
-**Last Updated:** 2026-06-29
+**Last Updated:** 2026-07-04
 
 ## Overview
 
 HyAtlas Memory v2.0.0 is currently tagged and working end-to-end for the author's personal setup. This roadmap documents the work required to validate external release quality — ensuring clean installs work, migration paths are documented, and no hidden blockers remain.
 
 **Current State:**
-- ✅ Pipeline works (L5 entities: 688, L6 schemas: 239, L7 intentions: 57)
-- ✅ All 18 patches load successfully
+- ✅ Pipeline works (L5 entities: 1,172, L6 schemas: 434, L7 intentions: 142)
+- ✅ All 23 patches load successfully
 - ⚠️ Import crash on `pip install hyatlas-memory` (hermes-agent imports not optional)
 - ⚠️ 30+ hardcoded `C:\Users\tuanc\` paths in `bin/` scripts
 - ⚠️ 384-dim references still present after 1024-dim migration

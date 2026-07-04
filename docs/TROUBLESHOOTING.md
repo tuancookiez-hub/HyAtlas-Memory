@@ -245,8 +245,12 @@ You'll lose all vector memories but keep L0 (raw JSONL) and L5+ (Kuzu graph).
 
 **Symptom:** L5 page is blank, or `/api/l5/graph` returns 404.
 
-**Diagnosis:**
+**Diagnosis (v2.0.0+, Patch 23):**
 ```bash
+# Check live endpoint directly — what the dashboard now uses by default
+curl http://localhost:19527/api/v1/graph?n=5
+
+# Check fallback path — used only if the live endpoint fails
 ls -la ~/.hy_memory/data/kuzu_db
 ```
 
@@ -258,6 +262,24 @@ The directory is created by the L5 pipeline (`server/bin/l5_full_pipeline.py`). 
 ```bash
 python server/bin/l5_full_pipeline.py
 ```
+
+### Live endpoint returns 503 (graph_store unavailable)
+
+The upstream server's Kuzu connection isn't initialized. Restart the server:
+```bash
+hyatlas stop && hyatlas start
+```
+
+If still 503, check the server log for Kuzu init errors and that `MEMORY_L5_ENABLED=true` in `hy_memory.json`.
+
+### Fallback export file missing (older installs)
+
+If the live endpoint is unavailable AND `l5_kuzu_export.json` doesn't exist, regenerate it:
+```bash
+python server/bin/l5_export_json.py
+```
+
+This is no longer required for day-to-day viewing — the dashboard reads live from the server by default — but remains useful as a snapshot/backup of the graph at a point in time.
 
 This takes 5-30 minutes for thousands of facts.
 

@@ -8,14 +8,21 @@ script runs as a one-shot (or cron job) to:
   1. Stop the server (so we can take an exclusive Kuzu lock)
   2. Connect to Kuzu directly
   3. Query all L5 nodes + relations
-  4. Write a JSON file that the proxy can read
-  5. Restart the server
+    4. Write a JSON snapshot file
+    5. Restart the server
 
-Output: logs/l5_kuzu_export.json — read by the dashboard proxy.
+  Output: logs/l5_kuzu_export.json — a snapshot/backup of the Kuzu graph.
 
-CRITICAL: This script (and any direct Kuzu access) requires the server
-to be STOPPED. The hy-memory server holds an exclusive lock on the
-kuzu_db file.
+  Since v2.0.0 (Patch 23), the dashboard reads live from the server's
+  /api/v1/graph endpoint and no longer requires this export for day-to-day
+  viewing. This script remains useful for:
+    - Creating a portable snapshot of the graph at a point in time
+    - Fallback data source if the live endpoint is unavailable
+    - Pipeline checkpoint after a full L5 rebuild
+
+  CRITICAL: This script (and any direct Kuzu access) requires the server
+  to be STOPPED. The hy-memory server holds an exclusive lock on the
+  kuzu_db file.
 """
 import argparse
 import json

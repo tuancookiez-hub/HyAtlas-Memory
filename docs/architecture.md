@@ -61,12 +61,16 @@ The official 6-layer spec maps roughly onto our 6 layers L1-L6 with one differen
 
 ### L5 — Pipeline
 - **What**: Async orchestration of batch ingest, entity resolution,
-  relation classification, NER fallback, Kuzu ingest, JSON export,
-  digest write.
+  relation classification, NER fallback, Kuzu ingest, digest write.
 - **Why async**: the full L5 cycle takes 10+ minutes for 1000 facts;
   running it inline would block every write.
 - **Schedule**: manual (via `python -m server.bin.l5_full_pipeline`)
   or `hourly` / `daily` via the config.
+- **Dashboard reads live (v2.0.0+, Patch 23)**: the dashboard queries the
+  server's `GET /api/v1/graph` endpoint, which reads Kuzu directly through
+  the server's open `graph_store` connection. No JSON export needed for
+  day-to-day viewing. The `l5_export_json.py` script remains available as
+  a snapshot/backup tool and as a fallback if the live endpoint is down.
 
 ### L6 — Schema
 - **What**: Typed entity and relationship categories. Read by L5

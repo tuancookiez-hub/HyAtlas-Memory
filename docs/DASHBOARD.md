@@ -163,8 +163,8 @@ The dashboard's HTTP server (`server/dashboard/dashboard.py`) exposes these endp
 | `GET` | `/api/coding-count` | Total coding memory count |
 | `GET` | `/api/layer-counts` | Counts per layer (L0–L4 from VDB) |
 | `GET` | `/api/graph-counts` | Counts for L5/L6/L7 (from Kuzu graph) |
-| `GET` | `/api/l5/graph` | Full L5 knowledge graph (nodes + relations) |
-| `GET` | `/api/l5/context?memory_id=...` | Context for a specific memory |
+| `GET` | `/api/l5/graph` | Full L5 knowledge graph (nodes + relations). v2.0.0+ reads live from the server's `/api/v1/graph` (Patch 23); falls back to `l5_kuzu_export.json` only if the upstream is down. |
+| `GET` | `/api/l5/context?memory_id=...` | Context for a specific memory. Same live-first / fallback pattern as `/api/l5/graph`. |
 | `POST` | `/api/search` | Body: `{query, user_id, top_k, ...}` — passthrough to `/api/v1/search` |
 
 ### Query parameters

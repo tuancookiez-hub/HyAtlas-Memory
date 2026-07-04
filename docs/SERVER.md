@@ -18,7 +18,7 @@ bin/l5_entity_resolver.py     # L5 step 2: resolve entity mentions to canonical 
 bin/l5_relation_prototype.py  # L5 step 3: classify entity-pair relationships
 bin/l5_ner_prototype.py       # L5 step 4: NER-based relation fallback
 bin/l5_ingest_kuzu.py         # L5 step 5: ingest resolved facts into Kuzu graph
-bin/l5_export_json.py         # L5 step 6: export graph state to JSON digests
+bin/l5_export_json.py         # L5 step 6: export graph state to JSON (backup/snapshot — no longer needed for dashboard viewing since Patch 23's live /api/v1/graph endpoint)
 bin/l5_digest_writer.py       # L5 step 7: write digests to the L1 raw layer
 bin/l5_full_pipeline.py       # runs all L5 steps in sequence
 bin/l5_quality_review.py      # manual review tool for L5 outputs
