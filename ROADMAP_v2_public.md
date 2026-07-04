@@ -28,7 +28,7 @@ HyAtlas Memory v2.0.0 is currently tagged and working end-to-end for the author'
 
 ### Deliverables
 - [x] Adversarial code review completed (found 22 issues, 4 critical blockers)
-- [x] Empirical patch verification (18/20 patches load successfully)
+- [x] Empirical patch verification (21/23 patches load successfully)
 - [x] Hardcoded path inventory (30+ instances identified)
 - [x] User ID parameterization audit
 - [x] Kuzu WAL checkpoint behavior documented

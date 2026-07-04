@@ -2385,15 +2385,20 @@ def apply_graph_endpoint_patch() -> bool:
             if raw == "/api/v1/graph":
                 _handle_graph(self)
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[graph-endpoint] dispatch error, falling through: {e}")
         return orig_do_get(self)
 
     def _handle_graph(handler):
         from urllib.parse import parse_qs, urlparse
 
         qs = parse_qs(urlparse(handler.path).query)
-        max_n = int(qs.get("n", ["0"])[0])
+        try:
+            max_n = int(qs.get("n", ["0"])[0])
+            max_n = min(max(max_n, 0), 5000)  # cap to prevent OOM on huge graphs
+        except (ValueError, TypeError):
+            _json_response(handler, 400, {"error": "n must be an integer"})
+            return
         etype = qs.get("type", [None])[0]
         search = qs.get("q", [None])[0]
         include_rels = qs.get("rels", ["true"])[0].lower() not in ("false", "0", "no")
@@ -2424,7 +2429,8 @@ def apply_graph_endpoint_patch() -> bool:
                 row = result.get_next()
                 try:
                     extra = _json.loads(row[4]) if row[4] else {}
-                except Exception:
+                except (ValueError, TypeError) as je:
+                    logger.debug(f"[graph-endpoint] extra_json parse failed for {row[0]}: {je}")
                     extra = {}
                 nodes.append({
                     "node_id": row[0],
@@ -2435,7 +2441,7 @@ def apply_graph_endpoint_patch() -> bool:
                     "mention_count": extra.get("mention_count", 1),
                     "aliases": extra.get("aliases", []),
                     "source": extra.get("source", "l5_digest"),
-                    "created_at": str(row[5]) if row[5] else None,
+                    "created_at": str(row[5]) if row[5] is not None else None,
                 })
         except Exception as e:
             _json_response(handler, 500, {"error": f"node query failed: {e}"})
@@ -2786,7 +2792,7 @@ def apply_s1_extractor_entity_type_patch() -> bool:
         try:
             import urllib.request as _urllib
             port = _os.environ.get("HY_MEMORY_SERVER_PORT", "19527")
-            url = f"http://127.0.0.1:{port}/api/v1/graph?n={n}&rels=false"
+            url = f"http://127.0.0.1:{port}/api/v1/graph?n={n}"
             with _urllib.urlopen(url, timeout=3) as resp:
                 if resp.status == 200:
                     data = _json.loads(resp.read())
@@ -2799,21 +2805,16 @@ def apply_s1_extractor_entity_type_patch() -> bool:
                             etype = nd.get("entity_type") or nd.get("type") or "unknown"
                             lines.append(f"- {nd['name']} [{etype}] mentioned {mentions}×{aliases}")
                         if n >= 8:
-                            # Fetch relations in a second call
-                            rel_url = f"http://127.0.0.1:{port}/api/v1/graph?n={n}"
-                            with _urllib.urlopen(rel_url, timeout=3) as rel_resp:
-                                if rel_resp.status == 200:
-                                    rel_data = _json.loads(rel_resp.read())
-                                    relations = rel_data.get("relations", [])
-                                    node_names = {nd["name"] for nd in nodes}
-                                    top_rels = [r for r in relations if r["a"] in node_names and r["b"] in node_names][:6]
-                                    if top_rels:
-                                        lines.append("\nNotable relations:")
-                                        for r in top_rels:
-                                            lines.append(f"  {r['a']} {r.get('relation_type', 'relates to')} {r['b']}")
+                            relations = data.get("relations", [])
+                            node_names = {nd["name"] for nd in nodes}
+                            top_rels = [r for r in relations if r["a"] in node_names and r["b"] in node_names][:6]
+                            if top_rels:
+                                lines.append("\nNotable relations:")
+                                for r in top_rels:
+                                    lines.append(f"  {r['a']} {r.get('relation_type', 'relates to')} {r['b']}")
                         return "\n".join(lines) + "\n\n"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[s1-extractor] live graph endpoint fallback: {e}")
 
         # Fallback: read from export file
         export_path = _P(_os.environ.get("HERMES_HOME", str(_P.home() / "AppData" / "Local" / "hermes"))) / "logs" / "l5_kuzu_export.json"

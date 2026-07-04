@@ -3317,17 +3317,23 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             except Exception:
                 pass
             # L5 lives in Kuzu too, but isn't in /api/v1/list.
-            # Read from the export JSON and count only L5_KNOWLEDGE nodes.
+            # v2.0.0+ (Patch 23): try the live /api/v1/graph endpoint first;
+            # fall back to the export JSON only if the upstream is unreachable.
             l5_count = 0
-            l5_export_path = str(_l5_export_path())
             try:
-                with open(l5_export_path, encoding="utf-8") as f:
-                    l5_data = json.loads(f.read())
-                for node in l5_data.get("nodes", []):
-                    if node.get("layer") == "l5_knowledge":
-                        l5_count += 1
-            except (FileNotFoundError, json.JSONDecodeError):
-                pass
+                _, graph_data = hy("GET", "/api/v1/graph", None)
+                if isinstance(graph_data, dict):
+                    l5_count = graph_data.get("node_count", 0)
+            except Exception:
+                l5_export_path = str(_l5_export_path())
+                try:
+                    with open(l5_export_path, encoding="utf-8") as f:
+                        l5_data = json.loads(f.read())
+                    for node in l5_data.get("nodes", []):
+                        if node.get("layer") == "l5_knowledge":
+                            l5_count += 1
+                except (FileNotFoundError, json.JSONDecodeError):
+                    pass
             if l5_count == 0:
                 l5_count = _qdrant_layer_count("l5_knowledge", require_is_latest=False)
             return self._json(200, {
@@ -3343,12 +3349,15 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
             etype = qs.get("type", [None])[0]
             search = qs.get("q", [None])[0]
-            params = {}
+            upstream_qs = []
             if etype:
-                params["type"] = etype
+                upstream_qs.append(f"type={etype}")
             if search:
-                params["q"] = search
-            status, data = hy("GET", "/api/v1/graph", None)
+                upstream_qs.append(f"q={search}")
+            upstream_path = "/api/v1/graph"
+            if upstream_qs:
+                upstream_path += "?" + "&".join(upstream_qs)
+            status, data = hy("GET", upstream_path, None)
             if status == 200 and isinstance(data, dict):
                 self._json(200, data)
             else:
