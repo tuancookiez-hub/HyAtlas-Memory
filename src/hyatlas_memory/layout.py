@@ -83,6 +83,9 @@ def ensure(root: str | Path | None = None) -> None:
 
 
 def hermes() -> Path:
+    env_home = os.environ.get("HERMES_HOME", "").strip()
+    if env_home:
+        return Path(env_home)
     try:
         from hermes_constants import get_hermes_home
 
