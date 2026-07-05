@@ -538,7 +538,7 @@ class System2Writer(WritePipeline):
         temperature = self.config.llm.temperature if self.config.llm.temperature is not None else 0.3
 
         async def _call(prompt: str) -> str:
-            resp = await provider._call_llm(prompt, max_tokens=1024, temperature=temperature)
+            resp = await provider._call_llm(prompt, max_tokens=8192, temperature=temperature)
             return resp.content
 
         return _call

@@ -1564,8 +1564,8 @@ class MemoryWriter(WritePipeline):
 
         # Reconcile & store
         stored_ids: List[str] = []
-        self._cur_valence = _val
-        self._cur_arousal = _arou
+        self._cur_valence = _valence
+        self._cur_arousal = _arousal
         _vs_logger = logging.getLogger("hy_memory.data.vector_store_chroma")
         _vs_level = _vs_logger.level
         _vs_logger.setLevel(logging.INFO)

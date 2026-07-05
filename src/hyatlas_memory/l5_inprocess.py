@@ -94,9 +94,26 @@ Relation types: owns, uses, works_on, depends_on, replaces, related_to, is_a, pa
 
 def _strip_think_blocks(text: str) -> str:
     """Strip LLM think-block wrappers and markdown json fences."""
-    text = re.sub(r"⋖.*?⋗", "", text, flags=re.DOTALL)
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    # Strip unicode think blocks (MiniMax-M3: \u22d6...\u22d7)
+    text = re.sub(r"\u22d6.*?\u22d7", "", text, flags=re.DOTALL)
+    # Strip XML think blocks (standard: <think>...</think>)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # Strip [thinking]...[/thinking] blocks
+    text = re.sub(r"\[thinking\].*?\[/thinking\]", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # Fallback: if an opening think tag exists but no closing tag, strip to first {
+    # This handles truncated responses where the closing tag was cut off
+    if "\u22d6" in text and "{" in text:
+        idx = text.index("{")
+        pre = text[:idx]
+        if "\u22d6" in pre:
+            text = text[idx:]
+    if "<think>" in text and "{" in text:
+        idx = text.index("{")
+        pre = text[:idx]
+        if "<think>" in pre:
+            text = text[idx:]
     text = re.sub(r"```json\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"```\s*$", "", text, flags=re.MULTILINE)
     if text.startswith("```"):
         text = "\n".join(
             line for line in text.split("\n")
@@ -112,12 +129,20 @@ def _parse_llm_json(text: str) -> dict | None:
         return None
 
     candidates: list[str] = [text]
-    start = text.find("{")
+
+    # Find ALL json blocks (markdown-fenced or bare) and try largest first
+    blocks = re.findall(r"\{[^{}]*\}|```json\s*(\{[\s\S]*?\})\s*```|\{[\s\S]*\}", text)
+    for block in reversed(blocks):
+        if block:
+            candidates.append(block)
+
+    start = text.rfind("{")
     end = text.rfind("}")
     if start >= 0 and end > start:
         candidates.append(text[start : end + 1])
-    if start >= 0:
-        candidates.append(text[start:])
+    start = text.find("{")
+    if start >= 0 and end > start:
+        candidates.append(text[start : end + 1])
 
     for cand in candidates:
         cand = cand.strip()
@@ -309,7 +334,7 @@ async def _llm_extract(facts: list[dict], llm_call) -> tuple[list[dict], list[di
 
             parsed = _parse_llm_json(text)
             if not parsed:
-                logger.warning("[L5] LLM JSON parse failed for batch offset=%d", offset)
+                logger.warning("[L5] LLM JSON parse failed for batch offset=%d, text[:200]=%s", offset, repr(text[:200]))
                 continue
 
             for fact_result in parsed.get("facts", []):
@@ -607,6 +632,7 @@ async def run_l5_inprocess(
         latest_ts = max(f["gmt_created"] for f in facts)
         if ent_written > 0 or rel_count > 0 or qdrant_ok:
             _write_watermark(latest_ts)
+            graph_store._checkpoint()
         else:
             logger.warning("[L5] watermark not advanced: no Kuzu/Qdrant writes succeeded")
 
