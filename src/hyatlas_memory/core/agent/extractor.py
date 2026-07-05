@@ -1201,18 +1201,19 @@ class Extractor:
     # ================================================================
 
     def _parse_json(self, text: str) -> Optional[Dict[str, Any]]:
-        """从 LLM 输出中解析 JSON。成功返回 dict，解析失败返回 None。"""
+        """Parse JSON from LLM output. Handles reasoning model think blocks."""
         text = text.strip()
-        # 处理 markdown 代码块
+        # Strip think blocks from reasoning models (MiniMax-M3, Grok, etc.)
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r"\u22d6.*?\u22d7", "", text, flags=re.DOTALL)
+        # Strip markdown code blocks
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0].strip()
         elif "```" in text:
             text = text.split("```")[1].split("```")[0].strip()
-
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            # 尝试找到 JSON 块
             match = re.search(r"\{[\s\S]*\}", text)
             if match:
                 try:
