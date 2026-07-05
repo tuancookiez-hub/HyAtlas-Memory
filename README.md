@@ -2,7 +2,7 @@
 
 A community implementation of the official Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan, `memory.hunyuan.tencent.com`) for Hermes Agent. Includes the experimental L7 intention layer. Apache 2.0 licensed.
 
-> **v2.1.0** introduces the `HYATLAS_HOME` runtime layout. All runtime state lives under `~/.hyatlas` with a single config file and migration helpers.
+> **v3.0.0** is a full SDK fork — the entire hy-memory 1.2.20 codebase (48,371 lines) is now first-party code under `src/hyatlas_memory/core/`. No external `hy-memory` dependency. Includes L5 knowledge graph (upstream stub), emotion-aware memory strength, reasoning model support, and operational hardening.
 
 <p align="center">
   <a href="https://tuancookiez-hub.github.io/tuandev-portfolio/"><img src="https://img.shields.io/badge/Built%20by-Tuan%20Dev-blueviolet?style=for-the-badge" alt="Built by Tuan Dev"></a>
@@ -239,6 +239,10 @@ provider.sync_turn(
 The upstream `hy-memory` server handles LLM-based fact extraction,
 importance scoring, and qdrant indexing automatically. ~8s indexing
 delay before the memory shows on the dashboard.
+
+> **v3.0.0:** The upstream SDK is now forked into first-party code.
+> `hyatlas_memory.core.*` contains the full extraction, reconciliation,
+> and graph pipeline. No external `hy-memory` pip dependency required.
 
 For thin-client control (no provider, just the HTTP wrapper):
 

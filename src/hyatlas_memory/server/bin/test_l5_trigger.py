@@ -35,7 +35,7 @@ except Exception as e:
     sys.exit(1)
 
 # Now use the SDK client
-from hy_memory.client import HyMemoryClient
+from hyatlas_memory.core.client import HyMemoryClient
 
 # Find config
 config_path = str(Path(os.environ.get("HERMES_HOME", str(Path.home() / "AppData" / "Local" / "hermes"))) / "hy_memory.json")
