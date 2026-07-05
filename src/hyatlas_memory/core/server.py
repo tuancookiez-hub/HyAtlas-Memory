@@ -31,12 +31,10 @@ import re
 import signal
 import sys
 import time
-import traceback
 from datetime import datetime
-from http.server import HTTPServer, BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Thread
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger("hy_memory.server")
 
@@ -44,11 +42,11 @@ logger = logging.getLogger("hy_memory.server")
 _client = None
 _client_lock = None
 
-_ADMIN_UI_DIR: Optional[Path] = None
+_ADMIN_UI_DIR: Path | None = None
 _SERVER_START_TIME = time.time()
 
 
-def _admin_ui_dir() -> Optional[Path]:
+def _admin_ui_dir() -> Path | None:
     global _ADMIN_UI_DIR
     if _ADMIN_UI_DIR is not None:
         return _ADMIN_UI_DIR
@@ -131,7 +129,7 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, data: Any):
     handler.wfile.write(body)
 
 
-def _read_json_body(handler: BaseHTTPRequestHandler) -> Optional[Dict]:
+def _read_json_body(handler: BaseHTTPRequestHandler) -> dict | None:
     """Read and parse JSON request body."""
     content_length = int(handler.headers.get("Content-Length", 0))
     if content_length == 0:
@@ -318,7 +316,6 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
 
     def _handle_healthz(self):
         """Deep health check: verify VDB, embed, and LLM connectivity."""
-        import asyncio
 
         checks = {"status": "ok", "vdb": "ok", "embed": "ok", "llm": "ok"}
         has_error = False
@@ -385,7 +382,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
         status_code = 200 if not has_error else 503
         _json_response(self, status_code, checks)
 
-    def _handle_add(self, body: Dict):
+    def _handle_add(self, body: dict):
         """POST /api/v1/add"""
         data = body.get("data")
         if data is None:
@@ -416,7 +413,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
         result = client.add(data, **kwargs)
         _json_response(self, 200, result)
 
-    def _handle_search(self, body: Dict):
+    def _handle_search(self, body: dict):
         """POST /api/v1/search"""
         query = body.get("query", "")
         if not query:
@@ -449,7 +446,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
         result = client.search(query, **kwargs)
         _json_response(self, 200, result)
 
-    def _handle_list(self, body: Dict):
+    def _handle_list(self, body: dict):
         """POST /api/v1/list"""
         client = _get_client()
         kwargs = {}
@@ -459,7 +456,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
         result = client.list_memories(**kwargs)
         _json_response(self, 200, result)
 
-    def _handle_delete_all(self, body: Dict):
+    def _handle_delete_all(self, body: dict):
         """POST /api/v1/delete_all"""
         client = _get_client()
         kwargs = {}
@@ -469,7 +466,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
         result = client.delete_all(**kwargs)
         _json_response(self, 200, result)
 
-    def _handle_digest(self, body: Dict):
+    def _handle_digest(self, body: dict):
         """POST /api/v1/digest — 手动触发 System 2 认知加工（仅 ultra 模式）"""
         user_id = body.get("user_id", "")
         if not user_id:

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Pipeline 可观测性：Log（文件 JSONL，始终开启）与 Trace（SQLite pipeline_logs，可关闭）。
 

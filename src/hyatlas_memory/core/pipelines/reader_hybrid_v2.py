@@ -18,33 +18,32 @@ Key differences from hybrid reader:
   - Tags participate via search_text (content + tags indexed together)
 """
 
-from typing import Any, Dict, List, Optional
-from datetime import datetime
 import asyncio
-import os
 import logging
+import os
+from datetime import datetime
+from typing import Any
 
-from .base import ReadPipeline, ReadRequest, ReadResponse, PipelineContext
 from ..config import MemoryConfig
 from ..core.embed_service import EmbedService
-from ..models.memory import MemoryNode, MemoryLayer, MemoryStatus
+from ..data.graph_store_base import GraphStoreBase
 from ..data.vector_store import create_vector_store
 from ..data.vector_store_base import VectorStoreBase
-from ..data.graph_store_base import GraphStoreBase
+from ..models.memory import MemoryLayer, MemoryNode, MemoryStatus
 from ..utils.tracer import PipelineTracer, create_tracer
-from ._retrieval import config as rconf
-from ._retrieval.lemmatize import lemmatize_for_bm25, get_bm25_params
-from ._retrieval.scoring import (
-    normalize_bm25,
-    compute_evidence_boost,
-    score_vdb_node,
-)
-from ._retrieval.rrf import rrf_fuse
-from ._retrieval.profile_evidence import reverse_lookup_l6
 from ._retrieval.evolution import expand_evolution_chains
 from ._retrieval.intention import recall_intentions
+from ._retrieval.lemmatize import get_bm25_params, lemmatize_for_bm25
+from ._retrieval.profile_evidence import reverse_lookup_l6
+from ._retrieval.rrf import rrf_fuse
+from ._retrieval.scoring import (
+    compute_evidence_boost,
+    normalize_bm25,
+    score_vdb_node,
+)
 from ._retrieval.strength import apply_strength_to_normal
 from ._retrieval.trace import ReadTraceLogger
+from .base import PipelineContext, ReadPipeline, ReadRequest, ReadResponse
 
 logger = logging.getLogger(__name__)
 
@@ -106,9 +105,9 @@ class HybridV2ReadPipeline(ReadPipeline):
     def __init__(
         self,
         config: MemoryConfig,
-        embed_service: Optional[EmbedService] = None,
-        vector_store: Optional[VectorStoreBase] = None,
-        graph_store: Optional[GraphStoreBase] = None,
+        embed_service: EmbedService | None = None,
+        vector_store: VectorStoreBase | None = None,
+        graph_store: GraphStoreBase | None = None,
         cache: Any = None,
     ):
         self.config = config
@@ -116,7 +115,7 @@ class HybridV2ReadPipeline(ReadPipeline):
         self._external_vector_store = vector_store
         self._graph_store = graph_store
         self._cache = cache
-        self._vector_store: Optional[VectorStoreBase] = None
+        self._vector_store: VectorStoreBase | None = None
         self._vector_store_initialized = False
         self._initialized = False
 
@@ -152,8 +151,8 @@ class HybridV2ReadPipeline(ReadPipeline):
     async def read(
         self,
         request: ReadRequest,
-        ctx: Optional[PipelineContext] = None,
-        tracer: Optional[PipelineTracer] = None,
+        ctx: PipelineContext | None = None,
+        tracer: PipelineTracer | None = None,
     ) -> ReadResponse:
         start_time = datetime.now()
         response = ReadResponse()
@@ -177,11 +176,11 @@ class HybridV2ReadPipeline(ReadPipeline):
         )
 
         # Pre-declare for exception safety
-        vdb_semantic_hits: List[Dict[str, Any]] = []
-        vdb_keyword_hits: List[Dict[str, Any]] = []
-        profile_hits: List[Dict[str, Any]] = []
-        graph_schema_hits: List[Dict[str, Any]] = []
-        graph_intention_hits: List[Dict[str, Any]] = []
+        vdb_semantic_hits: list[dict[str, Any]] = []
+        vdb_keyword_hits: list[dict[str, Any]] = []
+        profile_hits: list[dict[str, Any]] = []
+        graph_schema_hits: list[dict[str, Any]] = []
+        graph_intention_hits: list[dict[str, Any]] = []
 
         try:
             if not request.query:
@@ -342,7 +341,7 @@ class HybridV2ReadPipeline(ReadPipeline):
 
             # Proactive 路：intention（L7）从 VDB 召回（与 graph 解耦，全模式可用），
             # 过期惰性转 L2_FACT。仅当 intention_limit > 0 时启用。
-            graph_intention_hits: List[Dict[str, Any]] = []
+            graph_intention_hits: list[dict[str, Any]] = []
             if request.intention_limit > 0:
                 graph_intention_hits = await recall_intentions(
                     vector_store,
@@ -386,7 +385,7 @@ class HybridV2ReadPipeline(ReadPipeline):
             #   - False（经典 BM25 原始分）：用 sigmoid 归一化。
             kw_normalized = getattr(vector_store, "keyword_score_normalized", False)
             midpoint, steepness = get_bm25_params(request.query, query_lemmatized)
-            keyword_scores: Dict[str, float] = {}
+            keyword_scores: dict[str, float] = {}
             for r in vdb_keyword_hits:
                 nid = r["node_id"]
                 raw = r["score"]
@@ -406,8 +405,8 @@ class HybridV2ReadPipeline(ReadPipeline):
             #     不会出现同一 query 里两条相近 mem 因一条有 bm25、一条没有而走
             #     不同权重的情况。
             has_bm25 = bool(keyword_scores)
-            seen_vdb: Dict[str, int] = {}
-            vdb_scored: List[Dict[str, Any]] = []
+            seen_vdb: dict[str, int] = {}
+            vdb_scored: list[dict[str, Any]] = []
 
             # Process semantic hits first
             for r in vdb_semantic_hits:
@@ -475,7 +474,7 @@ class HybridV2ReadPipeline(ReadPipeline):
             # =========================================================
             # 正路：graph vector_search 命中的 L6（已过 profile_min_score），按
             # 证据数加成排序。每项 score = raw 语义分；_internal 仅用于正路内部排序。
-            forward_l6: List[Dict[str, Any]] = []
+            forward_l6: list[dict[str, Any]] = []
             if has_graph and graph_schema_hits:
                 for r in graph_schema_hits:
                     ev_count = 0
@@ -503,7 +502,7 @@ class HybridV2ReadPipeline(ReadPipeline):
             # Stage 8: Profile 反路 + RRF 融合
             # =========================================================
             # 反路：从 normal 命中的 VDB 节点反查支撑它们的 L6（按支撑度排序，不卡阈值）。
-            reverse_l6: List[Dict[str, Any]] = []
+            reverse_l6: list[dict[str, Any]] = []
             if has_graph and vdb_scored:
                 reverse_l6 = await reverse_lookup_l6(
                     self._graph_store,
@@ -513,9 +512,9 @@ class HybridV2ReadPipeline(ReadPipeline):
 
             # 正反 RRF 融合（rank 级，规避正路语义分 vs 反路支撑度不可比）。
             # RRF 输出只保留 node_id/node，content/layer 需从 node_id→item map 重新 hydrate。
-            fused_l6: List[Dict[str, Any]] = []
+            fused_l6: list[dict[str, Any]] = []
             if forward_l6 or reverse_l6:
-                _l6_by_id: Dict[str, Dict[str, Any]] = {}
+                _l6_by_id: dict[str, dict[str, Any]] = {}
                 for it in forward_l6 + reverse_l6:
                     _l6_by_id.setdefault(it["node_id"], it)  # 正路优先保留（先填）
                 fused = rrf_fuse({"forward": forward_l6, "reverse": reverse_l6})
@@ -557,7 +556,7 @@ class HybridV2ReadPipeline(ReadPipeline):
             # =========================================================
             _profile_layer_vals = {l.value for l in _PROFILE_LAYERS}
 
-            def _layer_of(item: Dict[str, Any]) -> str:
+            def _layer_of(item: dict[str, Any]) -> str:
                 nd = item.get("node")
                 return nd.layer.value if (nd and getattr(nd, "layer", None)) else (item.get("layer") or "")
 
@@ -599,7 +598,7 @@ class HybridV2ReadPipeline(ReadPipeline):
             # Stage 12: Build response
             # =========================================================
             for item in final_results:
-                node: Optional[MemoryNode] = item.get("node")
+                node: MemoryNode | None = item.get("node")
                 node_id = item.get("node_id", "")
                 is_evolved = bool(item.get("is_evolved"))
 
@@ -721,7 +720,7 @@ class HybridV2ReadPipeline(ReadPipeline):
         agent_id = request.agent_id or "default"
         return MemoryNode.build_isolation_key(user_id, agent_id)
 
-    def _build_isolation_params(self, request: ReadRequest) -> Dict[str, Any]:
+    def _build_isolation_params(self, request: ReadRequest) -> dict[str, Any]:
         """
         Build isolation parameters (same logic as hybrid reader).
         """

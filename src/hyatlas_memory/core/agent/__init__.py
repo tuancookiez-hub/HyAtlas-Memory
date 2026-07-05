@@ -16,40 +16,40 @@ Agent Memory - 智能层 (Agent Layer)
 """
 
 # Lite+Agent pipeline
-from .mem_agent import MemAgent, AgentResult, ProcessMode
-from .summarizer import Summarizer, SummaryResult
-from .extractor import Extractor, ExtractResult
-from .reflector import Reflector, ReflectResult, ConflictType, ConflictAction
-from .llm_provider import LLMProvider, LLMResponse, LLMConfig, LLMBackend
-
-# V2 Extractor
-from .extractor import ExtractMode, V2ExtractResult
-
 # System 2 / Pro Pipeline Abstractor
-from .abstractor import Abstractor, SessionSummaryResult, SchemaAbstractResult, ProfileSummaryResult
-
-# V2 Reflector
-from .reflector import (
-    V2ConflictType,
-    UpdateTypeResult,
-    ConflictDetectionResult,
-    ImplicitSignal,
-    ImplicitInferenceResult,
-)
+from .abstractor import Abstractor, ProfileSummaryResult, SchemaAbstractResult, SessionSummaryResult
 
 # V2 Emotion Analyzer
-from .emotion_analyzer import EmotionAnalyzer, EmotionAnalysisConfig, EmotionResult
+from .emotion_analyzer import EmotionAnalysisConfig, EmotionAnalyzer, EmotionResult
 
+# V2 Extractor
+from .extractor import ExtractMode, Extractor, ExtractResult, V2ExtractResult
 
 # V2 Intention Detector
 from .intention_detector import (
+    DetectedIntention,
     IntentionDetector,
     IntentionDetectorConfig,
-    DetectedIntention,
     IntentionDetectResult,
-    TriggeredIntentionItem,
     IntentionTriggerResult,
+    TriggeredIntentionItem,
 )
+from .llm_provider import LLMBackend, LLMConfig, LLMProvider, LLMResponse
+from .mem_agent import AgentResult, MemAgent, ProcessMode
+
+# V2 Reflector
+from .reflector import (
+    ConflictAction,
+    ConflictDetectionResult,
+    ConflictType,
+    ImplicitInferenceResult,
+    ImplicitSignal,
+    Reflector,
+    ReflectResult,
+    UpdateTypeResult,
+    V2ConflictType,
+)
+from .summarizer import Summarizer, SummaryResult
 
 __all__ = [
     # MemAgent
@@ -82,9 +82,9 @@ __all__ = [
     "ImplicitSignal",
     "ImplicitInferenceResult",
     # Emotion Analyzer (V2)
-    
-    
-    
+
+
+
     # Intention Detector (V2)
     "IntentionDetector",
     "IntentionDetectorConfig",

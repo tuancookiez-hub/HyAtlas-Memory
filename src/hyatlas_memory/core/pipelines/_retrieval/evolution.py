@@ -13,17 +13,17 @@
   时间字段统一为 Unix timestamp (float)。
 """
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
 import asyncio
 import logging
+from datetime import datetime
+from typing import Any
 
 from ...models.memory import MemoryNode
 
 logger = logging.getLogger(__name__)
 
 
-def _fmt_time(node: MemoryNode) -> Optional[float]:
+def _fmt_time(node: MemoryNode) -> float | None:
     """返回 node.memory_at 的 Unix timestamp；缺失返回 None。"""
     t = node.memory_at
     if not t:
@@ -39,7 +39,7 @@ def _time_key(node: MemoryNode):
     return node.memory_at or node.gmt_created or datetime.min
 
 
-def _node_to_chain_item(node: MemoryNode) -> Dict[str, Any]:
+def _node_to_chain_item(node: MemoryNode) -> dict[str, Any]:
     """将 MemoryNode 转为链条目（序列化友好的 dict）。"""
     return {
         "node_id": node.node_id,
@@ -54,7 +54,7 @@ def _node_to_chain_item(node: MemoryNode) -> Dict[str, Any]:
 async def _trace_full_chain(
     vector_store,
     start_node: MemoryNode,
-) -> List[MemoryNode]:
+) -> list[MemoryNode]:
     """
     从任意节点出发，**双向**追溯整条演化链。
 
@@ -63,8 +63,8 @@ async def _trace_full_chain(
 
     返回整条链（链头在 [0]）。如果只有自身则返回 [start_node]。
     """
-    visited: Dict[str, MemoryNode] = {start_node.node_id: start_node}
-    to_fetch: List[str] = []
+    visited: dict[str, MemoryNode] = {start_node.node_id: start_node}
+    to_fetch: list[str] = []
 
     # 收集双向 ID
     if start_node.supersedes:
@@ -81,7 +81,7 @@ async def _trace_full_chain(
         except Exception as e:
             logger.warning(f"[evolution] get_by_ids failed: {e}")
             break
-        new_to_fetch: List[str] = []
+        new_to_fetch: list[str] = []
         for n in nodes:
             if n.node_id not in visited:
                 visited[n.node_id] = n
@@ -107,7 +107,7 @@ async def _trace_full_chain(
     return [head] + rest
 
 
-async def _expand_one_chain(vector_store, head_item: Dict[str, Any]) -> Dict[str, Any]:
+async def _expand_one_chain(vector_store, head_item: dict[str, Any]) -> dict[str, Any]:
     """
     追溯单个 hit 的演化链（双向）。若无链或回溯失败，原样返回。
 
@@ -159,8 +159,8 @@ async def _expand_one_chain(vector_store, head_item: Dict[str, Any]) -> Dict[str
 
 async def expand_evolution_chains(
     vector_store,
-    hits: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    hits: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """
     并发扩展一批 hits 中有演化链的节点，并去重。
 
@@ -173,8 +173,8 @@ async def expand_evolution_chains(
     输出 list 可能比输入短（因为链去重）。
     """
     # 找出需要展开的 hit（在链上的节点）
-    needs: List[Dict[str, Any]] = []
-    idx_of_needs: Dict[int, int] = {}  # hits_idx → needs_idx
+    needs: list[dict[str, Any]] = []
+    idx_of_needs: dict[int, int] = {}  # hits_idx → needs_idx
     for i, item in enumerate(hits):
         node = item.get("node")
         if node and (getattr(node, "supersedes", None) or getattr(node, "superseded_by", None)):
@@ -191,8 +191,8 @@ async def expand_evolution_chains(
 
     # 链去重：同一条链的多个 hit 合并为一条（保留最高 score）
     # chain_head_id → best expanded result
-    chain_dedup: Dict[str, Dict[str, Any]] = {}
-    expanded_by_idx: Dict[int, Dict[str, Any]] = {}  # hits_idx → expanded result
+    chain_dedup: dict[str, dict[str, Any]] = {}
+    expanded_by_idx: dict[int, dict[str, Any]] = {}  # hits_idx → expanded result
 
     for i, item in enumerate(hits):
         if i not in idx_of_needs:
@@ -221,7 +221,7 @@ async def expand_evolution_chains(
         all_chain_node_ids.update(chain_ids)
 
     # 组装最终结果：去重 + 保持顺序
-    result: List[Dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
     seen_chain_heads: set = set()
     seen_node_ids: set = set()
 

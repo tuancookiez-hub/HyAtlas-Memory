@@ -12,15 +12,15 @@ V2 设计文档:
   新增 V2 接口 (classify_update_type, detect_conflicts_v2, extract_implicit_signals)
 """
 
-from typing import Dict, Any, Optional, List
+import json
+import logging
+import re
 from dataclasses import dataclass, field
 from enum import Enum
-import json
-import re
-import logging
+from typing import Any
 
-from .llm_provider import LLMProvider
 from ..config import LLMConfig as GlobalLLMConfig
+from .llm_provider import LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +57,12 @@ class V2ConflictType(str, Enum):
 class ReflectResult:
     """反思结果 (V1 兼容)"""
     success: bool
-    conflicts: List[Dict[str, Any]] = field(default_factory=list)
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
     should_merge: bool = False
-    merge_target_id: Optional[str] = None
-    merged_content: Optional[str] = None
+    merge_target_id: str | None = None
+    merged_content: str | None = None
     tokens_used: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
@@ -70,21 +70,21 @@ class UpdateTypeResult:
     """UpdateType 分类结果 (V2)"""
     success: bool
     update_type: str = ""  # OVERRIDE/SUPPLEMENT/TEMPORAL/NEGATE/CONFLICT
-    target_fact_id: Optional[str] = None
+    target_fact_id: str | None = None
     confidence: float = 0.0
     reasoning: str = ""
-    temporal_scope: Optional[str] = None
+    temporal_scope: str | None = None
     tokens_used: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
 class ConflictDetectionResult:
     """冲突检测结果 (V2)"""
     success: bool
-    conflicts: List[Dict[str, Any]] = field(default_factory=list)
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
     tokens_used: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
@@ -92,7 +92,7 @@ class ImplicitSignal:
     """隐式信号"""
     signal_type: str = ""   # behavior / attitude / choice
     content: str = ""
-    possible_traits: List[str] = field(default_factory=list)
+    possible_traits: list[str] = field(default_factory=list)
     strength: str = "weak"  # weak / moderate / strong
 
 
@@ -100,9 +100,9 @@ class ImplicitSignal:
 class ImplicitInferenceResult:
     """隐式推断结果 (V2)"""
     success: bool
-    signals: List[ImplicitSignal] = field(default_factory=list)
+    signals: list[ImplicitSignal] = field(default_factory=list)
     tokens_used: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 # ================================================================
@@ -230,7 +230,7 @@ class Reflector:
     def __init__(
         self,
         llm_provider: LLMProvider,
-        llm_config: Optional[GlobalLLMConfig] = None,
+        llm_config: GlobalLLMConfig | None = None,
     ):
         self.llm = llm_provider
         self._llm_config = llm_config or GlobalLLMConfig()
@@ -245,8 +245,8 @@ class Reflector:
     async def check_conflicts(
         self,
         new_content: str,
-        existing_memories: List[Dict[str, Any]],
-        context: Dict[str, Any] = None,
+        existing_memories: list[dict[str, Any]],
+        context: dict[str, Any] = None,
     ) -> ReflectResult:
         """V1 兼容: 检测冲突"""
         try:
@@ -284,8 +284,8 @@ class Reflector:
             return ReflectResult(success=False, error=str(e))
 
     async def suggest_merge(
-        self, memory1: Dict[str, Any], memory2: Dict[str, Any],
-    ) -> Optional[str]:
+        self, memory1: dict[str, Any], memory2: dict[str, Any],
+    ) -> str | None:
         """V1 兼容: 生成合并建议"""
         prompt = f"""请将以下两条记忆合并为一条，保留所有有用信息，解决冲突。
 
@@ -317,7 +317,7 @@ class Reflector:
     async def classify_update_type(
         self,
         new_fact: str,
-        existing_facts: List[Dict[str, Any]],
+        existing_facts: list[dict[str, Any]],
     ) -> UpdateTypeResult:
         """
         判断新事实与已有事实的更新关系。
@@ -364,7 +364,7 @@ class Reflector:
     async def detect_conflicts_v2(
         self,
         new_content: str,
-        existing_memories: List[Dict[str, Any]],
+        existing_memories: list[dict[str, Any]],
     ) -> ConflictDetectionResult:
         """
         V2 冲突检测: 区分四种冲突类型。
@@ -450,7 +450,7 @@ class Reflector:
     # ================================================================
 
     @staticmethod
-    def _parse_json(text: str) -> Dict[str, Any]:
+    def _parse_json(text: str) -> dict[str, Any]:
         """从 LLM 输出中解析 JSON"""
         text = text.strip()
         if "```json" in text:
@@ -468,7 +468,7 @@ class Reflector:
                     pass
         return {"conflicts": [], "should_merge": False}
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         return {
             "call_count": self._call_count,

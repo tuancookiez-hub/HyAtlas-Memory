@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # 注：实际接受哪些字段由调用方传入 allowed_fields 决定。
 # ================================================================
 
-BASIC_FIELDS: List[str] = ["name", "age", "location", "occupation", "employer"]
+BASIC_FIELDS: list[str] = ["name", "age", "location", "occupation", "employer"]
 
 
 # ================================================================
@@ -57,7 +57,7 @@ def basic_info_node_id(user_id: str, agent_id: str) -> str:
 # content 渲染
 # ================================================================
 
-def _render_content(kv: Dict[str, Any], field_order: Optional[List[str]] = None) -> str:
+def _render_content(kv: dict[str, Any], field_order: list[str] | None = None) -> str:
     """
     把 KV 渲染成人类可读的自然语言串。
     与其他 memory 保持 "The user's ..." 风格一致。
@@ -65,7 +65,7 @@ def _render_content(kv: Dict[str, Any], field_order: Optional[List[str]] = None)
     field_order: 可选，控制字段拼接顺序。未指定时按 kv 字典序。
     """
     order = field_order or sorted(kv.keys())
-    parts: List[str] = []
+    parts: list[str] = []
     for key in order:
         if key not in kv:
             continue
@@ -100,7 +100,7 @@ def render_l0_evolution_chain(l0_nodes: list) -> str:
     )
 
     # 收集每个属性的历史版本（动态发现 key，不再绑死 BASIC_FIELDS）
-    field_history: Dict[str, List[tuple]] = {}
+    field_history: dict[str, list[tuple]] = {}
     for node in sorted_nodes:
         kv = {}
         if hasattr(node, 'custom') and isinstance(node.custom, dict):
@@ -119,7 +119,7 @@ def render_l0_evolution_chain(l0_nodes: list) -> str:
         "employer": "用户雇主",
     }
     # 顺序：先 BASIC_FIELDS 中已知的，再剩下的按字母序
-    ordered_keys: List[str] = [k for k in BASIC_FIELDS if k in field_history]
+    ordered_keys: list[str] = [k for k in BASIC_FIELDS if k in field_history]
     for k in sorted(field_history.keys()):
         if k not in ordered_keys:
             ordered_keys.append(k)
@@ -144,9 +144,9 @@ def render_l0_evolution_chain(l0_nodes: list) -> str:
 # ================================================================
 
 def _sanitize_kv(
-    kv: Dict[str, Any],
-    allowed_fields: Optional[List[str]] = None,
-) -> Dict[str, Any]:
+    kv: dict[str, Any],
+    allowed_fields: list[str] | None = None,
+) -> dict[str, Any]:
     """
     只保留 allowed_fields 中的 key；丢弃 null / 空串 / "null" / "none"。
     age 字段强制 int。
@@ -155,7 +155,7 @@ def _sanitize_kv(
         allowed_fields = BASIC_FIELDS
     allowed_set = set(allowed_fields)
 
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
     for k, v in kv.items():
         if k not in allowed_set:
             continue
@@ -195,14 +195,14 @@ class BasicProfileUpsertResult:
     success: bool
     node_id: str = ""
     content: str = ""
-    diff_kv: Dict[str, Any] = None  # type: ignore[assignment]
+    diff_kv: dict[str, Any] = None  # type: ignore[assignment]
     changed: bool = False
     created: bool = False
-    supersedes: Optional[str] = None
+    supersedes: str | None = None
     reason: str = ""
-    error: Optional[str] = None
+    error: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "node_id": self.node_id,
@@ -221,10 +221,10 @@ async def upsert_basic_profile(
     user_id: str,
     agent_id: str,
     session_id: str,
-    kv: Dict[str, Any],
+    kv: dict[str, Any],
     vector_store,
     embed_service,
-    allowed_fields: Optional[List[str]] = None,
+    allowed_fields: list[str] | None = None,
 ) -> BasicProfileUpsertResult:
     """
     把 LLM 提取出的 basic_info kv 入库到 L0_BASIC_INFO 演化链。
@@ -250,7 +250,7 @@ async def upsert_basic_profile(
     latest_node = await _find_latest_l0(vector_store, user_id, agent_id)
     existing_full_kv = await _assemble_full_kv(vector_store, user_id, agent_id, allowed_fields)
 
-    diff_kv: Dict[str, Any] = {}
+    diff_kv: dict[str, Any] = {}
     for k, v in new_kv.items():
         old_v = existing_full_kv.get(k)
         if old_v is None or str(v) != str(old_v):
@@ -272,7 +272,7 @@ async def upsert_basic_profile(
     except Exception as e:
         return BasicProfileUpsertResult(success=False, error=f"embed failed: {e}")
 
-    from ...models.memory import MemoryNode, MemoryLayer, MemoryStatus, SourceType
+    from ...models.memory import MemoryLayer, MemoryNode, MemoryStatus, SourceType
 
     new_node_id = str(uuid.uuid4())
     supersedes_id = latest_node.node_id if latest_node else None
@@ -377,8 +377,8 @@ async def _assemble_full_kv(
     vector_store,
     user_id: str,
     agent_id: str,
-    allowed_fields: Optional[List[str]],
-) -> Dict[str, Any]:
+    allowed_fields: list[str] | None,
+) -> dict[str, Any]:
     """沿演化链组装完整 KV。"""
     from ...models.memory import MemoryLayer
     all_nodes = await vector_store.list_by_user(
@@ -390,7 +390,7 @@ async def _assemble_full_kv(
     all_nodes.sort(key=lambda x: x.gmt_created or x.valid_from)
 
     allowed_set = set(allowed_fields) if allowed_fields else None
-    full_kv: Dict[str, Any] = {}
+    full_kv: dict[str, Any] = {}
     for n in all_nodes:
         if not isinstance(n.custom, dict):
             continue

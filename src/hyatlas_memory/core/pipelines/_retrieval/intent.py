@@ -17,10 +17,8 @@ NAVIGATIONAL 分错的代价较高（应字面匹配却被向量稀释），因�
 """
 
 import re
-from typing import List
 
 from . import config
-
 
 # ─── NAVIGATIONAL patterns ───
 
@@ -93,12 +91,12 @@ def classify_intent(query: str) -> str:
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9]+|[\u4e00-\u9fff]+")
 
 
-def extract_keywords(query: str) -> List[str]:
+def extract_keywords(query: str) -> list[str]:
     if not query:
         return []
     raw = _TOKEN_RE.findall(query)
     seen = set()
-    result: List[str] = []
+    result: list[str] = []
     for tok in raw:
         t = tok.lower() if tok.isascii() else tok
         if tok.isascii():

@@ -11,16 +11,16 @@ Reciprocal Rank Fusion —— 多路召回的 rank 级融合。
   - 意图权重 w_c 按场景放大某一路贡献
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from . import config
 
 
 def rrf_fuse(
-    channels: Dict[str, List[Dict[str, Any]]],
-    weights: Optional[Dict[str, float]] = None,
-    k: Optional[int] = None,
-) -> List[Dict[str, Any]]:
+    channels: dict[str, list[dict[str, Any]]],
+    weights: dict[str, float] | None = None,
+    k: int | None = None,
+) -> list[dict[str, Any]]:
     """
     RRF 融合多路召回结果。
 
@@ -44,7 +44,7 @@ def rrf_fuse(
     weights = weights or {}
     k = k if k is not None else config.RRF_K
 
-    acc: Dict[str, Dict[str, Any]] = {}
+    acc: dict[str, dict[str, Any]] = {}
 
     for channel_name, hits in channels.items():
         w = float(weights.get(channel_name, 1.0))
@@ -78,7 +78,7 @@ def rrf_fuse(
     return fused
 
 
-def compute_confidence(fused: List[Dict[str, Any]], top_n: int = 3) -> float:
+def compute_confidence(fused: list[dict[str, Any]], top_n: int = 3) -> float:
     """
     基于 top-N RRF 分平均值的 proxy confidence，用于弃权判定。
 

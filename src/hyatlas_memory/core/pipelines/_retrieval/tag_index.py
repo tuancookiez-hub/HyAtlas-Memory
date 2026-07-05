@@ -18,7 +18,6 @@ Per-user tag embedding index —— 为 reader_hybrid_tag 的路 B 提供语义�
     初始化时会探测 backend 能力，不支持则 warning + 降级到 hybrid 行为
 """
 
-from typing import Any, Dict, List, Optional
 import logging
 
 from . import config
@@ -74,7 +73,7 @@ async def ensure_tag_embeddings_for_node(
     vector_store,
     embed_service,
     user_id: str,
-    tags: List[str],
+    tags: list[str],
 ) -> int:
     """
     批量确保一组 tag 的 embedding 在 tag_index 中就位。返回成功数量。
@@ -100,7 +99,7 @@ async def ensure_tag_embeddings_for_node(
 async def cleanup_tags_on_delete(
     vector_store,
     user_id: str,
-    tags: List[str],
+    tags: list[str],
     isolation_key: str = "",
 ) -> int:
     """
@@ -139,10 +138,10 @@ async def cleanup_tags_on_delete(
 async def search_matching_tags(
     vector_store,
     user_id: str,
-    keyword_embeddings: List[List[float]],
-    topk: Optional[int] = None,
-    min_score: Optional[float] = None,
-) -> List[str]:
+    keyword_embeddings: list[list[float]],
+    topk: int | None = None,
+    min_score: float | None = None,
+) -> list[str]:
     """
     对每个 keyword embedding 在 per-user tag_index 里检索 topk 最相近的 tag。
     合并去重后返回。
@@ -156,7 +155,7 @@ async def search_matching_tags(
     min_score = min_score if min_score is not None else config.TAG_MATCH_MIN_SCORE
 
     seen = set()
-    result: List[str] = []
+    result: list[str] = []
     for vec in keyword_embeddings:
         try:
             hits = await vector_store.search_tag_embeddings(

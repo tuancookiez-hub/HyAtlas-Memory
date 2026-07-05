@@ -13,14 +13,13 @@ ComponentFactory 负责:
     system2 = await factory.get_system2_writer()
 """
 
-from typing import Optional, Dict, Tuple
 import logging
 
-from .base import WritePipeline, ReadPipeline
 from ..config import MemoryConfig
 from ..core.embed_service import EmbedService
 from ..data.vector_store import create_vector_store
 from ..data.vector_store_base import VectorStoreBase
+from .base import ReadPipeline, WritePipeline
 
 logger = logging.getLogger(__name__)
 
@@ -50,20 +49,20 @@ class ComponentFactory:
         s2 = await factory.get_system2_writer()    # System2Writer (ultra mode)
     """
 
-    def __init__(self, config: Optional[MemoryConfig] = None):
+    def __init__(self, config: MemoryConfig | None = None):
         self.config = config or MemoryConfig.from_env()
 
         # 实例缓存（单例）
-        self._writer: Optional[WritePipeline] = None
-        self._reader: Optional[ReadPipeline] = None
-        self._system2_writer: Optional[WritePipeline] = None
+        self._writer: WritePipeline | None = None
+        self._reader: ReadPipeline | None = None
+        self._system2_writer: WritePipeline | None = None
 
         # 多 reader 缓存（按 reader_name 索引）
-        self._readers: Dict[str, ReadPipeline] = {}
+        self._readers: dict[str, ReadPipeline] = {}
 
         # 共享资源
-        self._shared_embed_service: Optional[EmbedService] = None
-        self._shared_vector_store: Optional[VectorStoreBase] = None
+        self._shared_embed_service: EmbedService | None = None
+        self._shared_vector_store: VectorStoreBase | None = None
         self._shared_vector_store_initialized: bool = False
         self._shared_graph_store = None
         self._shared_cache = None
@@ -131,7 +130,6 @@ class ComponentFactory:
         if not reader_name and self._reader is not None:
             return self._reader
 
-        from .reader import _build_impl
         reader_kwargs = {
             "config": self.config,
             "embed_service": self._get_shared_embed_service(),

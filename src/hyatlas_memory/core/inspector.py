@@ -25,7 +25,7 @@ HY Memory - MemoryInspector 调试/审计工具类
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class MemoryInspector:
@@ -70,11 +70,11 @@ class MemoryInspector:
 
     def get_pipeline_logs(
         self,
-        request_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        step: Optional[str] = None,
+        request_id: str | None = None,
+        user_id: str | None = None,
+        step: str | None = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """查询 pipeline LLM 调用链中间结果（同步）"""
         return self._loop_thread.run(
             self.async_get_pipeline_logs(
@@ -84,11 +84,11 @@ class MemoryInspector:
 
     async def async_get_pipeline_logs(
         self,
-        request_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        step: Optional[str] = None,
+        request_id: str | None = None,
+        user_id: str | None = None,
+        step: str | None = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         查询 pipeline LLM 调用链中间结果（异步）。
 
@@ -113,34 +113,34 @@ class MemoryInspector:
 
     # 快捷方法（同步）
 
-    def get_extract_log(self, request_id: str) -> Optional[Dict[str, Any]]:
+    def get_extract_log(self, request_id: str) -> dict[str, Any] | None:
         """获取某次请求的 EXTRACT 步骤日志"""
         logs = self.get_pipeline_logs(request_id=request_id, step="EXTRACT", limit=1)
         return logs[0] if logs else None
 
-    def get_search_query_log(self, request_id: str) -> Optional[Dict[str, Any]]:
+    def get_search_query_log(self, request_id: str) -> dict[str, Any] | None:
         """获取某次请求的 SEARCH_QUERY 步骤日志"""
         logs = self.get_pipeline_logs(request_id=request_id, step="SEARCH_QUERY", limit=1)
         return logs[0] if logs else None
 
-    def get_reconcile_log(self, request_id: str) -> Optional[Dict[str, Any]]:
+    def get_reconcile_log(self, request_id: str) -> dict[str, Any] | None:
         """获取某次请求的 RECONCILE 步骤日志"""
         logs = self.get_pipeline_logs(request_id=request_id, step="RECONCILE", limit=1)
         return logs[0] if logs else None
 
     # 快捷方法（异步）
 
-    async def async_get_extract_log(self, request_id: str) -> Optional[Dict[str, Any]]:
+    async def async_get_extract_log(self, request_id: str) -> dict[str, Any] | None:
         """获取某次请求的 EXTRACT 步骤日志（异步）"""
         logs = await self.async_get_pipeline_logs(request_id=request_id, step="EXTRACT", limit=1)
         return logs[0] if logs else None
 
-    async def async_get_search_query_log(self, request_id: str) -> Optional[Dict[str, Any]]:
+    async def async_get_search_query_log(self, request_id: str) -> dict[str, Any] | None:
         """获取某次请求的 SEARCH_QUERY 步骤日志（异步）"""
         logs = await self.async_get_pipeline_logs(request_id=request_id, step="SEARCH_QUERY", limit=1)
         return logs[0] if logs else None
 
-    async def async_get_reconcile_log(self, request_id: str) -> Optional[Dict[str, Any]]:
+    async def async_get_reconcile_log(self, request_id: str) -> dict[str, Any] | None:
         """获取某次请求的 RECONCILE 步骤日志（异步）"""
         logs = await self.async_get_pipeline_logs(request_id=request_id, step="RECONCILE", limit=1)
         return logs[0] if logs else None
@@ -151,11 +151,11 @@ class MemoryInspector:
 
     def get_memory_operations(
         self,
-        request_id: Optional[str] = None,
-        memory_id: Optional[str] = None,
-        user_id: Optional[str] = None,
+        request_id: str | None = None,
+        memory_id: str | None = None,
+        user_id: str | None = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """查询知识库变动记录（同步）"""
         return self._loop_thread.run(
             self.async_get_memory_operations(
@@ -165,11 +165,11 @@ class MemoryInspector:
 
     async def async_get_memory_operations(
         self,
-        request_id: Optional[str] = None,
-        memory_id: Optional[str] = None,
-        user_id: Optional[str] = None,
+        request_id: str | None = None,
+        memory_id: str | None = None,
+        user_id: str | None = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         查询知识库变动记录（异步）。
 
@@ -195,13 +195,13 @@ class MemoryInspector:
     # 综合查询（一次拿到完整链路）
     # ================================================================
 
-    def get_full_trace(self, request_id: str) -> Dict[str, Any]:
+    def get_full_trace(self, request_id: str) -> dict[str, Any]:
         """获取某次写入的完整追踪信息（同步）"""
         return self._loop_thread.run(
             self.async_get_full_trace(request_id)
         )
 
-    async def async_get_full_trace(self, request_id: str) -> Dict[str, Any]:
+    async def async_get_full_trace(self, request_id: str) -> dict[str, Any]:
         """
         获取某次写入的完整追踪信息（异步）。
 
@@ -272,11 +272,11 @@ class MemoryInspector:
         "READ_SUMMARY",
     ]
 
-    def get_read_trace(self, request_id: str) -> Dict[str, Any]:
+    def get_read_trace(self, request_id: str) -> dict[str, Any]:
         """查询某次 search 的完整 read pipeline trace（同步）。"""
         return self._loop_thread.run(self.async_get_read_trace(request_id))
 
-    async def async_get_read_trace(self, request_id: str) -> Dict[str, Any]:
+    async def async_get_read_trace(self, request_id: str) -> dict[str, Any]:
         """
         查询某次 search 的完整 read pipeline trace（异步）。
 
@@ -306,10 +306,10 @@ class MemoryInspector:
         read_logs.sort(key=lambda l: l.get("created_at") or "")
 
         import json as _json
-        parsed_logs: List[Dict[str, Any]] = []
-        by_step: Dict[str, List[Dict[str, Any]]] = {}
+        parsed_logs: list[dict[str, Any]] = []
+        by_step: dict[str, list[dict[str, Any]]] = {}
         reader_version = None
-        summary_parsed: Optional[Dict[str, Any]] = None
+        summary_parsed: dict[str, Any] | None = None
 
         for l in read_logs:
             item = dict(l)
@@ -345,11 +345,11 @@ class MemoryInspector:
         }
 
     # 快捷方法：对应单步读取
-    def get_read_summary(self, request_id: str) -> Optional[Dict[str, Any]]:
+    def get_read_summary(self, request_id: str) -> dict[str, Any] | None:
         """获取某次 search 的 READ_SUMMARY 总览日志（同步）。"""
         return self._loop_thread.run(self.async_get_read_summary(request_id))
 
-    async def async_get_read_summary(self, request_id: str) -> Optional[Dict[str, Any]]:
+    async def async_get_read_summary(self, request_id: str) -> dict[str, Any] | None:
         """获取某次 search 的 READ_SUMMARY 总览日志（异步）。"""
         logs = await self.async_get_pipeline_logs(request_id=request_id, step="READ_SUMMARY", limit=1)
         return logs[0] if logs else None
@@ -359,7 +359,7 @@ class MemoryInspector:
     # ================================================================
 
     @staticmethod
-    def _classify_op(op_record: Dict[str, Any]) -> str:
+    def _classify_op(op_record: dict[str, Any]) -> str:
         """
         统一分类 op 类型。
 
@@ -374,7 +374,7 @@ class MemoryInspector:
                 return "SUPERSEDE"
         return op_type
 
-    def get_digest_stats(self, request_id: str) -> Dict[str, Any]:
+    def get_digest_stats(self, request_id: str) -> dict[str, Any]:
         """
         获取单次 digest（add 调用）的操作统计。
 
@@ -404,7 +404,7 @@ class MemoryInspector:
         self,
         user_id: str,
         limit: int = 10000,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         获取用户维度的累计操作统计（按 op 类型独立列出）。
 
@@ -426,7 +426,7 @@ class MemoryInspector:
         """
         ops = self.get_memory_operations(user_id=user_id, limit=limit)
 
-        from collections import OrderedDict, Counter
+        from collections import Counter, OrderedDict
 
         # 按 request_id 分组
         digest_map: OrderedDict = OrderedDict()
@@ -471,7 +471,7 @@ class MemoryInspector:
     # System Metrics
     # ================================================================
 
-    def get_system_metrics(self, minutes: int = 5) -> Dict[str, Any]:
+    def get_system_metrics(self, minutes: int = 5) -> dict[str, Any]:
         """
         获取系统级负载指标（默认最近5分钟）。
 
@@ -484,7 +484,7 @@ class MemoryInspector:
         from .metrics import MetricsCollector
         return self._loop_thread.run(MetricsCollector.get().get_snapshot(minutes=minutes))
 
-    async def async_get_system_metrics(self, minutes: int = 5) -> Dict[str, Any]:
+    async def async_get_system_metrics(self, minutes: int = 5) -> dict[str, Any]:
         """获取系统级负载指标（异步，默认最近5分钟）"""
         from .metrics import MetricsCollector
         return await self._run_on_internal_loop(

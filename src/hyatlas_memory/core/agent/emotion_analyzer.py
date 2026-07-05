@@ -17,9 +17,9 @@ V2 设计文档 §3.1:
 """
 
 import json
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass, field
 import logging
+from dataclasses import dataclass, field
+from typing import Any
 
 from .llm_provider import LLMProvider
 
@@ -110,10 +110,10 @@ class EmotionResult:
     arousal: float = 0.0
     dominant_emotion: str = "neutral"
     is_sensitive: bool = False
-    sensitivity_reason: Optional[str] = None
-    emotional_keywords: List[str] = field(default_factory=list)
+    sensitivity_reason: str | None = None
+    emotional_keywords: list[str] = field(default_factory=list)
     tokens_used: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 # ================================================================
@@ -130,7 +130,7 @@ class EmotionAnalyzer:
     def __init__(
         self,
         llm: LLMProvider,
-        config: Optional[EmotionAnalysisConfig] = None,
+        config: EmotionAnalysisConfig | None = None,
     ):
         self.llm = llm
         self.config = config or EmotionAnalysisConfig()
@@ -187,8 +187,8 @@ class EmotionAnalyzer:
             return EmotionResult(success=False, error=str(e))
 
     async def analyze_batch(
-        self, contents: List[str],
-    ) -> List[EmotionResult]:
+        self, contents: list[str],
+    ) -> list[EmotionResult]:
         """
         批量分析情绪。
 
@@ -257,7 +257,7 @@ class EmotionAnalyzer:
         return max(min_v, min(max_v, value))
 
     @staticmethod
-    def _parse_json(text: str) -> Dict[str, Any]:
+    def _parse_json(text: str) -> dict[str, Any]:
         """从 LLM 输出中解析 JSON — handles reasoning model think blocks."""
         import re
         text = text.strip()
@@ -283,7 +283,7 @@ class EmotionAnalyzer:
                     pass
         return {}
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         return {
             "call_count": self._call_count,

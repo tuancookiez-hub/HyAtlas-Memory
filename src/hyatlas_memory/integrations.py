@@ -21,6 +21,7 @@ Integrations:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -34,7 +35,6 @@ logger = logging.getLogger(__name__)
 
 # ─── 1. VDB Circuit Breaker ─────────────────────────────────────────────────
 
-import threading
 
 class CircuitBreaker:
     """Thread-safe circuit breaker for VDB (Qdrant) calls."""
@@ -178,6 +178,7 @@ def start_l1_raw_sweep():
     def _sweep():
         try:
             from datetime import datetime, timedelta, timezone
+
             from qdrant_client import QdrantClient
             from qdrant_client.http import models
 
@@ -312,7 +313,8 @@ def wire_l5_auto_trigger(s2_cls):
             except Exception as e:
                 logger.warning(f"[l5-auto] state read failed: {e}")
         try:
-            import subprocess, sys
+            import subprocess
+            import sys
             flags = 0x00000008  # DETACHED_PROCESS (Windows)
             proc = subprocess.Popen(
                 [sys.executable, str(script_path)],
@@ -534,10 +536,8 @@ def wire_graph_counts(client_cls):
 
         if user_id:
             graph_nodes = [n for n in graph_nodes if user_id in (n.get("isolation_key") or "")]
-        try:
+        with contextlib.suppress(Exception):
             graph_nodes = self._sort_memory_nodes(graph_nodes, order=order)
-        except Exception:
-            pass
         total = len(graph_nodes)
         page = graph_nodes[offset: offset + limit]
         return {"nodes": list(page), "total": total, "limit": limit, "offset": offset,
@@ -633,7 +633,7 @@ def wire_user_identity(reader_cls):
     raw = os.environ.get("HYATLAS_USER_ALIASES", _DEFAULT_ALIASES).strip()
     alias_pool = [p.strip() for p in raw.split(",") if p.strip()]
 
-    orig = reader_cls._build_isolation_params
+    orig = reader_cls._build_isolation_params  # noqa: F841 — kept for rollback
 
     def _patched(self, request):
         user_ids = request.user_ids if request.user_ids else ([request.user_id] if request.user_id else [])
@@ -751,10 +751,14 @@ def wire_disabled_cache_tolerance(cache_cls):
 
         def _default(p):
             ann = str(p.annotation).lower() if p.annotation is not inspect.Parameter.empty else ""
-            if "dict" in ann or "mapping" in ann: return {}
-            if "list" in ann or "sequence" in ann: return []
-            if "int" in ann or "float" in ann: return 0
-            if "bool" in ann: return False
+            if "dict" in ann or "mapping" in ann:
+                return {}
+            if "list" in ann or "sequence" in ann:
+                return []
+            if "int" in ann or "float" in ann:
+                return 0
+            if "bool" in ann:
+                return False
             return ""
 
         defaults = [_default(p) for p in required]
@@ -763,10 +767,12 @@ def wire_disabled_cache_tolerance(cache_cls):
             def wrapped(self, *args, **kwargs):
                 new_args = list(args)
                 new_kwargs = dict(kwargs)
-                pos_names = set([p for i, p in enumerate(required) if i < len(new_args)])
+                pos_names = {p for i, p in enumerate(required) if i < len(new_args)}
                 for i, pn in enumerate(required):
-                    if pn in pos_names: continue
-                    if i < len(new_args): continue
+                    if pn in pos_names:
+                        continue
+                    if i < len(new_args):
+                        continue
                     if pn in new_kwargs:
                         new_args.append(new_kwargs.pop(pn))
                     else:
@@ -966,14 +972,14 @@ def wire_inprocess_embed(embed_service_cls):
 
 def wire_all():
     """Wire all integrations into the forked source. Called at server startup."""
-    from .core.server import MemoryHTTPHandler, _json_response, _get_client
+    from .core.agent.extractor import Extractor
     from .core.client import HyMemoryClient
-    from .core.pipelines.system2_writer import System2Writer
+    from .core.core.embed_service import EmbedService
+    from .core.data.cache_disabled import DisabledCache
     from .core.pipelines.reader_hybrid_v2 import HybridV2ReadPipeline
     from .core.pipelines.reader_legacy import LegacyReadPipeline
-    from .core.agent.extractor import Extractor
-    from .core.data.cache_disabled import DisabledCache
-    from .core.core.embed_service import EmbedService
+    from .core.pipelines.system2_writer import System2Writer
+    from .core.server import MemoryHTTPHandler, _get_client, _json_response
 
     # 1. Circuit breaker
     wire_circuit_breaker(MemoryHTTPHandler, _json_response)

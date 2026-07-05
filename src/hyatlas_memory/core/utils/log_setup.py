@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 HY Memory - 日志系统配置
 
@@ -23,7 +22,6 @@ import os
 import sys
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from typing import Optional
 
 # ================================================================
 # request_id 上下文变量 (协程安全)
@@ -183,9 +181,9 @@ def _default_log_dir() -> str:
 
 
 def setup_logging(
-    log_dir: Optional[str] = None,
+    log_dir: str | None = None,
     retention_days: int = 15,
-    level: Optional[int] = None,
+    level: int | None = None,
 ) -> None:
     """
     配置 hy_memory 模块的日志。
@@ -240,8 +238,8 @@ def setup_logging(
         for noisy in ("openai", "httpx", "httpcore", "urllib3"):
             logging.getLogger(noisy).setLevel(logging.WARNING)
         root_logger.debug(
-            f"Logging configured: host-managed (propagate=True, no own handlers); "
-            f"level follows host root"
+            "Logging configured: host-managed (propagate=True, no own handlers); "
+            "level follows host root"
         )
         return
 

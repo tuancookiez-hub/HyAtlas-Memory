@@ -60,7 +60,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -118,28 +118,28 @@ class Span:
     name: str
     start_time: float = 0.0  # time.perf_counter()
     end_time: float = 0.0
-    output: Dict[str, Any] = field(default_factory=dict)
-    error: Optional[str] = None
-    
+    output: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+
     # 相对于 trace 起始的偏移 (ms)
     start_ms: float = 0.0
     end_ms: float = 0.0
-    
-    def set_output(self, data: Dict[str, Any]) -> None:
+
+    def set_output(self, data: dict[str, Any]) -> None:
         """设置该环节的关键输出"""
         self.output.update(data)
-    
+
     def set_error(self, err: str) -> None:
         """设置错误信息"""
         self.error = err
-    
+
     @property
     def duration_ms(self) -> float:
         if self.end_time <= 0:
             return 0.0
         return (self.end_time - self.start_time) * 1000
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         d = {
             "name": self.name,
             "start_ms": round(self.start_ms, 2),
@@ -160,7 +160,7 @@ class PipelineTracer:
     记录一次请求的完整时间线和关键中间结果。
     支持嵌套 span 和 context manager 用法。
     """
-    
+
     def __init__(
         self,
         operation: str,
@@ -177,22 +177,22 @@ class PipelineTracer:
         self.agent_id = agent_id
         self.request_id = request_id
         self.content_preview = content_preview or ""
-        
+
         self._start_time = time.perf_counter()
         self._start_datetime = datetime.now()
-        self._spans: List[Span] = []
-        self._current_span: Optional[Span] = None
-        self._output_summary: Dict[str, Any] = {}
-        self._error: Optional[str] = None
+        self._spans: list[Span] = []
+        self._current_span: Span | None = None
+        self._output_summary: dict[str, Any] = {}
+        self._error: str | None = None
         self._finished = False
-        
+
         if _TRACE_ENABLED:
             logger.debug(
                 f"[trace] START {self.operation} "
                 f"pipeline={self.pipeline_version} uid={self.uid} "
                 f"content={self.content_preview}"
             )
-    
+
     @contextmanager
     def span(self, name: str):
         """
@@ -206,10 +206,10 @@ class PipelineTracer:
         s = Span(name=name)
         s.start_time = time.perf_counter()
         s.start_ms = (s.start_time - self._start_time) * 1000
-        
+
         prev_span = self._current_span
         self._current_span = s
-        
+
         try:
             yield s
         except Exception as e:
@@ -220,7 +220,7 @@ class PipelineTracer:
             s.end_ms = (s.end_time - self._start_time) * 1000
             self._spans.append(s)
             self._current_span = prev_span
-            
+
             if _TRACE_ENABLED:
                 err_tag = f" ERROR={s.error}" if s.error else ""
                 out_tag = ""
@@ -232,7 +232,7 @@ class PipelineTracer:
                 logger.debug(
                     f"[trace] {name}: {s.duration_ms:.1f}ms{out_tag}{err_tag}"
                 )
-    
+
     def start_span(self, name: str) -> Span:
         """
         手动 start/end 方式 (不用 with 时使用)
@@ -248,33 +248,33 @@ class PipelineTracer:
         s.start_ms = (s.start_time - self._start_time) * 1000
         self._current_span = s
         return s
-    
+
     def end_span(self, s: Span) -> None:
         """结束一个手动 span"""
         s.end_time = time.perf_counter()
         s.end_ms = (s.end_time - self._start_time) * 1000
         self._spans.append(s)
         self._current_span = None
-        
+
         if _TRACE_ENABLED:
             err_tag = f" ERROR={s.error}" if s.error else ""
             logger.debug(
                 f"[trace] {s.name}: {s.duration_ms:.1f}ms{err_tag}"
             )
-    
-    def set_output(self, data: Dict[str, Any]) -> None:
+
+    def set_output(self, data: dict[str, Any]) -> None:
         """设置请求级的输出摘要"""
         self._output_summary.update(data)
-    
+
     def set_error(self, error: str) -> None:
         """设置请求级错误"""
         self._error = error
-    
+
     @property
     def total_ms(self) -> float:
         return (time.perf_counter() - self._start_time) * 1000
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """生成完整的 trace JSON"""
         return {
             "trace_id": self.trace_id,
@@ -290,7 +290,7 @@ class PipelineTracer:
             "output_summary": _truncate(self._output_summary),
             "error": self._error,
         }
-    
+
     def to_summary_line(self) -> str:
         """生成一行人类可读的 trace 摘要"""
         spans_info = " → ".join(
@@ -301,8 +301,8 @@ class PipelineTracer:
             f"[{self.trace_id}] {self.operation} {self.pipeline_version} "
             f"total={self.total_ms:.0f}ms | {spans_info} | {status}"
         )
-    
-    def finish(self, *, write_file: bool = False) -> Dict[str, Any]:
+
+    def finish(self, *, write_file: bool = False) -> dict[str, Any]:
         """
         结束 trace。
 
@@ -324,8 +324,8 @@ class PipelineTracer:
                 self._write_to_file(trace_data)
 
         return trace_data
-    
-    def _write_to_file(self, trace_data: Dict[str, Any]) -> None:
+
+    def _write_to_file(self, trace_data: dict[str, Any]) -> None:
         """
         写入 JSONL 日志文件。
         
@@ -345,15 +345,15 @@ class PipelineTracer:
             # 目录: {trace_log_dir}/{uid}/
             log_dir = Path(_TRACE_LOG_DIR) / uid
             log_dir.mkdir(parents=True, exist_ok=True)
-            
+
             # 文件: {uid}_{agent_id}_{date}.log
             log_file = log_dir / f"{uid}_{agent_id}_{date_str}.log"
-            
+
             # append 一行 JSON
             line = json.dumps(trace_data, ensure_ascii=False, default=str)
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
-                
+
         except Exception as e:
             logger.warning(f"[TRACE:{self.trace_id}] Failed to write trace file: {e}")
 

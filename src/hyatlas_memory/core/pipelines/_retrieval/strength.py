@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 HY Memory - Memory Strength（基于"闲置时长"的时间衰减排序）
 
@@ -23,15 +22,16 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TAU = 180.0
 
 
-def compute_strength(node: Any, *, now: Optional[datetime] = None, tau: float = DEFAULT_TAU) -> float:
+def compute_strength(node: Any, *, now: datetime | None = None, tau: float = DEFAULT_TAU) -> float:
     """
     strength = (1 + log(access_count)) * exp(-idle_days / tau_effective)
 
@@ -67,14 +67,14 @@ def compute_strength(node: Any, *, now: Optional[datetime] = None, tau: float = 
 
 
 def apply_strength_to_normal(
-    hits: List[Dict[str, Any]],
+    hits: list[dict[str, Any]],
     *,
-    profile_layers: Optional[Set[str]] = None,
-    intention_layers: Optional[Set[str]] = None,
+    profile_layers: set[str] | None = None,
+    intention_layers: set[str] | None = None,
     score_key: str = "score",
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
     tau: float = DEFAULT_TAU,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     就地把 strength 乘进 normal 通道命中的分数；profile / intention 层原样透传。
 
@@ -103,7 +103,7 @@ async def bump_access(
     vector_store: Any,
     items: Iterable[Any],
     *,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> int:
     """
     best-effort 把命中节点的 access_count+1、last_accessed_at=now 写回 VDB。

@@ -18,33 +18,32 @@ mode 行为差异:
 """
 
 import json
-import os
-from typing import Optional, Dict, Any, List, Tuple, Union
-from datetime import datetime
 import logging
+import os
+from datetime import datetime
+from typing import Any
 
-from .base import WritePipeline, WriteRequest, WriteResponse, PipelineContext
-from ..config import MemoryConfig
-from ..core.scorer import MemoryScorer as Scorer
-from ..core.merger import Merger
-from ..core.embed_service import EmbedService
 from ..agent.mem_agent import MemAgent, ProcessMode
 from ..agent.reconciler import MemoryReconciler
 from ..agent.tools.basic_profile import upsert_basic_profile
-from ..models.memory import MemoryNode, MemoryLayer, MemoryStatus, SourceType
+from ..config import MemoryConfig
+from ..core.embed_service import EmbedService
+from ..core.merger import Merger
 from ..data.vector_store import create_vector_store
 from ..data.vector_store_base import VectorStoreBase
-from ..utils.tracer import PipelineTracer, create_tracer
+from ..models.memory import MemoryLayer, MemoryNode, MemoryStatus, SourceType
 from ..utils.log_setup import get_request_id
 from ..utils.pipeline_observability import is_pipeline_trace_enabled
+from ..utils.tracer import PipelineTracer, create_tracer
 from ._retrieval import tag_index as _tag_index_helper
+from .base import PipelineContext, WritePipeline, WriteRequest, WriteResponse
 
 logger = logging.getLogger(__name__)
 
 _RECONCILE_ENABLED = os.getenv("RECONCILE_ENABLED", "true").lower() == "true"
 
 
-def _norm_owner(value: Any) -> Optional[str]:
+def _norm_owner(value: Any) -> str | None:
     """归一化 extractor/reconcile 给出的 owner：仅接受 'user' / 'agent'，否则 None。"""
     if not value:
         return None
@@ -70,8 +69,8 @@ class MemoryWriter(WritePipeline):
     def __init__(
         self,
         config: MemoryConfig,
-        embed_service: Optional[EmbedService] = None,
-        vector_store: Optional[VectorStoreBase] = None,
+        embed_service: EmbedService | None = None,
+        vector_store: VectorStoreBase | None = None,
         cache=None,
     ):
         self.config = config
@@ -79,10 +78,10 @@ class MemoryWriter(WritePipeline):
         self._external_vector_store = vector_store
         self._cache = cache
 
-        self._merger: Optional[Merger] = None
-        self._mem_agent: Optional[MemAgent] = None
-        self._reconciler: Optional[MemoryReconciler] = None
-        self._vector_store: Optional[VectorStoreBase] = None
+        self._merger: Merger | None = None
+        self._mem_agent: MemAgent | None = None
+        self._reconciler: MemoryReconciler | None = None
+        self._vector_store: VectorStoreBase | None = None
         self._vector_store_initialized = False
 
         self._initialized = False
@@ -138,9 +137,9 @@ class MemoryWriter(WritePipeline):
     # ================================================================
 
     @staticmethod
-    def _build_custom(op, request_id: str) -> Dict[str, Any]:
+    def _build_custom(op, request_id: str) -> dict[str, Any]:
         """构造 VDB payload 中的 custom 字段。始终包含 request_id 以便追溯。"""
-        custom: Dict[str, Any] = {}
+        custom: dict[str, Any] = {}
         if request_id:
             custom["request_id"] = request_id
         if op.supersede_reason:
@@ -173,8 +172,8 @@ class MemoryWriter(WritePipeline):
 
     @staticmethod
     def _collect_new_memories(
-        extracted_info: Dict[str, Any],
-    ) -> Tuple[List[str], List[Dict]]:
+        extracted_info: dict[str, Any],
+    ) -> tuple[list[str], list[dict]]:
         """
         从 extract 结果中收集新 memory 文本列表和完整 meta 列表。
 
@@ -185,8 +184,8 @@ class MemoryWriter(WritePipeline):
             (new_memory_texts, new_memories_meta)
             每条 meta: {"content", "layer", "tags"}
         """
-        new_memory_texts: List[str] = []
-        new_memories_meta: List[Dict] = []
+        new_memory_texts: list[str] = []
+        new_memories_meta: list[dict] = []
 
         # 1) memory → 每条独立 memory（统一 L2_FACT）
         #    新版 extractor 输出 `memory`；兼容旧版 `facts` 字段。
@@ -248,11 +247,11 @@ class MemoryWriter(WritePipeline):
 
     async def _dedup_extracted(
         self,
-        new_memory_texts: List[str],
-        new_memories_meta: List[Dict],
+        new_memory_texts: list[str],
+        new_memories_meta: list[dict],
         request: "WriteRequest",
         req_id: str,
-    ) -> Tuple[List[str], List[Dict]]:
+    ) -> tuple[list[str], list[dict]]:
         """对 extractor 新抽取的多条 memory 互相去重（入库前）。
 
         这些条目还没落库、无 node_id、无演化链 → 全按非链处理，额外 embed 一次，
@@ -262,7 +261,7 @@ class MemoryWriter(WritePipeline):
         from ..pipelines._retrieval.dedup import DedupItem, execute_dedup
 
         embeds = await self.embed_service.embed_batch(list(new_memory_texts))
-        items: List[DedupItem] = []
+        items: list[DedupItem] = []
         for i, (text, emb) in enumerate(zip(new_memory_texts, embeds)):
             if not emb:
                 continue
@@ -304,7 +303,7 @@ class MemoryWriter(WritePipeline):
         return kept_texts, kept_meta
 
     @staticmethod
-    def _collect_intentions(extracted_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _collect_intentions(extracted_info: dict[str, Any]) -> list[dict[str, Any]]:
         """
         从 extract 结果中收集 intentions（前瞻意图，存 L7_INTENTION）。
 
@@ -312,14 +311,14 @@ class MemoryWriter(WritePipeline):
         valid_until 是 extractor 输出的 ISO 日期串（或 null）；这里解析为
         datetime（当天 23:59:59，宽松到日末），解析失败/缺失 → None。
         """
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for item in (extracted_info.get("intentions") or []):
             if not isinstance(item, dict):
                 continue
             content = (item.get("content") or "").strip()
             if not content:
                 continue
-            valid_until: Optional[datetime] = None
+            valid_until: datetime | None = None
             raw_vu = item.get("valid_until")
             if raw_vu and str(raw_vu).lower() not in ("null", "none", ""):
                 try:
@@ -338,11 +337,11 @@ class MemoryWriter(WritePipeline):
 
     async def _store_intentions(
         self,
-        intentions: List[Dict[str, Any]],
+        intentions: list[dict[str, Any]],
         request: WriteRequest,
         vector_store: VectorStoreBase,
         req_id: str,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         把 intentions 直接 upsert 为 L7_INTENTION 节点（不走 reconcile）。
 
@@ -352,10 +351,10 @@ class MemoryWriter(WritePipeline):
         if not intentions:
             return []
 
-        stored: List[str] = []
+        stored: list[str] = []
         # 批量 embed
         contents = [it["content"] for it in intentions]
-        embeddings: List[Optional[List[float]]] = [None] * len(contents)
+        embeddings: list[list[float] | None] = [None] * len(contents)
         try:
             batch = await self.embed_service.embed_batch(contents)
             for i, emb in enumerate(batch):
@@ -401,12 +400,12 @@ class MemoryWriter(WritePipeline):
 
     async def _reconcile_and_store(
         self,
-        new_memory_texts: List[str],
-        new_memories_meta: List[Dict],
+        new_memory_texts: list[str],
+        new_memories_meta: list[dict],
         request: WriteRequest,
         vector_store: VectorStoreBase,
         req_id: str,
-    ) -> Tuple[List[str], Optional[str], Dict[str, int], Dict[str, int]]:
+    ) -> tuple[list[str], str | None, dict[str, int], dict[str, int]]:
         """
         对新 memories 做 reconcile，执行 ADD（含 EVOLVE），写 DIGEST_SUMMARY log。
 
@@ -415,7 +414,7 @@ class MemoryWriter(WritePipeline):
             error_message=None 表示成功；ops_counts 含 add/supersede/update/total；
             recon_tokens 含 prompt/completion/total（reconcile 链路 LLM 消耗）
         """
-        stored_ids: List[str] = []
+        stored_ids: list[str] = []
         current_time = request.memory_at.isoformat(timespec="seconds") if request.memory_at else ""
 
         recon_result = await self.reconciler.reconcile(
@@ -448,8 +447,8 @@ class MemoryWriter(WritePipeline):
         # 这里不再逐条打印（避免重复刷屏）。
 
         # ── 批量 embed：收集所有需要 embed 的 content，一次性 batch 调用 ──
-        contents_to_embed: List[str] = []
-        content_indices: List[int] = []  # 对应 ops 索引
+        contents_to_embed: list[str] = []
+        content_indices: list[int] = []  # 对应 ops 索引
         for i, op in enumerate(recon_result.ops):
             if op.op in ("SUPERSEDE", "UPDATE"):
                 if op.op == "UPDATE" and not op.content:
@@ -463,7 +462,7 @@ class MemoryWriter(WritePipeline):
                 content_indices.append(i)
 
         # 一次 batch embed（不逐个串行）
-        embeddings_map: Dict[int, List[float]] = {}
+        embeddings_map: dict[int, list[float]] = {}
         if contents_to_embed:
             try:
                 batch_embeddings = await self.embed_service.embed_batch(contents_to_embed)
@@ -830,18 +829,18 @@ class MemoryWriter(WritePipeline):
 
     async def _direct_store(
         self,
-        new_memories_meta: List[Dict],
+        new_memories_meta: list[dict],
         request: WriteRequest,
         vector_store: VectorStoreBase,
         req_id: str,
-    ) -> Tuple[List[str], Optional[str], Dict[str, int], Dict[str, int]]:
+    ) -> tuple[list[str], str | None, dict[str, int], dict[str, int]]:
         """
         跳过 reconcile，直接把 extractor 提取的 memories 插入 VDB。
 
         通过 RECONCILE_ENABLED=false 激活。适用于 eval 场景：
         不做去重/合并/演化，保留所有提取结果。
         """
-        stored_ids: List[str] = []
+        stored_ids: list[str] = []
 
         # 批量 embed
         contents = [m.get("content", "") for m in new_memories_meta if m.get("content")]
@@ -914,11 +913,11 @@ class MemoryWriter(WritePipeline):
         request: WriteRequest,
         *,
         step: str,
-        parsed: Union[str, Dict[str, Any], List[Any]],
+        parsed: str | dict[str, Any] | list[Any],
         elapsed_ms: float = 0,
         response: str = "",
         prompt: str = "",
-        memory_ids: Optional[List[str]] = None,
+        memory_ids: list[str] | None = None,
         **kwargs: Any,
     ) -> None:
         """环节级 log/trace（经 client hook：文件始终 + DB 可关）。"""
@@ -974,8 +973,8 @@ class MemoryWriter(WritePipeline):
     async def write(
         self,
         request: WriteRequest,
-        ctx: Optional[PipelineContext] = None,
-        tracer: Optional[PipelineTracer] = None,
+        ctx: PipelineContext | None = None,
+        tracer: PipelineTracer | None = None,
     ) -> WriteResponse:
         """执行 Lite 写入流程。"""
         start_time = datetime.now()
@@ -1059,7 +1058,7 @@ class MemoryWriter(WritePipeline):
             # 3. 持久化到向量库（L1_RAW）
             _t_l1 = datetime.now()
             memory_id = ""
-            _l1_error: Optional[str] = None
+            _l1_error: str | None = None
             vector_store = None
             mem_node = None
             with tracer.span("qdrant_upsert") as s:
@@ -1234,7 +1233,7 @@ class MemoryWriter(WritePipeline):
         self,
         vector_store: VectorStoreBase,
         user_id: str,
-        agent_id: Optional[str] = None,
+        agent_id: str | None = None,
         exclude_memory_id: str = "",
         max_turns: int = 20,
         max_chars_assistant: int = 500,
@@ -1276,7 +1275,7 @@ class MemoryWriter(WritePipeline):
             _role_prefix = _re.compile(r"^\[?(user|assistant|system|tool)\]?:\s?")
 
             # (role, content) 元组列表
-            parsed: List[Tuple[str, str]] = []
+            parsed: list[tuple[str, str]] = []
             for node in nodes:
                 content = node.content or ""
                 for line in content.split("\n"):
@@ -1299,7 +1298,7 @@ class MemoryWriter(WritePipeline):
                 return ""
 
             # 格式化：assistant 整条截断，user 完整保留
-            all_messages: List[str] = []
+            all_messages: list[str] = []
             for role, body in recent:
                 body = body.strip()
                 if role == "assistant" and len(body) > max_chars_assistant:
@@ -1315,8 +1314,8 @@ class MemoryWriter(WritePipeline):
         self,
         vector_store: VectorStoreBase,
         user_id: str,
-        agent_id: Optional[str] = None,
-    ) -> List[str]:
+        agent_id: str | None = None,
+    ) -> list[str]:
         """
         收集该用户在 VDB 中已有的所有 tags（去重）。
 
@@ -1445,7 +1444,7 @@ class MemoryWriter(WritePipeline):
             basic_info_raw = agent_result.extracted_info.pop("basic_info", None)
 
         tool_calls_raw = None  # v0.1.5.13+ 不再有真实 LLM tool_calls；保留字段做兼容
-        tool_results_summary: List[Dict[str, Any]] = []
+        tool_results_summary: list[dict[str, Any]] = []
 
         if isinstance(basic_info_raw, dict) and basic_info_raw:
             try:
@@ -1563,7 +1562,7 @@ class MemoryWriter(WritePipeline):
         await self._write_summary_log(request, agent_result, _req_id)
 
         # Reconcile & store
-        stored_ids: List[str] = []
+        stored_ids: list[str] = []
         self._cur_valence = _valence
         self._cur_arousal = _arousal
         _vs_logger = logging.getLogger("hy_memory.data.vector_store_chroma")
@@ -1707,7 +1706,7 @@ class MemoryWriter(WritePipeline):
 
         tracer_span.set_output({"success": False, "error": _error_msg})
 
-    async def _write_extract_log(self, request, agent_result, req_id: str, tool_results: List[Dict[str, Any]] = None) -> None:
+    async def _write_extract_log(self, request, agent_result, req_id: str, tool_results: list[dict[str, Any]] = None) -> None:
         """写 EXTRACT pipeline log。"""
         if not self._cache:
             return
@@ -1764,8 +1763,9 @@ class MemoryWriter(WritePipeline):
                 _summary_prompt = _summary_result._actual_prompt
             else:
                 # fallback
-                from ..agent.summarizer import SUMMARY_PROMPT
                 from datetime import date as _date_now
+
+                from ..agent.summarizer import SUMMARY_PROMPT
                 _current_time = request.memory_at.isoformat(timespec="seconds") if request.memory_at else ""
                 _memory_date = _current_time[:10] if _current_time and len(_current_time) >= 10 else _date_now.today().isoformat()
                 _current_date = _date_now.today().isoformat()

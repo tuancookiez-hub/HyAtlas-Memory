@@ -24,18 +24,18 @@ Agent Memory - LLM Provider
     print(response.tokens_used)
 """
 
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass
-from enum import Enum
 import asyncio
 import logging
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any
 
 from ..config import MemoryConfig
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_tool_calls_list(raw_calls: list, _json) -> List[Dict[str, Any]]:
+def _parse_tool_calls_list(raw_calls: list, _json) -> list[dict[str, Any]]:
     """
     解析 tool_calls 列表。
 
@@ -88,7 +88,7 @@ class LLMResponse:
     # function/tool calling：当 LLM 决定调用工具时填充，结构为 OpenAI 风格：
     #   [{"id": "...", "type": "function", "function": {"name": "...", "arguments": "<json str>"}}]
     # 调用方应使用 tools.base.parse_tool_calls_from_json 解析
-    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_calls: list[dict[str, Any]] | None = None
 
 
 @dataclass
@@ -104,11 +104,11 @@ class LLMConfig:
     timeout: int = 30
     max_retries: int = 5
     retry_delay: float = 1.0  # 初始 delay，每次递增
-    extra_headers: Optional[Dict[str, str]] = None
-    extra_body: Optional[Dict[str, Any]] = None
+    extra_headers: dict[str, str] | None = None
+    extra_body: dict[str, Any] | None = None
     # 蒸馏平台专用
-    eval_user: Optional[str] = None
-    eval_apikey: Optional[str] = None
+    eval_user: str | None = None
+    eval_apikey: str | None = None
 
 
 class LLMProvider:
@@ -147,7 +147,7 @@ class LLMProvider:
         finish_reason = choices[0].finish_reason
         return msg, usage, finish_reason
 
-    def __init__(self, config: Optional[MemoryConfig] = None):
+    def __init__(self, config: MemoryConfig | None = None):
         """
         初始化 LLM Provider
         
@@ -157,14 +157,14 @@ class LLMProvider:
         self.config = config or MemoryConfig.from_env()
         self._llm_config = self._build_llm_config()
         self._client = None
-        
+
         # 统计
         self._total_calls = 0
         self._total_tokens = 0
         self._errors = 0
-        
+
         logger.debug(f"LLMProvider initialized, backend={self._llm_config.backend.value}")
-    
+
     def _build_llm_config(self) -> LLMConfig:
         """从配置构建 LLM 配置"""
         llm = self.config.llm
@@ -189,15 +189,15 @@ class LLMProvider:
             eval_user=llm.eval_user,
             eval_apikey=llm.eval_apikey,
         )
-    
+
     async def complete(
         self,
         prompt: str,
         max_tokens: int = 500,
         temperature: float = 0.7,
-        stop: List[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
+        stop: list[str] = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
         **kwargs
     ) -> LLMResponse:
         """
@@ -294,9 +294,9 @@ class LLMProvider:
         prompt: str,
         max_tokens: int,
         temperature: float,
-        stop: List[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
+        stop: list[str] = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
         **kwargs
     ) -> LLMResponse:
         """根据 backend 分发到对应的调用实现"""
@@ -315,9 +315,9 @@ class LLMProvider:
         prompt: str,
         max_tokens: int,
         temperature: float,
-        stop: List[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
+        stop: list[str] = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
     ) -> LLMResponse:
         """
         调用 OpenAI 兼容接口
@@ -339,7 +339,7 @@ class LLMProvider:
             if not any(m.get("role") == "system" for m in messages):
                 messages.insert(0, {"role": "system", "content": ""})
 
-            kwargs: Dict[str, Any] = {
+            kwargs: dict[str, Any] = {
                 "model": self._llm_config.model,
                 "messages": messages,
                 "max_tokens": max_tokens,
@@ -366,7 +366,7 @@ class LLMProvider:
 
             # tool_calls 反序列化为纯 dict 列表（方便后续传递 / 记录）
             tool_calls_raw = getattr(msg, "tool_calls", None) or []
-            tool_calls: Optional[List[Dict[str, Any]]] = None
+            tool_calls: list[dict[str, Any]] | None = None
             if tool_calls_raw:
                 tool_calls = []
                 for tc in tool_calls_raw:
@@ -402,8 +402,8 @@ class LLMProvider:
         prompt: str,
         max_tokens: int,
         temperature: float,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
     ) -> LLMResponse:
         """
         调用腾讯蒸馏平台（Eval Platform）— 标准协议
@@ -428,7 +428,7 @@ class LLMProvider:
             {"role": "user", "content": prompt},
         ]
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": self._llm_config.model,
             "messages": messages,
             "max_tokens": max_tokens,
@@ -452,7 +452,7 @@ class LLMProvider:
         c_tokens = usage.completion_tokens if usage else 0
 
         tool_calls_raw = getattr(msg, "tool_calls", None) or []
-        tool_calls: Optional[List[Dict[str, Any]]] = None
+        tool_calls: list[dict[str, Any]] | None = None
         if tool_calls_raw:
             tool_calls = []
             for tc in tool_calls_raw:
@@ -478,14 +478,14 @@ class LLMProvider:
             finish_reason=_finish,
             tool_calls=tool_calls,
         )
-    
+
     async def complete_messages(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         max_tokens: int = 500,
         temperature: float = 0.7,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
     ) -> LLMResponse:
         """
         多轮 messages 调用（支持 tool results 回传）。
@@ -544,11 +544,11 @@ class LLMProvider:
 
     async def _call_openai_messages(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         max_tokens: int,
         temperature: float,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
     ) -> LLMResponse:
         """OpenAI 兼容接口 — 多轮 messages 版本。"""
         from openai import AsyncOpenAI
@@ -562,7 +562,7 @@ class LLMProvider:
         if not any(m.get("role") == "system" for m in messages):
             messages = [{"role": "system", "content": ""}] + messages
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": self._llm_config.model,
             "messages": messages,
             "max_tokens": max_tokens,
@@ -586,7 +586,7 @@ class LLMProvider:
         c_tokens = usage.completion_tokens if usage else 0
 
         tool_calls_raw = getattr(msg, "tool_calls", None) or []
-        tool_calls: Optional[List[Dict[str, Any]]] = None
+        tool_calls: list[dict[str, Any]] | None = None
         if tool_calls_raw:
             tool_calls = []
             for tc in tool_calls_raw:
@@ -615,11 +615,11 @@ class LLMProvider:
 
     async def _call_eval_platform_messages(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         max_tokens: int,
         temperature: float,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
     ) -> LLMResponse:
         """蒸馏平台 — 多轮 messages 版本（标准协议，OpenAI 兼容）。"""
         from openai import AsyncOpenAI
@@ -636,7 +636,7 @@ class LLMProvider:
         if not any(m.get("role") == "system" for m in messages):
             messages = [{"role": "system", "content": ""}] + messages
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": self._llm_config.model,
             "messages": messages,
             "max_tokens": max_tokens,
@@ -660,7 +660,7 @@ class LLMProvider:
         c_tokens = usage.completion_tokens if usage else 0
 
         tool_calls_raw = getattr(msg, "tool_calls", None) or []
-        tool_calls: Optional[List[Dict[str, Any]]] = None
+        tool_calls: list[dict[str, Any]] | None = None
         if tool_calls_raw:
             tool_calls = []
             for tc in tool_calls_raw:
@@ -689,7 +689,7 @@ class LLMProvider:
 
     async def chat(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         max_tokens: int = 500,
         temperature: float = 0.7,
         **kwargs
@@ -711,17 +711,17 @@ class LLMProvider:
             role = msg.get("role", "user")
             content = msg.get("content", "")
             prompt_parts.append(f"{role}: {content}")
-        
+
         prompt = "\n".join(prompt_parts)
-        
+
         return await self.complete(
             prompt=prompt,
             max_tokens=max_tokens,
             temperature=temperature,
             **kwargs
         )
-    
-    def get_stats(self) -> Dict[str, Any]:
+
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         return {
             "total_calls": self._total_calls,

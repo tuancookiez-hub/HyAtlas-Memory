@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 HY Memory - Intention (L7) 召回 + 惰性过期转换
 
@@ -18,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ...models.memory import MemoryLayer, MemoryStatus
 
@@ -27,13 +26,13 @@ logger = logging.getLogger(__name__)
 
 async def recall_intentions(
     vector_store: Any,
-    query_embedding: List[float],
+    query_embedding: list[float],
     *,
-    user_ids: Optional[List[str]] = None,
-    agent_ids: Optional[List[str]] = None,
+    user_ids: list[str] | None = None,
+    agent_ids: list[str] | None = None,
     limit: int = 10,
-    now: Optional[datetime] = None,
-) -> List[Dict[str, Any]]:
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
     """
     召回未过期的 L7_INTENTION 节点（VDB），并惰性把过期意图转成 L2_FACT。
 
@@ -67,7 +66,7 @@ async def recall_intentions(
         logger.debug(f"[intention] recall search failed: {e}")
         return []
 
-    survivors: List[Dict[str, Any]] = []
+    survivors: list[dict[str, Any]] = []
     for h in hits:
         node = h.get("node")
         node_id = h.get("node_id", "")

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Pipeline Log Writer — 环节级 JSONL 日志（始终开启，与 SQLite Trace 分离）。
 
@@ -20,7 +19,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +64,7 @@ class PipelineLogWriter:
         prompt: str = "",
         response: str = "",
         parsed: str = "",
-        memory_ids: Optional[List[str]] = None,
+        memory_ids: list[str] | None = None,
         elapsed_ms: float = 0.0,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,

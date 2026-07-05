@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Qdrant BM25 稀疏向量编码器（fastembed Qdrant/bm25）单例封装。
 
@@ -18,12 +17,11 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 # (indices, values)：可直接用于 qdrant SparseVector(indices=, values=)
-SparseTuple = Tuple[List[int], List[float]]
+SparseTuple = tuple[list[int], list[float]]
 
 _encoder = None            # SparseTextEmbedding | None | False(=不可用)
 _lock = threading.Lock()
@@ -59,7 +57,7 @@ def is_available() -> bool:
     return bool(_get_encoder())
 
 
-def _to_tuple(sparse_embedding) -> Optional[SparseTuple]:
+def _to_tuple(sparse_embedding) -> SparseTuple | None:
     """fastembed SparseEmbedding → (indices:List[int], values:List[float])。"""
     try:
         indices = [int(i) for i in sparse_embedding.indices]
@@ -72,7 +70,7 @@ def _to_tuple(sparse_embedding) -> Optional[SparseTuple]:
         return None
 
 
-def encode_doc(text: str) -> Optional[SparseTuple]:
+def encode_doc(text: str) -> SparseTuple | None:
     """文档侧编码（含 IDF×TF 权重）；不可用或空文本返回 None。"""
     enc = _get_encoder()
     if not enc or not text:
@@ -85,13 +83,13 @@ def encode_doc(text: str) -> Optional[SparseTuple]:
         return None
 
 
-def encode_docs(texts: List[str]) -> List[Optional[SparseTuple]]:
+def encode_docs(texts: list[str]) -> list[SparseTuple | None]:
     """批量文档编码；与输入等长，空文本对应 None。"""
     enc = _get_encoder()
     if not enc:
         return [None] * len(texts)
     idxs = [i for i, t in enumerate(texts) if t]
-    result: List[Optional[SparseTuple]] = [None] * len(texts)
+    result: list[SparseTuple | None] = [None] * len(texts)
     if not idxs:
         return result
     try:
@@ -104,7 +102,7 @@ def encode_docs(texts: List[str]) -> List[Optional[SparseTuple]]:
     return result
 
 
-def encode_query(text: str) -> Optional[SparseTuple]:
+def encode_query(text: str) -> SparseTuple | None:
     """查询侧编码（query_embed，权重为 1）；不可用或空文本返回 None。"""
     enc = _get_encoder()
     if not enc or not text:

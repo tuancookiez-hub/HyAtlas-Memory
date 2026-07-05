@@ -8,8 +8,6 @@ Read pipeline 相关环境变量与常量集中入口。
 """
 
 import os
-from typing import Dict
-
 
 # ========================================================================
 # Reader 分发
@@ -95,7 +93,7 @@ RRF_K: int = _int_env("HY_MEMORY_READER_RRF_K", 60)
 
 
 # 意图权重（3 路：hybrid_tag reader 用）
-INTENT_WEIGHTS_3CHANNEL: Dict[str, Dict[str, float]] = {
+INTENT_WEIGHTS_3CHANNEL: dict[str, dict[str, float]] = {
     "NAVIGATIONAL": {"vec": 0.3, "tag": 0.8, "bm25": 1.5},
     "FACTUAL":      {"vec": 1.0, "tag": 1.2, "bm25": 0.8},
     "CONCEPTUAL":   {"vec": 1.0, "tag": 1.3, "bm25": 0.5},

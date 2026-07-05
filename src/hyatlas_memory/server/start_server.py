@@ -82,7 +82,6 @@ print(f"  Embedder: in-process (no sidecar)")
 # in-fork path is intentionally NOT checked any more — it was the
 # old layout before HyAtlas-Memory was extracted into its own repo.
 # patches.py is a no-op if the SDK is already patched.
-import importlib
 os.environ["MEMORY_SYSTEM2_TRIGGER_MODE"] = "scheduled"
 _l5_auto = os.environ.get("MEMORY_L5_AUTO", "true").strip().lower()
 os.environ["MEMORY_L5_AUTO"] = "true" if _l5_auto in ("1", "true", "yes") else "false"
@@ -94,7 +93,8 @@ try:
     print("  Integrations wired (13 first-class modules)")
 except Exception as _e:
     print(f"  WARN: integrations failed: {_e}")
-    import traceback; traceback.print_exc()
+    import traceback
+    traceback.print_exc()
 
 from hyatlas_memory.core.server import run_server
 run_server(port=19527, host="127.0.0.1")

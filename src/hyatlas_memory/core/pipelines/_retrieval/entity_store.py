@@ -8,8 +8,8 @@ Entity store 写入 helper（供 writer 落库时 + client 批量迁移共用）
 spaCy 不可用或抽不到 entity 时静默跳过（与 mem0 行为一致）。
 """
 
-from typing import Any, List, Optional
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

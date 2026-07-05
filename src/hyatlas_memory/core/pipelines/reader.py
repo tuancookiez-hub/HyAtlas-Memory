@@ -12,25 +12,25 @@ cache 参数从 Registry 注入，用于 read 侧的 trace 写入；传 None 时
 trace 写入静默跳过。
 """
 
-from typing import Any, Optional
 import logging
+from typing import Any
 
-from .base import ReadPipeline, ReadRequest, ReadResponse, PipelineContext
 from ..config import MemoryConfig
 from ..core.embed_service import EmbedService
-from ..data.vector_store_base import VectorStoreBase
 from ..data.graph_store_base import GraphStoreBase
+from ..data.vector_store_base import VectorStoreBase
 from ..utils.tracer import PipelineTracer
 from ._retrieval import config as _retrieval_config
+from .base import PipelineContext, ReadPipeline, ReadRequest, ReadResponse
 
 logger = logging.getLogger(__name__)
 
 
 def _build_impl(
     config: MemoryConfig,
-    embed_service: Optional[EmbedService],
-    vector_store: Optional[VectorStoreBase],
-    graph_store: Optional[GraphStoreBase] = None,
+    embed_service: EmbedService | None,
+    vector_store: VectorStoreBase | None,
+    graph_store: GraphStoreBase | None = None,
     cache: Any = None,
 ) -> ReadPipeline:
     """按环境变量选择内部实现类并构造实例。"""
@@ -79,9 +79,9 @@ class MemoryReader(ReadPipeline):
     def __init__(
         self,
         config: MemoryConfig,
-        embed_service: Optional[EmbedService] = None,
-        vector_store: Optional[VectorStoreBase] = None,
-        graph_store: Optional[GraphStoreBase] = None,
+        embed_service: EmbedService | None = None,
+        vector_store: VectorStoreBase | None = None,
+        graph_store: GraphStoreBase | None = None,
         cache: Any = None,
     ):
         self.config = config
@@ -100,8 +100,8 @@ class MemoryReader(ReadPipeline):
     async def read(
         self,
         request: ReadRequest,
-        ctx: Optional[PipelineContext] = None,
-        tracer: Optional[PipelineTracer] = None,
+        ctx: PipelineContext | None = None,
+        tracer: PipelineTracer | None = None,
     ) -> ReadResponse:
         return await self._impl.read(request, ctx=ctx, tracer=tracer)
 

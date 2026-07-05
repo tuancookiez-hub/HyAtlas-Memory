@@ -10,12 +10,12 @@ HY Memory - 抽象基类 + 统一协议
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, List, Dict, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 
 # 类型前向声明 (避免循环导入)
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
+
 if TYPE_CHECKING:
     from ..utils.tracer import PipelineTracer
 
@@ -33,7 +33,7 @@ class PipelineContext:
     """
     # 请求标识
     request_id: str = ""
-    
+
     # 用户隔离（两级: user_id + agent_id）
     user_id: str = ""
     agent_id: str = ""
@@ -42,11 +42,11 @@ class PipelineContext:
     session_id: str = ""
 
     # 中间结果存储 (Pipeline 内部使用)
-    intermediate: Dict[str, Any] = field(default_factory=dict)
+    intermediate: dict[str, Any] = field(default_factory=dict)
 
     # 性能追踪
-    start_time: Optional[datetime] = None
-    timings: Dict[str, float] = field(default_factory=dict)
+    start_time: datetime | None = None
+    timings: dict[str, float] = field(default_factory=dict)
 
     def elapsed_ms(self) -> float:
         """返回从 start_time 到现在的毫秒数"""
@@ -71,15 +71,15 @@ class ToolCall:
     """
     id: str = ""                         # 调用 id（OpenAI: tc.id；Anthropic: tool_use block id）
     name: str = ""                       # tool 名
-    arguments: Dict[str, Any] = field(default_factory=dict)
+    arguments: dict[str, Any] = field(default_factory=dict)
     # OpenAI 把 arguments 编码成 JSON 字符串；规范化层负责 json.loads 后塞进来
     # Anthropic 直接给 dict；规范化层照搬
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "name": self.name, "arguments": self.arguments}
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ToolCall":
+    def from_dict(cls, data: dict[str, Any]) -> "ToolCall":
         return cls(
             id=data.get("id", ""),
             name=data.get("name", ""),
@@ -94,19 +94,19 @@ class ChatMessage:
     content: str = ""
 
     # ── tool 扩展（仅 productivity / coding 路径使用；chat 路径忽略）──
-    tool_calls: List[ToolCall] = field(default_factory=list)
+    tool_calls: list[ToolCall] = field(default_factory=list)
     # role=assistant 时：发起的 tool 调用列表
     # 其他 role 必为空
 
-    tool_call_id: Optional[str] = None
+    tool_call_id: str | None = None
     # role=tool 时：本消息对应的调用 id
     # 其他 role 为 None
 
-    tool_name: Optional[str] = None
+    tool_name: str | None = None
     # role=tool 时：本消息对应的工具名（OpenAI 直接给；Anthropic 需要从前序 tool_use 反查，可空）
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {"role": self.role, "content": self.content}
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"role": self.role, "content": self.content}
         if self.tool_calls:
             d["tool_calls"] = [tc.to_dict() for tc in self.tool_calls]
         if self.tool_call_id is not None:
@@ -116,7 +116,7 @@ class ChatMessage:
         return d
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ChatMessage":
+    def from_dict(cls, data: dict[str, Any]) -> "ChatMessage":
         return cls(
             role=data.get("role", "user"),
             content=data.get("content", "") or "",
@@ -147,8 +147,8 @@ class WriteRequest:
     """
     # 必填 (二选一)
     content: str = ""
-    messages: List[ChatMessage] = field(default_factory=list)
-    
+    messages: list[ChatMessage] = field(default_factory=list)
+
     # 用户隔离
     user_id: str = ""
     agent_id: str = ""
@@ -161,32 +161,32 @@ class WriteRequest:
     # 可选元数据
     content_type: str = "text"
     session_id: str = ""
-    turn_index: Optional[int] = None
+    turn_index: int | None = None
     role: str = "user"
-    assistant_content: Optional[str] = None
-    
+    assistant_content: str | None = None
+
     # 版本特有参数 (V1: agent_mode 等; V2: gate_config 等)
-    extra: Dict[str, Any] = field(default_factory=dict)
-    
+    extra: dict[str, Any] = field(default_factory=dict)
+
     # 已有记忆 (V1 合并检测用)
-    existing_memories: Optional[List[Dict[str, Any]]] = None
+    existing_memories: list[dict[str, Any]] | None = None
 
     # 记忆时间戳（不传则用当前时间 datetime.now()）
-    memory_at: Optional[datetime] = None
+    memory_at: datetime | None = None
 
     # 本次写入是否生成 L3_SUMMARY；None = 沿用 LLMConfig.enable_summary（全局默认 False）
-    enable_summary: Optional[bool] = None
+    enable_summary: bool | None = None
 
     # 本次抽取场景：'chat'（默认对话提取）| 'migration'（保真迁移提取）。
     # None = 沿用 LLMConfig.extract_scene（全局默认 'chat'）。按请求覆盖，
     # 让同一台常驻 server 可在 normal/migration 间切换而无需重启或另起 server。
-    extract_scene: Optional[str] = None
+    extract_scene: str | None = None
 
     # ── Coding memory 路径专用（chat 路径忽略）──
-    workspace_id: Optional[str] = None
+    workspace_id: str | None = None
     # repo 标识。建议用 git remote URL 规范化（如 "github.com/org/repo"）。
     # 没传时：scope=strict/project 的 coding memory 会被拒写，仅保留 scope=user/global。
-    branch: Optional[str] = None
+    branch: str | None = None
     # 分支名。仅 boundary_scope=strict 时启用且必填，缺失时 strict memory 会被拒写。
 
     # ---- 便捷方法 ----
@@ -195,7 +195,7 @@ class WriteRequest:
         """是否有多轮对话输入"""
         return bool(self.messages)
 
-    def get_user_queries(self) -> List[str]:
+    def get_user_queries(self) -> list[str]:
         """提取所有 user 角色的消息内容 (用于 embed 查 novelty)"""
         return [m.content for m in self.messages if m.role == "user" and m.content.strip()]
 
@@ -238,27 +238,27 @@ class WriteResponse:
     所有版本的 WritePipeline 都返回此格式的响应。
     """
     success: bool = False
-    
+
     # 写入结果
     memory_id: str = ""
     layer: str = ""
     message: str = ""
-    
+
     # 提取的实体 (通用)
-    entities: List[Dict[str, Any]] = field(default_factory=list)
-    
+    entities: list[dict[str, Any]] = field(default_factory=list)
+
     # 性能
     elapsed_ms: float = 0.0
     tokens_used: int = 0
-    
+
     # 错误信息
     error_code: int = 0
     error_message: str = ""
-    
+
     # 版本特有数据 (V1: routing_confidence, should_merge 等; V2: gate_passed, l2_fact_ids 等)
-    extra: Dict[str, Any] = field(default_factory=dict)
-    
-    def to_dict(self) -> Dict[str, Any]:
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "memory_id": self.memory_id,
@@ -283,16 +283,16 @@ class ReadRequest:
 
     # 用户隔离
     user_id: str = ""              # 单用户（向后兼容）
-    user_ids: List[str] = field(default_factory=list)  # 多用户搜索
+    user_ids: list[str] = field(default_factory=list)  # 多用户搜索
     agent_id: str = ""
 
     # 灵活搜索过滤（list 形式）
-    agent_ids: List[str] = field(default_factory=list)
-    session_ids: List[str] = field(default_factory=list)
+    agent_ids: list[str] = field(default_factory=list)
+    session_ids: list[str] = field(default_factory=list)
 
     # 检索参数
     limit: int = 10
-    layers: Optional[List[str]] = None
+    layers: list[str] | None = None
     min_score: float = 0.4             # 通用最低分数阈值（部分 reader 用作召回门槛）
 
     # Profile 独立召回参数
@@ -304,10 +304,10 @@ class ReadRequest:
 
 
     # 时间过滤
-    created_after: Optional[float] = None  # Unix timestamp (float)，只返回 gmt_created >= 此值的记忆
+    created_after: float | None = None  # Unix timestamp (float)，只返回 gmt_created >= 此值的记忆
 
     # 预计算的查询向量 (可选, 避免重复 embed)
-    query_embedding: Optional[List[float]] = None
+    query_embedding: list[float] | None = None
 
     # 会话
     session_id: str = ""
@@ -318,7 +318,7 @@ class ReadRequest:
     request_id: str = ""
 
     # 版本特有参数 (V2: token_budget, use_llm_understanding 等)
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -327,22 +327,22 @@ class ReadResponse:
     统一读取响应协议。
     """
     success: bool = False
-    
+
     # 召回结果 (通用格式)
-    memories: List[Dict[str, Any]] = field(default_factory=list)
+    memories: list[dict[str, Any]] = field(default_factory=list)
     total_found: int = 0
-    
+
     # 性能
     elapsed_ms: float = 0.0
-    
+
     # 错误信息
     error_code: int = 0
     error_message: str = ""
-    
+
     # 版本特有数据 (V2: context_package, query_understanding, recalled_node_ids 等)
-    extra: Dict[str, Any] = field(default_factory=dict)
-    
-    def to_dict(self) -> Dict[str, Any]:
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "memories": self.memories,
@@ -369,10 +369,10 @@ class WritePipeline(ABC):
             async def write(self, request, ctx):
                 ...
     """
-    
+
     # Pipeline 版本标识 (子类必须覆盖)
     VERSION: str = "base"
-    
+
     @abstractmethod
     async def initialize(self) -> None:
         """
@@ -382,12 +382,12 @@ class WritePipeline(ABC):
         在首次使用前调用一次即可。
         """
         pass
-    
+
     @abstractmethod
     async def write(
         self,
         request: WriteRequest,
-        ctx: Optional[PipelineContext] = None,
+        ctx: PipelineContext | None = None,
         tracer: Optional["PipelineTracer"] = None,
     ) -> WriteResponse:
         """
@@ -401,11 +401,11 @@ class WritePipeline(ABC):
             统一写入响应
         """
         pass
-    
+
     async def close(self) -> None:
         """释放资源 (默认空实现)"""
         pass
-    
+
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} version={self.VERSION}>"
 
@@ -414,20 +414,20 @@ class ReadPipeline(ABC):
     """
     读取抽象基类。
     """
-    
+
     # Pipeline 版本标识 (子类必须覆盖)
     VERSION: str = "base"
-    
+
     @abstractmethod
     async def initialize(self) -> None:
         """初始化 Pipeline 所需的资源。"""
         pass
-    
+
     @abstractmethod
     async def read(
         self,
         request: ReadRequest,
-        ctx: Optional[PipelineContext] = None,
+        ctx: PipelineContext | None = None,
         tracer: Optional["PipelineTracer"] = None,
     ) -> ReadResponse:
         """
@@ -441,10 +441,10 @@ class ReadPipeline(ABC):
             统一读取响应
         """
         pass
-    
+
     async def close(self) -> None:
         """释放资源 (默认空实现)"""
         pass
-    
+
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} version={self.VERSION}>"

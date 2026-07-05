@@ -21,15 +21,14 @@ import json
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from ..models.memory import MemoryLayer, MemoryNode, MemoryStatus
 from ..config import MemoryConfig
 from ..core.embed_service import EmbedService
-from ..data.vector_store_base import VectorStoreBase
 from ..data.graph_store_base import GraphStoreBase
-
-from .system2_tools import System2ToolExecutor, SYSTEM2_TOOL_DEFINITIONS
+from ..data.vector_store_base import VectorStoreBase
+from ..models.memory import MemoryLayer, MemoryNode, MemoryStatus
+from .system2_tools import System2ToolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +53,9 @@ def _cosine_sim_vec(a, b) -> float:
 
 
 def _dedupe_group_indices(
-    group_indices: List[int],
+    group_indices: list[int],
     X,
-    valid_facts: List,
+    valid_facts: list,
     sim_threshold: float,
 ) -> tuple:
     """
@@ -67,7 +66,7 @@ def _dedupe_group_indices(
     if len(group_indices) <= 1:
         return list(group_indices), 0
 
-    kept: List[int] = []
+    kept: list[int] = []
     removed = 0
     for idx in group_indices:
         if not kept:
@@ -91,7 +90,7 @@ def _dedupe_group_indices(
     return kept, removed
 
 
-def s2_agent_skip_reason(materials: Dict[str, Any]) -> Optional[str]:
+def s2_agent_skip_reason(materials: dict[str, Any]) -> str | None:
     """
     返回跳过 S2 Agent 的原因；None 表示应运行 Agent。
 
@@ -246,7 +245,7 @@ async def prepare_materials(
     graph_store: GraphStoreBase,
     embed_service: EmbedService,
     config: MemoryConfig,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Phase 1: 硬编码预处理 — 聚类 + Graph 正反向搜索 → materials
 
@@ -518,7 +517,7 @@ async def prepare_materials(
         for f in c.get("facts", []):
             clustered_node_ids.add(f["node_id"])
 
-    unprocessed: List[Dict[str, Any]] = []
+    unprocessed: list[dict[str, Any]] = []
     if clusters:
         unprocessed = [
             {"node_id": f.node_id, "content": f.content, "layer": f.layer.value}
@@ -570,11 +569,11 @@ async def prepare_materials(
 # ====================================================================
 
 async def run_system2_agent(
-    materials: Dict[str, Any],
+    materials: dict[str, Any],
     tool_executor: System2ToolExecutor,
     config: MemoryConfig,
     max_iterations: int = 10,  # kept for backward compat, unused in single-call mode
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Phase 2: System 2 Agent — Single LLM call + JSON output + post-process execution.
 
@@ -632,7 +631,7 @@ async def run_system2_agent(
     # Parse JSON operations from response
     operations = _parse_operations_json(agent_reasoning)
     if operations is None:
-        logger.warning(f"[S2-agent] Failed to parse operations JSON from response")
+        logger.warning("[S2-agent] Failed to parse operations JSON from response")
         return {
             "success": True,
             "tool_calls": [],
@@ -705,12 +704,12 @@ async def run_system2_agent(
 
 
 async def run_system2_agent_batched(
-    materials: Dict[str, Any],
+    materials: dict[str, Any],
     tool_executor: System2ToolExecutor,
     config: MemoryConfig,
-    max_clusters_per_call: Optional[int] = None,
-    max_clusters_per_run: Optional[int] = None,
-) -> Dict[str, Any]:
+    max_clusters_per_call: int | None = None,
+    max_clusters_per_run: int | None = None,
+) -> dict[str, Any]:
     """
     量控制版 System 2 Agent：把 materials 的 clusters 按 max_clusters_per_call
     切成多批，每批一次 LLM 调用，循环处理，最后聚合各批结果。
@@ -748,10 +747,10 @@ async def run_system2_agent_batched(
         clusters = clusters[:per_run]
 
     # 聚合容器
-    agg_tool_calls: List[Dict[str, Any]] = []
-    agg_tool_call_log: List[Dict[str, Any]] = []
-    agg_messages: List[Dict[str, Any]] = []
-    agg_reasoning_parts: List[str] = []
+    agg_tool_calls: list[dict[str, Any]] = []
+    agg_tool_call_log: list[dict[str, Any]] = []
+    agg_messages: list[dict[str, Any]] = []
+    agg_reasoning_parts: list[str] = []
     total_prompt_tokens = 0
     total_completion_tokens = 0
     total_elapsed_ms = 0.0
@@ -883,7 +882,7 @@ Available operations:
     return base + output_instructions
 
 
-def _parse_operations_json(text: str) -> Optional[List[Dict[str, Any]]]:
+def _parse_operations_json(text: str) -> list[dict[str, Any]] | None:
     """Parse JSON array of operations from LLM response text."""
     import re
 
@@ -911,7 +910,7 @@ def _parse_operations_json(text: str) -> Optional[List[Dict[str, Any]]]:
         return None
 
 
-def _detect_language(materials: Dict[str, Any]) -> str:
+def _detect_language(materials: dict[str, Any]) -> str:
     """
     从 materials 的 fact content 检测语言。
     
@@ -943,7 +942,7 @@ def _detect_language(materials: Dict[str, Any]) -> str:
     return lang
 
 
-def _build_materials_message(materials: Dict[str, Any], lang: str = "zh") -> str:
+def _build_materials_message(materials: dict[str, Any], lang: str = "zh") -> str:
     """将预处理好的 materials 格式化为 Agent 能理解的 user message"""
     is_zh = (lang == "zh")
 
@@ -967,7 +966,7 @@ def _build_materials_message(materials: Dict[str, Any], lang: str = "zh") -> str
         )
         parts.append(f"- Graph Schema 总数: {stats.get('graph_total_schemas', 0)}（本次召回={recalled_schemas}）")
         if graph_total == 0:
-            parts.append(f"- Graph 状态: **空**（首次认知加工）\n")
+            parts.append("- Graph 状态: **空**（首次认知加工）\n")
         else:
             parts.append("")
     else:
@@ -980,7 +979,7 @@ def _build_materials_message(materials: Dict[str, Any], lang: str = "zh") -> str
         )
         parts.append(f"- Graph Schemas total: {stats.get('graph_total_schemas', 0)} (recalled={recalled_schemas})")
         if graph_total == 0:
-            parts.append(f"- Graph status: **EMPTY** (first cognitive processing run)\n")
+            parts.append("- Graph status: **EMPTY** (first cognitive processing run)\n")
         else:
             parts.append("")
 
@@ -988,7 +987,7 @@ def _build_materials_message(materials: Dict[str, Any], lang: str = "zh") -> str
     clusters = materials.get("clusters", [])
     clustered_ids = set()
     if clusters:
-        parts.append(("### 聚类结果\n" if is_zh else "### Cluster Results\n"))
+        parts.append("### 聚类结果\n" if is_zh else "### Cluster Results\n")
         for i, c in enumerate(clusters):
             n_facts = len(c['facts'])
             label = f"{n_facts} 条，主题" if is_zh else f"{n_facts} facts, topic"
@@ -1052,8 +1051,8 @@ def _build_materials_message(materials: Dict[str, Any], lang: str = "zh") -> str
     # Reverse hits
     reverse = materials.get("graph_reverse", [])
     if reverse:
-        parts.append(("### Graph 反向引用（已有 Schema 引用的 VDB 事实）\n" if is_zh
-                       else "### Graph Reverse References (VDB facts referenced by existing Schemas)\n"))
+        parts.append("### Graph 反向引用（已有 Schema 引用的 VDB 事实）\n" if is_zh
+                       else "### Graph Reverse References (VDB facts referenced by existing Schemas)\n")
         for r in reverse:
             parts.append(
                 f"  - [{r['layer']}] {r['content']} "

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 HY Memory Client - 面向用户的同步客户端（无状态）
 
@@ -33,26 +32,28 @@ import os
 import time
 import uuid
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from .config import MemoryConfig
 from .core.embed_service import EmbedService
-from .data.vector_store import create_vector_store
-from .data.history_store import HistoryStore
 from .data.cache import create_cache
-from .utils.log_setup import setup_logging, set_request_id, request_id_scope
+from .data.history_store import HistoryStore
+from .data.vector_store import create_vector_store
+from .utils.log_setup import request_id_scope, set_request_id, setup_logging
 
 if TYPE_CHECKING:
     from .runtime import SharedRuntime
 from .pipelines import (
-    ComponentFactory,
     ChatMessage,
+    ComponentFactory,
+    ReadRequest,
+    ReadResponse,
     ToolCall,
     WriteRequest,
     WriteResponse,
-    ReadRequest,
-    ReadResponse,
 )
+
+
 # Coding memory 模块（lazy 初始化，仅在 messages 含 tool 且判定为 coding 时启用）
 # Coding path disabled in HyAtlas v3 — all writes use normal memory path
 async def classify_messages_is_coding(*a, **kw): return False
@@ -62,7 +63,7 @@ def strip_tool_messages(msgs, *a, **kw): return msgs
 logger = logging.getLogger(__name__)
 
 # add() 第一个参数的类型：字符串 或 messages 列表
-MessageList = List[Dict[str, str]]
+MessageList = list[dict[str, str]]
 AddInput = Union[str, MessageList]
 
 
@@ -189,9 +190,9 @@ class HyMemoryClient:
 
     def __init__(
         self,
-        config: Optional[MemoryConfig] = None,
-        mode: Optional[str] = None,
-        coding_writer: Optional[str] = None,
+        config: MemoryConfig | None = None,
+        mode: str | None = None,
+        coding_writer: str | None = None,
         runtime: Optional["SharedRuntime"] = None,
     ):
         # 确保日志系统已配置（幂等，多次调用安全）
@@ -368,11 +369,11 @@ class HyMemoryClient:
         - Log：JSONL 文件，始终写入（环节级，不依赖 Trace 开关）
         - Trace：SQLite pipeline_logs，由 MEMORY_PIPELINE_TRACE_ENABLED 控制（Inspector）
         """
+        from .utils.pipeline_log_writer import PipelineLogWriter
         from .utils.pipeline_observability import (
             is_pipeline_trace_enabled,
             resolve_pipeline_log_dir,
         )
-        from .utils.pipeline_log_writer import PipelineLogWriter
 
         log_dir = resolve_pipeline_log_dir()
         log_writer = PipelineLogWriter(log_dir)
@@ -445,8 +446,8 @@ class HyMemoryClient:
     @classmethod
     def from_config(
         cls,
-        config_dict: Dict[str, Any],
-        mode: Optional[str] = None,
+        config_dict: dict[str, Any],
+        mode: str | None = None,
     ) -> "HyMemoryClient":
         """
         从字典创建客户端（类似 mem0 风格）。
@@ -524,7 +525,7 @@ class HyMemoryClient:
             return data, [], "text"
 
         if isinstance(data, list):
-            chat_messages: List[ChatMessage] = []
+            chat_messages: list[ChatMessage] = []
             for raw in data:
                 chat_messages.extend(HyMemoryClient._normalize_message(raw))
             return "", chat_messages, "messages"
@@ -534,7 +535,7 @@ class HyMemoryClient:
         )
 
     @staticmethod
-    def _normalize_message(m: Dict[str, Any]) -> List[ChatMessage]:
+    def _normalize_message(m: dict[str, Any]) -> list[ChatMessage]:
         """
         把单条原始消息规范化到 ChatMessage 列表。
 
@@ -546,7 +547,7 @@ class HyMemoryClient:
         raw_tool_calls = m.get("tool_calls", []) or []
 
         # ── 1. OpenAI assistant.tool_calls ──
-        tool_calls: List[ToolCall] = []
+        tool_calls: list[ToolCall] = []
         for tc in raw_tool_calls:
             fn = tc.get("function", {}) or {}
             args = fn.get("arguments")
@@ -577,8 +578,8 @@ class HyMemoryClient:
 
         # ── 3. Anthropic content blocks ──
         if isinstance(raw_content, list):
-            text_parts: List[str] = []
-            tool_result_msgs: List[ChatMessage] = []
+            text_parts: list[str] = []
+            tool_result_msgs: list[ChatMessage] = []
             for block in raw_content:
                 if not isinstance(block, dict):
                     # 非标准形态：当字符串处理
@@ -619,7 +620,7 @@ class HyMemoryClient:
                 # 其他未知 block 类型静默忽略
             text = "\n".join(p for p in text_parts if p).strip()
 
-            outputs: List[ChatMessage] = []
+            outputs: list[ChatMessage] = []
             # 即使 text 为空，只要 tool_calls 非空也保留 assistant 消息
             if text or tool_calls:
                 outputs.append(ChatMessage(
@@ -652,14 +653,14 @@ class HyMemoryClient:
         self,
         target_query: str,
         *,
-        user_ids: List[str],
-        workspace_id: Optional[str],
-        branch: Optional[str],
+        user_ids: list[str],
+        workspace_id: str | None,
+        branch: str | None,
         limit: int,
         min_score: float,
         request_id: str,
         t0: float,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Coding 召回路径：
           1. 拿 store（lazy init），ensure 已 initialize
@@ -727,7 +728,7 @@ class HyMemoryClient:
         details_by_id = {d.memory_id: d for d in details}
 
         # 组装返回
-        out_memories: List[Dict[str, Any]] = []
+        out_memories: list[dict[str, Any]] = []
         for h in hits:
             d = details_by_id.get(h["memory_id"])
             if d is None:
@@ -773,14 +774,14 @@ class HyMemoryClient:
         user_id: str = "",
         agent_id: str = "default_agent",
         session_id: str = "default_session",
-        metadata: Optional[Dict[str, Any]] = None,
-        memory_at: Optional[datetime] = None,
-        enable_summary: Optional[bool] = None,
-        workspace_id: Optional[str] = None,
-        branch: Optional[str] = None,
-        request_id: Optional[str] = None,
-        extract_scene: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        metadata: dict[str, Any] | None = None,
+        memory_at: datetime | None = None,
+        enable_summary: bool | None = None,
+        workspace_id: str | None = None,
+        branch: str | None = None,
+        request_id: str | None = None,
+        extract_scene: str | None = None,
+    ) -> dict[str, Any]:
         """
         写入记忆。
 
@@ -824,23 +825,23 @@ class HyMemoryClient:
 
     def search(
         self,
-        query: Optional[str] = None,
+        query: str | None = None,
         *,
-        queries: Optional[List[str]] = None,
-        scene: Optional[str] = None,
-        user_ids: Optional[List[str]] = None,
-        agent_ids: Optional[List[str]] = None,
-        session_ids: Optional[List[str]] = None,
+        queries: list[str] | None = None,
+        scene: str | None = None,
+        user_ids: list[str] | None = None,
+        agent_ids: list[str] | None = None,
+        session_ids: list[str] | None = None,
         limit: int = 10,
         min_score: float = 0.4,
         profile_min_score: float = 0.4,
         profile_limit: int = 10,
         intention_limit: int = 0,
-        created_after: Optional[float] = None,
+        created_after: float | None = None,
         reader: str = "",
-        workspace_id: Optional[str] = None,
-        branch: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        workspace_id: str | None = None,
+        branch: str | None = None,
+    ) -> dict[str, Any]:
         """
         搜索记忆。
 
@@ -886,7 +887,7 @@ class HyMemoryClient:
             workspace_id=workspace_id, branch=branch,
         ))
 
-    def get(self, memory_id: str) -> Optional[Dict[str, Any]]:
+    def get(self, memory_id: str) -> dict[str, Any] | None:
         """
         获取单条记忆。
 
@@ -902,7 +903,7 @@ class HyMemoryClient:
         self,
         memory_id: str,
         content: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         更新记忆内容。
 
@@ -915,7 +916,7 @@ class HyMemoryClient:
         """
         return self._loop_thread.run(self.async_update(memory_id, content))
 
-    def delete(self, memory_id: str) -> Dict[str, Any]:
+    def delete(self, memory_id: str) -> dict[str, Any]:
         """
         删除单条记忆。
 
@@ -931,9 +932,9 @@ class HyMemoryClient:
         self,
         *,
         user_id: str = "",
-        agent_ids: Optional[List[str]] = None,
-        session_ids: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
+        agent_ids: list[str] | None = None,
+        session_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         """
         删除用户的记忆。
 
@@ -956,11 +957,11 @@ class HyMemoryClient:
         self,
         *,
         user_id: str = "",
-        agent_id: Optional[str] = None,
+        agent_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
         order: str = "desc",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         列出用户的记忆（同步）。
 
@@ -989,8 +990,8 @@ class HyMemoryClient:
         src_user_id: str,
         dst_user_id: str,
         *,
-        agent_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        agent_id: str | None = None,
+    ) -> dict[str, Any]:
         """
         克隆用户记忆。
 
@@ -1019,7 +1020,7 @@ class HyMemoryClient:
         self,
         user_id: str,
         agent_id: str = "default_agent",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         手动触发 System 2 认知加工（ultra 模式专用，同步阻塞直到完成）。
 
@@ -1060,7 +1061,7 @@ class HyMemoryClient:
         self,
         user_id: str,
         agent_id: str = "default_agent",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """手动触发 System 2 认知加工（异步）"""
         t0 = __import__("time").perf_counter()
 
@@ -1088,9 +1089,9 @@ class HyMemoryClient:
 
     def sweep(
         self,
-        user_ids: List[str],
-        agent_ids: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
+        user_ids: list[str],
+        agent_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         """
         手动触发 cross-domain sweeper（同步）。
 
@@ -1118,9 +1119,9 @@ class HyMemoryClient:
     @_ensure_internal_loop
     async def async_sweep(
         self,
-        user_ids: List[str],
-        agent_ids: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
+        user_ids: list[str],
+        agent_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         """手动触发 cross-domain sweeper（异步）
 
         对每个 user_id × agent_id 组合执行一次 sweeper。
@@ -1146,7 +1147,7 @@ class HyMemoryClient:
     # System Metrics
     # ================================================================
 
-    def get_metrics(self, minutes: int = 5) -> Dict[str, Any]:
+    def get_metrics(self, minutes: int = 5) -> dict[str, Any]:
         """
         获取系统整体负载指标。
 
@@ -1165,7 +1166,7 @@ class HyMemoryClient:
         return self._loop_thread.run(self.async_get_metrics(minutes=minutes))
 
     @_ensure_internal_loop
-    async def async_get_metrics(self, minutes: int = 5) -> Dict[str, Any]:
+    async def async_get_metrics(self, minutes: int = 5) -> dict[str, Any]:
         """获取系统整体负载指标（异步）"""
         from .metrics import MetricsCollector
         return await MetricsCollector.get().get_snapshot(minutes=minutes)
@@ -1179,7 +1180,7 @@ class HyMemoryClient:
         if hasattr(self, '_loop_thread') and self._owns_runtime:
             self._loop_thread.stop()
 
-    def history(self, memory_id: str) -> List[Dict[str, Any]]:
+    def history(self, memory_id: str) -> list[dict[str, Any]]:
         """
         查询某条记忆的变更历史。
 
@@ -1195,9 +1196,9 @@ class HyMemoryClient:
     def get_recent_history(
         self,
         user_id: str = "",
-        agent_ids: Optional[List[str]] = None,
+        agent_ids: list[str] | None = None,
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         查询最近的操作历史。
 
@@ -1380,14 +1381,14 @@ class HyMemoryClient:
         user_id: str = "",
         agent_id: str = "default_agent",
         session_id: str = "default_session",
-        metadata: Optional[Dict[str, Any]] = None,
-        memory_at: Optional[datetime] = None,
-        enable_summary: Optional[bool] = None,
-        workspace_id: Optional[str] = None,
-        branch: Optional[str] = None,
-        request_id: Optional[str] = None,
-        extract_scene: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        metadata: dict[str, Any] | None = None,
+        memory_at: datetime | None = None,
+        enable_summary: bool | None = None,
+        workspace_id: str | None = None,
+        branch: str | None = None,
+        request_id: str | None = None,
+        extract_scene: str | None = None,
+    ) -> dict[str, Any]:
         """写入记忆（异步）
 
         Args:
@@ -1455,7 +1456,7 @@ class HyMemoryClient:
 
             # 判定为 chat：strip tool 消息再继续
             logger.info(
-                f"[add] tool messages found but classified as CHAT; stripping tools"
+                "[add] tool messages found but classified as CHAT; stripping tools"
             )
             chat_messages = strip_tool_messages(chat_messages)
 
@@ -1564,7 +1565,7 @@ class HyMemoryClient:
 
     def _spawn_search_dedup(
         self,
-        all_mems: List[Dict[str, Any]],
+        all_mems: list[dict[str, Any]],
         *,
         request_id: str,
         user_id: str,
@@ -1576,6 +1577,7 @@ class HyMemoryClient:
         从 evolution_chain 取出供连带删除。整体后台执行，不阻塞 search 返回。
         """
         import asyncio
+
         from .pipelines._retrieval.dedup import DedupItem, execute_dedup
 
         _DEDUP_LAYERS = {"l2_fact", "l4_identity"}
@@ -1590,7 +1592,7 @@ class HyMemoryClient:
             try:
                 node_ids = [m["memory_id"] for m in targets]
                 embs = await vector_store.get_embeddings(node_ids)
-                items: List[DedupItem] = []
+                items: list[DedupItem] = []
                 for m in targets:
                     mid = m["memory_id"]
                     emb = embs.get(mid)
@@ -1630,23 +1632,23 @@ class HyMemoryClient:
     @_ensure_internal_loop
     async def async_search(
         self,
-        query: Optional[str] = None,
+        query: str | None = None,
         *,
-        queries: Optional[List[str]] = None,
-        scene: Optional[str] = None,
-        user_ids: Optional[List[str]] = None,
-        agent_ids: Optional[List[str]] = None,
-        session_ids: Optional[List[str]] = None,
+        queries: list[str] | None = None,
+        scene: str | None = None,
+        user_ids: list[str] | None = None,
+        agent_ids: list[str] | None = None,
+        session_ids: list[str] | None = None,
         limit: int = 10,
         min_score: float = 0.4,
         profile_min_score: float = 0.4,
         profile_limit: int = 10,
         intention_limit: int = 0,
-        created_after: Optional[float] = None,
+        created_after: float | None = None,
         reader: str = "",
-        workspace_id: Optional[str] = None,
-        branch: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        workspace_id: str | None = None,
+        branch: str | None = None,
+    ) -> dict[str, Any]:
         """搜索记忆（异步）。详见 search() docstring。"""
         # ── 入参归一化 ──
         if queries is not None and query is not None:
@@ -1654,7 +1656,7 @@ class HyMemoryClient:
         if queries is None and query is None:
             raise ValueError("either query or queries is required")
         if queries is None:
-            queries_list: List[str] = [query]
+            queries_list: list[str] = [query]
         else:
             if not isinstance(queries, list) or not queries:
                 raise ValueError("queries must be a non-empty list[str]")
@@ -1662,7 +1664,7 @@ class HyMemoryClient:
         target_query = queries_list[-1]
 
         # scene 校验
-        scene_norm: Optional[str] = None
+        scene_norm: str | None = None
         if scene is not None:
             sn = str(scene).strip().lower()
             if sn not in ("productivity", "normal"):
@@ -1968,7 +1970,7 @@ class HyMemoryClient:
     # ================================================================
 
     @_ensure_internal_loop
-    async def async_get(self, memory_id: str) -> Optional[Dict[str, Any]]:
+    async def async_get(self, memory_id: str) -> dict[str, Any] | None:
         """
         获取单条记忆（异步）。
 
@@ -2053,7 +2055,7 @@ class HyMemoryClient:
         return None
 
     @_ensure_internal_loop
-    async def async_update(self, memory_id: str, content: str) -> Dict[str, Any]:
+    async def async_update(self, memory_id: str, content: str) -> dict[str, Any]:
         """
         更新记忆内容（异步）。
 
@@ -2119,7 +2121,7 @@ class HyMemoryClient:
         }
 
     @_ensure_internal_loop
-    async def async_delete(self, memory_id: str) -> Dict[str, Any]:
+    async def async_delete(self, memory_id: str) -> dict[str, Any]:
         """
         删除单条记忆（异步）。
 
@@ -2144,7 +2146,7 @@ class HyMemoryClient:
 
         # 先获取节点信息（用于链修复 + history + tag 清理）
         old_content = ""
-        old_tags: List[str] = []
+        old_tags: list[str] = []
         old_user_id = ""
         old_isolation_key = ""
         node = await self._vector_store.get_by_id(memory_id)
@@ -2256,8 +2258,8 @@ class HyMemoryClient:
     async def _purge_graph_data(
         self,
         user_id: str,
-        agent_id: Optional[str] = None,
-        session_id: Optional[str] = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
     ) -> int:
         """按 user 范围清理图数据（VDB 与 mode 无关，图库亦同）。"""
         gs, ephemeral = await self._acquire_graph_store_for_purge()
@@ -2284,9 +2286,9 @@ class HyMemoryClient:
         self,
         *,
         user_id: str = "",
-        agent_ids: Optional[List[str]] = None,
-        session_ids: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
+        agent_ids: list[str] | None = None,
+        session_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         """
         删除用户的记忆（异步）。
 
@@ -2362,7 +2364,7 @@ class HyMemoryClient:
     # ================================================================
 
     @staticmethod
-    def _memory_node_to_list_item(node) -> Dict[str, Any]:
+    def _memory_node_to_list_item(node) -> dict[str, Any]:
         """将 MemoryNode 序列化为 list API 条目。"""
         _memory_at = None
         if isinstance(node.memory_at, datetime):
@@ -2390,7 +2392,7 @@ class HyMemoryClient:
         }
 
     @staticmethod
-    def _sort_memory_nodes(nodes: List, *, order: str) -> List:
+    def _sort_memory_nodes(nodes: list, *, order: str) -> list:
         reverse = (order.lower() != "asc")
 
         def _sort_key(n):
@@ -2410,11 +2412,11 @@ class HyMemoryClient:
         self,
         *,
         user_id: str,
-        agent_id: Optional[str],
+        agent_id: str | None,
         limit: int,
         offset: int,
         order: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         from .models.memory import MemoryLayer, MemoryStatus
 
         all_nodes = await self._vector_store.list_by_user(
@@ -2437,11 +2439,11 @@ class HyMemoryClient:
         self,
         *,
         user_id: str,
-        agent_id: Optional[str],
+        agent_id: str | None,
         limit: int,
         offset: int,
         order: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """列出图库 L6/L7 节点；无图数据或不可用时返回 None。"""
         from .models.memory import MemoryLayer, MemoryNode
 
@@ -2480,11 +2482,11 @@ class HyMemoryClient:
         self,
         *,
         user_id: str = "",
-        agent_id: Optional[str] = None,
+        agent_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
         order: str = "desc",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         列出用户的记忆（异步）。
 
@@ -2515,7 +2517,7 @@ class HyMemoryClient:
             f"elapsed={elapsed}ms"
         )
 
-        out: Dict[str, Any] = {"vdb": vdb, "elapsed_ms": elapsed}
+        out: dict[str, Any] = {"vdb": vdb, "elapsed_ms": elapsed}
         if graph is not None:
             out["graph"] = graph
         return out
@@ -2530,7 +2532,7 @@ class HyMemoryClient:
         *,
         agent_id: str = "default_agent",
         rebuild: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """为指定 user 的全部 L2_FACT（含旧数据）抽取 entity 刷入 entity store（同步）。
 
         用于给历史 collection 补建 entity store，使 reader=mem0 的 entity boost 生效。
@@ -2557,7 +2559,7 @@ class HyMemoryClient:
         *,
         agent_id: str = "default_agent",
         rebuild: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """build_entity_store 的异步实现。"""
         from .models.memory import MemoryLayer, MemoryStatus
         from .pipelines._retrieval.entity_store import index_memory_entities
@@ -2628,8 +2630,8 @@ class HyMemoryClient:
         src_user_id: str,
         dst_user_id: str,
         *,
-        agent_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        agent_id: str | None = None,
+    ) -> dict[str, Any]:
         """
         克隆用户记忆（异步）。
 
@@ -2699,13 +2701,13 @@ class HyMemoryClient:
 
             # 3. 深拷贝：第一遍——生成新 node_id，建完整映射表
             from .models.memory import MemoryNode
-            id_map: Dict[str, str] = {}  # old_node_id → new_node_id
+            id_map: dict[str, str] = {}  # old_node_id → new_node_id
 
             for src_node in src_nodes:
                 id_map[src_node.node_id] = str(uuid.uuid4())
 
             # 第二遍——用完整的 id_map 做深拷贝 + 指针重映射
-            new_nodes: List = []
+            new_nodes: list = []
             for src_node in src_nodes:
                 new_id = id_map[src_node.node_id]
 
@@ -2816,8 +2818,8 @@ class HyMemoryClient:
         self,
         src_user_id: str,
         dst_user_id: str,
-        agent_id: Optional[str],
-        id_map: Dict[str, str],
+        agent_id: str | None,
+        id_map: dict[str, str],
     ) -> None:
         """
         从源用户的 Graph 深拷贝到目标用户。
@@ -3024,7 +3026,7 @@ class HyMemoryClient:
         src_user_id: str,
         dst_user_id: str,
         clone_request_id: str,
-        id_map: Dict[str, str],
+        id_map: dict[str, str],
     ) -> None:
         """
         复制源用户的 memory_operations 到目标用户。
@@ -3100,7 +3102,7 @@ class HyMemoryClient:
     # ================================================================
 
     @_ensure_internal_loop
-    async def async_history(self, memory_id: str) -> List[Dict[str, Any]]:
+    async def async_history(self, memory_id: str) -> list[dict[str, Any]]:
         """查询某条记忆的变更历史（异步）"""
         if self._history_store is None:
             return []
@@ -3110,9 +3112,9 @@ class HyMemoryClient:
     async def async_get_recent_history(
         self,
         user_id: str = "",
-        agent_ids: Optional[List[str]] = None,
+        agent_ids: list[str] | None = None,
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         查询最近的操作历史（异步）。
 

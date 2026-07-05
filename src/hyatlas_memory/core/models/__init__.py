@@ -6,91 +6,91 @@ Agent Memory V2 - 数据模型
 
 # === V2 核心模型 ===
 from .memory import (
-    # 枚举类型
-    MemoryLayer,
+    ActivatedSchema,
     ContentType,
-    MemoryStatus,
-    SourceType,
-    UpdateType,
-    SchemaStatus,
-    TriggerType,
-    IntentionPriority,
-    MetaCognitionTag,
     GapType,
-    # 核心节点
-    MemoryNode,
-    VersionedFact,
-    SchemaNode,
     IntentionNode,
+    IntentionPriority,
     # 辅助模型
     KnowledgeGap,
     LifeStage,
-    TemporalEvent,
-    UserTimeline,
-    # 输出协议
-    ProfileSummary,
-    MemoryIndexEntry,
-    MemorySummaryEntry,
-    MetaCognitionReport,
-    TriggeredIntention,
-    ActivatedSchema,
-    TemporalContext,
     MemoryContextPackage,
     # V1 兼容
     MemoryEntry,
+    MemoryIndexEntry,
+    # 枚举类型
+    MemoryLayer,
     MemoryMetadata,
+    # 核心节点
+    MemoryNode,
     MemoryScore,
+    MemoryStatus,
+    MemorySummaryEntry,
+    MetaCognitionReport,
+    MetaCognitionTag,
+    # 输出协议
+    ProfileSummary,
+    SchemaNode,
+    SchemaStatus,
+    SourceType,
+    TemporalContext,
+    TemporalEvent,
+    TriggeredIntention,
+    TriggerType,
+    UpdateType,
+    UserTimeline,
+    VersionedFact,
 )
 
 # === 请求/响应模型 ===
 from .requests import (
-    # 枚举
-    DeleteScope,
-    MemoryInputType,
-    TaskStatus,
-    AgentProcessMode,
-    # QA 对
-    QAPair,
     # 添加记忆
     AddRequest,
     AddResponse,
+    AgentProcessMode,
     AsyncAddResponse,
     AsyncTask,
-    TaskStatusRequest,
-    TaskStatusResponse,
-    # 召回记忆
-    RecallRequest,
-    RecallResponse,
-    # 更新记忆
-    UpdateRequest,
-    UpdateResponse,
+    BatchDeleteRequest,
+    BatchDeleteResponse,
+    CancelTaskRequest,
+    CancelTaskResponse,
     # 删除记忆
     DeleteRequest,
     DeleteResponse,
-    BatchDeleteRequest,
-    BatchDeleteResponse,
+    # 枚举
+    DeleteScope,
+    GetProfileRequest,
+    GetProfileResponse,
     # 获取/列出记忆
     GetRequest,
     GetResponse,
+    GetTaskRequest,
+    GetTaskResponse,
     ListRequest,
     ListResponse,
-    # 用户画像
-    UserProfile,
-    GetProfileRequest,
-    GetProfileResponse,
-    UpdateProfileRequest,
-    UpdateProfileResponse,
+    ListTasksRequest,
+    ListTasksResponse,
+    MemoryInputType,
+    # QA 对
+    QAPair,
     RebuildProfileRequest,
     RebuildProfileResponse,
+    # 召回记忆
+    RecallRequest,
+    RecallResponse,
     # 异步任务管理
     SubmitTaskRequest,
     SubmitTaskResponse,
-    GetTaskRequest,
-    GetTaskResponse,
-    CancelTaskRequest,
-    CancelTaskResponse,
-    ListTasksRequest,
-    ListTasksResponse,
+    TaskStatus,
+    TaskStatusRequest,
+    TaskStatusResponse,
+    UpdateProfileRequest,
+    UpdateProfileResponse,
+    # 更新记忆
+    UpdateRequest,
+    UpdateResponse,
+    # 用户画像
+    UserProfile,
 )
 
 __all__ = [

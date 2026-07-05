@@ -165,6 +165,32 @@ ignore = [
     "SIM105",  # try/except/pass is intentional for process management
     "SIM115",  # long-lived lock/log files can't use context managers
 ]
+# Forked hy-memory SDK — upstream style (Chinese comments, single-letter
+# variable names, whitespace on blank lines) is inherited, not ours to rewrite.
+"src/hyatlas_memory/core/**" = [
+    "I001",  # import sorting (upstream groups by Chinese comment sections)
+    "F401",  # __init__.py re-exports flagged as "unused" — intentional API surface
+    "F841",  # unused locals from upstream defensive patterns
+    "W293",  # whitespace on blank lines (upstream editor behavior)
+    "N806",  # non-lowercase variable names (upstream uses Chinese pinyin)
+    "N803",  # non-lowercase argument names
+    "N801",  # non-Pascal class names (upstream uses Chinese pinyin)
+    "N814",  # camelcase imported as lowercase
+    "E741",  # ambiguous variable names (single-letter upstream style)
+    "E701",  # multi-statement on one line (upstream compact style)
+    "E702",  # multiple statements on one line (semicolon)
+    "B905",  # zip() without explicit strict (upstream predates 3.10+)
+    "B007",  # unused loop variable (upstream defensive style)
+    "B904",  # raise from (upstream predates this convention)
+    "B027",  # empty optional method in ABC (upstream pattern)
+    "C416",  # unnecessary comprehension (upstream style)
+    "C403",  # unnecessary list comprehension inside set()
+    "F541",  # f-string without placeholders (upstream style)
+    "SIM105",  # try/except/pass (upstream defensive pattern)
+    "SIM102",  # collapsible-if (upstream style)
+    "SIM108",  # if-else vs ternary (upstream style)
+    "UP007",  # Union[] vs | (upstream predates 3.10+ syntax)
+]
 "src/hyatlas_memory/cli.py" = [
     "SIM115",  # long-lived log files can't use context managers
 ]

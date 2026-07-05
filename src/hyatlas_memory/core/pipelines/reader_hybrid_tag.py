@@ -16,28 +16,28 @@ Backend 能力探测：
     → init 时 warning 一次；read 阶段路 B 返回空，RRF 退化为「向量 + BM25」两路。
 """
 
-from typing import Any, Dict, List, Optional
-from datetime import datetime
 import asyncio
 import logging
+from datetime import datetime
+from typing import Any
 
-from .base import ReadPipeline, ReadRequest, ReadResponse, PipelineContext
 from ..config import MemoryConfig
 from ..core.embed_service import EmbedService
-from ..models.memory import MemoryNode, MemoryLayer
 from ..data.vector_store import create_vector_store
 from ..data.vector_store_base import VectorStoreBase
+from ..models.memory import MemoryLayer, MemoryNode
 from ..utils.tracer import PipelineTracer, create_tracer
+from ._retrieval import bm25 as rbm25
 from ._retrieval import config as rconf
 from ._retrieval import intent as rintent
-from ._retrieval import bm25 as rbm25
 from ._retrieval import rrf as rrrf
 from ._retrieval import tag_index as rtag
 from ._retrieval.evolution import expand_evolution_chains
 from ._retrieval.intention import recall_intentions
-from ._retrieval.strength import apply_strength_to_normal
 from ._retrieval.lemmatize import lemmatize_for_bm25
+from ._retrieval.strength import apply_strength_to_normal
 from ._retrieval.trace import ReadTraceLogger
+from .base import PipelineContext, ReadPipeline, ReadRequest, ReadResponse
 
 logger = logging.getLogger(__name__)
 
@@ -54,19 +54,19 @@ class HybridTagReadPipeline(ReadPipeline):
     def __init__(
         self,
         config: MemoryConfig,
-        embed_service: Optional[EmbedService] = None,
-        vector_store: Optional[VectorStoreBase] = None,
+        embed_service: EmbedService | None = None,
+        vector_store: VectorStoreBase | None = None,
         cache: Any = None,
     ):
         self.config = config
         self._embed_service = embed_service
         self._external_vector_store = vector_store
         self._cache = cache
-        self._vector_store: Optional[VectorStoreBase] = None
+        self._vector_store: VectorStoreBase | None = None
         self._vector_store_initialized = False
         self._initialized = False
         # 能力探测延到 initialize 里做，避免构造时 vector_store 还没就绪
-        self._tag_backend_supported: Optional[bool] = None
+        self._tag_backend_supported: bool | None = None
 
     @property
     def embed_service(self) -> EmbedService:
@@ -109,8 +109,8 @@ class HybridTagReadPipeline(ReadPipeline):
     async def read(
         self,
         request: ReadRequest,
-        ctx: Optional[PipelineContext] = None,
-        tracer: Optional[PipelineTracer] = None,
+        ctx: PipelineContext | None = None,
+        tracer: PipelineTracer | None = None,
     ) -> ReadResponse:
         start_time = datetime.now()
         response = ReadResponse()
@@ -134,11 +134,11 @@ class HybridTagReadPipeline(ReadPipeline):
         )
 
         # 预声明以便异常分支下 summary 安全
-        vec_hits: List[Dict[str, Any]] = []
-        tag_hits: List[Dict[str, Any]] = []
-        bm25_hits: List[Dict[str, Any]] = []
-        profile_hits: List[Dict[str, Any]] = []
-        hit_tags: List[str] = []
+        vec_hits: list[dict[str, Any]] = []
+        tag_hits: list[dict[str, Any]] = []
+        bm25_hits: list[dict[str, Any]] = []
+        profile_hits: list[dict[str, Any]] = []
+        hit_tags: list[str] = []
 
         try:
             if not request.query:
@@ -192,8 +192,8 @@ class HybridTagReadPipeline(ReadPipeline):
             )
 
             # 4. keyword 提取 & 并行 batch embed（只在 backend 支持时做）
-            keywords: List[str] = []
-            kw_vecs: List[List[float]] = []
+            keywords: list[str] = []
+            kw_vecs: list[list[float]] = []
             if self._tag_backend_supported:
                 keywords = rintent.extract_keywords(request.query)
                 if keywords:
@@ -350,7 +350,7 @@ class HybridTagReadPipeline(ReadPipeline):
             )
 
             # 9b. Proactive 路：召回未过期 intention（L7），过期惰性转 L2_FACT。
-            intention_hits: List[Dict[str, Any]] = []
+            intention_hits: list[dict[str, Any]] = []
             if request.intention_limit > 0:
                 intention_hits = await recall_intentions(
                     vector_store,
@@ -362,7 +362,7 @@ class HybridTagReadPipeline(ReadPipeline):
 
             # 10. 填充响应
             for item in final_results + intention_hits:
-                node: Optional[MemoryNode] = item.get("node")
+                node: MemoryNode | None = item.get("node")
                 node_id = item.get("node_id", "")
                 content = node.content if node else ""
                 is_evolved = bool(item.get("is_evolved"))
@@ -467,9 +467,9 @@ class HybridTagReadPipeline(ReadPipeline):
 
     async def _find_matching_tags(
         self,
-        keyword_embeddings: List[List[float]],
+        keyword_embeddings: list[list[float]],
         user_id: str,
-    ) -> List[str]:
+    ) -> list[str]:
         """通过 tag_index 查找与 keyword embedding 语义接近的 tag 集合。"""
         if not keyword_embeddings or not user_id or not self._tag_backend_supported:
             return []
@@ -484,12 +484,12 @@ class HybridTagReadPipeline(ReadPipeline):
     async def _recall_tag_filtered(
         self,
         vector_store,
-        query_embedding: List[float],
-        isolation_params: Dict[str, Any],
-        layers_filter: Optional[List[MemoryLayer]],
-        hit_tags: List[str],
+        query_embedding: list[float],
+        isolation_params: dict[str, Any],
+        layers_filter: list[MemoryLayer] | None,
+        hit_tags: list[str],
         pool_size: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         路 B 召回：带 tags MatchAny filter 的向量召回。
         搜索 layer = 所有非 profile 层（与路 A 一致），再叠加 tag 过滤。
@@ -513,13 +513,13 @@ class HybridTagReadPipeline(ReadPipeline):
         )
 
     @staticmethod
-    def _merge_dedup(*hit_lists: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _merge_dedup(*hit_lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         把多路向量召回结果合并去重（按 node_id）。保留每路中 node_id 第一次出现的
         hit（含 node 对象，供 BM25 取 content 用）。
         """
         seen = set()
-        merged: List[Dict[str, Any]] = []
+        merged: list[dict[str, Any]] = []
         for lst in hit_lists:
             for h in lst or []:
                 nid = h.get("node_id")
@@ -533,7 +533,7 @@ class HybridTagReadPipeline(ReadPipeline):
     # 通用 helpers（向量召回 / 隔离 / BM25 / profile 合并）
     # ==================================================================
 
-    def _parse_layers(self, request: ReadRequest) -> Optional[List[MemoryLayer]]:
+    def _parse_layers(self, request: ReadRequest) -> list[MemoryLayer] | None:
         if not request.layers:
             return None
         try:
@@ -541,7 +541,7 @@ class HybridTagReadPipeline(ReadPipeline):
         except Exception:
             return None
 
-    def _build_isolation_params(self, request: ReadRequest) -> Dict[str, Any]:
+    def _build_isolation_params(self, request: ReadRequest) -> dict[str, Any]:
         """隔离参数构建，额外返回 error_msg 字段表示参数非法。"""
         user_ids = request.user_ids if request.user_ids else ([request.user_id] if request.user_id else [])
         agent_ids = request.agent_ids
@@ -594,11 +594,11 @@ class HybridTagReadPipeline(ReadPipeline):
     async def _recall_main(
         self,
         vector_store: VectorStoreBase,
-        query_embedding: List[float],
-        isolation_params: Dict[str, Any],
-        layers_filter: Optional[List[MemoryLayer]],
+        query_embedding: list[float],
+        isolation_params: dict[str, Any],
+        layers_filter: list[MemoryLayer] | None,
         pool_size: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """路 A：主向量召回。搜索全 layer（减去 profile layer）。"""
         if layers_filter is not None:
             layers = [l for l in layers_filter if l not in _PROFILE_LAYERS]
@@ -620,12 +620,12 @@ class HybridTagReadPipeline(ReadPipeline):
     async def _recall_profile(
         self,
         vector_store: VectorStoreBase,
-        query_embedding: List[float],
-        isolation_params: Dict[str, Any],
-        layers_filter: Optional[List[MemoryLayer]],
+        query_embedding: list[float],
+        isolation_params: dict[str, Any],
+        layers_filter: list[MemoryLayer] | None,
         profile_min_score: float,
         profile_limit: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Profile 路：L0_BASIC_INFO + L6_SCHEMA，按 profile_min_score 过滤。"""
         if layers_filter is not None and not any(l in layers_filter for l in _PROFILE_LAYERS):
             return []
@@ -652,8 +652,8 @@ class HybridTagReadPipeline(ReadPipeline):
     @staticmethod
     def _run_bm25(
         query: str,
-        vec_hits: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+        vec_hits: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         """对向量召回池跑 BM25-lite，返回按 BM25 分数降序的 hits。"""
         if not vec_hits:
             return []
@@ -661,16 +661,16 @@ class HybridTagReadPipeline(ReadPipeline):
         q_terms = rbm25.tokenize(query_lemmatized or query)
         if not q_terms:
             return []
-        contents: List[str] = []
+        contents: list[str] = []
         for h in vec_hits:
-            node: Optional[MemoryNode] = h.get("node")
+            node: MemoryNode | None = h.get("node")
             raw = node.content if node else ""
             contents.append(lemmatize_for_bm25(raw) if raw else "")
         raw = rbm25.compute_bm25_scores(q_terms, contents)
         max_s = max(raw) if raw else 0.0
         if max_s <= 0:
             return []
-        scored: List[Dict[str, Any]] = []
+        scored: list[dict[str, Any]] = []
         for i, h in enumerate(vec_hits):
             s = raw[i] / max_s
             if s <= 0:
@@ -685,13 +685,13 @@ class HybridTagReadPipeline(ReadPipeline):
 
     @staticmethod
     def _merge_with_profile(
-        fused: List[Dict[str, Any]],
-        profile_hits: List[Dict[str, Any]],
+        fused: list[dict[str, Any]],
+        profile_hits: list[dict[str, Any]],
         profile_limit: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """把 profile 路结果插到 fused 前面（按 node_id 去重）。"""
         seen = set()
-        merged: List[Dict[str, Any]] = []
+        merged: list[dict[str, Any]] = []
         for p in profile_hits:
             nid = p.get("node_id")
             if not nid or nid in seen:

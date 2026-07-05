@@ -17,13 +17,12 @@ Usage:
 """
 
 import asyncio
-import json
 import logging
 import threading
 import time
 from collections import deque
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +78,7 @@ class MetricsCollector:
         # ── 当前分钟桶（待 flush） ──
         self._current_minute = self._get_minute_key(datetime.now())
         self._bucket = self._empty_bucket()
-        self._pending_flush: List[tuple] = []  # [(minute_key, bucket_data), ...]
+        self._pending_flush: list[tuple] = []  # [(minute_key, bucket_data), ...]
 
         # ── 滑动窗口（最近 60s 完成数） ──
         self._sys1_completions: deque = deque()
@@ -112,7 +111,7 @@ class MetricsCollector:
             self._active_sys1 += 1
             self._bucket["sys1_started"] += 1
 
-    def sys1_end(self, timing: Dict[str, float], success: bool = True) -> None:
+    def sys1_end(self, timing: dict[str, float], success: bool = True) -> None:
         """S1 请求结束"""
         now = time.time()
         with self._mu:
@@ -147,7 +146,7 @@ class MetricsCollector:
             self._queued_sys2 = max(0, self._queued_sys2 - 1)
             self._bucket["sys2_started"] += 1
 
-    def sys2_end(self, timing: Dict[str, float], success: bool = True) -> None:
+    def sys2_end(self, timing: dict[str, float], success: bool = True) -> None:
         """S2 任务结束"""
         now = time.time()
         with self._mu:
@@ -186,7 +185,7 @@ class MetricsCollector:
     # 查询 API
     # ================================================================
 
-    async def get_snapshot(self, minutes: int = 5) -> Dict[str, Any]:
+    async def get_snapshot(self, minutes: int = 5) -> dict[str, Any]:
         """
         获取最近 N 分钟的聚合指标。
 
@@ -197,7 +196,7 @@ class MetricsCollector:
         end_ts = now.strftime("%Y-%m-%dT%H:%M")
 
         # 从 SQLite 读取历史
-        history_buckets: List[Dict] = []
+        history_buckets: list[dict] = []
         if self._cache and hasattr(self._cache, "load_metrics_range"):
             try:
                 history_buckets = await self._cache.load_metrics_range(start_ts, end_ts)
@@ -304,7 +303,7 @@ class MetricsCollector:
 
         with self._mu:
             # 收集所有待写入的 buckets
-            to_flush: List[tuple] = list(self._pending_flush)
+            to_flush: list[tuple] = list(self._pending_flush)
             self._pending_flush.clear()
 
             # 当前桶也 flush（如果非空）
@@ -331,7 +330,7 @@ class MetricsCollector:
         return dt.strftime("%Y-%m-%dT%H:%M")
 
     @staticmethod
-    def _empty_bucket() -> Dict[str, Any]:
+    def _empty_bucket() -> dict[str, Any]:
         return {
             "sys1_started": 0,
             "sys1_completed": 0,
@@ -348,7 +347,7 @@ class MetricsCollector:
         }
 
     @staticmethod
-    def _is_bucket_empty(bucket: Dict) -> bool:
+    def _is_bucket_empty(bucket: dict) -> bool:
         return (
             bucket["sys1_started"] == 0
             and bucket["sys2_started"] == 0
@@ -367,7 +366,7 @@ class MetricsCollector:
             self._bucket = self._empty_bucket()
 
     @staticmethod
-    def _aggregate_buckets(buckets: List[Dict]) -> Dict[str, Any]:
+    def _aggregate_buckets(buckets: list[dict]) -> dict[str, Any]:
         """聚合多个 bucket 的数据"""
         agg = MetricsCollector._empty_bucket()
         for b in buckets:

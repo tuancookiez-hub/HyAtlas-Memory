@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ...models.memory import MemoryLayer, MemoryStatus
 from ...utils.log_setup import get_request_id
@@ -39,7 +39,7 @@ class ReconcileHybridRetriever:
     对单条 query 文本做 hybrid 召回：先向量扩池，再在池内 BM25 + 语义融合。
     """
 
-    def __init__(self, config: Optional[ReconcileRetrievalConfig] = None):
+    def __init__(self, config: ReconcileRetrievalConfig | None = None):
         self._cfg = config or ReconcileRetrievalConfig()
 
     @property
@@ -51,12 +51,12 @@ class ReconcileHybridRetriever:
         *,
         query_text: str,
         query_lemmatized: str,
-        q_terms: List[str],
+        q_terms: list[str],
         pool_size: int,
-        raw_bm25: List[float],
-        sem_scores: List[float],
-        bm25_norms: List[float],
-        fused_all: List[float],
+        raw_bm25: list[float],
+        sem_scores: list[float],
+        bm25_norms: list[float],
+        fused_all: list[float],
         kept: int,
     ) -> None:
         """BM25 全零或融合后候选被滤空时打 WARNING/ERROR，便于排查 token 不匹配等问题。"""
@@ -118,13 +118,13 @@ class ReconcileHybridRetriever:
     async def search_candidates(
         self,
         query_text: str,
-        query_embedding: List[float],
+        query_embedding: list[float],
         *,
-        vector_store: "VectorStoreBase",
+        vector_store: VectorStoreBase,
         user_id: str,
-        agent_id: Optional[str],
-        layers: List[MemoryLayer],
-    ) -> List[Dict[str, Any]]:
+        agent_id: str | None,
+        layers: list[MemoryLayer],
+    ) -> list[dict[str, Any]]:
         """
         Returns:
             [{"node": MemoryNode, "score": float, "_sem": float, "_bm25": float}, ...]
@@ -151,8 +151,8 @@ class ReconcileHybridRetriever:
             return []
 
         nodes = []
-        sem_scores: List[float] = []
-        contents: List[str] = []
+        sem_scores: list[float] = []
+        contents: list[str] = []
         for r in vec_results:
             node = r.get("node")
             if node is None:
@@ -173,9 +173,9 @@ class ReconcileHybridRetriever:
         raw_bm25 = rbm25.compute_bm25_scores(q_terms, contents_lemmatized)
         midpoint, steepness = get_bm25_params(query_text, query_lemmatized)
 
-        bm25_norms: List[float] = []
-        fused_all: List[float] = []
-        fused_hits: List[Dict[str, Any]] = []
+        bm25_norms: list[float] = []
+        fused_all: list[float] = []
+        fused_hits: list[dict[str, Any]] = []
         for i, node in enumerate(nodes):
             sem = sem_scores[i]
             bm25_norm = normalize_bm25(raw_bm25[i], midpoint, steepness)

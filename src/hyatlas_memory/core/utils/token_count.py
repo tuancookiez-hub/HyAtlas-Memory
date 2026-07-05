@@ -7,7 +7,6 @@ LLM 的 tokenizer 完全对齐——cl100k_base 对中英文都比 len() 准得�
 """
 
 import logging
-from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +41,7 @@ def count_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def count_messages_tokens(messages: List["object"]) -> int:
+def count_messages_tokens(messages: list["object"]) -> int:
     """
     对 messages 列表计 input token 数。
 
@@ -51,7 +50,7 @@ def count_messages_tokens(messages: List["object"]) -> int:
     """
     if not messages:
         return 0
-    parts: List[str] = []
+    parts: list[str] = []
     for m in messages:
         role = getattr(m, "role", None) if not isinstance(m, dict) else m.get("role")
         content = getattr(m, "content", None) if not isinstance(m, dict) else m.get("content")
@@ -60,7 +59,7 @@ def count_messages_tokens(messages: List["object"]) -> int:
     return count_tokens("\n".join(parts))
 
 
-def count_input_tokens(content: Optional[str], messages: Optional[List["object"]]) -> int:
+def count_input_tokens(content: str | None, messages: list["object"] | None) -> int:
     """add 接口统一入口：有 messages 则按 messages 计，否则按 content 计。"""
     if messages:
         return count_messages_tokens(messages)

@@ -15,23 +15,23 @@ Legacy Read Pipeline.
 演化链回溯。L4_IDENTITY 按普通记忆走 normal 路（不算 profile）。
 """
 
-from typing import Any, Optional, List
-from datetime import datetime
 import logging
 import os
+from datetime import datetime
+from typing import Any
 
-from .base import ReadPipeline, ReadRequest, ReadResponse, PipelineContext
 from ..config import MemoryConfig
 from ..core.embed_service import EmbedService
-from ..models.memory import MemoryNode, MemoryLayer
+from ..data.graph_store_base import GraphStoreBase
 from ..data.vector_store import create_vector_store
 from ..data.vector_store_base import VectorStoreBase
-from ..data.graph_store_base import GraphStoreBase
+from ..models.memory import MemoryLayer, MemoryNode
 from ..utils.tracer import PipelineTracer, create_tracer
 from ._retrieval.evolution import expand_evolution_chains
 from ._retrieval.intention import recall_intentions
 from ._retrieval.strength import apply_strength_to_normal
 from ._retrieval.trace import ReadTraceLogger
+from .base import PipelineContext, ReadPipeline, ReadRequest, ReadResponse
 
 logger = logging.getLogger(__name__)
 
@@ -117,9 +117,9 @@ class LegacyReadPipeline(ReadPipeline):
     def __init__(
         self,
         config: MemoryConfig,
-        embed_service: Optional[EmbedService] = None,
-        vector_store: Optional[VectorStoreBase] = None,
-        graph_store: Optional[GraphStoreBase] = None,
+        embed_service: EmbedService | None = None,
+        vector_store: VectorStoreBase | None = None,
+        graph_store: GraphStoreBase | None = None,
         cache: Any = None,
     ):
         self.config = config
@@ -127,7 +127,7 @@ class LegacyReadPipeline(ReadPipeline):
         self._external_vector_store = vector_store
         self._graph_store = graph_store
         self._cache = cache
-        self._vector_store: Optional[VectorStoreBase] = None
+        self._vector_store: VectorStoreBase | None = None
         self._vector_store_initialized = False
         self._initialized = False
 
@@ -159,8 +159,8 @@ class LegacyReadPipeline(ReadPipeline):
     async def read(
         self,
         request: ReadRequest,
-        ctx: Optional[PipelineContext] = None,
-        tracer: Optional[PipelineTracer] = None,
+        ctx: PipelineContext | None = None,
+        tracer: PipelineTracer | None = None,
     ) -> ReadResponse:
         start_time = datetime.now()
         response = ReadResponse()
@@ -240,7 +240,7 @@ class LegacyReadPipeline(ReadPipeline):
             search_agent_ids = None
             # Graph 专用：当跨 agent 搜索时，Graph 不能用精确 isolation_key，
             # 而要用 user_id 前缀匹配。graph_search_user_ids 为非空时表示 Graph 走跨 agent 模式。
-            graph_search_user_ids: Optional[List[str]] = None
+            graph_search_user_ids: list[str] | None = None
 
             if not agent_ids and not session_ids:
                 if request.agent_id:

@@ -5,23 +5,17 @@ Agent Memory V2 - 请求/响应模型
 适配 V2 数据模型 (MemoryNode, MemoryContextPackage 等)。
 """
 
-from typing import Optional, Dict, Any, List, Union
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-import uuid
+from typing import Any
 
 from .memory import (
+    MemoryContextPackage,
     MemoryLayer,
     MemoryNode,
-    MemoryEntry,
-    MemoryContextPackage,
-    MemoryScore,
-    MemoryMetadata,
-    ContentType,
-    SourceType,
 )
-
 
 # ============================================================
 # 枚举
@@ -66,11 +60,11 @@ class QAPair:
     question: str = ""
     answer: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {"question": self.question, "answer": self.answer}
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "QAPair":
+    def from_dict(cls, data: dict[str, Any]) -> "QAPair":
         return cls(question=data.get("question", ""), answer=data.get("answer", ""))
 
     def to_content(self) -> str:
@@ -94,23 +88,23 @@ class AddRequest:
 
     # 输入内容
     input_type: MemoryInputType = MemoryInputType.TEXT
-    content: Optional[str] = None
-    qa_pair: Optional[QAPair] = None
+    content: str | None = None
+    qa_pair: QAPair | None = None
 
     # 记忆层
-    layer: Optional[Union[MemoryLayer, str]] = None
+    layer: MemoryLayer | str | None = None
 
     # 时间
-    event_time: Optional[datetime] = None
-    ttl_seconds: Optional[int] = None
+    event_time: datetime | None = None
+    ttl_seconds: int | None = None
 
     # 权重
     importance: float = 1.0
 
     # 扩展
-    tags: List[str] = field(default_factory=list)
-    custom: Dict[str, Any] = field(default_factory=dict)
-    source: Optional[str] = None
+    tags: list[str] = field(default_factory=list)
+    custom: dict[str, Any] = field(default_factory=dict)
+    source: str | None = None
 
     # Agent 处理选项
     agent_mode: AgentProcessMode = AgentProcessMode.FULL
@@ -149,7 +143,7 @@ class AddRequest:
             return self.qa_pair.to_content() if self.qa_pair else ""
         return ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         result = {
             "uid": self.uid,
             "agent_id": self.agent_id,
@@ -173,19 +167,19 @@ class AddResponse:
     """添加记忆响应（同步模式）"""
     success: bool = False
     memory_id: str = ""
-    node_ids: List[str] = field(default_factory=list)
-    layer: Optional[MemoryLayer] = None
+    node_ids: list[str] = field(default_factory=list)
+    layer: MemoryLayer | None = None
     message: str = ""
 
     # System 1 提取的额外节点
-    extracted_fact_ids: List[str] = field(default_factory=list)
-    extracted_intention_ids: List[str] = field(default_factory=list)
+    extracted_fact_ids: list[str] = field(default_factory=list)
+    extracted_intention_ids: list[str] = field(default_factory=list)
 
     # V1 兼容
-    extracted_ids: List[str] = field(default_factory=list)
-    abstract_key_ids: List[str] = field(default_factory=list)
+    extracted_ids: list[str] = field(default_factory=list)
+    abstract_key_ids: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "memory_id": self.memory_id,
@@ -204,9 +198,9 @@ class AsyncAddResponse:
     task_id: str = ""
     status: TaskStatus = TaskStatus.PENDING
     message: str = ""
-    estimated_time: Optional[int] = None
+    estimated_time: int | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "task_id": self.task_id,
@@ -230,13 +224,13 @@ class TaskStatusResponse:
     status: TaskStatus = TaskStatus.PENDING
     message: str = ""
     progress: int = 0
-    result: Optional[AddResponse] = None
-    error: Optional[str] = None
-    created_at: Optional[datetime] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    result: AddResponse | None = None
+    error: str | None = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "task_id": self.task_id,
@@ -257,14 +251,14 @@ class AsyncTask:
     task_id: str = ""
     uid: str = ""
     agent_id: str = ""
-    request: Optional[AddRequest] = None
+    request: AddRequest | None = None
     status: TaskStatus = TaskStatus.PENDING
     progress: int = 0
-    result: Optional[AddResponse] = None
-    error: Optional[str] = None
+    result: AddResponse | None = None
+    error: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
     @classmethod
     def create(cls, request: AddRequest) -> "AsyncTask":
@@ -294,22 +288,22 @@ class RecallRequest:
     uid: str = ""
 
     # 会话信息
-    session_id: Optional[str] = None
-    agent_id: Optional[str] = None
-    agent_ids: List[str] = field(default_factory=list)
-    layers: List[MemoryLayer] = field(default_factory=list)
+    session_id: str | None = None
+    agent_id: str | None = None
+    agent_ids: list[str] = field(default_factory=list)
+    layers: list[MemoryLayer] = field(default_factory=list)
 
     # 数量限制
     limit: int = 10
-    limit_per_layer: Optional[int] = None
+    limit_per_layer: int | None = None
 
     # 跨场景
     cross_scene: bool = False
 
     # 过滤条件
-    tags: List[str] = field(default_factory=list)
-    time_range_start: Optional[datetime] = None
-    time_range_end: Optional[datetime] = None
+    tags: list[str] = field(default_factory=list)
+    time_range_start: datetime | None = None
+    time_range_end: datetime | None = None
     min_importance: float = 0.0
     min_confidence: float = 0.0
 
@@ -340,13 +334,13 @@ class RecallResponse:
     V2: 核心返回 MemoryContextPackage。memories 保留用于 V1 兼容。
     """
     success: bool = False
-    context_package: Optional[MemoryContextPackage] = None
-    memories: List[MemoryNode] = field(default_factory=list)
+    context_package: MemoryContextPackage | None = None
+    memories: list[MemoryNode] = field(default_factory=list)
     total_count: int = 0
     message: str = ""
-    by_category: Dict[str, List[MemoryNode]] = field(default_factory=dict)
+    by_category: dict[str, list[MemoryNode]] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         result = {
             "success": self.success,
             "total_count": self.total_count,
@@ -376,10 +370,10 @@ class GetRequest:
 class GetResponse:
     """获取单条记忆响应"""
     success: bool = False
-    memory: Optional[MemoryNode] = None
+    memory: MemoryNode | None = None
     message: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "memory": self.memory.to_dict() if self.memory else None,
@@ -395,8 +389,8 @@ class GetResponse:
 class ListRequest:
     """列出记忆请求"""
     uid: str = ""
-    agent_id: Optional[str] = None
-    layers: List[MemoryLayer] = field(default_factory=list)
+    agent_id: str | None = None
+    layers: list[MemoryLayer] = field(default_factory=list)
     offset: int = 0
     limit: int = 100
     order_by: str = "created_at"
@@ -407,13 +401,13 @@ class ListRequest:
 class ListResponse:
     """列出记忆响应"""
     success: bool = False
-    memories: List[MemoryNode] = field(default_factory=list)
+    memories: list[MemoryNode] = field(default_factory=list)
     total_count: int = 0
     offset: int = 0
     limit: int = 100
     message: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "memories": [m.to_dict() for m in self.memories],
@@ -432,10 +426,10 @@ class ListResponse:
 class UpdateRequest:
     """更新记忆请求"""
     memory_id: str = ""
-    content: Optional[str] = None
-    importance: Optional[float] = None
-    tags: Optional[List[str]] = None
-    custom: Optional[Dict[str, Any]] = None
+    content: str | None = None
+    importance: float | None = None
+    tags: list[str] | None = None
+    custom: dict[str, Any] | None = None
     conflict_strategy: str = "update"
 
 
@@ -447,7 +441,7 @@ class UpdateResponse:
     message: str = ""
     conflict_resolved: bool = False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "memory_id": self.memory_id,
@@ -473,7 +467,7 @@ class DeleteResponse:
     deleted_count: int = 0
     message: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "deleted_count": self.deleted_count,
@@ -485,11 +479,11 @@ class DeleteResponse:
 class BatchDeleteRequest:
     """批量删除记忆请求"""
     scope: DeleteScope = DeleteScope.MEMORY
-    memory_ids: List[str] = field(default_factory=list)
-    uid: Optional[str] = None
-    agent_id: Optional[str] = None
-    layers: List[MemoryLayer] = field(default_factory=list)
-    before_time: Optional[datetime] = None
+    memory_ids: list[str] = field(default_factory=list)
+    uid: str | None = None
+    agent_id: str | None = None
+    layers: list[MemoryLayer] = field(default_factory=list)
+    before_time: datetime | None = None
     confirm: bool = False
 
 
@@ -500,7 +494,7 @@ class BatchDeleteResponse:
     deleted_count: int = 0
     message: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "deleted_count": self.deleted_count,
@@ -516,21 +510,21 @@ class BatchDeleteResponse:
 class UserProfile:
     """用户画像"""
     uid: str = ""
-    basic_info: Dict[str, Any] = field(default_factory=dict)
-    preferences: Dict[str, Any] = field(default_factory=dict)
-    relationships: List[Dict[str, Any]] = field(default_factory=list)
-    tags: List[str] = field(default_factory=list)
+    basic_info: dict[str, Any] = field(default_factory=dict)
+    preferences: dict[str, Any] = field(default_factory=dict)
+    relationships: list[dict[str, Any]] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     version: int = 1
 
     # V2 新增字段
-    schemas: List[str] = field(default_factory=list)
-    gotchas: List[str] = field(default_factory=list)
+    schemas: list[str] = field(default_factory=list)
+    gotchas: list[str] = field(default_factory=list)
     personality: str = ""
-    hypotheses: Dict[str, float] = field(default_factory=dict)
+    hypotheses: dict[str, float] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "uid": self.uid,
             "basic_info": self.basic_info,
@@ -558,10 +552,10 @@ class GetProfileRequest:
 class GetProfileResponse:
     """获取用户画像响应"""
     success: bool = False
-    profile: Optional[UserProfile] = None
+    profile: UserProfile | None = None
     message: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "profile": self.profile.to_dict() if self.profile else None,
@@ -573,7 +567,7 @@ class GetProfileResponse:
 class UpdateProfileRequest:
     """更新用户画像请求"""
     uid: str = ""
-    updates: Dict[str, Any] = field(default_factory=dict)
+    updates: dict[str, Any] = field(default_factory=dict)
     merge: bool = True
 
 
@@ -581,10 +575,10 @@ class UpdateProfileRequest:
 class UpdateProfileResponse:
     """更新用户画像响应"""
     success: bool = False
-    profile: Optional[UserProfile] = None
+    profile: UserProfile | None = None
     message: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "profile": self.profile.to_dict() if self.profile else None,
@@ -603,11 +597,11 @@ class RebuildProfileRequest:
 class RebuildProfileResponse:
     """重建用户画像响应"""
     success: bool = False
-    profile: Optional[UserProfile] = None
+    profile: UserProfile | None = None
     memories_processed: int = 0
     message: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "profile": self.profile.to_dict() if self.profile else None,
@@ -624,9 +618,9 @@ class RebuildProfileResponse:
 class SubmitTaskRequest:
     """提交异步任务请求"""
     task_type: str = ""
-    payload: Dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=dict)
     priority: int = 0
-    callback_url: Optional[str] = None
+    callback_url: str | None = None
 
 
 @dataclass
@@ -636,9 +630,9 @@ class SubmitTaskResponse:
     task_id: str = ""
     status: str = "pending"
     message: str = ""
-    estimated_time: Optional[int] = None
+    estimated_time: int | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "task_id": self.task_id,
@@ -662,12 +656,12 @@ class GetTaskResponse:
     task_type: str = ""
     status: str = "pending"
     progress: int = 0
-    result: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
+    result: dict[str, Any] | None = None
+    error: str | None = None
     message: str = ""
-    created_at: Optional[datetime] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
     @property
     def is_completed(self) -> bool:
@@ -677,7 +671,7 @@ class GetTaskResponse:
     def is_failed(self) -> bool:
         return self.status == "failed"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "task_id": self.task_id,
@@ -706,7 +700,7 @@ class CancelTaskResponse:
     task_id: str = ""
     message: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "task_id": self.task_id,
@@ -717,9 +711,9 @@ class CancelTaskResponse:
 @dataclass
 class ListTasksRequest:
     """列出任务请求"""
-    uid: Optional[str] = None
-    task_type: Optional[str] = None
-    status: Optional[str] = None
+    uid: str | None = None
+    task_type: str | None = None
+    status: str | None = None
     offset: int = 0
     limit: int = 20
 
@@ -728,13 +722,13 @@ class ListTasksRequest:
 class ListTasksResponse:
     """列出任务响应"""
     success: bool = False
-    tasks: List[Dict[str, Any]] = field(default_factory=list)
+    tasks: list[dict[str, Any]] = field(default_factory=list)
     total_count: int = 0
     offset: int = 0
     limit: int = 20
     message: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "tasks": self.tasks,

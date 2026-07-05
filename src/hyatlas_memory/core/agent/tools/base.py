@@ -14,7 +14,7 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +41,9 @@ class ToolDefinition:
     """
     name: str
     description: str
-    parameters: Dict[str, Any] = field(default_factory=dict)
+    parameters: dict[str, Any] = field(default_factory=dict)
 
-    def to_openai_schema(self) -> Dict[str, Any]:
+    def to_openai_schema(self) -> dict[str, Any]:
         """转为 OpenAI function calling tools 数组中的一项。"""
         return {
             "type": "function",
@@ -66,7 +66,7 @@ class ToolDefinition:
 class ToolCall:
     """LLM 发起的一次 tool 调用请求。"""
     name: str
-    arguments: Dict[str, Any] = field(default_factory=dict)
+    arguments: dict[str, Any] = field(default_factory=dict)
     call_id: str = ""   # LLM function-calling API 返回的 call id，prompt 模拟时可为空
 
 
@@ -76,8 +76,8 @@ class ToolResult:
     success: bool
     tool_name: str = ""
     call_id: str = ""
-    data: Dict[str, Any] = field(default_factory=dict)
-    error: Optional[str] = None
+    data: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
 
 
 # ================================================================
@@ -106,7 +106,7 @@ class ToolHandler(ABC):
         return self.definition().name
 
     @abstractmethod
-    async def execute(self, arguments: Dict[str, Any], context: Dict[str, Any]) -> ToolResult:
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
         ...
 
 
@@ -123,7 +123,7 @@ class ToolRegistry:
     """
 
     def __init__(self):
-        self._handlers: Dict[str, ToolHandler] = {}
+        self._handlers: dict[str, ToolHandler] = {}
 
     def register(self, handler: ToolHandler) -> None:
         name = handler.name
@@ -131,16 +131,16 @@ class ToolRegistry:
             logger.warning(f"[tools] handler '{name}' already registered, overriding")
         self._handlers[name] = handler
 
-    def get(self, name: str) -> Optional[ToolHandler]:
+    def get(self, name: str) -> ToolHandler | None:
         return self._handlers.get(name)
 
-    def names(self) -> List[str]:
+    def names(self) -> list[str]:
         return list(self._handlers.keys())
 
-    def definitions(self) -> List[ToolDefinition]:
+    def definitions(self) -> list[ToolDefinition]:
         return [h.definition() for h in self._handlers.values()]
 
-    def openai_schemas(self) -> List[Dict[str, Any]]:
+    def openai_schemas(self) -> list[dict[str, Any]]:
         return [d.to_openai_schema() for d in self.definitions()]
 
     def prompt_snippets(self) -> str:
@@ -149,7 +149,7 @@ class ToolRegistry:
             return ""
         return "\n".join(d.to_prompt_snippet() for d in self.definitions())
 
-    async def dispatch(self, call: ToolCall, context: Dict[str, Any]) -> ToolResult:
+    async def dispatch(self, call: ToolCall, context: dict[str, Any]) -> ToolResult:
         """
         执行一次 tool_call。
 
@@ -185,7 +185,7 @@ class ToolRegistry:
 # 解析工具：从 LLM 输出里提取 tool_calls
 # ================================================================
 
-def parse_tool_calls_from_json(raw: Any) -> List[ToolCall]:
+def parse_tool_calls_from_json(raw: Any) -> list[ToolCall]:
     """
     从 LLM JSON 输出里的 `tool_calls` 字段解析出 ToolCall 列表。
 
@@ -194,7 +194,7 @@ def parse_tool_calls_from_json(raw: Any) -> List[ToolCall]:
        其中 arguments 可能是 JSON 字符串
     2) 简化风格：[{"name": "...", "arguments": {...}}]
     """
-    calls: List[ToolCall] = []
+    calls: list[ToolCall] = []
     if not raw:
         return calls
     if not isinstance(raw, list):

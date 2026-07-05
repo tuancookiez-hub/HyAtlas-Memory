@@ -6,8 +6,8 @@ Agent Memory - 配置管理
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, List
 from pathlib import Path
+from typing import Any
 
 
 def _load_dotenv():
@@ -96,14 +96,14 @@ class VectorStoreConfig:
     on_disk: bool = True  # 是否持久化
 
     # 连接配置（远程存储）
-    host: Optional[str] = None
-    port: Optional[int] = None
-    api_key: Optional[str] = None
+    host: str | None = None
+    port: int | None = None
+    api_key: str | None = None
 
     # 腾讯云向量数据库扩展
-    url: Optional[str] = None  # 连接地址（tencent provider）
-    username: Optional[str] = None  # 用户名（tencent provider）
-    database_name: Optional[str] = None  # 数据库名（tencent provider）
+    url: str | None = None  # 连接地址（tencent provider）
+    username: str | None = None  # 用户名（tencent provider）
+    database_name: str | None = None  # 数据库名（tencent provider）
 
     def __post_init__(self):
         if self.provider is None:
@@ -139,8 +139,8 @@ class LLMConfig:
 
     provider: str = None  # openai | eval_platform
     model: str = None
-    api_key: Optional[str] = None
-    base_url: Optional[str] = None
+    api_key: str | None = None
+    base_url: str | None = None
 
     # 生成参数
     temperature: float = None
@@ -158,12 +158,12 @@ class LLMConfig:
     extract_scene: str = None  # 抽取场景：'chat'（默认，实时对话提取）| 'migration'（从已沉淀记忆迁移抽取，保真优先）。env: MEMORY_EXTRACT_SCENE
 
     # 内部平台扩展（extra_headers / extra_body 会透传给 OpenAI client）
-    extra_headers: Optional[Dict[str, str]] = None
-    extra_body: Optional[Dict[str, Any]] = None
+    extra_headers: dict[str, str] | None = None
+    extra_body: dict[str, Any] | None = None
 
     # 蒸馏平台专用
-    eval_user: Optional[str] = None
-    eval_apikey: Optional[str] = None
+    eval_user: str | None = None
+    eval_apikey: str | None = None
 
     def __post_init__(self):
         if self.provider is None:
@@ -215,8 +215,8 @@ class EmbedderConfig:
 
     provider: str = None  # openai（兼容 DashScope、DeepSeek 等）
     model: str = None
-    api_key: Optional[str] = None
-    base_url: Optional[str] = None
+    api_key: str | None = None
+    base_url: str | None = None
     embedding_dims: int = None
 
     # 重试参数
@@ -225,8 +225,8 @@ class EmbedderConfig:
     timeout: int = None  # 请求超时（秒）
 
     # 内部平台扩展（extra_headers / extra_body 会透传给 OpenAI client）
-    extra_headers: Optional[Dict[str, str]] = None
-    extra_body: Optional[Dict[str, Any]] = None
+    extra_headers: dict[str, str] | None = None
+    extra_body: dict[str, Any] | None = None
 
     def __post_init__(self):
         if self.provider is None:
@@ -329,7 +329,7 @@ class TimeWindowConfig:
     rolling_check_interval: int = 3600  # 检查间隔（秒）
 
     # 按层配置不同的窗口
-    layer_windows: Dict[str, int] = field(default_factory=dict)
+    layer_windows: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self):
         self.enable_rolling_delete = _get_env_bool("MEMORY_ROLLING_DELETE", False)
@@ -503,7 +503,7 @@ class APIConfig:
 
     # 认证
     enable_auth: bool = False
-    api_keys: List[str] = field(default_factory=list)
+    api_keys: list[str] = field(default_factory=list)
 
     # 限流
     enable_rate_limit: bool = False
@@ -511,7 +511,7 @@ class APIConfig:
 
     # CORS
     enable_cors: bool = True
-    cors_origins: List[str] = field(default_factory=lambda: ["*"])
+    cors_origins: list[str] = field(default_factory=lambda: ["*"])
 
     def __post_init__(self):
         self.host = os.getenv("MEMORY_API_HOST", "0.0.0.0")
@@ -602,7 +602,7 @@ class BasicProfileConfig:
         }
     """
 
-    fields: Dict[str, str] = field(
+    fields: dict[str, str] = field(
         default_factory=lambda: {
             "name": "User's full or preferred name.",
             "age": "User's age in years (integer).",
@@ -612,7 +612,7 @@ class BasicProfileConfig:
         }
     )
 
-    def effective_fields(self) -> Dict[str, str]:
+    def effective_fields(self) -> dict[str, str]:
         """配置为空时回落到默认；否则用配置值。"""
         if not self.fields:
             return BasicProfileConfig().fields
@@ -632,7 +632,7 @@ class PipelineRouteConfig:
 
     # 业务方 → Pipeline 版本映射
     # 例: {"business_a": "pro", "experiment_group": "pro"}
-    business_version_map: Dict[str, str] = field(default_factory=dict)
+    business_version_map: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         if self.default_version is None:
@@ -691,7 +691,7 @@ class MemoryConfig:
         return cls()
 
     @classmethod
-    def from_dict(cls, config_dict: Dict[str, Any]) -> "MemoryConfig":
+    def from_dict(cls, config_dict: dict[str, Any]) -> "MemoryConfig":
         """从字典创建配置"""
         config = cls()
 
@@ -736,7 +736,7 @@ class MemoryConfig:
 
         return config
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
         return {
             "vector_store": {
@@ -795,46 +795,46 @@ class MemoryConfig:
         print("=" * 60)
         print("Agent Memory Configuration")
         print("=" * 60)
-        print(f"[Vector Store]")
+        print("[Vector Store]")
         print(f"  Provider: {self.vector_store.provider}")
         print(f"  Collection: {self.vector_store.collection_name}")
         print(f"  Persist Dir: {self.vector_store.persist_directory}")
         print(f"  Embedding Dims: {self.vector_store.embedding_dims}")
-        print(f"[Graph Store]")
+        print("[Graph Store]")
         print(f"  Provider: {self.graph_store.provider}")
         if self.graph_store.provider == "neo4j":
             print(f"  URL: {self.graph_store.url}")
             print(f"  Database: {self.graph_store.database}")
         else:
             print(f"  DB Path: {self.graph_store.db_path}")
-        print(f"[Cache]")
+        print("[Cache]")
         print(f"  Backend: {self.cache.backend}")
         if self.cache.backend == "sqlite":
             print(f"  DB Path: {self.cache.db_path}")
         else:
             print(f"  MySQL: {self.cache.mysql_host}:{self.cache.mysql_port}/{self.cache.mysql_database}")
-        print(f"[LLM]")
+        print("[LLM]")
         print(f"  Provider: {self.llm.provider}")
         print(f"  Model: {self.llm.model}")
         print(f"  Base URL: {self.llm.base_url}")
-        print(f"[Embedder]")
+        print("[Embedder]")
         print(f"  Provider: {self.embedder.provider}")
         print(f"  Model: {self.embedder.model}")
         print(f"  Base URL: {self.embedder.base_url}")
-        print(f"[Recall]")
+        print("[Recall]")
         print(f"  Default Limit: {self.recall.default_limit}")
         print(
             f"  Weights: semantic={self.recall.semantic_weight}, "
             f"recency={self.recall.recency_weight}, "
             f"importance={self.recall.importance_weight}"
         )
-        print(f"[Pipeline]")
+        print("[Pipeline]")
         print(f"  Default Version: {self.pipeline.default_version}")
         print(f"  Business Map: {self.pipeline.business_version_map}")
-        print(f"[API]")
+        print("[API]")
         print(f"  Prefix: {self.api.prefix}")
         print(f"  Auth: {self.api.enable_auth}")
-        print(f"[History]")
+        print("[History]")
         print(f"  Enable: {self.history.enable}")
         print(f"  DB Path: {self.history.db_path}")
         print(f"  Record Searches: {self.history.record_searches}")

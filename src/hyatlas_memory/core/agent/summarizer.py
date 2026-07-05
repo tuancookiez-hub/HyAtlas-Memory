@@ -8,12 +8,12 @@ System 2 pro pipeline 相关的摘要能力（SessionSummary / Schema / Profile�
 保留在 abstractor.py 中。
 """
 
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
+from typing import Any
 
-from .llm_provider import LLMProvider
 from ..config import LLMConfig as GlobalLLMConfig
+from .llm_provider import LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +26,13 @@ logger = logging.getLogger(__name__)
 class SummaryResult:
     """摘要结果"""
     success: bool
-    summary: Optional[str] = None          # 摘要文本，直接用于存储
-    source_raw_memory_id: Optional[str] = None  # 对应的 L1_RAW 节点 ID（锚点）
+    summary: str | None = None          # 摘要文本，直接用于存储
+    source_raw_memory_id: str | None = None  # 对应的 L1_RAW 节点 ID（锚点）
     tokens_used: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    error: Optional[str] = None
-    _actual_prompt: Optional[str] = None   # 实际发送给 LLM 的 prompt
+    error: str | None = None
+    _actual_prompt: str | None = None   # 实际发送给 LLM 的 prompt
 
 
 # ================================================================
@@ -96,7 +96,7 @@ class Summarizer:
     def __init__(
         self,
         llm_provider: LLMProvider,
-        llm_config: Optional[GlobalLLMConfig] = None,
+        llm_config: GlobalLLMConfig | None = None,
     ):
         self.llm = llm_provider
         self._llm_config = llm_config or GlobalLLMConfig()
@@ -108,7 +108,7 @@ class Summarizer:
         self,
         content: str,
         current_time: str = "",
-        source_raw_memory_id: Optional[str] = None,  # 对应 L1_RAW 节点 ID
+        source_raw_memory_id: str | None = None,  # 对应 L1_RAW 节点 ID
     ) -> SummaryResult:
         """
         生成摘要。
@@ -126,7 +126,8 @@ class Summarizer:
 
         try:
             # 构建日期字段（精确到日）
-            from datetime import datetime as _dt_cls, date as _date_cls
+            from datetime import date as _date_cls
+            from datetime import datetime as _dt_cls
             _current_date = _date_cls.today().isoformat()  # e.g. "2026-05-23"
             # memory_date: 转为日精度
             if current_time:
@@ -177,7 +178,7 @@ class Summarizer:
             logger.error(f"Summarizer.summarize failed: {e}")
             return SummaryResult(success=False, error=str(e))
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         return {
             "call_count": self._call_count,
             "total_tokens": self._total_tokens,

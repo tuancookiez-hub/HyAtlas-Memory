@@ -22,7 +22,6 @@ from __future__ import annotations
 import logging
 import re
 import threading
-from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +162,7 @@ def _has_artifacts(txt: str) -> bool:
 # 公开 API
 # ========================================================================
 
-def extract_entities(text: str) -> List[Tuple[str, str]]:
+def extract_entities(text: str) -> list[tuple[str, str]]:
     """从文本抽取 entity，返回去重后的 (entity_type, entity_text) 列表。
 
     entity_type ∈ {PROPER, QUOTED, COMPOUND, NOUN}。spaCy 不可用时返回 []。
@@ -181,8 +180,8 @@ def extract_entities(text: str) -> List[Tuple[str, str]]:
     return _extract_entities_from_doc(doc)
 
 
-def _extract_entities_from_doc(doc) -> List[Tuple[str, str]]:
-    entities: List[Tuple[str, str]] = []
+def _extract_entities_from_doc(doc) -> list[tuple[str, str]]:
+    entities: list[tuple[str, str]] = []
     text = doc.text
     tokens = list(doc)
 
@@ -334,7 +333,7 @@ def _extract_entities_from_doc(doc) -> List[Tuple[str, str]]:
             seen.add(k)
             deduped.append((t, e))
 
-    cleaned: List[Tuple[str, str]] = []
+    cleaned: list[tuple[str, str]] = []
     for etype, etext in deduped:
         txt = re.sub(r"^\*+\s*|\s*\*+$", "", etext.strip())
         txt = re.sub(r"\s*:+$", "", txt)

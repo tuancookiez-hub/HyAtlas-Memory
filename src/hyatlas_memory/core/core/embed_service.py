@@ -27,13 +27,13 @@ Agent Memory - EmbedService 向量化服务
     ])
 """
 
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass
 import asyncio
 import hashlib
 import logging
+from dataclasses import dataclass
+from typing import Any
 
-from ..config import MemoryConfig, EmbedderConfig
+from ..config import MemoryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +66,8 @@ class EmbedServiceConfig:
     # 写路径攒批队列参数
     queue_batch_size: int = 32            # 攒满多少条立即发送
     queue_batch_window_ms: float = 1000.0  # 最多等待多少毫秒后强制发送（高并发下攒批更高效）
-    extra_headers: Optional[Dict[str, str]] = None
-    extra_body: Optional[Dict[str, Any]] = None
+    extra_headers: dict[str, str] | None = None
+    extra_body: dict[str, Any] | None = None
 
 
 class EmbedService:
@@ -78,25 +78,25 @@ class EmbedService:
     - embed()：直接发送，适合 search 路径（低延迟优先）
     - embed_queued()：通过攒批队列发送，适合 write 路径（减少并发数，避免打爆服务）
     """
-    
-    def __init__(self, config: Optional[MemoryConfig] = None):
+
+    def __init__(self, config: MemoryConfig | None = None):
         self.config = config or MemoryConfig.from_env()
         self._embed_config = self._build_config()
-        
+
         # 缓存
-        self._cache: Dict[str, List[float]] = {}
-        
+        self._cache: dict[str, list[float]] = {}
+
         # 统计
         self._embed_count = 0
         self._cache_hits = 0
 
         # 写路径攒批队列（懒初始化，首次调用 embed_queued 时创建）
-        self._queue_lock: Optional[asyncio.Lock] = None
-        self._queue_pending: List[tuple] = []   # (text, Future)
-        self._queue_flush_task: Optional[asyncio.Task] = None
-        
+        self._queue_lock: asyncio.Lock | None = None
+        self._queue_pending: list[tuple] = []   # (text, Future)
+        self._queue_flush_task: asyncio.Task | None = None
+
         logger.info(f"EmbedService initialized, model={self._embed_config.model}")
-    
+
     def _build_config(self) -> EmbedServiceConfig:
         """从配置构建向量化配置"""
         embedder = self.config.embedder
@@ -125,7 +125,7 @@ class EmbedService:
             extra_headers=embedder.extra_headers,
             extra_body=embedder.extra_body,
         )
-    
+
     def _get_cache_key(self, text: str) -> str:
         """生成缓存键"""
         return hashlib.md5(text.encode()).hexdigest()
@@ -134,7 +134,7 @@ class EmbedService:
     # 写路径攒批队列
     # ----------------------------------------------------------------
 
-    async def embed_queued(self, text: str, use_cache: bool = True) -> List[float]:
+    async def embed_queued(self, text: str, use_cache: bool = True) -> list[float]:
         """
         写路径向量化：通过攒批队列将多个并发请求合并成一次 batch 调用。
         适合 write 路径（高并发写入时避免大量并发 embed 请求）。
@@ -207,12 +207,12 @@ class EmbedService:
             for fut in futures:
                 if not fut.done():
                     fut.set_exception(e)
-    
+
     async def embed(
         self,
         text: str,
         use_cache: bool = True,
-    ) -> List[float]:
+    ) -> list[float]:
         """
         向量化单条文本
         
@@ -234,20 +234,20 @@ class EmbedService:
         # 调用向量化
         vectors = await self._embed_texts([text])
         vector = vectors[0]
-        
+
         # 更新缓存
         if use_cache and self._embed_config.enable_cache:
             if len(self._cache) < self._embed_config.cache_size:
                 self._cache[cache_key] = vector
-        
+
         self._embed_count += 1
         return vector
-    
+
     async def embed_batch(
         self,
-        texts: List[str],
+        texts: list[str],
         use_cache: bool = True,
-    ) -> List[List[float]]:
+    ) -> list[list[float]]:
         """
         批量向量化
         
@@ -260,11 +260,11 @@ class EmbedService:
         """
         if not texts:
             return []
-        
+
         results = [None] * len(texts)
         texts_to_embed = []
         indices_to_embed = []
-        
+
         # 检查缓存
         for i, text in enumerate(texts):
             if use_cache and self._embed_config.enable_cache:
@@ -273,37 +273,37 @@ class EmbedService:
                     results[i] = self._cache[cache_key]
                     self._cache_hits += 1
                     continue
-            
+
             texts_to_embed.append(text)
             indices_to_embed.append(i)
-        
+
         # 批量向量化未缓存的文本
         if texts_to_embed:
             vectors = await self._embed_texts(texts_to_embed)
-            
+
             for j, vector in enumerate(vectors):
                 idx = indices_to_embed[j]
                 results[idx] = vector
-                
+
                 # 更新缓存
                 if use_cache and self._embed_config.enable_cache:
                     cache_key = self._get_cache_key(texts_to_embed[j])
                     if len(self._cache) < self._embed_config.cache_size:
                         self._cache[cache_key] = vector
-            
+
             self._embed_count += len(texts_to_embed)
-        
+
         return results
-    
-    async def _embed_texts(self, texts: List[str]) -> List[List[float]]:
+
+    async def _embed_texts(self, texts: list[str]) -> list[list[float]]:
         """实际的向量化调用（统一走 OpenAI 兼容协议），逐条调用避免 batch size 限制"""
-        all_vectors: List[List[float]] = []
+        all_vectors: list[list[float]] = []
         for text in texts:
             vectors = await self._embed_openai([text])
             all_vectors.extend(vectors)
         return all_vectors
-    
-    async def _embed_openai(self, texts: List[str]) -> List[List[float]]:
+
+    async def _embed_openai(self, texts: list[str]) -> list[list[float]]:
         """
         使用 OpenAI 兼容接口向量化
 
@@ -330,7 +330,7 @@ class EmbedService:
             timeout=self._embed_config.timeout or 60,
         )
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "model": self._embed_config.model,
             "input": texts,
         }
@@ -378,29 +378,29 @@ class EmbedService:
             if cache_key in self._cache:
                 self._cache_hits += 1
                 return self._cache[cache_key], True
-        
+
         # 调用向量化
         vectors = await self._embed_texts([text])
         vector = vectors[0]
-        
+
         # 更新缓存
         if use_cache and self._embed_config.enable_cache:
             if len(self._cache) < self._embed_config.cache_size:
                 self._cache[cache_key] = vector
-        
+
         self._embed_count += 1
         return vector, False
-    
+
     def get_embedding_dims(self) -> int:
         """获取向量维度"""
         return self._embed_config.embedding_dims
-    
+
     def clear_cache(self) -> None:
         """清空缓存"""
         self._cache.clear()
         logger.info("EmbedService cache cleared")
-    
-    def get_stats(self) -> Dict[str, Any]:
+
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         return {
             "embed_count": self._embed_count,

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 记忆去重核心逻辑（纯函数，无 I/O，可单测）。
 
@@ -27,7 +26,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 try:
     import numpy as np
@@ -58,12 +57,12 @@ class DedupItem:
       - 链头：    is_chain_head=True,  chain_node_ids=[head, ...SUPERSEDED bodies]
     """
     node_id: str
-    embedding: List[float]
+    embedding: list[float]
     content: str = ""
     is_latest: bool = True
     is_chain_head: bool = False
-    gmt_created: Optional[float] = None  # Unix ts；用于确定性保留（越小越早）
-    chain_node_ids: List[str] = field(default_factory=list)
+    gmt_created: float | None = None  # Unix ts；用于确定性保留（越小越早）
+    chain_node_ids: list[str] = field(default_factory=list)
 
 
 def _gmt_key(item: DedupItem) -> float:
@@ -71,7 +70,7 @@ def _gmt_key(item: DedupItem) -> float:
     return item.gmt_created if item.gmt_created is not None else float("inf")
 
 
-def _pairwise_cosine(vectors: List[List[float]]):
+def _pairwise_cosine(vectors: list[list[float]]):
     """行 L2 归一化后 M @ M.T，返回相似度矩阵（numpy）。"""
     M = np.asarray(vectors, dtype=np.float32)
     norms = np.linalg.norm(M, axis=1, keepdims=True)
@@ -80,7 +79,7 @@ def _pairwise_cosine(vectors: List[List[float]]):
     return M @ M.T
 
 
-def _union_find_groups(n: int, sim, threshold: float) -> List[List[int]]:
+def _union_find_groups(n: int, sim, threshold: float) -> list[list[int]]:
     """对 sim > threshold 的成对索引做并查集连通，返回每组的 index 列表（含单点）。"""
     parent = list(range(n))
 
@@ -100,13 +99,13 @@ def _union_find_groups(n: int, sim, threshold: float) -> List[List[int]]:
             if float(sim[i][j]) > threshold:
                 union(i, j)
 
-    groups: Dict[int, List[int]] = {}
+    groups: dict[int, list[int]] = {}
     for i in range(n):
         groups.setdefault(find(i), []).append(i)
     return list(groups.values())
 
 
-def _decide_group(members: List[DedupItem]) -> Dict[str, Any]:
+def _decide_group(members: list[DedupItem]) -> dict[str, Any]:
     """对一个重复组决定保留/删除，返回组明细（含审计字段）。"""
     heads = [m for m in members if m.is_chain_head]
 
@@ -120,7 +119,7 @@ def _decide_group(members: List[DedupItem]) -> Dict[str, Any]:
         reason = "earliest_gmt"
 
     deleted = []
-    delete_ids: List[str] = []
+    delete_ids: list[str] = []
     for m in members:
         if m.node_id == kept.node_id:
             continue
@@ -154,10 +153,10 @@ def _decide_group(members: List[DedupItem]) -> Dict[str, Any]:
 
 
 def plan_dedup(
-    items: List[DedupItem],
+    items: list[DedupItem],
     *,
-    threshold: Optional[float] = None,
-) -> Dict[str, Any]:
+    threshold: float | None = None,
+) -> dict[str, Any]:
     """
     对一组候选项做去重规划（纯函数，不执行删除）。
 
@@ -194,9 +193,9 @@ def plan_dedup(
     max_cos = float(pair_cos.max()) if pair_cos.size else None
     avg_cos = float(pair_cos.mean()) if pair_cos.size else None
 
-    groups_out: List[Dict[str, Any]] = []
-    all_delete: List[str] = []
-    all_kept: List[str] = []
+    groups_out: list[dict[str, Any]] = []
+    all_delete: list[str] = []
+    all_kept: list[str] = []
     seen_del = set()
 
     for idxs in idx_groups:
@@ -226,7 +225,7 @@ def plan_dedup(
     }
 
 
-def _build_dedup_content(trigger: str, plan: Dict[str, Any]) -> str:
+def _build_dedup_content(trigger: str, plan: dict[str, Any]) -> str:
     """构造 DEDUP step 的人类可读 content。
 
     无删除：trigger + 比较条数 + max/avg cosine + 阈值。
@@ -282,7 +281,7 @@ async def _emit_dedup_log(
     user_id: str,
     agent_id: str,
     trigger: str,
-    plan: Dict[str, Any],
+    plan: dict[str, Any],
 ) -> None:
     """写 DEDUP pipeline log（删除审计明细）。best-effort。"""
     if cache is None or not getattr(cache, "store_pipeline_log", None):
@@ -313,7 +312,7 @@ async def _emit_dedup_log(
 
 
 async def execute_dedup(
-    items: List[DedupItem],
+    items: list[DedupItem],
     *,
     vector_store: Any,
     cache: Any = None,
@@ -322,8 +321,8 @@ async def execute_dedup(
     user_id: str = "",
     agent_id: str = "",
     delete_from_store: bool = True,
-    threshold: Optional[float] = None,
-) -> Dict[str, Any]:
+    threshold: float | None = None,
+) -> dict[str, Any]:
     """
     去重编排：plan → （可选）删库 → 写 DEDUP log。整体 best-effort，绝不抛错影响主流程。
 

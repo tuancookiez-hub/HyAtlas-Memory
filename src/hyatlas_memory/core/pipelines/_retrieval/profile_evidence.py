@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Profile 证据反查 —— 从一批 VDB 命中节点反查「支撑它们的 L6 schema」。
 
@@ -14,9 +13,8 @@ free async 函数，graph_store 作首参，与 evolution.recall / intention.rec
 其他 reader 可直接 import 复用。best-effort：graph 不可用 / 无该能力 / 抛错均返回 []。
 """
 
-from typing import Any, Dict, List
-
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +23,10 @@ _L6_LAYER = "l6_schema"
 
 async def reverse_lookup_l6(
     graph_store: Any,
-    vdb_node_ids: List[str],
+    vdb_node_ids: list[str],
     *,
     limit: int = 50,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """从 VDB node_id 列表反查支撑它们的 L6 schema，按支撑度降序。
 
     Args:
@@ -54,7 +52,7 @@ async def reverse_lookup_l6(
         return []
 
     # 按 L6 node_id 聚合：support = distinct evidence_vdb_id 数
-    grouped: Dict[str, Dict[str, Any]] = {}
+    grouped: dict[str, dict[str, Any]] = {}
     for row in rows or []:
         if row.get("layer") != _L6_LAYER:
             continue
@@ -79,7 +77,7 @@ async def reverse_lookup_l6(
 
     max_support = max(len(g["_evidence_ids"]) or 1 for g in grouped.values())
 
-    hits: List[Dict[str, Any]] = []
+    hits: list[dict[str, Any]] = []
     for g in grouped.values():
         support = len(g["_evidence_ids"]) or 1
         hits.append({

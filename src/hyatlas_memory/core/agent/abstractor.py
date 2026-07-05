@@ -9,13 +9,13 @@ Agent Memory V2 - Abstractor 摘要智能体 (System 2 Pro Pipeline)
 注意：lite+agent pipeline 的 L3_SUMMARY 生成由 summarizer.py 的 Summarizer 负责。
 """
 
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass, field
 import json
 import logging
+from dataclasses import dataclass, field
+from typing import Any
 
-from .llm_provider import LLMProvider
 from ..config import LLMConfig as GlobalLLMConfig
+from .llm_provider import LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +27,11 @@ class SessionSummaryResult:
     """Session 摘要结果 (V2)"""
     success: bool
     summary: str = ""
-    key_topics: List[str] = field(default_factory=list)
+    key_topics: list[str] = field(default_factory=list)
     emotional_tone: str = ""
     new_facts_count: int = 0
     tokens_used: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
@@ -40,10 +40,10 @@ class SchemaAbstractResult:
     success: bool
     central_proposition: str = ""
     supporting_summary: str = ""
-    expected_inferences: List[str] = field(default_factory=list)
+    expected_inferences: list[str] = field(default_factory=list)
     confidence: float = 0.0
     tokens_used: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
@@ -52,11 +52,11 @@ class ProfileSummaryResult:
     success: bool
     core: str = ""
     personality: str = ""
-    active_schemas: List[str] = field(default_factory=list)
-    gotchas: List[str] = field(default_factory=list)
+    active_schemas: list[str] = field(default_factory=list)
+    gotchas: list[str] = field(default_factory=list)
     note: str = ""
     tokens_used: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 # ================================================================
@@ -137,7 +137,7 @@ class Abstractor:
     def __init__(
         self,
         llm_provider: LLMProvider,
-        llm_config: Optional[GlobalLLMConfig] = None,
+        llm_config: GlobalLLMConfig | None = None,
     ):
         self.llm = llm_provider
         self._llm_config = llm_config or GlobalLLMConfig()
@@ -189,7 +189,7 @@ class Abstractor:
 
     async def abstract_schema(
         self,
-        facts: List[str],
+        facts: list[str],
     ) -> SchemaAbstractResult:
         """
         从一组关联事实中归纳 Schema (心智模型)。
@@ -269,7 +269,7 @@ class Abstractor:
     # ================================================================
 
     @staticmethod
-    def _parse_json(text: str) -> Dict[str, Any]:
+    def _parse_json(text: str) -> dict[str, Any]:
         """从 LLM 输出中解析 JSON — handles reasoning model think blocks."""
         text = text.strip()
         import re
@@ -292,7 +292,7 @@ class Abstractor:
                     pass
         return {}
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         return {
             "call_count": self._call_count,

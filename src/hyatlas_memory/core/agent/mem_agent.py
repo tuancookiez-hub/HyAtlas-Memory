@@ -23,17 +23,17 @@ Agent Memory - MemAgent 智能体协调器
     print(result.suggested_layer)  # "profile"
 """
 
-from typing import Dict, Any, Optional, List
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-import logging
+from typing import Any
 
-from .summarizer import Summarizer, SummaryResult
-from .extractor import Extractor, ExtractResult
-from .reflector import Reflector, ReflectResult
-from .llm_provider import LLMProvider
 from ..config import MemoryConfig
+from .extractor import Extractor
+from .llm_provider import LLMProvider
+from .reflector import Reflector
+from .summarizer import Summarizer
 
 logger = logging.getLogger(__name__)
 
@@ -52,25 +52,25 @@ class AgentResult:
     智能体处理结果
     """
     success: bool
-    
+
     # 提取结果
-    extracted_info: Dict[str, Any] = field(default_factory=dict)
-    suggested_layer: Optional[str] = None
-    
+    extracted_info: dict[str, Any] = field(default_factory=dict)
+    suggested_layer: str | None = None
+
     # 摘要结果
-    summary: Optional[str] = None  # LLM 原始摘要文本（已 strip），直接用于存储
-    
+    summary: str | None = None  # LLM 原始摘要文本（已 strip），直接用于存储
+
     # 反思结果
-    conflicts: List[Dict[str, Any]] = field(default_factory=list)
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
     should_merge: bool = False
-    merge_target_id: Optional[str] = None
-    
+    merge_target_id: str | None = None
+
     # 元信息
     processing_time_ms: float = 0
     tokens_used: int = 0
-    error: Optional[str] = None
-    error_code: Optional[str] = None        # "EMPTY_RESPONSE" / "JSON_PARSE_FAILED" / "LLM_ERROR"
-    extract_raw_response: Optional[str] = None  # LLM 原始返回（失败时保留）
+    error: str | None = None
+    error_code: str | None = None        # "EMPTY_RESPONSE" / "JSON_PARSE_FAILED" / "LLM_ERROR"
+    extract_raw_response: str | None = None  # LLM 原始返回（失败时保留）
 
     # 细分统计（各步骤的 token 和耗时）
     extract_tokens_used: int = 0
@@ -81,8 +81,8 @@ class AgentResult:
     summary_prompt_tokens: int = 0
     summary_completion_tokens: int = 0
     summary_elapsed_ms: float = 0
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "extracted_info": self.extracted_info,
@@ -110,11 +110,11 @@ class MemAgent:
     
     负责协调 Summarizer、Extractor、Reflector 完成记忆处理。
     """
-    
+
     def __init__(
         self,
-        config: Optional[MemoryConfig] = None,
-        llm_provider: Optional[LLMProvider] = None,
+        config: MemoryConfig | None = None,
+        llm_provider: LLMProvider | None = None,
     ):
         """
         初始化 MemAgent
@@ -125,30 +125,30 @@ class MemAgent:
         """
         self.config = config or MemoryConfig.from_env()
         self.llm_provider = llm_provider or LLMProvider(self.config)
-        
+
         # 初始化子智能体（传入 llm_config 以支持各场景 max_tokens 配置）
         llm_config = self.config.llm
         self.summarizer = Summarizer(self.llm_provider, llm_config)
         self.extractor = Extractor(self.llm_provider, llm_config)
         self.reflector = Reflector(self.llm_provider, llm_config)
-        
+
         logger.debug("MemAgent initialized")
 
     async def process_add(
         self,
         content: str,
-        context: Dict[str, Any],
+        context: dict[str, Any],
         mode: ProcessMode = ProcessMode.FULL,
-        existing_memories: List[Dict] = None,
-        memory_at: Optional[datetime] = None,
-        existing_tags: Optional[List[str]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_registry: Optional[Any] = None,
-        tool_context: Optional[Dict[str, Any]] = None,
+        existing_memories: list[dict] = None,
+        memory_at: datetime | None = None,
+        existing_tags: list[str] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_registry: Any | None = None,
+        tool_context: dict[str, Any] | None = None,
         history_context: str = "",
-        enable_summary: Optional[bool] = None,
-        basic_profile_fields: Optional[Dict[str, str]] = None,
-        extract_scene: Optional[str] = None,
+        enable_summary: bool | None = None,
+        basic_profile_fields: dict[str, str] | None = None,
+        extract_scene: str | None = None,
     ) -> AgentResult:
         """
         处理添加记忆请求
@@ -310,7 +310,7 @@ class MemAgent:
                     f"conflicts={len(reflect_result.conflicts)} "
                     f"should_merge={reflect_result.should_merge}"
                 )
-            
+
             # 计算处理时间
             result.processing_time_ms = (
                 datetime.now() - start_time
@@ -320,7 +320,7 @@ class MemAgent:
             logger.debug(f"MemAgent: tokens_used={total_tokens}")
 
             return result
-            
+
         except Exception as e:
             logger.error(f"MemAgent process_add failed: {e}")
             return AgentResult(
@@ -328,12 +328,12 @@ class MemAgent:
                 error=str(e),
                 processing_time_ms=(datetime.now() - start_time).total_seconds() * 1000,
             )
-    
+
     async def process_recall(
         self,
         query: str,
-        memories: List[Dict],
-        context: Dict[str, Any],
+        memories: list[dict],
+        context: dict[str, Any],
     ) -> AgentResult:
         """
         处理召回请求（可选的后处理）
@@ -352,38 +352,38 @@ class MemAgent:
             处理结果
         """
         start_time = datetime.now()
-        
+
         try:
             # 生成综合摘要
             combined_content = "\n".join([m.get("content", "") for m in memories])
-            
+
             if combined_content:
                 abstract_result = await self.abstractor.abstract(
                     combined_content,
                     context,
                     focus=query  # 聚焦于查询内容
                 )
-                
+
                 return AgentResult(
                     success=True,
                     summary=abstract_result.summary,
                     tokens_used=abstract_result.tokens_used,
                     processing_time_ms=(datetime.now() - start_time).total_seconds() * 1000,
                 )
-            
+
             return AgentResult(
                 success=True,
                 processing_time_ms=(datetime.now() - start_time).total_seconds() * 1000,
             )
-            
+
         except Exception as e:
             logger.error(f"MemAgent process_recall failed: {e}")
             return AgentResult(
                 success=False,
                 error=str(e),
             )
-    
-    def get_stats(self) -> Dict[str, Any]:
+
+    def get_stats(self) -> dict[str, Any]:
         """获取智能体统计信息"""
         return {
             "summarizer": self.summarizer.get_stats(),

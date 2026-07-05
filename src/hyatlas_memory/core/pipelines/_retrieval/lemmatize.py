@@ -9,9 +9,8 @@ Provides text preprocessing for the keyword search channel:
 Graceful fallback: if NLP libraries are not installed, returns original text.
 """
 
-import re
 import logging
-from typing import Tuple
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +72,7 @@ def _is_cjk_char(char: str) -> bool:
     return bool(_CJK_PATTERN.match(char))
 
 
-def _split_mixed_text(text: str) -> Tuple[str, str]:
+def _split_mixed_text(text: str) -> tuple[str, str]:
     """
     Split text into English and Chinese parts.
     Returns (english_parts, chinese_parts).
@@ -197,7 +196,7 @@ def lemmatize_for_bm25(text: str) -> str:
 # BM25 Score Normalization Parameters
 # ========================================================================
 
-def get_bm25_params(query: str, lemmatized: str) -> Tuple[float, float]:
+def get_bm25_params(query: str, lemmatized: str) -> tuple[float, float]:
     """
     Get sigmoid normalization parameters based on query characteristics.
 

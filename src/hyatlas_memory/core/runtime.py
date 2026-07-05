@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 SharedRuntime — 多 client 部署（例如多租户 server）的共享基础设施。
 
@@ -63,14 +62,11 @@ await runtime.aclose()     # 关 shared 基础设施
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .config import MemoryConfig
-    from .data.cache_base import CacheBase
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +79,7 @@ class SharedRuntime:
     需要 async init 才能建 cache pool 并 bind metrics）。
     """
 
-    def __init__(self, config: "MemoryConfig"):
+    def __init__(self, config: MemoryConfig):
         # 配置只用来建 cache 和决定 loop 策略；vector_store / embedder 等
         # 由各个 client 自己管。
         self._config = config
@@ -98,7 +94,7 @@ class SharedRuntime:
     # ------------------------------------------------------------
 
     @classmethod
-    async def create(cls, config: "MemoryConfig") -> "SharedRuntime":
+    async def create(cls, config: MemoryConfig) -> SharedRuntime:
         """
         创建并初始化一个 SharedRuntime。
 
@@ -157,11 +153,11 @@ class SharedRuntime:
             return
         self._observability_installed = True
 
+        from .utils.pipeline_log_writer import PipelineLogWriter
         from .utils.pipeline_observability import (
             is_pipeline_trace_enabled,
             resolve_pipeline_log_dir,
         )
-        from .utils.pipeline_log_writer import PipelineLogWriter
 
         log_dir = resolve_pipeline_log_dir()
         log_writer = PipelineLogWriter(log_dir)
@@ -249,7 +245,7 @@ class SharedRuntime:
         return self._metrics
 
     @property
-    def config(self) -> "MemoryConfig":
+    def config(self) -> MemoryConfig:
         """构造 runtime 时用的 base config（client 不必跟它一致，仅 cache 配置须一致）。"""
         return self._config
 

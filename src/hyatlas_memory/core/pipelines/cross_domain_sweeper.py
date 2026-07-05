@@ -18,16 +18,16 @@ Trace 设计：
   - memory_operation ops: SWEEPER_BEH_EMBED / SWEEPER_CORE_CREATE / SWEEPER_CROSS_EDGE / SWEEPER_CORE_MERGE
 """
 
-import os
 import json
-import uuid
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+import os
+import uuid
 from datetime import datetime
+from typing import Any
 
-from ..models.memory import MemoryLayer, MemoryNode, MemoryStatus, SourceType
-from ..data.graph_store_base import GraphStoreBase
 from ..core.embed_service import EmbedService
+from ..data.graph_store_base import GraphStoreBase
+from ..models.memory import MemoryLayer, MemoryNode, MemoryStatus, SourceType
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ class UnionFind:
     """Union-Find (Disjoint Set Union) for merging collision pairs."""
 
     def __init__(self):
-        self._parent: Dict[str, str] = {}
+        self._parent: dict[str, str] = {}
 
     def find(self, x: str) -> str:
         if x not in self._parent:
@@ -96,8 +96,8 @@ class UnionFind:
         if rx != ry:
             self._parent[ry] = rx
 
-    def clusters(self) -> Dict[str, List[str]]:
-        groups: Dict[str, List[str]] = {}
+    def clusters(self) -> dict[str, list[str]]:
+        groups: dict[str, list[str]] = {}
         for x in self._parent:
             root = self.find(x)
             groups.setdefault(root, []).append(x)
@@ -136,7 +136,7 @@ class CrossDomainSweeper:
 
     async def _log_pipeline(
         self, step: str, prompt: str = "", response: str = "",
-        parsed: Optional[Dict] = None, memory_ids: Optional[List[str]] = None,
+        parsed: dict | None = None, memory_ids: list[str] | None = None,
         elapsed_ms: float = 0,
     ) -> None:
         """写 pipeline_log（best-effort）"""
@@ -182,7 +182,7 @@ class CrossDomainSweeper:
     # Main entry
     # ================================================================
 
-    async def sweep(self) -> Dict[str, Any]:
+    async def sweep(self) -> dict[str, Any]:
         """执行一次跨域扫描，返回统计信息"""
         _t_start = datetime.now()
 
@@ -287,7 +287,7 @@ class CrossDomainSweeper:
     # Step 1: 行为升维打标
     # ================================================================
 
-    async def _ensure_beh_embeddings(self, basics: List[MemoryNode]) -> int:
+    async def _ensure_beh_embeddings(self, basics: list[MemoryNode]) -> int:
         """确保每个 L6 basic 都有 beh_embedding，没有的就生成"""
         count = 0
         for node in basics:
@@ -354,7 +354,7 @@ class CrossDomainSweeper:
 
         return count
 
-    async def _fetch_basics_with_beh(self) -> List[Dict[str, Any]]:
+    async def _fetch_basics_with_beh(self) -> list[dict[str, Any]]:
         """获取所有有 beh_embedding 的 L6 basic 节点（统一接口，支持 Neo4j / Kuzu）"""
         gs = self.graph_store
         results = []
@@ -406,8 +406,8 @@ class CrossDomainSweeper:
 
     async def _scan_collisions(
         self,
-        basics: List[MemoryNode],
-    ) -> Tuple[List[List[str]], Dict[str, Any]]:
+        basics: list[MemoryNode],
+    ) -> tuple[list[list[str]], dict[str, Any]]:
         """矩阵化碰撞扫描 + Union-Find 聚类。返回 (clusters, details)"""
         import numpy as np
 
@@ -451,7 +451,7 @@ class CrossDomainSweeper:
 
         # 预加载所有节点的 CROSS_ABSTRACTS_TO 目标（用于过滤已有关系的对）
         node_ids = [d["node_id"] for d in all_with_beh]
-        targets_map: Dict[str, set] = {}  # node_id → set of target_ids
+        targets_map: dict[str, set] = {}  # node_id → set of target_ids
         for nid in node_ids:
             try:
                 targets = await self.graph_store.get_cross_abstracts_targets(nid)
@@ -507,9 +507,9 @@ class CrossDomainSweeper:
 
     async def _process_cluster(
         self,
-        cluster_ids: List[str],
-        all_basics: List[MemoryNode],
-    ) -> Tuple[int, int, List[str]]:
+        cluster_ids: list[str],
+        all_basics: list[MemoryNode],
+    ) -> tuple[int, int, list[str]]:
         """处理一个碰撞 cluster，返回 (cores_created, cores_merged, created_memory_ids)"""
         # 查已有 core
         existing_core_ids = set()

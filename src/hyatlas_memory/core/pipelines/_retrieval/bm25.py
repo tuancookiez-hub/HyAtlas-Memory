@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Dict, List, Set, Tuple
 
 
-def _tokenize(text: str) -> List[str]:
+def _tokenize(text: str) -> list[str]:
     """Simple whitespace + punctuation tokenizer."""
     return re.findall(r"\w+", text.lower())
 
@@ -22,14 +21,14 @@ class BM25Scorer:
     def __init__(self, k1: float = 1.5, b: float = 0.75):
         self.k1 = k1
         self.b = b
-        self._docs: List[List[str]] = []
-        self._doc_freqs: List[Dict[str, int]] = []
-        self._doc_len: List[int] = []
+        self._docs: list[list[str]] = []
+        self._doc_freqs: list[dict[str, int]] = []
+        self._doc_len: list[int] = []
         self._avgdl: float = 0.0
-        self._df: Dict[str, int] = {}
+        self._df: dict[str, int] = {}
         self._n: int = 0
 
-    def fit(self, documents: List[str]) -> None:
+    def fit(self, documents: list[str]) -> None:
         """Index a corpus of documents."""
         self._docs = []
         self._doc_freqs = []
@@ -38,7 +37,7 @@ class BM25Scorer:
         for doc in documents:
             tokens = _tokenize(doc)
             self._docs.append(tokens)
-            freq: Dict[str, int] = {}
+            freq: dict[str, int] = {}
             for t in tokens:
                 freq[t] = freq.get(t, 0) + 1
             self._doc_freqs.append(freq)
@@ -48,7 +47,7 @@ class BM25Scorer:
         self._n = len(documents)
         self._avgdl = sum(self._doc_len) / max(self._n, 1)
 
-    def score(self, query: str) -> List[float]:
+    def score(self, query: str) -> list[float]:
         """Score all documents against a query. Returns list of scores."""
         query_tokens = _tokenize(query)
         scores = [0.0] * self._n
@@ -65,7 +64,7 @@ class BM25Scorer:
                 scores[i] += idf * (tf * (self.k1 + 1)) / (tf + self.k1 * norm)
         return scores
 
-    def top_k(self, query: str, k: int = 5) -> List[Tuple[int, float]]:
+    def top_k(self, query: str, k: int = 5) -> list[tuple[int, float]]:
         """Return top-k (index, score) pairs."""
         scores = self.score(query)
         ranked = sorted(enumerate(scores), key=lambda x: -x[1])
@@ -74,10 +73,10 @@ class BM25Scorer:
 
 def score_candidates(
     query: str,
-    candidates: List[str],
+    candidates: list[str],
     k1: float = 1.5,
     b: float = 0.75,
-) -> List[float]:
+) -> list[float]:
     """One-shot BM25 scoring: score each candidate against the query.
 
     Returns a list of BM25 scores, one per candidate.

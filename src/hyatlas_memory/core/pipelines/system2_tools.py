@@ -17,17 +17,17 @@ Write (4): — Graph 专用
 """
 
 import json
-import uuid
 import logging
-from typing import Any, Dict, List, Optional
-from datetime import datetime
-
-from ..models.memory import MemoryLayer, MemoryNode, MemoryStatus, SourceType
-from ..data.vector_store_base import VectorStoreBase
-from ..data.graph_store_base import GraphStoreBase
-from ..core.embed_service import EmbedService
-
 import time
+import uuid
+from datetime import datetime
+from typing import Any
+
+from ..core.embed_service import EmbedService
+from ..data.graph_store_base import GraphStoreBase
+from ..data.vector_store_base import VectorStoreBase
+from ..models.memory import MemoryLayer, MemoryNode, MemoryStatus, SourceType
+
 logger = logging.getLogger(__name__)
 
 # Evidence tree truncation length for content preview
@@ -209,12 +209,12 @@ class System2ToolExecutor:
         self.user_id = user_id
         self.agent_id = agent_id
         self._isolation_key = MemoryNode.build_isolation_key(user_id, agent_id)
-        self.tool_call_log: List[Dict[str, Any]] = []
+        self.tool_call_log: list[dict[str, Any]] = []
 
-    async def execute(self, tool_name: str, args: Dict[str, Any]) -> str:
+    async def execute(self, tool_name: str, args: dict[str, Any]) -> str:
         """执行一个 tool call，返回 JSON string 结果"""
         start_time = time.perf_counter()
-        
+
         handler = getattr(self, f"_tool_{tool_name}", None)
         if handler is None:
             result = {"error": f"Unknown tool: {tool_name}"}
@@ -252,7 +252,7 @@ class System2ToolExecutor:
     # Read tools
     # ================================================================
 
-    async def _tool_search_vdb(self, args: Dict) -> Any:
+    async def _tool_search_vdb(self, args: dict) -> Any:
         query = args["query"]
         layers_str = args.get("layers")
         limit = args.get("limit", 10)
@@ -282,7 +282,7 @@ class System2ToolExecutor:
             for r in results
         ]
 
-    async def _tool_search_graph(self, args: Dict) -> Any:
+    async def _tool_search_graph(self, args: dict) -> Any:
         query = args.get("query")
         tags = args.get("tags")
         layer = args.get("layer")
@@ -321,7 +321,7 @@ class System2ToolExecutor:
             })
         return results
 
-    async def _tool_get_node(self, args: Dict) -> Any:
+    async def _tool_get_node(self, args: dict) -> Any:
         node_id = args["node_id"]
 
         # Try VDB first
@@ -361,7 +361,7 @@ class System2ToolExecutor:
 
         return {"error": f"Node {node_id} not found in VDB or Graph"}
 
-    async def _tool_expand_node(self, args: Dict) -> Any:
+    async def _tool_expand_node(self, args: dict) -> Any:
         node_id = args["node_id"]
         hops = args.get("hops", 1)
 
@@ -386,7 +386,7 @@ class System2ToolExecutor:
     # Write tools
     # ================================================================
 
-    async def _tool_create_graph_node(self, args: Dict) -> Any:
+    async def _tool_create_graph_node(self, args: dict) -> Any:
         layer_str = args["layer"]
         content = args["content"]
         evidence_list = args["evidence_list"]
@@ -441,7 +441,7 @@ class System2ToolExecutor:
 
         return {"node_id": node_id, "created": True, "evidence_count": len(evidence_list)}
 
-    async def _tool_add_evidence(self, args: Dict) -> Any:
+    async def _tool_add_evidence(self, args: dict) -> Any:
         """Add evidence to an existing Schema/Intention (content stays immutable)"""
         node_id = args["node_id"]
         evidence_list = args["evidence_list"]
@@ -472,7 +472,7 @@ class System2ToolExecutor:
         except Exception as e:
             logger.debug(f"[S2-tools] increment s2_evidence_count for {vdb_id} failed: {e}")
 
-    async def _tool_add_edge(self, args: Dict) -> Any:
+    async def _tool_add_edge(self, args: dict) -> Any:
         source_id = args["source_id"]
         target_id = args["target_id"]
         reason = args.get("reason", "")

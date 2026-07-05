@@ -31,15 +31,15 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from .llm_provider import LLMProvider, LLMResponse
 from ..config import MemoryConfig
+from .llm_provider import LLMProvider
 
 logger = logging.getLogger(__name__)
 
 
-def _log_ops_detail(ops: List["ReconcileOp"]) -> None:
+def _log_ops_detail(ops: list["ReconcileOp"]) -> None:
     """以单条 INFO（JSON list）输出 reconcile 的逐条结果，便于线上 debug。"""
     if not ops:
         return
@@ -85,14 +85,14 @@ class ReconcileOp:
 
     op: str = "ADD"
     # --- 共用字段 ---
-    content: Optional[str] = None  # 最终存储内容
-    layer: Optional[str] = None  # "L2_FACT" / "L4_IDENTITY"
-    owner: Optional[str] = None  # 'user' / 'agent'（仅 L2_FACT 有意义）
-    tags: List[str] = field(default_factory=list)  # 1-3 topic keywords
-    speculate: Optional[str] = None  # 隐性偏好推导（仅 identity）
+    content: str | None = None  # 最终存储内容
+    layer: str | None = None  # "L2_FACT" / "L4_IDENTITY"
+    owner: str | None = None  # 'user' / 'agent'（仅 L2_FACT 有意义）
+    tags: list[str] = field(default_factory=list)  # 1-3 topic keywords
+    speculate: str | None = None  # 隐性偏好推导（仅 identity）
     # --- SUPERSEDE / UPDATE 字段 ---
-    memory_id: Optional[str] = None  # 目标旧节点 ID（单节点；多节点链时为链上最新的那个）
-    memory_ids: List[str] = field(default_factory=list)  # SUPERSEDE 多节点链：有序（旧→新）的现有节点 ID 列表；用于把多条同维度旧记忆折叠进同一条演化链
+    memory_id: str | None = None  # 目标旧节点 ID（单节点；多节点链时为链上最新的那个）
+    memory_ids: list[str] = field(default_factory=list)  # SUPERSEDE 多节点链：有序（旧→新）的现有节点 ID 列表；用于把多条同维度旧记忆折叠进同一条演化链
     supersede_reason: str = ""  # SUPERSEDE 的矛盾描述
     # --- 通用 ---
     reason: str = ""
@@ -102,9 +102,9 @@ class ReconcileOp:
 class ReconcileResult:
     """Reconcile 结果"""
 
-    ops: List[ReconcileOp] = field(default_factory=list)
+    ops: list[ReconcileOp] = field(default_factory=list)
     success: bool = True
-    error: Optional[str] = None
+    error: str | None = None
     # reconcile 链路 LLM token 消耗（search-query + reconcile 两次 LLM 调用之和）
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -398,7 +398,7 @@ class MemoryReconciler:
 
     def __init__(self, config: MemoryConfig):
         self.config = config
-        self._llm: Optional[LLMProvider] = None
+        self._llm: LLMProvider | None = None
         # 消融开关：关闭时只用新 memory 直接搜索，不生成 search queries
         self._enable_search_query = self._read_enable_search_query()
 
@@ -412,7 +412,7 @@ class MemoryReconciler:
             self._llm = LLMProvider(self.config)
         return self._llm
 
-    async def _generate_search_queries(self, new_memories: List[str]) -> tuple:
+    async def _generate_search_queries(self, new_memories: list[str]) -> tuple:
         """
         Pre-process: 从全部新 memory 中提取 search queries，
         用于补充向量搜索的召回能力。
@@ -459,7 +459,7 @@ class MemoryReconciler:
 
     async def reconcile(
         self,
-        new_memories: List[str],
+        new_memories: list[str],
         user_id: str,
         agent_id: str,
         vector_store,  # VectorStoreBase
@@ -468,7 +468,7 @@ class MemoryReconciler:
         cache=None,  # Optional[CacheBase], 用于写 pipeline_logs
         request_id: str = "",
         current_time: str = "",
-        new_memories_with_meta: Optional[List[Dict]] = None,  # 含 tags 的完整 meta
+        new_memories_with_meta: list[dict] | None = None,  # 含 tags 的完整 meta
     ) -> ReconcileResult:
         """
         对 new_memories 做 reconcile。
@@ -480,8 +480,9 @@ class MemoryReconciler:
         if not new_memories:
             return ReconcileResult(ops=[], success=True)
 
-        from ..models.memory import MemoryLayer, MemoryStatus, MemoryNode
         import asyncio
+
+        from ..models.memory import MemoryLayer, MemoryNode, MemoryStatus
 
         if layers is None:
             layers = [MemoryLayer.L2_FACT, MemoryLayer.L4_IDENTITY]
@@ -490,7 +491,7 @@ class MemoryReconciler:
             import time as _time
 
             # ── Step 1: Search Query 生成（可消融）──
-            search_queries: List[str] = []
+            search_queries: list[str] = []
             sq_response = None
             t_sq = _time.perf_counter()
 
@@ -541,8 +542,8 @@ class MemoryReconciler:
                     logger.warning(f"[reconciler] store SEARCH_QUERY log failed: {e}")
 
             # ── Step 2: 候选搜索，合并候选池 ──
-            candidate_map: Dict[str, MemoryNode] = {}
-            candidate_scores: Dict[str, float] = {}
+            candidate_map: dict[str, MemoryNode] = {}
+            candidate_scores: dict[str, float] = {}
 
             all_search_texts = list(new_memories) + list(search_queries)
             all_embeddings = (
@@ -551,7 +552,7 @@ class MemoryReconciler:
                 else []
             )
 
-            def _merge_hits(hits: List[Dict[str, Any]], source: str) -> None:
+            def _merge_hits(hits: list[dict[str, Any]], source: str) -> None:
                 logger.debug(f"[reconciler] search {source}: {len(hits)} results")
                 for r in hits:
                     node = r.get("node")
@@ -595,7 +596,7 @@ class MemoryReconciler:
                 if i < len(mem_embeddings)
             ]
 
-            async def _search_by_embedding(embedding: List[float], topk: int):
+            async def _search_by_embedding(embedding: list[float], topk: int):
                 return await vector_store.search(
                     query_embedding=embedding,
                     user_id=user_id,
@@ -652,10 +653,10 @@ class MemoryReconciler:
             # supersede 时只暴露 head 的 id+content，history 不提供，防止 LLM 误操作）。
             from ..pipelines._retrieval.evolution import _trace_full_chain
 
-            chain_head_node: Dict[str, MemoryNode] = {}   # head_id → head node
-            chain_best_score: Dict[str, float] = {}       # head_id → 链上最高命中分
-            node_to_head: Dict[str, str] = {}             # 任一命中 node_id → 其链头 id
-            chain_members: Dict[str, List[str]] = {}      # head_id → 整条链 node_id（head+bodies）
+            chain_head_node: dict[str, MemoryNode] = {}   # head_id → head node
+            chain_best_score: dict[str, float] = {}       # head_id → 链上最高命中分
+            node_to_head: dict[str, str] = {}             # 任一命中 node_id → 其链头 id
+            chain_members: dict[str, list[str]] = {}      # head_id → 整条链 node_id（head+bodies）
 
             for nid, node in candidate_map.items():
                 if nid in node_to_head:
@@ -686,7 +687,7 @@ class MemoryReconciler:
             )[: self.FINAL_TOPK * 2]
 
             # 最终候选：以链头为代表（prompt 只展示 head）
-            final_candidates: Dict[str, MemoryNode] = {}
+            final_candidates: dict[str, MemoryNode] = {}
             for head_id in sorted_chains:
                 final_candidates[head_id] = chain_head_node[head_id]
                 candidate_scores[head_id] = chain_best_score.get(head_id, 0.0)
@@ -816,7 +817,7 @@ class MemoryReconciler:
             )
 
             # Helper: format memory_at as date string to minute precision
-            def _format_memory_at(val) -> Optional[str]:
+            def _format_memory_at(val) -> str | None:
                 if val is None:
                     return None
                 if isinstance(val, datetime):
@@ -833,7 +834,7 @@ class MemoryReconciler:
             if new_memories_with_meta:
                 new_mem_list = []
                 for meta in new_memories_with_meta:
-                    item: Dict[str, Any] = {
+                    item: dict[str, Any] = {
                         "content": meta.get("content", ""),
                         "owner": meta.get("owner") or "user",
                         "memory_at": _format_memory_at(current_time) if current_time else None,
@@ -853,7 +854,7 @@ class MemoryReconciler:
 
             existing_mem_list = []
             for node in sorted_candidates:
-                item: Dict[str, Any] = {
+                item: dict[str, Any] = {
                     "memory_id": node.node_id,
                     "content": node.content,
                     "owner": getattr(node, "owner", None) or "user",
@@ -869,7 +870,6 @@ class MemoryReconciler:
             existing_lines = json.dumps(existing_mem_list, ensure_ascii=False, indent=2)
 
             # 构建 current_date（精确到分钟）
-            from datetime import date as _date_cls
             _current_date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
             # Select prompt based on input language
@@ -878,7 +878,7 @@ class MemoryReconciler:
             _few_shot_on = getattr(self.config.llm, "few_shot_enabled", False)
 
             if is_chinese("\n".join(new_memories)):
-                from .prompts_zh import RECONCILE_PROMPT_ZH, RECONCILE_FEW_SHOT_ZH
+                from .prompts_zh import RECONCILE_FEW_SHOT_ZH, RECONCILE_PROMPT_ZH
 
                 _fs = ("\n" + RECONCILE_FEW_SHOT_ZH + "\n") if _few_shot_on else ""
                 prompt = RECONCILE_PROMPT_ZH.format(
@@ -1052,7 +1052,7 @@ class MemoryReconciler:
             return text.split("```")[1].split("```")[0].strip()
         return text
 
-    def _parse_ops(self, text: str) -> List[ReconcileOp]:
+    def _parse_ops(self, text: str) -> list[ReconcileOp]:
         """
         解析 LLM 返回的 RECONCILE 输出。
 
@@ -1084,7 +1084,7 @@ class MemoryReconciler:
             data = [data]
 
         # ── 展平：把 (op_dict, group_reason) 二元组放到 flat 列表里 ──
-        flat_items: List[tuple] = []  # (op_dict, group_reason)
+        flat_items: list[tuple] = []  # (op_dict, group_reason)
         for entry in data:
             if not isinstance(entry, dict):
                 continue
@@ -1103,7 +1103,7 @@ class MemoryReconciler:
                 )
 
         # Pass 1: 结构解析
-        parsed: List[ReconcileOp] = []
+        parsed: list[ReconcileOp] = []
         for op_dict, group_reason in flat_items:
             op_type = str(op_dict.get("op", "")).upper()
             op_reason = str(op_dict.get("reason") or "").strip() or group_reason
@@ -1145,7 +1145,7 @@ class MemoryReconciler:
             elif op_type == "SUPERSEDE":
                 # 接受单 id（memory_id）或多 id 链（memory_ids，有序 旧→新）
                 raw_ids = op_dict.get("memory_ids")
-                id_list: List[str] = []
+                id_list: list[str] = []
                 if isinstance(raw_ids, list):
                     id_list = [str(x).strip() for x in raw_ids if x and str(x).strip()]
                 mid = str(op_dict.get("memory_id") or "").strip()
@@ -1223,8 +1223,8 @@ class MemoryReconciler:
                 continue
 
         # Pass 2: 校验"同一 existing memory 不得被多处 touch"
-        touched: Dict[str, str] = {}  # memory_id → first-seen op description
-        validated: List[ReconcileOp] = []
+        touched: dict[str, str] = {}  # memory_id → first-seen op description
+        validated: list[ReconcileOp] = []
         for op in parsed:
             # SUPERSEDE 多节点链：登记链上所有 id；UPDATE/单节点 SUPERSEDE 登记 memory_id
             if op.op == "SUPERSEDE" and op.memory_ids:

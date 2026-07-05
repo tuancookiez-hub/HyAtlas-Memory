@@ -11,15 +11,15 @@ LLM 只需感知 memory 与 intention 两类，无需感知内部分层（layer�
 另保留 deep_extract (System 2 深度分析) 供后台精炼使用。
 """
 
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass, field
-from enum import Enum
 import json
 import logging
 import re
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
 
-from .llm_provider import LLMProvider
 from ..config import LLMConfig as GlobalLLMConfig
+from .llm_provider import LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -41,24 +41,24 @@ class ExtractResult:
     """提取结果 (V1 兼容)"""
 
     success: bool
-    info: Dict[str, Any] = field(default_factory=dict)
-    suggested_layer: Optional[str] = None
+    info: dict[str, Any] = field(default_factory=dict)
+    suggested_layer: str | None = None
     confidence: float = 0.0
     tokens_used: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    error: Optional[str] = None
-    error_code: Optional[str] = (
+    error: str | None = None
+    error_code: str | None = (
         None  # "EMPTY_RESPONSE" / "JSON_PARSE_FAILED" / "LLM_ERROR"
     )
-    raw_response: Optional[str] = (
+    raw_response: str | None = (
         None  # LLM 原始返回（失败时保留，用于写 pipeline_log）
     )
     tool_calls_only: bool = False  # True 当 LLM 只返回了 tool_calls，content 为空
-    _actual_prompt: Optional[str] = (
+    _actual_prompt: str | None = (
         None  # 实际发送给 LLM 的 user prompt（用于 trace 日志）
     )
-    _actual_system_prompt: Optional[str] = None  # 实际的 system prompt
+    _actual_system_prompt: str | None = None  # 实际的 system prompt
 
 
 @dataclass
@@ -69,30 +69,30 @@ class V2ExtractResult:
     mode: ExtractMode = ExtractMode.LIGHT
 
     # 事实提取
-    facts: List[Dict[str, Any]] = field(default_factory=list)
+    facts: list[dict[str, Any]] = field(default_factory=list)
 
     # 实体与关系
-    entities: List[Dict[str, Any]] = field(default_factory=list)
-    relations: List[Dict[str, Any]] = field(default_factory=list)
+    entities: list[dict[str, Any]] = field(default_factory=list)
+    relations: list[dict[str, Any]] = field(default_factory=list)
 
     # 情绪标注
     emotional_valence: float = 0.0
     emotional_arousal: float = 0.0
 
     # 时间信息
-    temporal_expressions: List[Dict[str, Any]] = field(default_factory=list)
+    temporal_expressions: list[dict[str, Any]] = field(default_factory=list)
 
     # 意图检测
-    intentions: List[Dict[str, Any]] = field(default_factory=list)
+    intentions: list[dict[str, Any]] = field(default_factory=list)
 
     # 画像信息
-    profile_updates: List[Dict[str, Any]] = field(default_factory=list)
+    profile_updates: list[dict[str, Any]] = field(default_factory=list)
 
     # 更新类型判断 (深度模式)
-    update_classifications: List[Dict[str, Any]] = field(default_factory=list)
+    update_classifications: list[dict[str, Any]] = field(default_factory=list)
 
     tokens_used: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 # ================================================================
@@ -769,7 +769,7 @@ Output the JSON now."""
 # 基础画像 section 渲染（英文）
 # ================================================================
 
-def render_basic_profile_section_en(fields: Optional[Dict[str, str]]) -> str:
+def render_basic_profile_section_en(fields: dict[str, str] | None) -> str:
     """
     Render `{basic_profile_section}` block for EXTRACT_PROMPT (English).
 
@@ -779,7 +779,7 @@ def render_basic_profile_section_en(fields: Optional[Dict[str, str]]) -> str:
     if not fields:
         return ""
 
-    lines: List[str] = []
+    lines: list[str] = []
     for k, desc in fields.items():
         if not k or not desc:
             continue
@@ -814,7 +814,7 @@ class Extractor:
     def __init__(
         self,
         llm_provider: LLMProvider,
-        llm_config: Optional[GlobalLLMConfig] = None,
+        llm_config: GlobalLLMConfig | None = None,
     ):
         self.llm = llm_provider
         self._llm_config = llm_config or GlobalLLMConfig()
@@ -829,16 +829,16 @@ class Extractor:
     async def extract(
         self,
         content: str,
-        context: Dict[str, Any] = None,
-        extract_types: List[str] = None,
+        context: dict[str, Any] = None,
+        extract_types: list[str] = None,
         current_time: str = "",
-        existing_tags: Optional[List[str]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_registry: Optional[Any] = None,
-        tool_context: Optional[Dict[str, Any]] = None,
+        existing_tags: list[str] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_registry: Any | None = None,
+        tool_context: dict[str, Any] | None = None,
         history_context: str = "",
-        basic_profile_fields: Optional[Dict[str, str]] = None,
-        extract_scene: Optional[str] = None,
+        basic_profile_fields: dict[str, str] | None = None,
+        extract_scene: str | None = None,
     ) -> ExtractResult:
         """
         统一提取：identity / facts / basic_info
@@ -898,9 +898,9 @@ class Extractor:
 
             if is_chinese(content):
                 from .prompts_zh import (
+                    EXTRACT_FEW_SHOT_ZH,
                     EXTRACT_PROMPT_ZH,
                     EXTRACT_SYSTEM_PROMPT_ZH,
-                    EXTRACT_FEW_SHOT_ZH,
                     render_basic_profile_section_zh,
                 )
 
@@ -948,11 +948,11 @@ class Extractor:
             total_tokens = 0
             total_prompt_tokens = 0
             total_completion_tokens = 0
-            all_tool_calls: List[Dict[str, Any]] = []
-            all_tool_results: List[Dict[str, Any]] = []
+            all_tool_calls: list[dict[str, Any]] = []
+            all_tool_results: list[dict[str, Any]] = []
 
             # 构造 messages（system + user）
-            messages: List[Dict[str, Any]] = [
+            messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ]
@@ -1098,7 +1098,7 @@ class Extractor:
 
             # 空响应判断
             if (not raw_text or not raw_text.strip()) and not all_tool_calls:
-                logger.warning(f"[extractor] LLM returned empty response")
+                logger.warning("[extractor] LLM returned empty response")
                 return ExtractResult(
                     success=False,
                     error="LLM returned empty response",
@@ -1110,7 +1110,7 @@ class Extractor:
                 )
 
             # 解析 JSON
-            info: Dict[str, Any]
+            info: dict[str, Any]
             if raw_text and raw_text.strip():
                 parsed = self._parse_json(raw_text)
                 if parsed is None:
@@ -1177,8 +1177,8 @@ class Extractor:
     async def extract_profile(
         self,
         content: str,
-        context: Dict[str, Any] = None,
-    ) -> Dict[str, Any]:
+        context: dict[str, Any] = None,
+    ) -> dict[str, Any]:
         """专门提取用户画像 (profile 已包含 preferences)"""
         result = await self.extract(content, context)
         if result.success:
@@ -1188,8 +1188,8 @@ class Extractor:
     async def extract_entities(
         self,
         content: str,
-        context: Dict[str, Any] = None,
-    ) -> List[Dict[str, Any]]:
+        context: dict[str, Any] = None,
+    ) -> list[dict[str, Any]]:
         """提取实体"""
         result = await self.extract(content, context)
         if result.success:
@@ -1200,7 +1200,7 @@ class Extractor:
     # 工具方法
     # ================================================================
 
-    def _parse_json(self, text: str) -> Optional[Dict[str, Any]]:
+    def _parse_json(self, text: str) -> dict[str, Any] | None:
         """Parse JSON from LLM output. Handles reasoning model think blocks."""
         text = text.strip()
         # Strip think blocks from reasoning models (MiniMax-M3, DeepSeek-R1, etc.)
@@ -1227,7 +1227,7 @@ class Extractor:
                     pass
         return None
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         return {
             "call_count": self._call_count,

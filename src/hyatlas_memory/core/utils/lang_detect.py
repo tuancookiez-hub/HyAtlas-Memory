@@ -10,7 +10,6 @@ This avoids langdetect's known weakness with short Chinese text.
 
 import logging
 import re
-from typing import List, Dict, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +110,7 @@ def detect_language(text: str) -> str:
 
 def extract_content_for_detection(
     content: str = "",
-    messages: Optional[List] = None,
+    messages: list | None = None,
 ) -> str:
     """
     Extract pure content text for language detection.
@@ -147,7 +146,7 @@ def extract_content_for_detection(
 
 def is_chinese(
     content: str = "",
-    messages: Optional[List] = None,
+    messages: list | None = None,
 ) -> bool:
     """
     Quick check: is the input content Chinese?

@@ -14,7 +14,7 @@ import os
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ def _rotate(path: Path) -> None:
     path.rename(path.with_suffix(".1.jsonl"))
 
 
-def log_event(event_type: str, data: Dict[str, Any], *, session_id: str = "") -> None:
+def log_event(event_type: str, data: dict[str, Any], *, session_id: str = "") -> None:
     """Write one audit event to the JSONL log. Fire-and-forget — errors are swallowed."""
     try:
         entry = {
@@ -63,7 +63,7 @@ def log_event(event_type: str, data: Dict[str, Any], *, session_id: str = "") ->
         logger.debug(f"[audit] log_event failed: {e}")
 
 
-def log_extraction(request_id: str, extracted: Dict[str, Any], *, session_id: str = "") -> None:
+def log_extraction(request_id: str, extracted: dict[str, Any], *, session_id: str = "") -> None:
     """Log S1 extraction results."""
     log_event("s1_extraction", {
         "request_id": request_id,
@@ -87,7 +87,7 @@ def log_reconciliation(request_id: str, ops: Any, *, session_id: str = "") -> No
     log_event("s1_reconciliation", {"request_id": request_id, **summary}, session_id=session_id)
 
 
-def log_s2_digest(user_key: str, result: Dict[str, Any], *, session_id: str = "") -> None:
+def log_s2_digest(user_key: str, result: dict[str, Any], *, session_id: str = "") -> None:
     """Log S2 digest cycle."""
     log_event("s2_digest", {
         "user_key": user_key,
@@ -97,7 +97,7 @@ def log_s2_digest(user_key: str, result: Dict[str, Any], *, session_id: str = ""
     }, session_id=session_id)
 
 
-def log_l5_pipeline(stats: Dict[str, Any], *, session_id: str = "") -> None:
+def log_l5_pipeline(stats: dict[str, Any], *, session_id: str = "") -> None:
     """Log L5 pipeline run."""
     log_event("l5_pipeline", {
         "entities_extracted": stats.get("entities_count", 0),

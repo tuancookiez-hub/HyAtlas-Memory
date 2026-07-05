@@ -7,9 +7,9 @@ Agent Memory - 核心层 (Core Layer)
 - EmbedService: 向量化服务，文本转向量
 """
 
-from .scorer import MemoryScorer as Scorer
-from .merger import Merger, MergeResult, MergerConfig
 from .embed_service import EmbedService
+from .merger import Merger, MergerConfig, MergeResult
+from .scorer import MemoryScorer as Scorer
 
 __all__ = [
     "Scorer",

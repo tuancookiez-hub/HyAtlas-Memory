@@ -21,7 +21,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +79,12 @@ def _safe_json(obj: Any) -> str:
         return "{}"
 
 
-def _preview_node(item: Dict[str, Any], *, content_limit: int = 120) -> Dict[str, Any]:
+def _preview_node(item: dict[str, Any], *, content_limit: int = 120) -> dict[str, Any]:
     """把一条 hit 压缩成可读性好、体积小的预览结构。"""
     node = item.get("node")
     content = ""
     layer = ""
-    tags: List[str] = []
+    tags: list[str] = []
     if node is not None:
         content = (getattr(node, "content", "") or "")[:content_limit]
         try:
@@ -111,7 +111,7 @@ def _preview_node(item: Dict[str, Any], *, content_limit: int = 120) -> Dict[str
     return out
 
 
-def _preview_hits(items: List[Dict[str, Any]], *, top: int = 10) -> List[Dict[str, Any]]:
+def _preview_hits(items: list[dict[str, Any]], *, top: int = 10) -> list[dict[str, Any]]:
     return [_preview_node(it) for it in (items or [])[:top]]
 
 
@@ -167,8 +167,8 @@ class ReadTraceLogger:
         *,
         prompt: str = "",
         response: str = "",
-        parsed: Optional[Dict[str, Any]] = None,
-        memory_ids: Optional[List[str]] = None,
+        parsed: dict[str, Any] | None = None,
+        memory_ids: list[str] | None = None,
         elapsed_ms: float = 0.0,
     ) -> None:
         if not self.enabled:
@@ -206,7 +206,7 @@ class ReadTraceLogger:
         scene: str,
         mode: str,
         is_coding: bool,
-        rewrite_query: Optional[str] = None,
+        rewrite_query: str | None = None,
         rewrite_used: bool = False,
         elapsed_ms: float = 0.0,
     ) -> None:
@@ -239,13 +239,13 @@ class ReadTraceLogger:
         *,
         query: str,
         limit: int,
-        layers: Optional[List[str]],
+        layers: list[str] | None,
         min_score: float = 0.0,
-        profile_min_score: Optional[float] = None,
-        profile_limit: Optional[int] = None,
-        user_ids: List[str],
-        agent_ids: List[str],
-        session_ids: List[str],
+        profile_min_score: float | None = None,
+        profile_limit: int | None = None,
+        user_ids: list[str],
+        agent_ids: list[str],
+        session_ids: list[str],
     ) -> None:
         parsed = {
             "query": query,
@@ -287,7 +287,7 @@ class ReadTraceLogger:
             elapsed_ms=elapsed_ms,
         )
 
-    async def log_intent(self, *, query: str, intent: str, keywords: List[str]) -> None:
+    async def log_intent(self, *, query: str, intent: str, keywords: list[str]) -> None:
         await self._write(
             STEP_READ_INTENT,
             prompt=query or "",
@@ -299,7 +299,7 @@ class ReadTraceLogger:
         self,
         *,
         pool_size: int,
-        hits: List[Dict[str, Any]],
+        hits: list[dict[str, Any]],
         elapsed_ms: float = 0.0,
     ) -> None:
         preview = _preview_hits(hits)
@@ -322,7 +322,7 @@ class ReadTraceLogger:
         *,
         profile_min_score: float,
         profile_limit: int,
-        hits: List[Dict[str, Any]],
+        hits: list[dict[str, Any]],
         elapsed_ms: float = 0.0,
     ) -> None:
         preview = _preview_hits(hits)
@@ -344,7 +344,7 @@ class ReadTraceLogger:
     async def log_keyword_embed(
         self,
         *,
-        keywords: List[str],
+        keywords: list[str],
         vec_count: int,
         elapsed_ms: float = 0.0,
     ) -> None:
@@ -359,8 +359,8 @@ class ReadTraceLogger:
     async def log_tag_match(
         self,
         *,
-        keywords: List[str],
-        hit_tags: List[str],
+        keywords: list[str],
+        hit_tags: list[str],
         topk: int,
         min_score: float,
         elapsed_ms: float = 0.0,
@@ -382,9 +382,9 @@ class ReadTraceLogger:
     async def log_recall_tag(
         self,
         *,
-        hit_tags: List[str],
+        hit_tags: list[str],
         pool_size: int,
-        hits: List[Dict[str, Any]],
+        hits: list[dict[str, Any]],
         elapsed_ms: float = 0.0,
     ) -> None:
         preview = _preview_hits(hits)
@@ -407,14 +407,14 @@ class ReadTraceLogger:
         self,
         *,
         pool_size: int,
-        query_terms: List[str],
-        hits: List[Dict[str, Any]],
-        raw_hits: Optional[List[Dict[str, Any]]] = None,
-        bm25_scores: Optional[Dict[str, float]] = None,
-        normalize_method: Optional[str] = None,
-        sigmoid_midpoint: Optional[float] = None,
-        sigmoid_steepness: Optional[float] = None,
-        has_bm25: Optional[bool] = None,
+        query_terms: list[str],
+        hits: list[dict[str, Any]],
+        raw_hits: list[dict[str, Any]] | None = None,
+        bm25_scores: dict[str, float] | None = None,
+        normalize_method: str | None = None,
+        sigmoid_midpoint: float | None = None,
+        sigmoid_steepness: float | None = None,
+        has_bm25: bool | None = None,
         elapsed_ms: float = 0.0,
     ) -> None:
         """BM25/keyword 路埋点。
@@ -428,7 +428,7 @@ class ReadTraceLogger:
         """
         preview = _preview_hits(hits)
         # 关键词命中的 raw→normalized 明细（按 raw 分降序，便于排查）
-        bm25_detail: List[Dict[str, Any]] = []
+        bm25_detail: list[dict[str, Any]] = []
         _scores = bm25_scores or {}
         _raw = raw_hits if raw_hits is not None else []
         for r in sorted(_raw, key=lambda x: x.get("score", 0.0), reverse=True)[:20]:
@@ -469,8 +469,8 @@ class ReadTraceLogger:
     async def log_entity(
         self,
         *,
-        entity_texts: List[str],
-        boosts: Dict[str, float],
+        entity_texts: list[str],
+        boosts: dict[str, float],
         elapsed_ms: float = 0.0,
     ) -> None:
         """路 D：entity boost（mem0 reader）。
@@ -508,7 +508,7 @@ class ReadTraceLogger:
         max_possible: float,
         candidate_pool: int,
         threshold: float,
-        scored: List[Dict[str, Any]],
+        scored: list[dict[str, Any]],
         top_n: int = 10,
         elapsed_ms: float = 0.0,
     ) -> None:
@@ -519,7 +519,7 @@ class ReadTraceLogger:
           - max_possible：全局分母（1.0 / 1.5 / 2.0 / 2.5）；
           - 每条结果的 _semantic / _bm25 / _entity 原始分量 + combined 终分。
         """
-        preview: List[Dict[str, Any]] = []
+        preview: list[dict[str, Any]] = []
         for item in (scored or [])[:top_n]:
             node = item.get("node")
             layer = ""
@@ -568,14 +568,14 @@ class ReadTraceLogger:
     async def log_rrf(
         self,
         *,
-        channels: Dict[str, int],          # {"vec": 30, "tag": 18, "bm25": 12}
-        weights: Dict[str, float],
-        fused: List[Dict[str, Any]],
+        channels: dict[str, int],          # {"vec": 30, "tag": 18, "bm25": 12}
+        weights: dict[str, float],
+        fused: list[dict[str, Any]],
         confidence: float,
         is_low_confidence: bool,
         top_n: int = 10,
     ) -> None:
-        preview: List[Dict[str, Any]] = []
+        preview: list[dict[str, Any]] = []
         for item in (fused or [])[:top_n]:
             preview.append({
                 "node_id": item.get("node_id", ""),
@@ -655,13 +655,13 @@ class ReadTraceLogger:
         self,
         *,
         query: str,
-        intent: Optional[str],
-        confidence: Optional[float],
-        is_low_confidence: Optional[bool],
-        channels: Dict[str, int],
+        intent: str | None,
+        confidence: float | None,
+        is_low_confidence: bool | None,
+        channels: dict[str, int],
         total_found: int,
         elapsed_ms: float,
-        returned_memories: List[Dict[str, Any]],
+        returned_memories: list[dict[str, Any]],
     ) -> None:
         """一次 search 的总览日志，对齐 writer 侧的 DIGEST_SUMMARY 作用。"""
         parsed = {

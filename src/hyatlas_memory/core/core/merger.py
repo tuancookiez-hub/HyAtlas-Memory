@@ -26,12 +26,11 @@ Agent Memory - Merger 合并器
         print(f"合并后内容: {result.merged_content}")
 """
 
-from typing import Dict, Any, Optional, List
+import logging
 from dataclasses import dataclass
 from enum import Enum
-import logging
+from typing import Any
 
-from ..models import MemoryEntry
 from ..config import LLMConfig as GlobalLLMConfig
 
 logger = logging.getLogger(__name__)
@@ -51,8 +50,8 @@ class MergeResult:
     合并结果
     """
     should_merge: bool = False
-    target_memory_id: Optional[str] = None
-    merged_content: Optional[str] = None
+    target_memory_id: str | None = None
+    merged_content: str | None = None
     strategy: MergeStrategy = MergeStrategy.KEEP_BOTH
     reason: str = ""
     similarity_score: float = 0.0
@@ -66,10 +65,10 @@ class MergerConfig:
     # 相似度阈值
     merge_threshold: float = 0.85          # 高于此值触发合并
     duplicate_threshold: float = 0.95      # 高于此值认为是重复
-    
+
     # 合并策略
     default_strategy: MergeStrategy = MergeStrategy.SMART
-    
+
     # 其他选项
     max_content_length: int = 2000         # 合并后最大长度
     enable_smart_merge: bool = True        # 是否启用智能合并
@@ -81,11 +80,11 @@ class Merger:
     
     检测和处理重复/相似记忆。
     """
-    
+
     def __init__(
         self,
-        config: Optional[MergerConfig] = None,
-        llm_config: Optional[GlobalLLMConfig] = None,
+        config: MergerConfig | None = None,
+        llm_config: GlobalLLMConfig | None = None,
     ):
         """
         初始化合并器
@@ -96,18 +95,18 @@ class Merger:
         """
         self.config = config or MergerConfig()
         self._llm_config = llm_config or GlobalLLMConfig()
-        
+
         # 统计
         self._check_count = 0
         self._merge_count = 0
-        
+
         logger.info("Merger initialized")
-    
+
     def check_merge(
         self,
         new_content: str,
-        existing_memories: List[Any],
-        context: Dict[str, Any] = None,
+        existing_memories: list[Any],
+        context: dict[str, Any] = None,
     ) -> MergeResult:
         """
         检查是否需要合并
@@ -121,22 +120,22 @@ class Merger:
             合并结果
         """
         self._check_count += 1
-        
+
         if not existing_memories:
             return MergeResult(should_merge=False, reason="No existing memories")
-        
+
         # 找到最相似的记忆
         best_match = None
         best_score = 0.0
-        
+
         for mem in existing_memories:
             # 获取相似度分数
             score = self._get_similarity_score(mem)
-            
+
             if score > best_score:
                 best_score = score
                 best_match = mem
-        
+
         # 判断是否需要合并
         if best_score >= self.config.duplicate_threshold:
             # 完全重复，跳过
@@ -147,16 +146,16 @@ class Merger:
                 similarity_score=best_score,
                 reason="Duplicate content detected",
             )
-        
+
         if best_score >= self.config.merge_threshold:
             # 需要合并
             merged_content = self._merge_content(
                 new_content,
                 self._get_content(best_match),
             )
-            
+
             self._merge_count += 1
-            
+
             return MergeResult(
                 should_merge=True,
                 target_memory_id=self._get_memory_id(best_match),
@@ -165,14 +164,14 @@ class Merger:
                 similarity_score=best_score,
                 reason="Similar content, merged",
             )
-        
+
         # 不需要合并
         return MergeResult(
             should_merge=False,
             similarity_score=best_score,
             reason="No similar memory found",
         )
-    
+
     def _get_similarity_score(self, memory: Any) -> float:
         """获取相似度分数"""
         if isinstance(memory, dict):
@@ -183,7 +182,7 @@ class Merger:
                 return score.semantic_score
             return float(score) if score else 0.0
         return 0.0
-    
+
     def _get_memory_id(self, memory: Any) -> str:
         """获取记忆 ID"""
         if isinstance(memory, dict):
@@ -191,7 +190,7 @@ class Merger:
         elif hasattr(memory, "memory_id"):
             return memory.memory_id
         return ""
-    
+
     def _get_content(self, memory: Any) -> str:
         """获取记忆内容"""
         if isinstance(memory, dict):
@@ -199,7 +198,7 @@ class Merger:
         elif hasattr(memory, "content"):
             return memory.content
         return ""
-    
+
     def _merge_content(
         self,
         new_content: str,
@@ -221,21 +220,21 @@ class Merger:
         # 简单策略：使用更长的内容
         if len(new_content) > len(old_content) * 1.2:
             return new_content
-        
+
         # 检查新内容是否包含额外信息
         # 简单方法：检查新内容是否完全包含在旧内容中
         if new_content.strip() in old_content:
             return old_content
-        
+
         # 追加新信息
         # 实际应用中应该使用 LLM 进行智能合并
         if len(old_content) + len(new_content) < self.config.max_content_length:
             # 避免简单拼接，这里只是示例
             # 实际应该提取新信息并更新
             return new_content  # 使用新内容
-        
+
         return new_content
-    
+
     async def smart_merge(
         self,
         new_content: str,
@@ -255,7 +254,7 @@ class Merger:
         """
         if llm_provider is None:
             return self._merge_content(new_content, old_content)
-        
+
         prompt = f"""请将以下两条记忆合并为一条，保留所有有用信息：
 
 旧记忆：
@@ -277,14 +276,14 @@ class Merger:
             max_tokens=self._llm_config.agent_max_tokens,
             temperature=0.3,
         )
-        
+
         return response.content.strip()
-    
+
     def deduplicate(
         self,
-        memories: List[Any],
+        memories: list[Any],
         threshold: float = None,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """
         批量去重
         
@@ -297,22 +296,22 @@ class Merger:
         """
         if threshold is None:
             threshold = self.config.duplicate_threshold
-        
+
         # 简单实现：基于内容哈希去重
         seen = set()
         result = []
-        
+
         for mem in memories:
             content = self._get_content(mem)
             content_hash = hash(content.strip().lower())
-            
+
             if content_hash not in seen:
                 seen.add(content_hash)
                 result.append(mem)
-        
+
         return result
-    
-    def get_stats(self) -> Dict[str, Any]:
+
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         return {
             "check_count": self._check_count,

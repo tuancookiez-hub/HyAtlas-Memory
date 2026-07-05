@@ -15,20 +15,20 @@ HY Memory - System 2 Writer (ultra 模式)
   - digest() 一次 = 对该 user 的 VDB 全量跑一次 S2 + sweeper（同步阻塞、非幂等）。
 """
 
-import os
-from typing import Optional, Dict, Any
-from datetime import datetime
 import logging
+import os
+import time
+from datetime import datetime
+from typing import Any
 
-from .base import WritePipeline, WriteRequest, WriteResponse, PipelineContext
-from .writer import MemoryWriter
 from ..config import MemoryConfig
 from ..core.embed_service import EmbedService
-from ..data.vector_store_base import VectorStoreBase
 from ..data.graph_store_base import GraphStoreBase
+from ..data.vector_store_base import VectorStoreBase
 from ..utils.tracer import PipelineTracer, create_tracer
+from .base import PipelineContext, WritePipeline, WriteRequest, WriteResponse
+from .writer import MemoryWriter
 
-import time
 logger = logging.getLogger(__name__)
 
 _SWEEPER_ENABLED = os.getenv("SWEEPER_ENABLED", "true").lower() == "true"
@@ -59,9 +59,9 @@ class System2Writer(WritePipeline):
     def __init__(
         self,
         config: MemoryConfig,
-        embed_service: Optional[EmbedService] = None,
-        vector_store: Optional[VectorStoreBase] = None,
-        graph_store: Optional[GraphStoreBase] = None,
+        embed_service: EmbedService | None = None,
+        vector_store: VectorStoreBase | None = None,
+        graph_store: GraphStoreBase | None = None,
         cache=None,
     ):
         self.config = config
@@ -71,7 +71,7 @@ class System2Writer(WritePipeline):
         self._cache = cache
 
         # System 1: 复用 MemoryWriter
-        self._writer: Optional[MemoryWriter] = None
+        self._writer: MemoryWriter | None = None
 
         self._initialized = False
 
@@ -95,8 +95,8 @@ class System2Writer(WritePipeline):
     async def write(
         self,
         request: WriteRequest,
-        ctx: Optional[PipelineContext] = None,
-        tracer: Optional[PipelineTracer] = None,
+        ctx: PipelineContext | None = None,
+        tracer: PipelineTracer | None = None,
     ) -> WriteResponse:
         """
         执行 Pro 写入流程:
@@ -146,7 +146,7 @@ class System2Writer(WritePipeline):
     # System 2 认知加工
     # ================================================================
 
-    async def _run_system2_workers(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def _run_system2_workers(self, payload: dict[str, Any]) -> dict[str, Any]:
         """
         System 2 认知加工 — System 2 Agent + Graph
 
@@ -155,7 +155,7 @@ class System2Writer(WritePipeline):
         """
         return await self._run_system2_agent(payload)
 
-    async def _run_system2_agent_with_timing(self, payload: Dict[str, Any]) -> Dict[str, float]:
+    async def _run_system2_agent_with_timing(self, payload: dict[str, Any]) -> dict[str, float]:
         """
         包裹 _run_system2_agent，返回细分 timing:
           - preprocess_ms
@@ -313,7 +313,7 @@ class System2Writer(WritePipeline):
             "tools_avg_ms": tools_avg_ms,
         }
 
-    async def _run_system2_agent(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def _run_system2_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
         """
         System 2 Agent — 预处理 + LLM Agent + Graph tools
         """
@@ -504,7 +504,7 @@ class System2Writer(WritePipeline):
         agent_id: str,
         llm_call,
         request_id: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """在 System2 Agent 之后运行跨域突破性归纳"""
         if not _SWEEPER_ENABLED:
             return {"skipped": True, "reason": "SWEEPER_ENABLED=false"}
@@ -549,7 +549,7 @@ class System2Writer(WritePipeline):
         user_id: str,
         agent_id: str,
         step: str,
-        result: Dict[str, Any],
+        result: dict[str, Any],
     ) -> None:
         """Write a pipeline log entry for a System 2 worker execution."""
         if not self._cache or not request_id:
@@ -580,7 +580,7 @@ class System2Writer(WritePipeline):
         self,
         user_id: str,
         agent_id: str = "default_agent",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         手动触发 cross-domain sweeper（同步等待完成）。
 
@@ -614,7 +614,7 @@ class System2Writer(WritePipeline):
         self,
         user_id: str,
         agent_id: str = "default_agent",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         手动触发 System 2 认知加工（由调用方/App 层控制触发时机）。
 

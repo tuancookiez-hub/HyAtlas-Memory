@@ -11,12 +11,11 @@ Agent Memory V2 - 核心数据模型
 - 兼容别名: MemoryEntry, MemoryMetadata, MemoryScore (保留旧接口)
 """
 
-from enum import Enum
-from typing import Optional, Dict, Any, List
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-import uuid
-
+from enum import Enum
+from typing import Any
 
 # ============================================================
 # 枚举类型
@@ -95,7 +94,7 @@ class MemoryLayer(str, Enum):
         raise ValueError(f"Invalid memory layer: {value}")
 
     @classmethod
-    def all_layers(cls) -> List["MemoryLayer"]:
+    def all_layers(cls) -> list["MemoryLayer"]:
         """返回所有记忆层 (不含别名)"""
         return [
             cls.L0_BASIC_INFO,
@@ -254,28 +253,28 @@ class MemoryNode:
     # === 归属（owner）===
     # 该记忆属于谁：'user'（关于用户/用户陈述）| 'agent'（assistant 提供/用户要 agent 做的事）。
     # 仅 L2_FACT / L7_INTENTION 写入；其他层（L0/L1/L3/L5/L6）留空（None）。
-    owner: Optional[str] = None
+    owner: str | None = None
 
     # === 时空维度 ===
-    memory_at: Optional[datetime] = None     # 记忆发生时间（用户指定，可为空）
-    temporal_anchor: Optional[str] = None    # 保留字段兼容历史数据；v0.3.45_v0 post8 起不再写入
-    valid_from: Optional[datetime] = None
-    valid_until: Optional[datetime] = None
+    memory_at: datetime | None = None     # 记忆发生时间（用户指定，可为空）
+    temporal_anchor: str | None = None    # 保留字段兼容历史数据；v0.3.45_v0 post8 起不再写入
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
 
     # === 数据管理时间 ===
-    gmt_created: Optional[datetime] = None   # 数据写入时间（系统自动）
-    gmt_modified: Optional[datetime] = None  # 数据最后修改时间（系统自动）
+    gmt_created: datetime | None = None   # 数据写入时间（系统自动）
+    gmt_modified: datetime | None = None  # 数据最后修改时间（系统自动）
 
     # === 演化图谱（EVOLVE 语义）===
-    supersedes: Optional[List[str]] = None       # 本节点取代的旧节点 ID 列表，全新信息为 None
-    superseded_by: Optional[List[str]] = None    # 被哪些新节点取代（系统写入，不透出给调用方）
+    supersedes: list[str] | None = None       # 本节点取代的旧节点 ID 列表，全新信息为 None
+    superseded_by: list[str] | None = None    # 被哪些新节点取代（系统写入，不透出给调用方）
     is_latest: bool = True                       # 是否链条末端；被取代时系统自动置 False
 
     # === 推断注解（不参与 embed）===
-    speculate: Optional[str] = None              # LLM 对复杂/模糊信号的推断注解
+    speculate: str | None = None              # LLM 对复杂/模糊信号的推断注解
 
     # === Summary 锚点（L3_SUMMARY / L4_IDENTITY）===
-    source_raw_memory_id: Optional[str] = None   # 对应的 L1_RAW 节点 ID
+    source_raw_memory_id: str | None = None   # 对应的 L1_RAW 节点 ID
 
     # === 状态 ===
     status: MemoryStatus = MemoryStatus.ACTIVE
@@ -291,8 +290,8 @@ class MemoryNode:
 
     # === 检索元数据 ===
     access_count: int = 0
-    last_accessed_at: Optional[datetime] = None
-    embedding: Optional[List[float]] = None
+    last_accessed_at: datetime | None = None
+    embedding: list[float] | None = None
 
     # === 长尾标记 ===
     specificity_score: float = 0.0      # [0, 1] 具体度
@@ -300,17 +299,17 @@ class MemoryNode:
     longtail_flag: bool = False
 
     # === 元认知标记 ===
-    meta_tags: List[MetaCognitionTag] = field(default_factory=list)
-    meta_hints: Dict[str, str] = field(default_factory=dict)
+    meta_tags: list[MetaCognitionTag] = field(default_factory=list)
+    meta_hints: dict[str, str] = field(default_factory=dict)
 
     # === 出处追溯 ===
     source_session_id: str = ""
-    source_turn_index: Optional[int] = None
-    evidence_chain: List[str] = field(default_factory=list)
+    source_turn_index: int | None = None
+    evidence_chain: list[str] = field(default_factory=list)
 
     # === 扩展字段 ===
-    custom: Dict[str, Any] = field(default_factory=dict)
-    tags: List[str] = field(default_factory=list)
+    custom: dict[str, Any] = field(default_factory=dict)
+    tags: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.node_id:
@@ -370,7 +369,7 @@ class MemoryNode:
             return parts[0], parts[1], "default_session"
         return "", "", ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """序列化为字典"""
         return {
             "node_id": self.node_id,
@@ -425,7 +424,7 @@ class MemoryNode:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MemoryNode":
+    def from_dict(cls, data: dict[str, Any]) -> "MemoryNode":
         """从字典反序列化（兼容旧 payload 中的废弃字段，忽略即可）"""
         def parse_dt(v):
             if v is None:
@@ -523,20 +522,20 @@ class VersionedFact(MemoryNode):
 
     V2 §3.2: 不直接修改事实内容，而是通过 status 变迁 + SUPERSEDED_BY 边来追踪变更。
     """
-    update_type: Optional[UpdateType] = None
+    update_type: UpdateType | None = None
 
     def __post_init__(self):
         super().__post_init__()
         if self.layer == MemoryLayer.L1_RAW:
             self.layer = MemoryLayer.L2_FACT
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         d = super().to_dict()
         d["update_type"] = self.update_type.value if self.update_type else None
         return d
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "VersionedFact":
+    def from_dict(cls, data: dict[str, Any]) -> "VersionedFact":
         base = MemoryNode.from_dict(data)
         update_type = None
         if data.get("update_type"):
@@ -555,18 +554,18 @@ class SchemaNode(MemoryNode):
     V3 §2.2
     """
     central_proposition: str = ""
-    supporting_evidence: List[str] = field(default_factory=list)
-    expected_inferences: List[str] = field(default_factory=list)
+    supporting_evidence: list[str] = field(default_factory=list)
+    expected_inferences: list[str] = field(default_factory=list)
     activation_threshold: float = 0.7
     activation_count: int = 0
-    last_activated_at: Optional[datetime] = None
+    last_activated_at: datetime | None = None
     schema_status: SchemaStatus = SchemaStatus.FORMING
 
     def __post_init__(self):
         super().__post_init__()
         self.layer = MemoryLayer.L6_SCHEMA
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         d = super().to_dict()
         d.update({
             "central_proposition": self.central_proposition,
@@ -580,7 +579,7 @@ class SchemaNode(MemoryNode):
         return d
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SchemaNode":
+    def from_dict(cls, data: dict[str, Any]) -> "SchemaNode":
         base = MemoryNode.from_dict(data)
         def parse_dt(v):
             if v is None:
@@ -621,24 +620,24 @@ class IntentionNode(MemoryNode):
     trigger_condition: str = ""
 
     # 时间触发
-    trigger_time: Optional[datetime] = None
+    trigger_time: datetime | None = None
 
     # 事件触发
-    trigger_event_pattern: Optional[str] = None
-    trigger_event_embedding: Optional[List[float]] = None
+    trigger_event_pattern: str | None = None
+    trigger_event_embedding: list[float] | None = None
 
     # 意图内容
     intention_content: str = ""
     priority: IntentionPriority = IntentionPriority.MEDIUM
-    expiry: Optional[datetime] = None
+    expiry: datetime | None = None
     triggered: bool = False
-    triggered_at: Optional[datetime] = None
+    triggered_at: datetime | None = None
 
     def __post_init__(self):
         super().__post_init__()
         self.layer = MemoryLayer.L7_INTENTION
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         d = super().to_dict()
         d.update({
             "trigger_type": self.trigger_type.value,
@@ -654,7 +653,7 @@ class IntentionNode(MemoryNode):
         return d
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "IntentionNode":
+    def from_dict(cls, data: dict[str, Any]) -> "IntentionNode":
         base = MemoryNode.from_dict(data)
         def parse_dt(v):
             if v is None:
@@ -710,13 +709,13 @@ class KnowledgeGap:
     gap_type: GapType = GapType.PROFILE_INCOMPLETE
     importance: str = "medium"          # high / medium / low
     description: str = ""
-    related_node_ids: List[str] = field(default_factory=list)
+    related_node_ids: list[str] = field(default_factory=list)
     hint: str = ""
-    created_at: Optional[datetime] = None
-    last_scanned_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    last_scanned_at: datetime | None = None
     resolved: bool = False
-    resolved_at: Optional[datetime] = None
-    resolve_trigger: Optional[str] = None
+    resolved_at: datetime | None = None
+    resolve_trigger: str | None = None
 
     def __post_init__(self):
         if not self.gap_id:
@@ -727,7 +726,7 @@ class KnowledgeGap:
         if self.last_scanned_at is None:
             self.last_scanned_at = now
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "gap_id": self.gap_id,
             "user_id": self.user_id,
@@ -745,7 +744,7 @@ class KnowledgeGap:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "KnowledgeGap":
+    def from_dict(cls, data: dict[str, Any]) -> "KnowledgeGap":
         def parse_dt(v):
             if v is None:
                 return None
@@ -787,11 +786,11 @@ class KnowledgeGap:
 class LifeStage:
     """用户的一个生命阶段"""
     name: str = ""                      # "大学时期", "在上海工作"
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
     description: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "start_time": int(self.start_time.timestamp()) if self.start_time else None,
@@ -800,7 +799,7 @@ class LifeStage:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "LifeStage":
+    def from_dict(cls, data: dict[str, Any]) -> "LifeStage":
         def parse_dt(v):
             if v is None:
                 return None
@@ -828,13 +827,13 @@ class TemporalEvent:
     """
     event_id: str = ""                  # 关联的 fact_id
     event_description: str = ""
-    event_time: Optional[datetime] = None
+    event_time: datetime | None = None
     time_precision: str = "approximate"  # exact / month / quarter / year / approximate
     time_description: str = ""          # 原始时间描述
-    life_stage: Optional[str] = None
+    life_stage: str | None = None
     is_milestone: bool = False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
             "event_description": self.event_description,
@@ -846,7 +845,7 @@ class TemporalEvent:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "TemporalEvent":
+    def from_dict(cls, data: dict[str, Any]) -> "TemporalEvent":
         def parse_dt(v):
             if v is None:
                 return None
@@ -876,11 +875,11 @@ class UserTimeline:
     V2 §6.1
     """
     user_id: str = ""
-    events: List[TemporalEvent] = field(default_factory=list)
-    life_stages: List[LifeStage] = field(default_factory=list)
-    milestone_events: Dict[str, TemporalEvent] = field(default_factory=dict)
+    events: list[TemporalEvent] = field(default_factory=list)
+    life_stages: list[LifeStage] = field(default_factory=list)
+    milestone_events: dict[str, TemporalEvent] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "user_id": self.user_id,
             "events": [e.to_dict() for e in self.events],
@@ -889,7 +888,7 @@ class UserTimeline:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "UserTimeline":
+    def from_dict(cls, data: dict[str, Any]) -> "UserTimeline":
         return cls(
             user_id=data.get("user_id", ""),
             events=[TemporalEvent.from_dict(e) for e in data.get("events", [])],
@@ -910,11 +909,11 @@ class ProfileSummary:
     """用户画像摘要 (Layer 0, 始终返回)"""
     core: str = ""                      # "张三, 30岁, 北京, 后端工程师"
     personality: str = ""               # "务实, 技术导向"
-    active_schemas: List[str] = field(default_factory=list)
-    gotchas: List[str] = field(default_factory=list)
+    active_schemas: list[str] = field(default_factory=list)
+    gotchas: list[str] = field(default_factory=list)
     note: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "core": self.core,
             "personality": self.personality,
@@ -932,9 +931,9 @@ class MemoryIndexEntry:
     content_type: str = ""
     title: str = ""
     relevance: float = 0.0
-    meta_tags: List[str] = field(default_factory=list)
+    meta_tags: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.node_id,
             "date": self.date,
@@ -951,10 +950,10 @@ class MemorySummaryEntry:
     node_id: str = ""
     summary: str = ""
     confidence: float = 0.0
-    meta_tags: List[str] = field(default_factory=list)
-    meta_hints: Dict[str, str] = field(default_factory=dict)
+    meta_tags: list[str] = field(default_factory=list)
+    meta_hints: dict[str, str] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.node_id,
             "summary": self.summary,
@@ -968,11 +967,11 @@ class MemorySummaryEntry:
 class MetaCognitionReport:
     """元认知报告"""
     confidence_summary: str = ""
-    knowledge_gaps: List[Dict[str, Any]] = field(default_factory=list)
-    unresolved_conflicts: List[Dict[str, Any]] = field(default_factory=list)
-    stale_memories: List[Dict[str, Any]] = field(default_factory=list)
+    knowledge_gaps: list[dict[str, Any]] = field(default_factory=list)
+    unresolved_conflicts: list[dict[str, Any]] = field(default_factory=list)
+    stale_memories: list[dict[str, Any]] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "confidence_summary": self.confidence_summary,
             "knowledge_gaps": self.knowledge_gaps,
@@ -987,10 +986,10 @@ class TriggeredIntention:
     trigger_reason: str = ""
     intention: str = ""
     priority: str = "medium"
-    meta_tags: List[str] = field(default_factory=list)
+    meta_tags: list[str] = field(default_factory=list)
     source_intention_id: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "trigger_reason": self.trigger_reason,
             "intention": self.intention,
@@ -1005,11 +1004,11 @@ class ActivatedSchema:
     """被激活的 Schema"""
     schema: str = ""
     evidence_summary: str = ""
-    expected_inferences: List[str] = field(default_factory=list)
-    meta_tags: List[str] = field(default_factory=list)
+    expected_inferences: list[str] = field(default_factory=list)
+    meta_tags: list[str] = field(default_factory=list)
     source_schema_id: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "schema": self.schema,
             "evidence_summary": self.evidence_summary,
@@ -1022,10 +1021,10 @@ class ActivatedSchema:
 @dataclass
 class TemporalContext:
     """时间线上下文 (query 涉及时间时返回)"""
-    relevant_timeline: List[Dict[str, str]] = field(default_factory=list)
+    relevant_timeline: list[dict[str, str]] = field(default_factory=list)
     temporal_note: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "relevant_timeline": self.relevant_timeline,
             "temporal_note": self.temporal_note,
@@ -1043,27 +1042,27 @@ class MemoryContextPackage:
     profile_summary: ProfileSummary = field(default_factory=ProfileSummary)
 
     # Layer 1: 索引视图 (~100 tokens)
-    index_view: List[MemoryIndexEntry] = field(default_factory=list)
+    index_view: list[MemoryIndexEntry] = field(default_factory=list)
 
     # Layer 2: 摘要视图 (~500 tokens, 按需展开)
-    summary_view: List[MemorySummaryEntry] = field(default_factory=list)
+    summary_view: list[MemorySummaryEntry] = field(default_factory=list)
 
     # Layer 3: 完整内容 (按需懒加载)
-    full_content_ids: List[str] = field(default_factory=list)
+    full_content_ids: list[str] = field(default_factory=list)
 
     # 元认知信号
     meta_cognition: MetaCognitionReport = field(default_factory=MetaCognitionReport)
 
     # 前瞻性意图
-    triggered_intentions: List[TriggeredIntention] = field(default_factory=list)
+    triggered_intentions: list[TriggeredIntention] = field(default_factory=list)
 
     # 激活的 Schema
-    activated_schemas: List[ActivatedSchema] = field(default_factory=list)
+    activated_schemas: list[ActivatedSchema] = field(default_factory=list)
 
     # 时间线上下文
-    temporal_context: Optional[TemporalContext] = None
+    temporal_context: TemporalContext | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "profile_summary": self.profile_summary.to_dict(),
             "index_view": [e.to_dict() for e in self.index_view],
@@ -1095,22 +1094,22 @@ class MemoryMetadata:
     agent_id: str = ""
     layer: MemoryLayer = MemoryLayer.L1_RAW
 
-    event_time: Optional[datetime] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    expires_at: Optional[datetime] = None
+    event_time: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    expires_at: datetime | None = None
 
     importance: float = 1.0
     recency_weight: float = 1.0
     access_count: int = 0
-    last_accessed: Optional[datetime] = None
+    last_accessed: datetime | None = None
 
-    source: Optional[str] = None
-    parent_id: Optional[str] = None
-    related_ids: List[str] = field(default_factory=list)
+    source: str | None = None
+    parent_id: str | None = None
+    related_ids: list[str] = field(default_factory=list)
 
-    custom: Dict[str, Any] = field(default_factory=dict)
-    tags: List[str] = field(default_factory=list)
+    custom: dict[str, Any] = field(default_factory=dict)
+    tags: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         now = datetime.now()
@@ -1121,7 +1120,7 @@ class MemoryMetadata:
         if self.event_time is None:
             self.event_time = now
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "uid": self.uid,
             "agent_id": self.agent_id,
@@ -1142,7 +1141,7 @@ class MemoryMetadata:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MemoryMetadata":
+    def from_dict(cls, data: dict[str, Any]) -> "MemoryMetadata":
         def parse_datetime(value):
             if value is None:
                 return None
@@ -1204,7 +1203,7 @@ class MemoryScore:
             + self.access_score * self.access_weight
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "semantic_score": self.semantic_score,
             "recency_score": self.recency_score,

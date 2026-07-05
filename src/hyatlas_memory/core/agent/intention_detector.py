@@ -19,9 +19,9 @@ V2 设计文档 §3.4 + §4.1:
 """
 
 import json
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass, field
 import logging
+from dataclasses import dataclass, field
+from typing import Any
 
 from .llm_provider import LLMProvider
 
@@ -118,10 +118,10 @@ class DetectedIntention:
     content: str = ""
     trigger_type: str = "event_based"   # time_based / event_based
     trigger_condition: str = ""
-    trigger_time: Optional[str] = None  # ISO format
-    trigger_event_pattern: Optional[str] = None
+    trigger_time: str | None = None  # ISO format
+    trigger_event_pattern: str | None = None
     priority: str = "medium"            # high / medium / low
-    expiry: Optional[str] = None
+    expiry: str | None = None
     is_proactive_care: bool = False
 
 
@@ -129,9 +129,9 @@ class DetectedIntention:
 class IntentionDetectResult:
     """意图检测结果"""
     success: bool
-    intentions: List[DetectedIntention] = field(default_factory=list)
+    intentions: list[DetectedIntention] = field(default_factory=list)
     tokens_used: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
@@ -146,9 +146,9 @@ class TriggeredIntentionItem:
 class IntentionTriggerResult:
     """意图触发检查结果"""
     success: bool
-    triggered: List[TriggeredIntentionItem] = field(default_factory=list)
+    triggered: list[TriggeredIntentionItem] = field(default_factory=list)
     tokens_used: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 # ================================================================
@@ -167,7 +167,7 @@ class IntentionDetector:
     def __init__(
         self,
         llm: LLMProvider,
-        config: Optional[IntentionDetectorConfig] = None,
+        config: IntentionDetectorConfig | None = None,
     ):
         self.llm = llm
         self.config = config or IntentionDetectorConfig()
@@ -237,7 +237,7 @@ class IntentionDetector:
     async def check_triggers(
         self,
         current_content: str,
-        existing_intentions: List[Dict[str, Any]],
+        existing_intentions: list[dict[str, Any]],
         current_time: str = "",
     ) -> IntentionTriggerResult:
         """
@@ -301,7 +301,7 @@ class IntentionDetector:
     # ================================================================
 
     @staticmethod
-    def _parse_json(text: str) -> Dict[str, Any]:
+    def _parse_json(text: str) -> dict[str, Any]:
         """从 LLM 输出中解析 JSON"""
         import re
         text = text.strip()
@@ -320,7 +320,7 @@ class IntentionDetector:
                     pass
         return {}
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         return {
             "call_count": self._call_count,
