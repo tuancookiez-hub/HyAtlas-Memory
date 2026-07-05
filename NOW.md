@@ -1,33 +1,36 @@
 # HyAtlas-Memory — Current State
 
-## v3.0.0 — Battle-Tested and Maturing
+## v3.0.0 — Release-Prepared
 
-**Branch:** `feat/v3-fork` (14 commits)
-**Tests:** 51 passed, 1 skipped
-**Latest commit:** `8181f42` — restored hybrid_tag reader, emotion analyzer, arousal-weighted strength
+**Branch:** `feat/v3-fork` (17 commits)
+**Tests:** 47 passed, 5 skipped
+**Latest commit:** `5ccc01e` — L5 think-block parsing fix + Kuzu WAL checkpoint + emotion wiring
 
-### What's Working
+### What's Working (Live-Verified)
 - Full pipeline: L1_RAW → L2_FACT extraction → L4_IDENTITY → L5_KNOWLEDGE (in-process) → S2 digest
-- 3 reader strategies: legacy, hybrid_v2, hybrid_tag (3-channel RRF)
-- Emotion analyzer restored (valence/arousal scoring, think-block parsing fix)
+- Emotion analyzer wired into write path: valence=0.95, arousal=0.9 verified on test content
 - Arousal-weighted memory strength: emotionally significant memories decay slower
+- 3 reader strategies: legacy, hybrid_v2, hybrid_tag (3-channel RRF)
+- Kuzu WAL checkpoint: close() now calls CHECKPOINT + db.close() (was just nulling refs)
+- Periodic checkpoint after L5 digest writes prevents WAL data loss on crash
 - Circuit breaker, L1_RAW rolling delete, L1_RAW dedup skip, multi-key rotation
 - Dashboard with live graph, CLI (hyatlas init/config/status/start/stop)
 - MiniMax-M3 / reasoning model compatibility (think-block stripping in all JSON parsers)
+- Graph: 1,358 nodes, 5,922 relations (live-verified)
 
 ### Architecture
 - 7-layer model: L1 RAW, L2 FACT, L3 SUMMARY, L4 IDENTITY, L5 KNOWLEDGE, L6 SCHEMA, L7 INTENTION
 - Storage: Qdrant (VDB) + Kuzu (graph) + SQLite (cache/history)
-- 51,559 lines across 121 files — zero external hy-memory dependency
+- ~52,000 lines across 121 files — zero external hy-memory dependency
 - Coding judge disabled (incompatible with agent OS tool-heavy workflows)
 
-### Upstream Comparison (vs hy-memory 1.2.20)
-- **Our advantages:** L5 implemented (upstream stub), agent OS compat, reasoning model support, resilience patterns, operational tooling, no upstream drift risk
-- **Upstream advantages:** benchmark validation (85.20% LongMemEval), coding memory path (3,823 lines), backend diversity (Chroma/FAISS/Neo4j/MySQL), Chinese prompts, emotion→strength connection (now restored in our fork)
-- **Gap closed:** emotion analyzer + arousal-weighted strength + hybrid_tag reader restored from upstream; only coding path and Chinese prompts remain as upstream-only features
+### Key Fixes This Session
+1. **L5 think-block parsing** — _strip_think_blocks now handles all formats: unicode (⋖...⋗), XML (ILD...ILD), [thinking] tags, and unclosed/truncated tags
+2. **Kuzu WAL checkpoint** — close() was just nulling refs, never flushing WAL. Fixed to call CHECKPOINT + db.close()
+3. **Emotion wiring** — EmotionAnalyzer called after extraction, valence/arousal passed to all 3 MemoryNode creation sites
+4. **max_tokens** — raised from 1024 to 8192 for S2/L5 LLM calls (reasoning models need more budget)
 
 ### Next Steps
-1. Wire emotion analyzer into extractor write path (currently restored but not called during writes)
-2. Run LoCoMo/LongMemEval benchmarks to get real accuracy numbers
-3. Consider upstreaming resilience features (circuit breaker, think-block parsing) to Tencent
-4. Docs rewrite for v3.0.0 release
+1. Run formal benchmarks (LongMemEval/LoCoMo) — upstream claims 85.20%, our score unknown
+2. Merge to main and tag v3.0.0 (awaiting Tuna's approval)
+3. Consider upstreaming resilience features (circuit breaker, WAL checkpoint, think-block parsing)
