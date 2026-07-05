@@ -395,7 +395,7 @@ async def _resolve_and_write_entities(
     embed_by_name: dict[str, list[float]] | None = None,
 ) -> tuple[dict[str, str], int]:
     """Resolve entities against existing Kuzu nodes, write new ones. Returns (name→node_id, written)."""
-    from hy_memory.models.memory import MemoryLayer, MemoryNode, MemoryStatus, SourceType
+    from hyatlas_memory.core.models.memory import MemoryLayer, MemoryNode, MemoryStatus, SourceType
 
     name_to_id = {}
     written = 0
