@@ -1203,9 +1203,14 @@ class Extractor:
     def _parse_json(self, text: str) -> Optional[Dict[str, Any]]:
         """Parse JSON from LLM output. Handles reasoning model think blocks."""
         text = text.strip()
-        # Strip think blocks from reasoning models (MiniMax-M3, Grok, etc.)
+        # Strip think blocks from reasoning models (MiniMax-M3, DeepSeek-R1, etc.)
+        # Handle closed think blocks: <think>...</think> or ⋖...⋗
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
         text = re.sub(r"\u22d6.*?\u22d7", "", text, flags=re.DOTALL)
+        # Handle UNCLOSED think blocks (truncated response — no closing tag):
+        # strip from opening tag to first '{' or end of text
+        text = re.sub(r"<think>.*?(?=\{)", "", text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r"\u22d6.*?(?=\{)", "", text, flags=re.DOTALL)
         # Strip markdown code blocks
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0].strip()

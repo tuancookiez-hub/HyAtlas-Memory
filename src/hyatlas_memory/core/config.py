@@ -182,7 +182,7 @@ class LLMConfig:
         if self.max_tokens is None:
             self.max_tokens = _get_env_int("MEMORY_LLM_MAX_TOKENS", 1024)
         if self.agent_max_tokens is None:
-            self.agent_max_tokens = _get_env_int("MEMORY_AGENT_MAX_TOKENS", 2000)
+            self.agent_max_tokens = _get_env_int("MEMORY_AGENT_MAX_TOKENS", 8192)
         if self.eval_user is None:
             self.eval_user = os.getenv("MEMORY_LLM_EVAL_USER")
         if self.eval_apikey is None:

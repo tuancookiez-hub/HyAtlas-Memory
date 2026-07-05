@@ -270,8 +270,13 @@ class Abstractor:
 
     @staticmethod
     def _parse_json(text: str) -> Dict[str, Any]:
-        """从 LLM 输出中解析 JSON"""
+        """从 LLM 输出中解析 JSON — handles reasoning model think blocks."""
         text = text.strip()
+        import re
+        # Strip think blocks from reasoning models (MiniMax-M3, DeepSeek-R1, etc.)
+        # Closed: ⋖...⋗ or ...; unclosed (truncated): strip to first '{'
+        text = re.sub(r'⋖[\s\S]*?⋗', '', text)
+        text = re.sub(r'⋖.*?(?=\{)', '', text, flags=re.DOTALL)
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0].strip()
         elif "```" in text:
@@ -279,7 +284,6 @@ class Abstractor:
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            import re
             match = re.search(r'\{[\s\S]*\}', text)
             if match:
                 try:

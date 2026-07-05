@@ -262,8 +262,12 @@ class EmotionAnalyzer:
         import re
         text = text.strip()
         # Strip think blocks from reasoning models (MiniMax-M3, DeepSeek-R1, etc.)
-        text = re.sub(r'<think>[\s\S]*?</think>', '', text)
+        # Closed: ⋖...⋗ or ...; unclosed (truncated): strip to first '{'
+        text = re.sub(r'⋖[\s\S]*?⋗', '', text)
+        text = re.sub(r'<think>[\s\S]*?</think>', '', text, flags=re.IGNORECASE)
         text = re.sub(r'⋮[\s\S]*?\n', '', text)
+        text = re.sub(r'⋖.*?(?=\{)', '', text, flags=re.DOTALL)
+        text = re.sub(r'<think>.*?(?=\{)', '', text, flags=re.DOTALL | re.IGNORECASE)
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0].strip()
         elif "```" in text:
