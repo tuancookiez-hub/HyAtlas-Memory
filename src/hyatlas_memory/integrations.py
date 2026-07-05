@@ -166,6 +166,7 @@ _l1_sweep_thread: threading.Thread | None = None
 
 def start_l1_raw_sweep():
     """Start daemon thread for periodic L1_RAW shadow cleanup."""
+    global _l1_sweep_thread
     if _l1_sweep_thread is not None:
         return
     if os.environ.get("HY_MEMORY_L1_RAW_ROLLING_DELETE", "true").lower() not in ("1", "true", "yes", "on"):
@@ -493,7 +494,7 @@ def wire_graph_counts(client_cls):
     if getattr(client_cls, "_hyatlas_graph_bucket_patched", False):
         return
 
-    from ..core.models import memory as _mem
+    from hyatlas_memory.core.models import memory as _mem
     _graph_layers = (
         _mem.MemoryLayer.L5_KNOWLEDGE,
         _mem.MemoryLayer.L6_SCHEMA,
@@ -793,7 +794,7 @@ def wire_rerank(reader_legacy_cls, reader_hybrid_cls):
         return
 
     try:
-        from ..core.core import rerank as _r
+        from hyatlas_memory.core.core import rerank as _r
     except ImportError:
         try:
             from .core import rerank as _r
@@ -869,7 +870,7 @@ def wire_l1_normal_fallback(reader_legacy_cls):
     if getattr(reader_legacy_cls, "_l1_raw_fallback_wired", False):
         return
 
-    from ..core.models.memory import MemoryLayer
+    from hyatlas_memory.core.models.memory import MemoryLayer
 
     orig = reader_legacy_cls.read
 
@@ -916,6 +917,51 @@ def wire_l1_normal_fallback(reader_legacy_cls):
     logger.info("[integrations] L1_RAW normal fallback wired")
 
 
+# ─── 14. In-Process Embedding (local sentence-transformers) ─────────────────
+
+_embed_model = None
+
+
+def wire_inprocess_embed(embed_service_cls):
+    """Replace the OpenAI HTTP embedding call with a local sentence-transformers model.
+
+    Eliminates the need for an external embedding API. The model is loaded once
+    and shared. Embedding calls use asyncio.to_thread so CPU-bound encoding does
+    not block the event loop.
+    """
+    global _embed_model
+    if getattr(embed_service_cls, "_inprocess_embed_wired", False):
+        return
+
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError:
+        logger.warning("[integrations] sentence-transformers not installed — skipping in-process embed")
+        return
+
+    model_name = os.environ.get("MEMORY_EMBEDDER_MODEL", "BAAI/bge-large-en-v1.5")
+    device = os.environ.get("MEMORY_EMBEDDER_DEVICE", "cpu")
+
+    try:
+        import time as _t
+        t0 = _t.time()
+        logger.info(f"[integrations] loading embedding model: {model_name} on {device}")
+        _embed_model = SentenceTransformer(model_name, device=device)
+        logger.info(f"[integrations] model loaded in {_t.time() - t0:.1f}s (dim={_embed_model.get_sentence_embedding_dimension()})")
+    except Exception as e:
+        logger.error(f"[integrations] failed to load embedding model: {e}")
+        return
+
+    async def _local_embed(self, texts, **kwargs):
+        import asyncio
+        vecs = await asyncio.to_thread(_embed_model.encode, texts, convert_to_numpy=True)
+        return [v.tolist() for v in vecs]
+
+    embed_service_cls._embed_openai = _local_embed
+    embed_service_cls._inprocess_embed_wired = True
+    logger.info("[integrations] in-process embedding wired (no external API needed)")
+
+
 # ─── Wire All ────────────────────────────────────────────────────────────────
 
 def wire_all():
@@ -927,6 +973,7 @@ def wire_all():
     from .core.pipelines.reader_legacy import LegacyReadPipeline
     from .core.agent.extractor import Extractor
     from .core.data.cache_disabled import DisabledCache
+    from .core.core.embed_service import EmbedService
 
     # 1. Circuit breaker
     wire_circuit_breaker(MemoryHTTPHandler, _json_response)
@@ -967,4 +1014,7 @@ def wire_all():
     # 13. L1_RAW normal fallback
     wire_l1_normal_fallback(LegacyReadPipeline)
 
-    logger.info("[integrations] all 13 integrations wired successfully")
+    # 14. In-process embedding (local sentence-transformers, no API)
+    wire_inprocess_embed(EmbedService)
+
+    logger.info("[integrations] all 14 integrations wired successfully")

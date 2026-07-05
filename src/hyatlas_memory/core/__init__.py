@@ -45,13 +45,9 @@ HY Memory - 核心 SDK
 """
 
 try:
-    from importlib.metadata import version as _get_version
-    try:
-        __version__ = _get_version("hy-memory-internal")
-    except Exception:
-        __version__ = _get_version("hy-memory")
+    from hyatlas_memory._version import __version__
 except Exception:
-    __version__ = "0.1.0"
+    __version__ = "3.0.0"
 
 # ====== 用户级 API（推荐） ======
 from .client import HyMemoryClient
