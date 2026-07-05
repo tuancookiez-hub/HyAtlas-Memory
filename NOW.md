@@ -33,11 +33,10 @@
 - Upstream HY_MEMORY_THINKING_MODE=disabled works for DeepSeek/Qwen/Kimi/Hunyuan but NOT MiniMax
 - Our fork is genuinely ahead on reasoning model compatibility and L5 reliability
 
-### LLM Plan
-- Current: MiniMax-M3 (reasoning model, cannot disable thinking)
-- Keep until MiniMax subscription expires
-- Then switch to DeepSeek/Qwen/Kimi/Hunyuan + set HY_MEMORY_THINKING_MODE=disabled
-- Our think-block strip becomes harmless no-op after switch
+### LLM Configuration
+- Current: deepseek-v4-flash via https://hyper.charm.land/v1 (switched from MiniMax-M3)
+- No reasoning/thinking — clean JSON output, no think-block stripping needed
+- Our think-block parsing remains as a safety net for future reasoning model use
 
 ### Next Steps
 1. Merge feat/v3-fork to main, tag v3.0.0 (awaiting Tuna's approval)
