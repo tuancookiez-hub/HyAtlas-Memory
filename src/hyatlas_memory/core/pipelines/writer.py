@@ -667,6 +667,8 @@ class MemoryWriter(WritePipeline):
                     memory_at=request.memory_at,
                     tags=list(op.tags or []),
                     custom=self._build_custom(op, req_id),
+                    emotional_valence=getattr(self, "_cur_valence", 0.0),
+                    emotional_arousal=getattr(self, "_cur_arousal", 0.0),
                 )
                 nid = await vector_store.upsert(new_node)
                 stored_ids.append(nid)
@@ -748,6 +750,8 @@ class MemoryWriter(WritePipeline):
                 memory_at=request.memory_at,
                 tags=list(op.tags or []),
                 custom=self._build_custom(op, req_id),
+                emotional_valence=getattr(self, "_cur_valence", 0.0),
+                emotional_arousal=getattr(self, "_cur_arousal", 0.0),
             )
             nid = await vector_store.upsert(new_node)
             stored_ids.append(nid)
@@ -870,6 +874,8 @@ class MemoryWriter(WritePipeline):
                 embedding=batch_embeddings[emb_idx] if emb_idx < len(batch_embeddings) else await self.embed_service.embed_queued(content),
                 memory_at=request.memory_at,
                 tags=list(tags),
+                emotional_valence=getattr(self, "_cur_valence", 0.0),
+                emotional_arousal=getattr(self, "_cur_arousal", 0.0),
             )
             emb_idx += 1
             nid = await vector_store.upsert(new_node)
@@ -1403,6 +1409,25 @@ class MemoryWriter(WritePipeline):
             await self._handle_agent_failure(request, response, agent_result, tracer_span)
             return
 
+        # ── Emotional tagging: analyze valence/arousal on the conversation ──
+        # Best-effort: failures default to 0.0 (neutral), never block writes.
+        _valence = 0.0
+        _arousal = 0.0
+        if getattr(getattr(self.config, "extractor", None), "emotion_enabled", False):
+            try:
+                from ..agent.emotion_analyzer import EmotionAnalyzer
+                _emotion = EmotionAnalyzer(self.mem_agent.extractor.llm)
+                _emo_result = await _emotion.analyze(_extract_content[:2000])
+                if _emo_result.success:
+                    _valence = _emo_result.valence
+                    _arousal = _emo_result.arousal
+                    logger.info(
+                        f"[write] emotion: valence={_valence:.2f} "
+                        f"arousal={_arousal:.2f} emotion={_emo_result.dominant_emotion}"
+                    )
+            except Exception as emo_err:
+                logger.debug(f"[write] emotion analysis skipped: {emo_err}")
+
         # ── 提取成功 ──
         _perf_req_id = request.request_id or get_request_id()
         logger.info(
@@ -1539,6 +1564,8 @@ class MemoryWriter(WritePipeline):
 
         # Reconcile & store
         stored_ids: List[str] = []
+        self._cur_valence = _val
+        self._cur_arousal = _arou
         _vs_logger = logging.getLogger("hy_memory.data.vector_store_chroma")
         _vs_level = _vs_logger.level
         _vs_logger.setLevel(logging.INFO)

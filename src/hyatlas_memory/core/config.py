@@ -359,6 +359,9 @@ class ExtractorConfig:
     extract_summary: bool = True  # 提取摘要
     extract_profile: bool = True  # 提取画像
 
+    # 情绪标注
+    emotion_enabled: bool = False  # LLM 情绪分析 (valence/arousal)
+
     # 提取阈值
     min_content_length: int = 10  # 最小内容长度
     summary_trigger_length: int = 500  # 触发摘要的长度
@@ -366,6 +369,7 @@ class ExtractorConfig:
     def __post_init__(self):
         self.enable_auto_routing = _get_env_bool("MEMORY_AUTO_ROUTING", True)
         self.enable_auto_extract = _get_env_bool("MEMORY_AUTO_EXTRACT", False)
+        self.emotion_enabled = _get_env_bool("MEMORY_EMOTION_ENABLED", False)
         self.min_content_length = _get_env_int("MEMORY_MIN_CONTENT_LENGTH", 10)
 
 
