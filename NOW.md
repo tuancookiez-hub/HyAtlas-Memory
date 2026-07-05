@@ -1,22 +1,47 @@
-# NOW — HyAtlas-Memory
+# NOW.md — HyAtlas-Memory Current State
 
-- Runtime layout consolidation (Patches 24–31) is live on `main` as v2.1.0.
-- All runtime state now resolves under `~/.hyatlas`. Migration applied 2026-07-05:
-  - Qdrant data copied from `C:\qdrant-data` to `~/.hyatlas/data/qdrant` (3.61 GB)
-  - Kuzu DB copied from `~/.hy_memory/data/kuzu_db` to `~/.hyatlas/data/kuzu_db` (83 MB)
-  - Legacy paths preserved as rollback safety net.
-- Migration repair: the original `~/.hyatlas/data/qdrant` had 2,041+ corrupted empty files (metadata/config/WAL). Replaced with a clean copy from legacy `C:\qdrant-data`; stack now healthy.
-- Legacy cleanup done 2026-07-05: renamed `C:\qdrant-data` → `C:\qdrant-data.legacy` and `~/.hy_memory` → `~/.hy_memory.legacy`. These backups are kept as a final safety net and can be deleted after a stable period.
-- Active LLM is MiniMax-M3 via the official MiniMax API (`https://api.minimax.io/v1`).
-- Multi-key LLM resilience configured: `llm.api_keys` populated with the current key as fallback list.
-- Qdrant binary already points to `~/.hyatlas/vector/qdrant/qdrant.exe`.
-- Stack running detached on ports 6333/19527/8765; dashboard on port 8765.
-- Smart memory pruning configured: cronjob `smart-memory-prune` runs every 4 hours, triggers at 80%, prunes down to 70%, uses recent session context, archives to HyAtlas, posts to Discord thread `1523091423556276365`.
-- Full test suite: 33 passed, 19 skipped.
+## v3.0.0 Fork Complete (2026-07-06)
 
-Next:
-1. Verify stack remains stable over the next few hours.
-2. Watch the first autonomous `smart-memory-prune` run at 12:05.
-3. After stable period, optionally delete legacy `C:\qdrant-data` and `~/.hy_memory` to complete cleanup.
+**Branch:** `feat/v3-fork`
+**Version:** 3.0.0
+**Status:** Ready for release — tests pass, imports clean, version consistent
 
-Blocker: none.
+### What Was Done
+
+The hy-memory SDK (1.2.20, 42,668 lines) was forked into `src/hyatlas_memory/core/`.
+23 monkey-patches replaced by 13 first-class integrations in `integrations.py`.
+~8,000 lines of dead backends stripped. No external `hy-memory` dependency.
+
+### Commits (feat/v3-fork)
+
+```
+8b85efc feat(v3): fix remaining hy_memory imports, bump to 3.0.0
+44381ea feat(v3): port 13 patches as first-class integrations, remove hy-memory dep
+408e14c feat(cache): re-add DisabledCache as first-class backend
+6100cc6 feat(fork): import hy-memory 1.2.20 as first-party core
+a9788d3 docs: v3.0.0 fork plan + memory design research
+```
+
+### Safety Net
+
+- Tag: `v2.1.0-stable`
+- Kuzu backup: `kuzu_db_backup_v2` (83 MB)
+- Qdrant export: `qdrant_pre_v3.jsonl` (6,135 points)
+- Rollback: `git checkout v2.1.0-stable`
+
+### Next Steps
+
+1. **Push to main** — merge `feat/v3-fork` into `main` (needs Tuna's approval)
+2. **Live stack test** — start server with v3.0.0, verify add/search/digest work
+3. **Enable hybrid_v2 reader** — set `HY_MEMORY_READER=hybrid_v2` for BM25 hybrid search
+4. **Qdrant collection recreation** — create new collection with sparse BM25 vectors (existing collection degrades to dense-only, which is fine)
+5. **L7 migration** — if L7 data exists in Kuzu, migrate to Qdrant VDB (currently 0 L7 points, likely no-op)
+6. **Delete `patches.py`** — it's legacy and no longer imported, but kept for reference
+
+### Not Yet Done (Post-Release)
+
+- L5 in-process extraction needs live testing (MEMORY_L5_VERSION=2)
+- Audit logging is wired but not yet called from extraction pipeline
+- Rerank stage is wired but gated behind MEMORY_RERANK_ENABLED=true
+- User identity alias expansion gated behind HYATLAS_USER_IDENTITY=1
+- LLM fast/smart split requires fast_model config in hy_memory.json
