@@ -5,10 +5,8 @@ HY Memory - Read (Dispatcher)
 真正的实现：
 
   - "legacy"     → LegacyReadPipeline      (默认)
-  - "hybrid_tag" → HybridTagReadPipeline    (路 A∪B 召回 + 路 C BM25 重排)
+  - "hybrid_tag" → HybridTagReadPipeline    (vec + tag-bridge + BM25, RRF 3-channel)
   - "hybrid_v2"  → HybridV2ReadPipeline     (Embed + Keyword + Graph Evidence)
-  - "tencent_hybrid" → TencentHybridReadPipeline (腾讯云 native hybrid)
-  - "mem0"       → Mem0ReadPipeline         (复刻 mem0 OSS hybrid：semantic over-fetch + BM25 sigmoid，候选池仅 semantic)
 
 cache 参数从 Registry 注入，用于 read 侧的 trace 写入；传 None 时
 trace 写入静默跳过。

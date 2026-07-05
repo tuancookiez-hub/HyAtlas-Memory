@@ -6,7 +6,7 @@ HY Memory - Memory Strength（基于"闲置时长"的时间衰减排序）
 而非创建以来的绝对年龄：
 
     idle_days = (now - last_accessed_at) / 1 day        # 不是 age（创建至今）
-    strength  = (1 + log(access_count)) * exp(-idle_days / tau)   # tau 默认 180
+    strength  = (1 + log(access_count)) * exp(-idle_days / tau_eff)   # tau_eff = tau * (1 + arousal)
 
 设计理由：2023 年创建的"用户喜欢 Kobe"若昨天刚被命中，依然重要；用 age_days 会
 被衰减得很惨，但用 idle_days（自上次访问以来）就能保持强度。高频命中（access_count
@@ -33,12 +33,15 @@ DEFAULT_TAU = 180.0
 
 def compute_strength(node: Any, *, now: Optional[datetime] = None, tau: float = DEFAULT_TAU) -> float:
     """
-    计算单个节点的 strength。
+    strength = (1 + log(access_count)) * exp(-idle_days / tau_effective)
 
-    strength = (1 + log(access_count)) * exp(-idle_days / tau)
-      - access_count < 1 → 频次因子 = 1.0（避免 log(0)，不罚不奖）
-      - last_accessed_at 为空 → idle_days 用 gmt_created 计算（冷启动）
-      - 两者都为空 → idle_days = 0（满近度）
+    tau_effective = tau * (1 + arousal) — high-arousal memories decay slower.
+    Arousal comes from emotional_arousal field [0, 1] (0 = calm, 1 = excited).
+    Missing arousal → tau_effective = tau (original behavior).
+
+      - access_count < 1 → freq factor = 1.0 (avoid log(0))
+      - last_accessed_at empty → idle_days from gmt_created (cold start)
+      - both empty → idle_days = 0 (full strength)
     """
     if tau <= 0:
         tau = DEFAULT_TAU
@@ -57,7 +60,10 @@ def compute_strength(node: Any, *, now: Optional[datetime] = None, tau: float = 
         except (TypeError, ValueError):
             idle_days = 0.0
 
-    return freq * math.exp(-idle_days / tau)
+    arousal = getattr(node, "emotional_arousal", 0.0) or 0.0
+    tau_eff = tau * (1.0 + max(0.0, min(1.0, float(arousal))))
+
+    return freq * math.exp(-idle_days / tau_eff)
 
 
 def apply_strength_to_normal(

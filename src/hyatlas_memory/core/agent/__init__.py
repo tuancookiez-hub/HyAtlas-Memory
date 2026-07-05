@@ -38,6 +38,7 @@ from .reflector import (
 )
 
 # V2 Emotion Analyzer
+from .emotion_analyzer import EmotionAnalyzer, EmotionAnalysisConfig, EmotionResult
 
 
 # V2 Intention Detector
