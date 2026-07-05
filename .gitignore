@@ -90,3 +90,8 @@ storage/
 .git-commit-msg-*
 *-draft.txt
 .worktrees/
+
+# Internal planning artifacts (not for public release)
+.hermes/
+research/
+snapshots/

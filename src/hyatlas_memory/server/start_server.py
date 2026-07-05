@@ -86,6 +86,7 @@ import importlib
 os.environ["MEMORY_SYSTEM2_TRIGGER_MODE"] = "scheduled"
 _l5_auto = os.environ.get("MEMORY_L5_AUTO", "true").strip().lower()
 os.environ["MEMORY_L5_AUTO"] = "true" if _l5_auto in ("1", "true", "yes") else "false"
+os.environ["MEMORY_EMOTION_ENABLED"] = "true"
 
 try:
     from hyatlas_memory.integrations import wire_all
