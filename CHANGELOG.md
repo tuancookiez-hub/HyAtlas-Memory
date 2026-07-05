@@ -65,10 +65,29 @@ of code is now owned and maintained by HyAtlas.
 
 #### Test Results
 
-- 38 passed, 14 skipped (matches 2.1.0 baseline)
-- All 9 critical module imports verified
-- Zero `from hy_memory` imports in active code paths
+- 51 passed, 1 skipped
+- All critical module imports verified (intent, hybrid_tag reader, emotion analyzer, strength)
+- Zero `from hy_memory` imports in active code paths (patches.py has guarded try/except — safe)
+- Zero hardcoded `C:\Users\tuanc` paths in any `.py` file
 - Version consistency: 3.0.0 across `pyproject.toml`, `_version.py`, both `plugin.yaml` files
+
+#### Maturation Additions (post-fork)
+
+**Restored from upstream:**
+- `reader_hybrid_tag.py` — 3-channel RRF reader (vector + tag-bridge + BM25) with intent-weighted fusion and backend capability detection
+- `_retrieval/intent.py` — query intent classification (NAVIGATIONAL/CONCEPTUAL/FACTUAL) + keyword extraction for tag-bridge retrieval
+- `agent/emotion_analyzer.py` — LLM-based valence/arousal scoring with think-block parsing fix for reasoning models
+
+**New capabilities:**
+- Arousal-weighted memory strength: `tau_effective = tau * (1 + arousal)` — emotionally significant memories resist time decay (amygdala analogy)
+- Emotion analyzer wired into write path: `MEMORY_EMOTION_ENABLED=true` enables LLM emotion analysis during extraction, populating `emotional_valence`/`emotional_arousal` on L2 fact nodes
+- Think-block parsing in emotion analyzer (MiniMax-M3, DeepSeek-R1, o1 compatibility)
+
+**Bug fixes:**
+- `bm25.py` module created (reconciler import was failing — blocked L2 fact extraction)
+- Think-block stripping in extractor `_parse_json` (reasoning model JSON parsing)
+- Version metadata: `core/__init__.py` reads from `hyatlas_memory._version` (was reading from uninstalled `hy-memory` package)
+- Reader dispatcher docstring cleaned (removed dead tencent_hybrid/mem0 references)
 
 ---
 
