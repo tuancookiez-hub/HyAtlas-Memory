@@ -82,7 +82,7 @@ hyatlas stop            # shut down the stack
 
 > **Three modes:** `lite` (no LLM, embedding-only) · `pro` (LLM extraction per `add`) · `ultra` (pro + System 2 cognitive layer with Kuzu graph — default).
 
-> **New in 2.0 (S-Class):** hybrid_v2 retrieval + optional cross-encoder rerank, 1024-d embeddings, **in-process L5** knowledge-graph writer (no batch lock), and **L4 identity** dedup + evolution chains. Upgrading from 1.x with existing data? See **[`docs/MIGRATION_v2_SCLASS.md`](docs/MIGRATION_v2_SCLASS.md)**.
+> **New in 3.0:** Full SDK fork (no external `hy-memory` dependency), reasoning model compatibility (think-block parsing for MiniMax-M3/DeepSeek-R1), emotion-aware memory strength, Kuzu WAL checkpoint fix, 23 patches → 13 first-class integrations. See [CHANGELOG.md](CHANGELOG.md) for the full diff vs 2.1.0.
 
 ---
 
@@ -376,7 +376,7 @@ src/hyatlas_memory/        # the plugin (Python package)
   _start.py                # full stack startup logic (bundled for `hyatlas` CLI)
   _version.py              # version string (no-dep import)
   client.py                # HTTP client to the local server (urllib, zero deps)
-  patches.py               # 9 carried patches + layer-as-importance + access-count
+  integrations.py          # 13 first-class integrations (circuit breaker, L5, graph endpoint, etc.)
   context_pressure.py      # 4-tier token budget monitor (fastpath → emergency)
   process.py               # subprocess lifecycle for the local server
   embed_server.py          # local SentenceTransformers embedder (OpenAI-compatible)
@@ -384,10 +384,23 @@ src/hyatlas_memory/        # the plugin (Python package)
   installer.py             # one-time pip-deps installer
   cli.py                   # `hermes hy-memory doctor|add|search|list|init|reset`
   start.py                 # thin wrapper for `hyatlas` console_scripts entry
+  l5_inprocess.py          # L5 knowledge graph extraction (entity/relation → Kuzu)
   plugin.yaml              # legacy plugin manifest (kept for back-compat)
+  layout.py                # HYATLAS_HOME path resolver + config loading
+  config_cli.py            # `hyatlas config` CLI commands
+  core/                    # forked hy-memory 1.2.20 SDK (42,668 lines, first-party)
+    agent/                 # extractor, reconciler, abstractor, emotion analyzer, LLM provider
+    client.py              # HyMemoryClient — the core memory engine
+    config.py              # MemoryConfig + LLM/embedder/vector config
+    core/                  # embed service, merger, scorer
+    data/                  # vector stores (Qdrant), graph store (Kuzu), cache, history
+    models/                # memory + request data models
+    pipelines/             # writer, readers (legacy/hybrid_v2/hybrid_tag), system2 agent
+    server.py              # HTTP server (port 19527)
+    utils/                 # audit log, token counting, language detection, tracing
 
-server/                    # standalone server (auto-started by plugin)
-  start_server.py          # uvicorn launcher, reads hy_memory.json + .env
+server/                    # standalone server launcher
+  start_server.py          # reads hy_memory.json + .env, starts core server
   bin/                     # L5 pipeline scripts (7-step graph rebuild)
   dashboard/               # local web UI (port 8765)
     dashboard.html         # HTML shell + page templates
@@ -397,14 +410,8 @@ server/                    # standalone server (auto-started by plugin)
     js/l5.js               # L5 Knowledge Graph page
     js/observatory.js      # Three.js memory observatory (split from app.js for size)
 
-tests/                     # pytest suite (16 unit + 4 integration = 20 tests)
-  test_standalone.py       # version + plugin manifest + importable checks
-  test_hy_memory_search.py # recall formatting, layered response shape
-  test_integration.py      # end-to-end against live Qdrant + upstream server
-
-scripts/                   # one-off ops scripts (out of CI lint scope)
-  backfill_importance.py   # populate importance + access_count across corpus
-
+tests/                     # pytest suite (47 tests)
+scripts/                   # one-off ops scripts
 docs/                      # architecture + migration notes
 assets/                    # infographic images
 ```
@@ -412,10 +419,10 @@ assets/                    # infographic images
 ### How the pieces fit
 
 - **Plugin** (`src/hyatlas_memory/`) is a thin client. It implements the `MemoryProvider` interface that Hermes Agent calls. It doesn't do heavy lifting — it talks to a local server over HTTP.
-- **Server** (auto-started on port 19527) runs the upstream `hy-memory` SDK. This is where embedding, LLM extraction, and vector search happen. The plugin manages its lifecycle as a subprocess.
-- **L5 pipeline** (`server/bin/`) is a 7-step batch job that rebuilds the Kuzu graph: stop server → extract facts → resolve entities → quality review → rebuild graph → export JSON → restart server. Runs async, takes minutes for thousands of facts. The dashboard's graph tab reads live from the server's `/api/v1/graph` endpoint (Patch 23) — no manual JSON export needed for day-to-day viewing.
-- **Context pressure** (`context_pressure.py`) monitors the agent's context window. At 50% usage it starts compressing old tool outputs to ref files. At 95% it aggressively prunes to prevent overflow. This is plugin-layer — no SDK changes needed.
-- **Patches** (`patches.py`) are applied at import time. They fix and extend the upstream SDK: LLMConfig env-loading, cross-encoder rerank, in-process embedding, L1 dedup/shadow/rolling-delete, **L5 in-process knowledge-graph extraction** (`l5_inprocess.py`, gated by `MEMORY_L5_VERSION=2`), **L4 identity** (pre-write dedup, `identity_type`, evolution-chain enrichment), a VDB circuit breaker, fast/smart LLM model split, **robust S2 JSON parsing** (`s2_operations_json`), **auto-forgetting** with recency scoring + expiry sweep, and **live graph endpoint** (`/api/v1/graph`, queries Kuzu directly — replaces the stale-export-file pattern). Each patch is idempotent and documented inline. The active set is logged at startup.
+- **Server** (auto-started on port 19527) runs the forked hy-memory SDK (`src/hyatlas_memory/core/`). This is where embedding, LLM extraction, and vector search happen. The plugin manages its lifecycle as a subprocess.
+- **L5 pipeline** (`l5_inprocess.py`) runs in-process — entity/relation extraction writes directly to Kuzu without a batch lock. The dashboard's graph tab reads live from the server's `/api/v1/graph` endpoint.
+- **Context pressure** (`context_pressure.py`) monitors the agent's context window. At 50% usage it starts compressing old tool outputs to ref files. At 95% it aggressively prunes to prevent overflow.
+- **Integrations** (`integrations.py`) are 13 first-class modules applied at import time: VDB circuit breaker, L1_RAW rolling delete/dedup, L5 auto-trigger + in-process extraction, graph endpoint, L5/L6/L7 counts, S1 L5 context, user identity alias expansion, LLM fast/smart split, DisabledCache tolerance, rerank stage, and L1_RAW normal fallback. Each is idempotent and documented inline. The active set is logged at startup.
 
 ## Documentation
 
@@ -436,8 +443,8 @@ cd HyAtlas-Memory
 uv pip install -e ".[dev,test]"
 
 # 2. Run tests
-pytest                     # 16 unit tests, ~0.1s, no external deps
-pytest -m integration      # 4 integration tests, needs Qdrant + upstream running
+pytest                     # 47 tests, ~1 min, no external deps needed
+pytest -m integration      # integration tests, needs Qdrant + server running
 
 # 3. Lint
 ruff check .
@@ -465,9 +472,9 @@ pip install -e .
 #    ~/.hyatlas/config/hy_memory.json  (config)
 ```
 
-No data migration needed for the in-fork → package move. The Kuzu graph at `~/.hyatlas/data/kuzu_db` (or legacy `~/.hy_memory/data/kuzu_db`) is forward-compatible. The carried patches from the fork are now part of the package, applied at import time via the `patches.py` module.
+No data migration needed for the in-fork → package move. The Kuzu graph at `~/.hyatlas/data/kuzu_db` (or legacy `~/.hy_memory/data/kuzu_db`) is forward-compatible. The integrations from the fork are now part of the package, applied at import time via the `integrations.py` module.
 
-> **Upgrading 1.x → 2.0?** The v2 S-Class stack changes the default embedding dimension (1024-d) and adds the in-process L5 writer. If you have an existing 384-d Qdrant collection or an old Kuzu graph, **read [`docs/MIGRATION_v2_SCLASS.md`](docs/MIGRATION_v2_SCLASS.md) before upgrading production data.**
+> **Upgrading 2.x → 3.0?** The v3.0.0 release forks the full hy-memory SDK into first-party code. No external `hy-memory` pip dependency needed. Your existing Qdrant data and Kuzu graph are forward-compatible. If you have issues, `git checkout v2.1.0-stable` restores the pre-fork state.
 
 ## License
 

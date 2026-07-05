@@ -2,53 +2,88 @@
 
 ## [3.0.0] — 2026-07-06
 
-### Major: Full SDK Fork — hy-memory 1.2.20 as First-Party Code
+### Major: Full SDK Fork + Reasoning Model Compatibility + Operational Hardening
 
-The hy-memory SDK (42,668 lines) has been forked into `src/hyatlas_memory/core/`.
-HyAtlas-Memory no longer depends on the external `hy-memory` package. Every line
-of code is now owned and maintained by HyAtlas.
+The entire hy-memory 1.2.20 SDK (42,668 lines) is now first-party code under
+`src/hyatlas_memory/core/`. No external `hy-memory` dependency. Every line is
+owned and maintained by HyAtlas. All patches promoted to first-class integrations.
+E2E verified with deepseek-v4-flash: write → L2 extraction → S2 digest → L5
+knowledge graph → search → graph endpoint.
 
-#### What Changed
+#### What's New vs 2.1.0
+
+**Full SDK Fork (biggest change)**
+- 70 files from hy-memory 1.2.20 forked into `src/hyatlas_memory/core/`
+- Zero external `hy-memory` pip dependency — all code is first-party
+- Stripped ~8,000 lines of dead backends (Chroma, FAISS, Tencent, Neo4j, MySQL, Redis)
+- 23 monkey-patches → 13 first-class integrations in `integrations.py`
+
+**Reasoning Model Compatibility**
+- Think-block parsing in all 3 `_parse_json` implementations (extractor, abstractor, emotion analyzer)
+- Handles closed `⋖...⋗`, closed `<think>...</think>`, unclosed/truncated think blocks
+- `agent_max_tokens` raised 2000 → 8192 (reasoning models need budget for thinking + output)
+- Tested with MiniMax-M3 (reasoning) and deepseek-v4-flash (non-reasoning) — both work
+
+**L5 Knowledge Graph (our addition — upstream doesn't have this)**
+- In-process entity/relation extraction → Kuzu graph writes
+- No batch lock — runs alongside the live server
+- Live graph endpoint `/api/v1/graph` (1,444 nodes, 6,374 relations verified)
+
+**Emotion-Aware Memory**
+- LLM-based valence/arousal scoring wired into write path
+- Arousal-weighted memory strength: emotionally significant memories resist time decay
+- `MEMORY_EMOTION_ENABLED=true` to activate
+
+**Kuzu WAL Checkpoint Fix (upstream has the same bug)**
+- `close()` now calls `CHECKPOINT` + `db.close()` (was just nulling refs)
+- Prevents WAL data loss on crash — verified: 0KB WAL after shutdown
+
+**Operational Hardening**
+- VDB circuit breaker (Qdrant resilience — auto-recovers from failures)
+- L1_RAW rolling delete + dedup skip
+- Multi-key LLM rotation (`llm.api_keys` list)
+- Auto-forgetting with recency scoring + expiry sweep
+
+#### Detailed Changes
 
 **SDK Fork (Phase 1)**
 - Copied 70 files from hy-memory 1.2.20 wheel into `src/hyatlas_memory/core/`
-- Stripped ~8,000 lines of dead backends: Chroma, FAISS, Tencent, Neo4j, MySQL, Redis, Memory cache, coding judge module, emotion analyzer, Chinese prompts, unused readers
 - Coding judge hardcoded to `return False` — all writes use the normal memory path
 - Factory files cleaned: only Qdrant, Kuzu, DisabledCache, SQLite remain
 - Zero `from hy_memory` imports in active code paths
 
-**DisabledCache Re-Added (Phase 2)**
-- `cache_disabled.py` created with all no-op methods (removed in upstream 1.2.19)
-- Registered in cache factory alongside SQLite
-- Config validation accepts `"disabled"` backend
-
-**23 Monkey-Patches → 13 First-Class Integrations (Phase 3)**
-- 4 patches eliminated (solved upstream in 1.2.19): dedup module, L4 identity elimination, auto-forgetting (strength.py + intention.py), S2 ops logging
-- 6 patches eliminated (already in 1.2.20): LLM extra_body env loading, L3 summary default off, in-process embed queue, dedup threshold env var, L1 shadow handling, L1 normal fallback
-- 13 patches ported as first-class code in `integrations.py`:
-  1. VDB circuit breaker (server resilience)
-  2. L1_RAW rolling delete sweep
-  3. L1_RAW dedup skip
-  4. L5 auto-trigger
-  5. L5 in-process extraction
-  6. Graph endpoint (`/api/v1/graph`)
-  7. L5/L6/L7 counts (raw Kuzu Cypher)
-  8. S1 extractor L5 context
-  9. User identity (alias expansion)
-  10. LLM fast/smart model split
-  11. DisabledCache kwargs tolerance
-  12. Rerank stage
-  13. L1_RAW normal fallback
+**13 First-Class Integrations (Phase 3, replacing 23 patches)**
+1. VDB circuit breaker (server resilience)
+2. L1_RAW rolling delete sweep
+3. L1_RAW dedup skip
+4. L5 auto-trigger
+5. L5 in-process extraction
+6. Graph endpoint (`/api/v1/graph`)
+7. L5/L6/L7 counts (raw Kuzu Cypher)
+8. S1 extractor L5 context
+9. User identity (alias expansion)
+10. LLM fast/smart model split
+11. DisabledCache kwargs tolerance
+12. Rerank stage
+13. L1_RAW normal fallback
 
 **New Capabilities from 1.2.19/1.2.20**
-- BM25 hybrid search (dense + keyword fusion at 0.6/0.4 weighting) — already integrated in `reader_hybrid_v2.py`, enabled via `HY_MEMORY_READER=hybrid_v2`
-- Memory strength scoring (`strength.py`): `(1 + log(access_count)) × exp(-idle_days / 180)`
-- L7 intentions in Qdrant VDB with lazy expiry to L2_FACT (moved from Kuzu graph)
-- Profile evidence reverse lookup (`profile_evidence.py`)
-- Token counting via tiktoken (`utils/token_count.py`)
-- Audit logging (`utils/audit_log.py`): JSONL rotating log for pipeline events
-- S2 operations JSON robust parsing for reasoning models (think blocks, code fences)
+- BM25 hybrid search (dense + keyword fusion at 0.6/0.4 weighting)
+- Memory strength scoring: `(1 + log(access_count)) × exp(-idle_days / 180)`
+- L7 intentions in Qdrant VDB with lazy expiry to L2_FACT
+- Profile evidence reverse lookup
+- Token counting via tiktoken
+- Audit logging (JSONL rotating log for pipeline events)
+- S2 operations JSON robust parsing for reasoning models
 - L1_RAW multi-line message parsing fix
+
+**Session Fixes (2026-07-06)**
+- Unclosed think-block regex: strips from opening `⋖` to first `{` when response truncates mid-reasoning
+- `agent_max_tokens` default raised 2000 → 8192 in `config.py`
+- Abstractor `_parse_json` had no think-block stripping — fixed
+- Emotion analyzer `_parse_json` had incomplete stripping — fixed
+- Kuzu WAL checkpoint: `close()` calls `CHECKPOINT` + `db.close()` (verified 0KB WAL)
+- LLM switched from MiniMax-M3 → deepseek-v4-flash (clean JSON, no reasoning overhead)
 
 **Dependencies**
 - Removed: `hy-memory` (forked into source)
@@ -58,36 +93,28 @@ of code is now owned and maintained by HyAtlas.
 #### Safety
 
 - Git tag `v2.1.0-stable` preserves the pre-fork state
-- Branch `feat/v3-fork` contains all v3.0.0 work
+- Branch `feat/v3-fork` contains all v3.0.0 work (merged to main)
 - Kuzu backup at `kuzu_db_backup_v2` (83 MB)
 - Qdrant export at `qdrant_pre_v3.jsonl` (6,135 points, 185 MB)
 - Rollback: `git checkout v2.1.0-stable` restores the entire 2.1.0 state
 
 #### Test Results
 
-- 51 passed, 1 skipped
-- All critical module imports verified (intent, hybrid_tag reader, emotion analyzer, strength)
-- Zero `from hy_memory` imports in active code paths (patches.py has guarded try/except — safe)
-- Zero hardcoded `C:\Users\tuanc` paths in any `.py` file
+- 47 passed, 5 skipped
+- All critical module imports verified
+- Zero `from hy_memory` imports in active code paths
+- Zero hardcoded paths in any `.py` file
 - Version consistency: 3.0.0 across `pyproject.toml`, `_version.py`, both `plugin.yaml` files
+- E2E verified: write → L2 → S2 digest → L5 graph → search → graph endpoint → circuit breaker
 
-#### Maturation Additions (post-fork)
+#### Upstream Comparison
 
-**Restored from upstream:**
-- `reader_hybrid_tag.py` — 3-channel RRF reader (vector + tag-bridge + BM25) with intent-weighted fusion and backend capability detection
-- `_retrieval/intent.py` — query intent classification (NAVIGATIONAL/CONCEPTUAL/FACTUAL) + keyword extraction for tag-bridge retrieval
-- `agent/emotion_analyzer.py` — LLM-based valence/arousal scoring with think-block parsing fix for reasoning models
-
-**New capabilities:**
-- Arousal-weighted memory strength: `tau_effective = tau * (1 + arousal)` — emotionally significant memories resist time decay (amygdala analogy)
-- Emotion analyzer wired into write path: `MEMORY_EMOTION_ENABLED=true` enables LLM emotion analysis during extraction, populating `emotional_valence`/`emotional_arousal` on L2 fact nodes
-- Think-block parsing in emotion analyzer (MiniMax-M3, DeepSeek-R1, o1 compatibility)
-
-**Bug fixes:**
-- `bm25.py` module created (reconciler import was failing — blocked L2 fact extraction)
-- Think-block stripping in extractor `_parse_json` (reasoning model JSON parsing)
-- Version metadata: `core/__init__.py` reads from `hyatlas_memory._version` (was reading from uninstalled `hy-memory` package)
-- Reader dispatcher docstring cleaned (removed dead tencent_hybrid/mem0 references)
+HyAtlas-Memory v3.0.0 is genuinely ahead of upstream hy-memory 1.2.20 on:
+- **L5 knowledge graph** — upstream has no entity/relation extraction (their "L5" is profile summary text)
+- **Kuzu WAL checkpoint** — upstream has the same bug (just nulls refs, no checkpoint)
+- **Reasoning model support** — upstream `_parse_json` has no think-block handling
+- **`agent_max_tokens`** — upstream defaults to 2000 (too low for reasoning models)
+- Upstream's `HY_MEMORY_THINKING_MODE=disabled` works for DeepSeek/Qwen/Kimi/Hunyuan but not MiniMax
 
 ---
 
