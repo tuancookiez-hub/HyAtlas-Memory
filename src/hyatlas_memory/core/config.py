@@ -442,10 +442,10 @@ class CacheConfig:
         if self.backend is None:
             self.backend = os.getenv("MEMORY_CACHE_BACKEND", "sqlite")
         backend_norm = str(self.backend).lower().strip()
-        if backend_norm not in ("sqlite", "mysql"):
+        if backend_norm not in ("sqlite", "disabled"):
             raise ValueError(
                 f"Unsupported cache backend {self.backend!r}; "
-                f"must be one of: sqlite / mysql"
+                f"must be one of: sqlite / disabled"
             )
         self.backend = backend_norm
         if self.db_path is None:
