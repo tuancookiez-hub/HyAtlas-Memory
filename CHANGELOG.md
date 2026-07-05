@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [2.1.0] - 2026-07-05
+
 ### Added
 - **Runtime layout consolidation (`HYATLAS_HOME`).** All runtime state now resolves under a single `~/.hyatlas` root. New `hyatlas config` subcommands (`show`, `model`, `embedder`, `validate`) and migration helpers (`hyatlas snapshot`, `hyatlas migrate layout --dry-run|--apply|--rollback`). Config precedence: CLI flags > env vars > `~/.hyatlas/config/.env` > `~/.hyatlas/config/hy_memory.json` > legacy `HERMES_HOME/hy_memory.json` > `~/.hy_memory/pkg/.env`.
 - **Multi-key LLM resilience.** `llm.api_keys` list is probed at startup; the first key that authenticates wins. Falls back to `llm.api_key` for backward compatibility.

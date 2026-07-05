@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyatlas-memory"
-version = "2.1.0"
+version = "3.0.0"
 description = "Community implementation of the official Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan, memory.hunyuan.tencent.com) for Hermes Agent. Includes the experimental L7 intention layer. Apache 2.0 licensed."
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -49,12 +49,7 @@ requires-python = ">=3.10"
 # chromadb / qdrant-client / faiss-cpu = vector store (L4 identity search)
 # openai = default LLM/embedder client (overridable via hy_memory.json)
 dependencies = [
-    # Hy-Memory upstream SDK is NOT on PyPI — it's a private/internal package
-    # from Tencent (memory.hunyuan.tencent.com). Users must install it separately
-    # from source or a private index. We declare it as optional to avoid
-    # blocking pip install for users who already have it.
-    # Install hy-memory separately: pip install hy-memory (from private index)
-    # or from source: https://memory.hunyuan.tencent.com
+    # v3.0.0: hy-memory SDK forked into src/hyatlas_memory/core/ — no external dep
     "kuzu>=0.4.0",
     "openai>=1.30.0",
     "pydantic>=2.0",
@@ -63,13 +58,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Hy-Memory upstream SDK (required for full functionality)
-# Install separately if not already available: pip install hy-memory>=1.2.18
-hy-memory = ["hy-memory>=1.2.18"]
+# v3.0.0: hy-memory SDK is now forked into src/hyatlas_memory/core/
 # Vector store backends (pick at least one; default is qdrant)
 qdrant = ["qdrant-client>=1.7.0"]
-chroma = ["chromadb>=0.4.0"]
-faiss = ["faiss-cpu>=1.7.0"]
+# chroma and faiss backends were stripped in v3.0.0 (only qdrant supported)
 # Embedding server (local SentenceTransformers-based; no API key needed)
 local-embed = ["sentence-transformers>=2.0.0", "uvicorn>=0.27.0", "fastapi>=0.100.0"]
 # Dev tooling

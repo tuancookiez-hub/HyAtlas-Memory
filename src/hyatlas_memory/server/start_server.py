@@ -84,20 +84,16 @@ print(f"  Embedder: in-process (no sidecar)")
 # patches.py is a no-op if the SDK is already patched.
 import importlib
 os.environ["MEMORY_SYSTEM2_TRIGGER_MODE"] = "scheduled"
-# Honor MEMORY_L5_AUTO from .env (don't override). The L5 pipeline spawns
-# a detached subprocess whose first step is to STOP the hy-memory server
-# (to get an exclusive Kuzu lock). It's debounced by L5_MIN_INTERVAL_HOURS
-# so it doesn't run constantly. Set MEMORY_L5_AUTO=false in .env to disable.
 _l5_auto = os.environ.get("MEMORY_L5_AUTO", "true").strip().lower()
 os.environ["MEMORY_L5_AUTO"] = "true" if _l5_auto in ("1", "true", "yes") else "false"
-try:
-    _pm = importlib.import_module("hyatlas_memory.patches")
-    _result = _pm.apply_all_patches()
-    print(f"  Patches applied: {_result}")
-    if _result.get("user_identity"):
-        print("  User identity unification: ON (HYATLAS_USER_IDENTITY)")
-except ImportError as _e:
-    print(f"  WARN: hyatlas_memory.patches not importable: {_e}")
 
-from hy_memory.server import run_server
+try:
+    from hyatlas_memory.integrations import wire_all
+    wire_all()
+    print("  Integrations wired (13 first-class modules)")
+except Exception as _e:
+    print(f"  WARN: integrations failed: {_e}")
+    import traceback; traceback.print_exc()
+
+from hyatlas_memory.core.server import run_server
 run_server(port=19527, host="127.0.0.1")

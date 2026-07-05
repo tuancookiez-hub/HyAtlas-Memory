@@ -89,3 +89,4 @@ plans/
 storage/
 .git-commit-msg-*
 *-draft.txt
+.worktrees/
