@@ -100,7 +100,7 @@ knowledge graph → search → graph endpoint.
 
 #### Test Results
 
-- 47 passed, 5 skipped
+- 33 passed, 19 skipped (14 graph + 4 integration + 1 dashboard skipped when server not running)
 - All critical module imports verified
 - Zero `from hy_memory` imports in active code paths
 - Zero hardcoded paths in any `.py` file

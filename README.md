@@ -443,7 +443,7 @@ cd HyAtlas-Memory
 uv pip install -e ".[dev,test]"
 
 # 2. Run tests
-pytest                     # 47 tests, ~1 min, no external deps needed
+pytest                     # 33 tests pass offline, 19 skipped (need live server)
 pytest -m integration      # integration tests, needs Qdrant + server running
 
 # 3. Lint
