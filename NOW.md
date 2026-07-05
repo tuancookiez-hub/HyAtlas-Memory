@@ -47,6 +47,14 @@ a9788d3 docs: v3.0.0 fork plan + memory design research
 - Qdrant export: `qdrant_pre_v3.jsonl` (6,135 points)
 - Rollback: `git checkout v2.1.0-stable`
 
+### Full Test Suite
+
+- **52 passed, 0 failed, 0 skipped** (including integration tests)
+- Integration test `test_importance_and_access_count_are_populated` now passes
+- S2 Digest cycle verified: L5 in-process extraction runs (2 facts → 1 entity)
+- Search quality verified: 4 queries all return correct L2 facts (0.714-0.735 scores)
+- Dedup, graph endpoint, circuit breaker all functional
+
 ### Next Steps
 
 1. **Merge to main** — needs Tuna's approval
