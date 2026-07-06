@@ -1,44 +1,34 @@
-# HyAtlas-Memory — Current State
+# HyAtlas-Memory — NOW.md
 
-## v3.0.0 — Release-Ready (Final Verification Done)
+## Current State (2026-07-06)
+**v3.0.0 released and pushed to GitHub. CI green.**
 
-**Branch:** `feat/v3-fork` (21 commits, 51 total)
-**Tests:** 47 passed, 5 skipped
-**Latest commit:** `cf1f998` — unclosed think-block parsing + agent_max_tokens 8192
+- Branch: `main` (merged from `feat/v3-fork`)
+- Tag: `v3.0.0` — https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.0.0
+- CI: All pass (3.10/3.11/3.12 — tests + ruff)
+- Model: `deepseek-v4-flash` @ `https://hyper.charm.land/v1` (non-reasoning, clean JSON)
+- Graph: 1,444 nodes, 6,374 relations
+- Tests: 33 offline pass, 14 server-dependent (47 total), 5 skipped
+- Server: Down (stopped for WAL checkpoint verification)
 
-### End-to-End Verification (2026-07-06)
-- [x] Server health: VDB ok, embed ok, LLM ok (Qdrant + MiniMax-M3 + BGE)
-- [x] Write: S1 extraction success (270 tokens, 10s, error_code=null)
-- [x] L2 facts: YC test content extracted, tagged [startup, yc, milestone], score 0.672
-- [x] Search: semantic recall working, returns relevant L2 facts
-- [x] Graph: 1,358 nodes, 5,922 relations (live endpoint)
-- [x] Circuit breaker: CLOSED (no VDB failures)
-- [x] Tests: 47 passed, 5 skipped
+## Completed This Session
+1. Diagnosed upstream hy-memory 1.2.20 — confirmed no think-block handling, no L5 graph, same Kuzu WAL bug
+2. Switched LLM from MiniMax-M3 → deepseek-v4-flash (zero parse errors)
+3. E2E verified: write → L2 → S2 digest → L5 graph (+61 nodes) → search → graph endpoint → circuit breaker
+4. Fixed CI: ruff lint (per-file-ignores for forked core/, fixed our code properly)
+5. Merged feat/v3-fork → main, tagged v3.0.0, pushed
+6. Created GitHub release with infographic, updated notes for full v2→v3 journey
+7. Verified no PII in release/infographic/changelog
 
-### What's Working
-- Full pipeline: L1_RAW → L2_FACT → L4_IDENTITY → L5_KNOWLEDGE (in-process) → S2 digest
-- Emotion analyzer: valence/arousal wired into write path
-- Kuzu WAL checkpoint: CHECKPOINT + db.close() on shutdown (verified: 0KB WAL)
-- 3 reader strategies: legacy, hybrid_v2, hybrid_tag (3-channel RRF)
-- Circuit breaker, L1_RAW rolling delete, dedup skip, multi-key rotation
-- MiniMax-M3 compatibility: think-block stripping in all 3 _parse_json implementations
-  - Handles: closed ⋖⋗, closed , unclosed ⋖ (truncated), markdown fences, regex fallback
-- agent_max_tokens raised 2000 → 8192 (reasoning models need budget for thinking + output)
+## Next Moves
+1. **Restart server** when ready to use the memory system
+2. **MiniMax subscription expiry** — switch to a thinking-disableable model (DeepSeek/Qwen/Kimi/Hunyuan), set `HY_MEMORY_THINKING_MODE=disabled`
+3. **Patch 28** (deferred): `hyatlas snapshot`, `hyatlas migrate layout --dry-run/--apply/--rollback`
+4. **Patches 29-31** (deferred): docs rewrite, legacy deprecation warnings
+5. **BM25 activation**: install `fastembed`, set `HY_MEMORY_READER=hybrid_v2`
 
-### Upstream Comparison (hy-memory 1.2.20)
-- Upstream has NO L5 knowledge graph (their "L5" = profile summary text, not entity/relation extraction)
-- Upstream has same Kuzu WAL bug (just nulls refs, no checkpoint)
-- Upstream _parse_json: no think-block handling (markdown fence + regex fallback only)
-- Upstream agent_max_tokens default: 2000 (too low for reasoning models)
-- Upstream HY_MEMORY_THINKING_MODE=disabled works for DeepSeek/Qwen/Kimi/Hunyuan but NOT MiniMax
-- Our fork is genuinely ahead on reasoning model compatibility and L5 reliability
-
-### LLM Configuration
-- Current: deepseek-v4-flash via https://hyper.charm.land/v1 (switched from MiniMax-M3)
-- No reasoning/thinking — clean JSON output, no think-block stripping needed
-- Our think-block parsing remains as a safety net for future reasoning model use
-
-### Next Steps
-1. Merge feat/v3-fork to main, tag v3.0.0 (awaiting Tuna's approval)
-2. Run formal benchmarks (LongMemEval/LoCoMo)
-3. Consider upstreaming resilience features (circuit breaker, WAL checkpoint, think-block parsing)
+## Key Paths
+- Repo: `F:\HyAtlas-Memory`
+- Config: `C:\Users\tuanc\.hyatlas\config\hy_memory.json`
+- Qdrant: `C:\qdrant\qdrant.exe --config-path C:\qdrant\config.yaml`
+- Kuzu DB: `C:\Users\tuanc\.hy_memory\data\kuzu_db`
