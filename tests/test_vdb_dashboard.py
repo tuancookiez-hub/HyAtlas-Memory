@@ -28,8 +28,10 @@ def test_payload_by_ids_handles_memorynode_fields():
         async def get_by_ids(self, ids):
             return [n]
 
-    vs = FakeVS()
-    out = asyncio.run(vdb_dashboard._payload_by_ids_async(vs, ["m1"]))
+    class FakeClient:
+        _vector_store = FakeVS()
+
+    out = asyncio.run(vdb_dashboard._payload_by_ids_async(FakeClient(), ["m1"]))
     assert out == {"m1": {"importance": "high", "access_count": 7}}, out
 
 
