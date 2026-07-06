@@ -1,7 +1,7 @@
 # HyAtlas-Memory — NOW.md
 
 ## Current State (2026-07-06)
-**v3.0.0 released and pushed to GitHub. CI green.**
+**v3.0.0 released and pushed to GitHub. CI green. Live stack restored to Qdrant after Zvec spike rollback.**
 
 - Branch: `main` (merged from `feat/v3-fork`)
 - Tag: `v3.0.0` — https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.0.0
@@ -9,7 +9,16 @@
 - Model: `deepseek-v4-flash` @ `https://hyper.charm.land/v1` (non-reasoning, clean JSON)
 - Graph: 1,444 nodes, 6,374 relations
 - Tests: 33 offline pass, 14 server-dependent (47 total), 5 skipped
-- Server: Down (stopped for WAL checkpoint verification)
+- Server: Running on Qdrant (`/api/v1/status` ok, provider=`qdrant`, collection=`agent_memories_1024`)
+
+## Zvec Spike Closeout (2026-07-06)
+- Verdict: Zvec performance spike was legitimately good, but live integration is not production-ready yet.
+- Worked: Qdrant → Zvec migration exported/imported 6,433 docs; count verification passed; fresh temp Zvec collections reopen correctly.
+- Failed: live Zvec server repeatedly failed with `RuntimeError: Can't open lock file ... LOCK` after open/reopen cycles; failure is specific to production-path collection lifecycle, not Qdrant data loss.
+- Fixed while debugging: `start_server.py` now gives config priority over stale `MEMORY_VECTOR_STORE`, and passes `MEMORY_COLLECTION_NAME`, `MEMORY_VECTOR_HOST`, `MEMORY_VECTOR_PORT` from `hy_memory.json`.
+- Reverted runtime config to Qdrant for stability. Keep Zvec work as v3.1 spike until adapter has a reliable Windows close/reopen contract and startup tests.
+- Tuna decision: once Zvec is implemented properly and passes lifecycle/E2E gates, remove Qdrant instead of keeping dual backends long-term.
+- Zvec hardening pass added temp-store lifecycle tests, removed normal-startup LOCK deletion, unified runtime/migration path resolution, and fixed migration point-id/schema coercion. Full pytest: 52 passed, 5 skipped. Live runtime remains Qdrant (`agent_memories_1024`, 6,443 points).
 
 ## Completed This Session
 1. Diagnosed upstream hy-memory 1.2.20 — confirmed no think-block handling, no L5 graph, same Kuzu WAL bug

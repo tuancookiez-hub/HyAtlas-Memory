@@ -66,7 +66,12 @@ os.environ["MEMORY_EMBEDDING_DIMS"] = str(emb.get("dims", 384))
 # This eliminates the sidecar failure mode entirely.
 
 vs = config.get("vector_store", {})
-os.environ["MEMORY_VECTOR_STORE"] = os.environ.get("MEMORY_VECTOR_STORE") or vs.get("provider", "chroma")
+os.environ["MEMORY_VECTOR_STORE"] = vs.get("provider", "chroma") or os.environ.get("MEMORY_VECTOR_STORE", "")
+os.environ["MEMORY_COLLECTION_NAME"] = vs.get("collection") or vs.get("collection_name") or os.environ.get("MEMORY_COLLECTION_NAME", "agent_memories")
+if vs.get("host"):
+    os.environ["MEMORY_VECTOR_HOST"] = str(vs["host"])
+if vs.get("port"):
+    os.environ["MEMORY_VECTOR_PORT"] = str(vs["port"])
 
 print(f"Starting hy_memory.server with config from {config_path}")
 print(f"  HyAtlas home: {root}")
