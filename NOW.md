@@ -1,7 +1,7 @@
 # HyAtlas-Memory — NOW.md
 
-## Current State (2026-07-06)
-**v3.0.0 released and pushed to GitHub. CI green. Live stack restored to Qdrant after Zvec spike rollback.**
+## Current State (2026-07-07)
+**v3.0.0 on `main`. Live stack cut over to Zvec (`agent_memories_1024`). Qdrant still auto-started by `hyatlas start` as sidecar; vector reads/writes go through Zvec.**
 
 - Branch: `main` (merged from `feat/v3-fork`)
 - Tag: `v3.0.0` — https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.0.0
@@ -9,7 +9,7 @@
 - Model: `deepseek-v4-flash` @ `https://hyper.charm.land/v1` (non-reasoning, clean JSON)
 - Graph: 1,444 nodes, 6,374 relations
 - Tests: 33 offline pass, 14 server-dependent (47 total), 5 skipped
-- Server: Running on Qdrant (`/api/v1/status` ok, provider=`qdrant`, collection=`agent_memories_1024`)
+- Server: Running on Zvec (`/api/v1/status` ok, `vdb_provider=zvec`, collection=`agent_memories_1024`)
 
 ## Zvec Spike Closeout (2026-07-06)
 - Verdict: Zvec performance spike was legitimately good, but live integration is not production-ready yet.
@@ -19,7 +19,9 @@
 - Reverted runtime config to Qdrant for stability. Keep Zvec work as v3.1 spike until adapter has a reliable Windows close/reopen contract and startup tests.
 - Tuna decision: once Zvec is implemented properly and passes lifecycle/E2E gates, remove Qdrant instead of keeping dual backends long-term.
 - Zvec hardening pass added temp-store lifecycle tests, removed normal-startup LOCK deletion, unified runtime/migration path resolution, and fixed migration point-id/schema coercion. Full pytest: 52 passed, 5 skipped. Live runtime remains Qdrant (`agent_memories_1024`, 6,443 points).
-- Added `hyatlas zvec doctor`, fixed status collection suffix handling, and proved a temp Zvec config can boot the real server on an isolated port. Full pytest: 57 passed, 5 skipped. Live runtime remains Qdrant (`agent_memories_1024`, 6,457 points). Real doctor still reports the old production Zvec path cannot reopen (`Can't open lock file`), so cutover remains blocked until that path is replaced or repaired.
+- Added `hyatlas zvec doctor`, fixed status collection suffix handling, and proved a temp Zvec config can boot the real server on an isolated port. Full pytest: 57 passed, 5 skipped.
+- **Live Zvec cutover (2026-07-07):** Archived poisoned `~/.hyatlas/zvec/agent_memories_1024` → `agent_memories_1024_poison_20260706_221610`. Promoted verified rehearsal store (copy) to canonical `agent_memories_1024`. Config `vector_store.provider=zvec`. `hyatlas start --detach` healthy; `/api/v1/status` reports `zvec`. `hyatlas zvec doctor` exits 1 while server holds collection lock (expected); subprocess reopen ok after stop.
+- **Qdrant data note:** Standalone `qdrant.exe --config-path C:/qdrant/config.yaml` saw only 374 points in `C:/qdrant-data`; HyAtlas-managed Qdrant still reports ~6,465 — investigate storage path before relying on Qdrant for backup migration.
 
 ## Completed This Session
 1. Diagnosed upstream hy-memory 1.2.20 — confirmed no think-block handling, no L5 graph, same Kuzu WAL bug
@@ -31,10 +33,10 @@
 7. Verified no PII in release/infographic/changelog
 
 ## Next Moves
-1. **Restart server** when ready to use the memory system
-2. **MiniMax subscription expiry** — switch to a thinking-disableable model (DeepSeek/Qwen/Kimi/Hunyuan), set `HY_MEMORY_THINKING_MODE=disabled`
-3. **Patch 28** (deferred): `hyatlas snapshot`, `hyatlas migrate layout --dry-run/--apply/--rollback`
-4. **Patches 29-31** (deferred): docs rewrite, legacy deprecation warnings
+1. **Skip Qdrant on zvec-only start** (or document sidecar) — then remove Qdrant binary dep when comfortable
+2. **Reconcile Qdrant storage paths** (`C:/qdrant-data` vs HyAtlas-managed data) before any backup migration
+3. **MiniMax subscription expiry** — thinking-disableable model already on deepseek-v4-flash
+4. **Patch 28** (deferred): `hyatlas snapshot`, `hyatlas migrate layout`
 5. **BM25 activation**: install `fastembed`, set `HY_MEMORY_READER=hybrid_v2`
 
 ## Key Paths
