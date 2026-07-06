@@ -3283,10 +3283,6 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 return self._json(500, {"error": str(e)})
 
         if path == "/api/layer-counts":
-            # Actual counts of ACTIVE memories per layer, queried directly
-            # from Qdrant. Used by the Memory Composition bar so the
-            # percentages reflect the true VDB population, not a sample
-            # biased by recent gmt_created activity.
             layer_keys = [
                 "l0_basic_info", "l1_raw", "l2_fact", "l3_summary", "l4_identity",
                 "l5_knowledge", "l6_schema", "l7_intention",
@@ -3299,31 +3295,14 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 n = _vdb_layer_count(layer, require_is_latest=require_latest)
                 counts[layer] = n
                 total += n
-            # L5/L6/L7 also live in Kuzu; merge graph bucket (all known user scopes).
-            graph_counts = {"l5_knowledge": 0, "l6_schema": 0, "l7_intention": 0}
+            # L5/L6/L7 live in Kuzu; use the fast /api/v1/graph endpoint
+            # (one call, no per-user loop) instead of the slow /api/v1/list.
             try:
-                for uid in HERMES_USER_IDS:
-                    list_body = json.dumps({
-                        "user_id": uid,
-                        "session_id": "default_session",
-                        "limit": 10000,
-                    }).encode()
-                    list_req = urllib.request.Request(
-                        f"{HY_MEMORY_BASE}/api/v1/list",
-                        data=list_body,
-                        headers={"Content-Type": "application/json"},
-                    )
-                    raw = json.loads(
-                        urllib.request.urlopen(list_req, timeout=15).read()
-                    )
-                    for n in (raw.get("graph") or {}).get("nodes") or []:
-                        lyr = n.get("layer")
-                        if lyr in graph_counts:
-                            graph_counts[lyr] += 1
+                _, graph_data = hy("GET", "/api/v1/graph", None)
+                if isinstance(graph_data, dict):
+                    counts["l5_knowledge"] = max(counts.get("l5_knowledge", 0), graph_data.get("node_count", 0))
             except Exception:
                 pass
-            for lyr in graph_layers:
-                counts[lyr] = max(counts.get(lyr, 0), graph_counts[lyr])
             total = sum(counts.values())
             return self._json(200, {
                 "counts": counts,
@@ -3339,30 +3318,20 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             # by layer.
             l6_count = 0
             l7_count = 0
+            # Use the fast /api/v1/graph endpoint (one call) instead of
+            # looping through /api/v1/list per user (3 × 15s timeout).
             try:
-                for uid in HERMES_USER_IDS:
-                    body = json.dumps({
-                        "user_id": uid,
-                        "session_id": "default_session",
-                        "limit": 10000,
-                    }).encode()
-                    req = urllib.request.Request(
-                        f"{HY_MEMORY_BASE}/api/v1/list",
-                        data=body,
-                        headers={"Content-Type": "application/json"},
-                    )
-                    raw = json.loads(urllib.request.urlopen(req, timeout=15).read())
-                    for n in (raw.get("graph") or {}).get("nodes") or []:
-                        layer = n.get("layer")
-                        if layer == "l6_schema":
-                            l6_count += 1
-                        elif layer == "l7_intention":
-                            l7_count += 1
+                _, graph_data = hy("GET", "/api/v1/graph", None)
+                if isinstance(graph_data, dict):
+                    # /api/v1/graph returns total node_count (L5 entities);
+                    # L6/L7 are not distinguished here, so we still check
+                    # the VDB layer count for those.
+                    pass
             except Exception:
                 pass
-            # L5 lives in Kuzu too, but isn't in /api/v1/list.
-            # v2.0.0+ (Patch 23): try the live /api/v1/graph endpoint first;
-            # fall back to the export JSON only if the upstream is unreachable.
+            l6_count = _vdb_layer_count("l6_schema", require_is_latest=False)
+            l7_count = _vdb_layer_count("l7_intention", require_is_latest=False)
+            # L5 from /api/v1/graph (node_count) or VDB fallback.
             l5_count = 0
             try:
                 _, graph_data = hy("GET", "/api/v1/graph", None)

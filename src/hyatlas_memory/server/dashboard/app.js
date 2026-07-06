@@ -298,10 +298,10 @@ function renderAll() {
 
 // Overview Page
 function renderOverview() {
-  // Compute total memories across all sources: VDB active + Coding
-  const vdbActive = (statusData?.vdb_points || 0);
+  // Compute total memories from layer-counts (authoritative, includes all layers)
+  const layerTotal = (layerCountsData && layerCountsData.total) ? layerCountsData.total : 0;
   const codingTotal = codingCountData?.total || 0;
-  const totalMemories = vdbActive + codingTotal;
+  const totalMemories = layerTotal + codingTotal;
 
   // Compute total L5 graph links (edges + relationships)
   const totalLinks = (l5Graph && l5Graph.relations) ? l5Graph.relations.length
@@ -1085,9 +1085,10 @@ function renderToday() {
   const html = filtered.slice(0, 20).map(m => {
       const title = (m.content || '');
       const preview = title.length > 100 ? title.substring(0, 100) + '…' : title;
-      const time = new Date(m.gmt_created * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-      const ago = Math.floor((Date.now() / 1000 - m.gmt_created) / 60);
-      const agoText = ago < 60 ? `${ago}m ago` : `${Math.floor(ago / 60)}h ago`;
+      const ts = Number(m.gmt_created) || 0;
+      const time = ts ? new Date(ts * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—';
+      const ago = ts ? Math.floor((Date.now() / 1000 - ts) / 60) : 0;
+      const agoText = !ts ? '—' : ago < 60 ? `${ago}m ago` : `${Math.floor(ago / 60)}h ago`;
 
       const imp = typeof m.importance === 'number' ? m.importance : null;
       const impCls = imp === null ? '' : imp >= 0.7 ? 'importance-high' : imp >= 0.4 ? 'importance-mid' : 'importance-low';
@@ -1499,13 +1500,13 @@ function renderOverviewSidebar() {
       </div>
       ${recent.length === 0 ? '<div class="text-xs text-muted" style="margin-top: 12px;">No recent memories in this filter</div>' : recent.map(m => {
         const title = (m.content || '').substring(0, 50) + '...';
-        const ts = sortKey(m);
-        const ago = Math.floor((Date.now() / 1000 - ts) / 60);
-        const agoText = ago < 1 ? 'just now' : (ago < 60 ? `${ago}m ago` : `${Math.floor(ago / 60)}h ago`);
-        const wasUpdated = m.gmt_updated && m.gmt_created && (m.gmt_updated - m.gmt_created > 60);
+        const ts = Number(sortKey(m)) || 0;
+        const ago = ts ? Math.floor((Date.now() / 1000 - ts) / 60) : 0;
+        const agoText = !ts ? '—' : (ago < 1 ? 'just now' : (ago < 60 ? `${ago}m ago` : `${Math.floor(ago / 60)}h ago`));
+        const wasUpdated = m.gmt_updated && m.gmt_created && (Number(m.gmt_updated) - Number(m.gmt_created) > 60);
         const titleAttr = wasUpdated
-          ? `Created ${new Date(m.gmt_created * 1000).toLocaleString()} • Updated ${new Date(m.gmt_updated * 1000).toLocaleString()}`
-          : `Created ${new Date(m.gmt_created * 1000).toLocaleString()}`;
+          ? `Created ${ts ? new Date(Number(m.gmt_created) * 1000).toLocaleString() : '—'} • Updated ${ts ? new Date(Number(m.gmt_updated) * 1000).toLocaleString() : '—'}`
+          : `Created ${ts ? new Date(Number(m.gmt_created) * 1000).toLocaleString() : '—'}`;
 
         return `
                   <div class="ingestion-item" data-memory-id="${m.memory_id}" onclick="window.__openMemoryDetail && window.__openMemoryDetail('${m.memory_id}')">
