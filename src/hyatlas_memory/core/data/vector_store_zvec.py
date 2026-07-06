@@ -568,6 +568,18 @@ class ZvecVectorStore(VectorStoreBase):
             logger.warning(f"[zvec] delete failed for {node_id}: {e}")
             return False
 
+    async def delete_by_filter(self, filt: str) -> int:
+        """Delete points matching a zvec filter string. Returns count deleted."""
+        try:
+            def _delete():
+                self._coll.delete_by_filter(filter=filt)
+                self._coll.flush()
+            await _run_in_vdb_pool(_delete)
+            return -1
+        except Exception as e:
+            logger.warning(f"[zvec] delete_by_filter failed: {e}")
+            return 0
+
     async def delete_by_isolation_key(self, isolation_key: str) -> int:
         """Delete all points under an isolation key."""
         try:

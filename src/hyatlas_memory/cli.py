@@ -224,17 +224,25 @@ def _cmd_doctor(args) -> int:
     else:
         print(f"  ✗ Plugin shim missing at {plugin_dir} — run `hyatlas setup hermes`")
 
-    # 4. Qdrant
+    # 4. Vector store
     from .process import StackManager
     manager = StackManager(project_root=Path(__file__).parent, hermes_home=home, log_dir=layout.logs())
     cfg = manager._read_hy_memory_json()
-    qdrant_port = int(cfg.get("qdrant", {}).get("port", 6333))
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(1)
-        if sock.connect_ex(("127.0.0.1", qdrant_port)) == 0:
-            print(f"  ✓ Qdrant reachable on port {qdrant_port}")
+    vec_provider = (cfg.get("vector_store") or {}).get("provider", "zvec")
+    if vec_provider == "qdrant":
+        qdrant_port = int(cfg.get("qdrant", {}).get("port", 6333))
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(1)
+            if sock.connect_ex(("127.0.0.1", qdrant_port)) == 0:
+                print(f"  ✓ Qdrant reachable on port {qdrant_port}")
+            else:
+                print(f"  ✗ Qdrant not reachable on port {qdrant_port}")
+    else:
+        zvec_path = layout.home() / "zvec"
+        if zvec_path.exists():
+            print(f"  ✓ Zvec store present at {zvec_path}")
         else:
-            print(f"  ✗ Qdrant not reachable on port {qdrant_port}")
+            print(f"  ✗ Zvec store missing at {zvec_path}")
 
     # 5. Upstream server
     client = _get_client()

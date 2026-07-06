@@ -164,8 +164,13 @@ def wire_circuit_breaker(handler_cls, json_resp_fn):
 _l1_sweep_thread: threading.Thread | None = None
 
 
-def start_l1_raw_sweep():
-    """Start daemon thread for periodic L1_RAW shadow cleanup."""
+def start_l1_raw_sweep(vector_store=None):
+    """Start daemon thread for periodic L1_RAW shadow cleanup.
+
+    If `vector_store` (the live ZvecVectorStore / Qdrant store) is passed,
+    the zvec sweep reuses it instead of opening a second handle (which would
+    collide with the server's lock).
+    """
     global _l1_sweep_thread
     if _l1_sweep_thread is not None:
         return
@@ -179,10 +184,18 @@ def start_l1_raw_sweep():
         try:
             from datetime import datetime, timedelta, timezone
 
+            from . import layout
+
+            provider = (layout.read_config() or {}).get("vector_store", {}).get("provider", "qdrant")
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).timestamp()
+
+            if provider == "zvec":
+                _sweep_zvec(cutoff, vector_store=vector_store)
+                return
+
             from qdrant_client import QdrantClient
             from qdrant_client.http import models
 
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).timestamp()
             host = os.environ.get("MEMORY_VECTOR_HOST", "127.0.0.1")
             port = int(os.environ.get("MEMORY_VECTOR_PORT", "6333"))
             collection = os.environ.get("MEMORY_VECTOR_COLLECTION", "agent_memories_1024")
@@ -200,6 +213,63 @@ def start_l1_raw_sweep():
             logger.info(f"[l1-sweep] deleted shadowed L1_RAW older than {window_days} days")
         except Exception as e:
             logger.warning(f"[l1-sweep] failed: {e}")
+
+
+    def _sweep_zvec(cutoff: float, vector_store=None):
+        """Delete shadowed L1_RAW on a zvec store.
+
+        Uses the live `vector_store` handle when provided (the server's own
+        collection) to avoid a second open that would collide on the lock.
+        zvec stores gmt_created as ISO strings, so the time window is applied
+        by reading the field and comparing after parse (best-effort retention).
+        """
+        if vector_store is None:
+            logger.debug("[l1-sweep] zvec: no live vector store handle; skipping")
+            return
+
+        from datetime import datetime
+
+        from .core.data.vector_store_zvec import _quote
+        from .core.models.memory import MemoryLayer, MemoryStatus
+
+        try:
+            loop = getattr(vector_store, "_loop_thread", None)
+
+            async def _do():
+                vs = vector_store
+                docs = await vs.search(
+                    query_embedding=[0.0] * (vs.config.vector_store.embedding_dims or 1024),
+                    layers=[MemoryLayer.L1_RAW],
+                    status_filter=[MemoryStatus.SHADOW],
+                    limit=100000,
+                    only_latest=False,
+                )
+                killed = 0
+                for item in docs:
+                    gc = item.get("gmt_created")
+                    if gc is not None:
+                        try:
+                            ts = gc.timestamp() if hasattr(gc, "timestamp") else datetime.fromisoformat(str(gc)).timestamp()
+                            if ts >= cutoff:
+                                continue
+                        except (ValueError, TypeError, AttributeError):
+                            pass
+                    nid = item.get("node_id")
+                    if nid:
+                        await vs.delete_by_filter(f"node_id = {_quote(nid)}")
+                        killed += 1
+                if killed:
+                    logger.info(f"[l1-sweep] zvec deleted {killed} shadowed L1_RAW older than {window_days} days")
+                return killed
+
+            if loop is not None:
+                import asyncio
+                asyncio.run_coroutine_threadsafe(_do(), loop).result(timeout=60)
+            else:
+                import asyncio
+                asyncio.run(_do())
+        except Exception as e:
+            logger.warning(f"[l1-sweep] zvec failed: {e}")
 
     def _loop():
         while True:
@@ -1055,7 +1125,11 @@ def wire_all():
     wire_circuit_breaker(MemoryHTTPHandler, _json_response)
 
     # 2. L1_RAW sweep
-    start_l1_raw_sweep()
+    try:
+        _vs = _get_client()._vector_store
+    except Exception:
+        _vs = None
+    start_l1_raw_sweep(vector_store=_vs)
 
     # 3. L1_RAW dedup skip
     wire_l1_dedup_skip(HyMemoryClient)

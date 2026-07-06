@@ -58,8 +58,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# v3.0.0: hy-memory SDK is now forked into src/hyatlas_memory/core/
-# Vector store backends (pick at least one; default is qdrant)
+# v3.1.0: Zvec is the default vector store (in-process, no sidecar).
+# Qdrant remains available as an optional backend.
 qdrant = ["qdrant-client>=1.7.0"]
 zvec = ["zvec>=0.5.1"]
 # chroma and faiss backends were stripped in v3.0.0 (only qdrant supported)

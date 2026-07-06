@@ -57,7 +57,7 @@ hyatlas stop            # shut down the stack
 >
 > **`hyatlas console`** is read-only. Shows live service health and recent memory activity (writes, recalls, errors). Closing it does NOT stop the stack.
 
-**Need Qdrant?** The setup wizard detects whether Qdrant is installed and guides you through installing it (download from [qdrant.tech](https://qdrant.tech/documentation/guides/install/), or `docker run -d -p 6333:6333 qdrant/qdrant`).
+**Need a vector store?** HyAtlas-Memory v3.1.0 uses **Zvec** by default — an in-process store, no separate binary or port. If you prefer Qdrant, install it (download from [qdrant.tech](https://qdrant.tech/documentation/guides/install/), or `docker run -d -p 6333:6333 qdrant/qdrant`) and set `vector_store.provider: "qdrant"` in your config.
 
 **Want Docker instead?** See [Path A — Docker](#path-a--docker-recommended) below.
 
@@ -76,7 +76,7 @@ hyatlas stop            # shut down the stack
       "provider": "local"
     },
   "mode": "ultra",
-  "vector_store": {"provider": "qdrant", "host": "127.0.0.1", "port": 6333}
+  "vector_store": {"provider": "zvec", "host": "127.0.0.1", "port": 6333}
 }
 ```
 

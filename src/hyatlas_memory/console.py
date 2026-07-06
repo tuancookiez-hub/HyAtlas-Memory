@@ -384,7 +384,12 @@ def _row_static_section(label: str) -> str:
 
 
 def _row_health(key: str, state: _State) -> str:
-    name, desc, port = _SERVICE_BY_KEY[key]
+    name, desc, port = _service_for_key(key)
+    if key == "zvec":
+        from . import layout
+        present = (layout.home() / "zvec").exists()
+        status = _color("green", "● present") if present else _color("red", "○ missing")
+        return f"  {_color('cyan', name):<12} {desc:<22} {status}"
     up = state.health.get(port, False)
     status = _color("green", "● healthy") if up else _color("red", "○ down")
     return (
@@ -419,10 +424,23 @@ _ROW_FNS = {
 # each row at its position. _RECENT_ROWS is filled at startup time
 # because it depends on the layout length.
 def _build_line_plan() -> list[tuple[int, str]]:
-    """Return [(row, text-factory-kind, kind-arg), ...] in row order."""
+    """Return [(row, text-factory-kind, kind-arg), ...] in row order.
+
+    The vector-store health row is provider-aware: shows Zvec when the
+    active config uses zvec, otherwise Qdrant.
+    """
+    from . import _start as _st
+    provider = _st._vector_provider()
+    template = list(_LAYOUT_TEMPLATE)
+    if provider == "zvec":
+        template = [
+            ("health", "zvec" if kind == "health" and arg == "qdrant" else arg)
+            if kind == "health" else (kind, arg)
+            for kind, arg in template
+        ]
     plan: list[tuple[int, str, str]] = []
     row = 1
-    for kind, arg in _LAYOUT_TEMPLATE:
+    for kind, arg in template:
         plan.append((row, kind, arg))
         row += 1
     # 8 recent-event rows
@@ -430,6 +448,27 @@ def _build_line_plan() -> list[tuple[int, str]]:
         plan.append((row, "recent", str(i)))
         row += 1
     return plan
+
+
+# Provider-aware service lookup for the vector-store health row
+_SERVICES: list[tuple[str, str, int]] = [
+    ("Qdrant", "Vector store", _DEFAULT_PORTS["qdrant"]),
+    ("Upstream", "Hy-Memory server", _DEFAULT_PORTS["upstream"]),
+    ("Dashboard", "Web UI", _DEFAULT_PORTS["dashboard"]),
+]
+
+
+def _zvec_service_row() -> tuple[str, str, int]:
+    return ("Zvec", "Vector store", 0)
+
+
+def _service_for_key(key: str) -> tuple[str, str, int]:
+    if key == "zvec":
+        return _zvec_service_row()
+    for name, desc, port in _SERVICES:
+        if name.lower() == key:
+            return (name, desc, port)
+    return (key, "", 0)
 
 
 _LINE_PLAN = _build_line_plan()

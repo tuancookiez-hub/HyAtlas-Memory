@@ -481,7 +481,7 @@ def _print_service_urls():
     if _vector_provider() != "zvec":
         print(f"  {BOLD}Qdrant:{RESET}     http://127.0.0.1:{QDRANT_PORT}")
     else:
-        print(dim(f"  Vector store: zvec (no Qdrant sidecar)"))
+        print(dim("  Vector store: zvec (no Qdrant sidecar)"))
     print()
 
 

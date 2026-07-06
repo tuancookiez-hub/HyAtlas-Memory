@@ -40,7 +40,7 @@ def default_config() -> dict[str, Any]:
             "provider": "local",
         },
         "mode": "ultra",
-        "vector_store": {"provider": "qdrant", "host": "127.0.0.1", "port": 6333},
+        "vector_store": {"provider": "zvec", "host": "127.0.0.1", "port": 6333},
         "auto_start": True,
         "port": 19527,
     }
@@ -154,8 +154,8 @@ def validate(_: Namespace) -> int:
         bad.append("embedder.model is required")
     if not isinstance(emb.get("dims"), int) or emb.get("dims", 0) <= 0:
         bad.append("embedder.dims must be a positive integer")
-    if vec.get("provider") != "qdrant":
-        bad.append("only qdrant vector_store.provider is supported by this stack")
+    if vec.get("provider") not in ("qdrant", "zvec"):
+        bad.append("vector_store.provider must be 'qdrant' or 'zvec'")
     if bad:
         print("Config invalid:")
         for item in bad:
