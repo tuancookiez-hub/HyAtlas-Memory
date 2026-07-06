@@ -38,6 +38,8 @@ def test_migration_import_uses_runtime_schema_and_releases_store(monkeypatch, tm
                 "content": "migrated zvec proof",
                 "status": "active",
                 "is_latest": True,
+                "gmt_created": 1782703943,
+                "memory_at": "1783273685",
                 "custom": {"k": "v"},
             },
         }
@@ -53,3 +55,5 @@ def test_migration_import_uses_runtime_schema_and_releases_store(monkeypatch, tm
     assert node is not None
     assert node.content == "migrated zvec proof"
     assert node.custom == {"k": "v"}
+    assert node.gmt_created is not None
+    assert node.memory_at is not None

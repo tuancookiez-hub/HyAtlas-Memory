@@ -29,7 +29,7 @@ from pathlib import Path
 
 from hermes_constants import get_hermes_home
 
-from . import _start, config_cli, layout, migrate_cli, zvec_cli
+from . import _start, archive_cli, config_cli, layout, migrate_cli, zvec_cli
 from . import cli as _memory_cli
 from .installer import _install_plugin_shim, _update_config
 from .process import StackManager
@@ -137,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     config_cli.register(sub)
     migrate_cli.register(sub)
     zvec_cli.register(sub)
+    archive_cli.register(sub)
 
     p_doctor = sub.add_parser("doctor", help="Run health checks")
     p_doctor.set_defaults(func=lambda _: _memory_cli._main_standalone(["doctor"]))

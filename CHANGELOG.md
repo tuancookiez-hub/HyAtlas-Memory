@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.1.0] — 2026-07-07
+
+### Zvec as default vector store (Qdrant archived, not required at runtime)
+
+- **`ZvecVectorStore`** — production adapter with refcounted lifecycle, `resolve_zvec_path()`, shared `_FIELD_SCHEMA` with migration.
+- **`hyatlas start`** — when `vector_store.provider` is `zvec`, Qdrant is **not** started; status shows Zvec store + server. `hyatlas stop` kills legacy Qdrant on :6333 if still running.
+- **Dashboard** — layer counts, L1 raw scroll, and payload enrichment use memory server **`/api/v1/vdb/*`** (works with Zvec; Qdrant HTTP fallback when server down).
+- **`hyatlas archive qdrant`** — zip cold backup of HyAtlas Qdrant storage under `~/.hyatlas/archive/` (data left on disk).
+- **`hyatlas zvec doctor`** — path lock/reopen checks for cutover rehearsal.
+- **Migration** — `scripts/migrate_qdrant_to_zvec.py` with `--apply --verify`; deterministic point IDs.
+- **Tests** — Zvec lifecycle, migration, doctor, server E2E, zvec-only service list.
+
+### Upgrade notes
+
+- Set `vector_store.provider` to `zvec` and install `pip install hyatlas-memory[zvec]` (or `zvec>=0.5.1`).
+- Run migration from Qdrant while server is stopped, then `hyatlas zvec doctor`, then `hyatlas start`.
+- Archive Qdrant with `hyatlas archive qdrant` before decommissioning the sidecar.
+
 ## [3.0.0] — 2026-07-06
 
 ### Major: Full SDK Fork + Reasoning Model Compatibility + Operational Hardening

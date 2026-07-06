@@ -101,6 +101,18 @@ def _qdrant_layer_count(layer: str, *, require_is_latest: bool = True) -> int:
         return 0
 
 
+def _vdb_layer_count(layer: str, *, require_is_latest: bool = True) -> int:
+    """Layer count via memory server (works with zvec; falls back to Qdrant HTTP)."""
+    latest = "true" if require_is_latest else "false"
+    code, body = hy(
+        "GET",
+        f"/api/v1/vdb/layer_count?layer={layer}&require_is_latest={latest}",
+    )
+    if code == 200 and isinstance(body, dict) and "count" in body:
+        return int(body["count"])
+    return _qdrant_layer_count(layer, require_is_latest=require_is_latest)
+
+
 def _l5_export_path() -> _pathlib.Path:
     """Resolve the canonical path of the L5 Kuzu-graph export JSON.
 
@@ -346,6 +358,17 @@ def _fetch_l1_raw_from_qdrant(limit_total: int = 1500) -> list[dict]:
     return items
 
 
+def _fetch_l1_raw_from_vdb(limit_total: int = 1500) -> list[dict]:
+    code, body = hy(
+        "POST",
+        "/api/v1/vdb/scroll",
+        {"mode": "l1_raw", "user_ids": HERMES_USER_IDS, "limit": limit_total},
+    )
+    if code == 200 and isinstance(body, dict):
+        return body.get("items") or []
+    return _fetch_l1_raw_from_qdrant(limit_total=limit_total)
+
+
 def _enrich_with_qdrant_payload(memories: list[dict]) -> list[dict]:
     """Enrich memories with `importance` and `access_count` from Qdrant.
 
@@ -390,6 +413,27 @@ def _enrich_with_qdrant_payload(memories: list[dict]) -> list[dict]:
                 if v is not None:
                     m[k] = v
     return memories
+
+
+def _enrich_with_vdb_payload(memories: list[dict]) -> list[dict]:
+    ids = [m.get("memory_id") for m in memories if m.get("memory_id")]
+    if not ids:
+        return memories
+    code, body = hy(
+        "POST",
+        "/api/v1/vdb/scroll",
+        {"mode": "payload_by_ids", "memory_ids": ids},
+    )
+    if code == 200 and isinstance(body, dict):
+        by_id = body.get("payloads") or {}
+        for m in memories:
+            mid = m.get("memory_id") or ""
+            if mid in by_id:
+                for k, v in by_id[mid].items():
+                    if v is not None:
+                        m[k] = v
+        return memories
+    return _enrich_with_qdrant_payload(memories)
 
 
 # --------------------------------------------------------------------------
@@ -3098,7 +3142,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             # design, but the dashboard wants to show them. Normalized
             # to the same shape as the items above, so the rest of the
             # dedupe + sort logic just works.
-            l1_raw_items = _fetch_l1_raw_from_qdrant()
+            l1_raw_items = _fetch_l1_raw_from_vdb()
             l1_raw_total = len(l1_raw_items)
             for m in l1_raw_items:
                 mid = m.get("memory_id") or ""
@@ -3122,7 +3166,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             deduped.sort(key=_ts, reverse=True)
             # Enrich with importance + access_count from qdrant payload
             # (upstream's /api/v1/list doesn't surface these fields)
-            deduped = _enrich_with_qdrant_payload(deduped)
+            deduped = _enrich_with_vdb_payload(deduped)
             return self._json(200, {
                 "memories": deduped[:limit],
                 "total": total + l1_raw_total,
@@ -3252,7 +3296,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             graph_layers = ("l5_knowledge", "l6_schema", "l7_intention")
             for layer in layer_keys:
                 require_latest = layer not in graph_layers
-                n = _qdrant_layer_count(layer, require_is_latest=require_latest)
+                n = _vdb_layer_count(layer, require_is_latest=require_latest)
                 counts[layer] = n
                 total += n
             # L5/L6/L7 also live in Kuzu; merge graph bucket (all known user scopes).
@@ -3335,7 +3379,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 except (FileNotFoundError, json.JSONDecodeError):
                     pass
             if l5_count == 0:
-                l5_count = _qdrant_layer_count("l5_knowledge", require_is_latest=False)
+                l5_count = _vdb_layer_count("l5_knowledge", require_is_latest=False)
             return self._json(200, {
                 "l5_knowledge": l5_count,
                 "l6_schema": l6_count,

@@ -50,7 +50,7 @@ def doctor(args: argparse.Namespace) -> int:
     provider = cfg.vector_store.provider or "?"
     print("[hyatlas] zvec doctor")
     print(f"provider: {provider}")
-    path = resolve_zvec_path(cfg)
+    path = Path(args.path) if getattr(args, "path", None) else resolve_zvec_path(cfg)
     print(f"resolved path: {path}")
     print(f"collection exists: {'yes' if path.exists() else 'no'}")
     locks = _locks(path)
@@ -59,7 +59,7 @@ def doctor(args: argparse.Namespace) -> int:
         print(f"  - {lock}")
     ok, msg = _reopen(path)
     print(f"fresh subprocess reopen: {msg}")
-    if provider != "zvec":
+    if provider != "zvec" and not getattr(args, "path", None):
         return 1
     return 0 if ok else 1
 
@@ -68,6 +68,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     zvec = sub.add_parser("zvec", help="Zvec diagnostics and maintenance")
     zsub = zvec.add_subparsers(dest="zvec_cmd", required=True)
     doc = zsub.add_parser("doctor", help="Read-only Zvec lifecycle diagnostic")
+    doc.add_argument("--path", help="Inspect this zvec collection path instead of config-resolved path")
     doc.set_defaults(func=doctor)
 
 
@@ -75,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="hyatlas zvec")
     sub = parser.add_subparsers(dest="zvec_cmd", required=True)
     doc = sub.add_parser("doctor", help="Read-only Zvec lifecycle diagnostic")
+    doc.add_argument("--path", help="Inspect this zvec collection path instead of config-resolved path")
     doc.set_defaults(func=doctor)
     args = parser.parse_args(argv)
     return args.func(args) or 0

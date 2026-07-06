@@ -156,24 +156,28 @@ def _build_qdrant_cmd():
     return cmd
 
 
-# Lazy service table — populated on first call so we can resolve cwd
-_SERVICES: list[dict] | None = None
+# Service table — rebuilt per call from config (zvec skips Qdrant sidecar)
+
+
+def _qdrant_service() -> dict:
+    return {
+        "name": "Qdrant",
+        "port": QDRANT_PORT,
+        "url": f"http://127.0.0.1:{QDRANT_PORT}/collections",
+        "expect": "collections",
+        "cmd": None,
+        "cwd": None,
+        "external": False,
+    }
 
 
 def _services(project_root: str) -> list[dict]:
-    global _SERVICES
-    if _SERVICES is not None:
-        return _SERVICES
-    _SERVICES = [
-        {
-            "name": "Qdrant",
-            "port": QDRANT_PORT,
-            "url": f"http://127.0.0.1:{QDRANT_PORT}/collections",
-            "expect": "collections",
-            "cmd": None,
-            "cwd": None,
-            "external": False,
-        },
+    cfg = _read_config()
+    provider = _vector_provider(cfg)
+    services: list[dict] = []
+    if provider != "zvec":
+        services.append(_qdrant_service())
+    services.extend([
         {
             "name": "Hy-Memory Server",
             "port": UPSTREAM_PORT,
@@ -192,8 +196,8 @@ def _services(project_root: str) -> list[dict]:
             "cwd": project_root,
             "external": False,
         },
-    ]
-    return _SERVICES
+    ])
+    return services
 
 
 def _child_env() -> dict[str, str]:
@@ -235,6 +239,37 @@ def _read_config() -> dict | None:
     """Read the active HyAtlas config if it exists."""
     cfg = layout.read_config()
     return cfg or None
+
+
+def _vector_provider(cfg: dict | None = None) -> str:
+    raw = cfg if cfg is not None else _read_config()
+    if not raw:
+        return os.environ.get("MEMORY_VECTOR_STORE", "qdrant").lower()
+    return str((raw.get("vector_store") or {}).get("provider") or "qdrant").lower()
+
+
+def _zvec_status_line(cfg: dict | None) -> str:
+    from .core.config import MemoryConfig
+    from .core.data.vector_store_zvec import resolve_zvec_path
+
+    mem = MemoryConfig()
+    vec = (cfg or {}).get("vector_store") or {}
+    emb = (cfg or {}).get("embedder") or {}
+    mem.vector_store.provider = "zvec"
+    mem.vector_store.collection_name = str(vec.get("collection") or "agent_memories")
+    mem.vector_store.embedding_dims = int(emb.get("dims") or 1024)
+    path = resolve_zvec_path(mem)
+    if not path.exists():
+        return f"zvec collection missing at {path}"
+    try:
+        import zvec
+
+        coll = zvec.open(str(path))
+        n = coll.stats.doc_count
+        coll = None
+        return f"zvec {path.name}: {n} docs"
+    except Exception as e:
+        return f"zvec at {path}: {e}"
 
 
 def _collection(cfg: dict | None) -> str:
@@ -426,6 +461,27 @@ def banner():
     print(f"  {BOLD}║{RESET}          {BOLD}HyAtlas Memory{RESET}            {BOLD}║{RESET}")
     print(f"  {BOLD}║{RESET}       AI Memory Atlas v1.0         {BOLD}║{RESET}")
     print(f"  {BOLD}╚══════════════════════════════════════╝{RESET}")
+    print()
+
+
+def _print_service_urls():
+    """Print post-start URLs (Qdrant line omitted when vector provider is zvec)."""
+    dash_bind = os.environ.get("HY_DASH_BIND", "127.0.0.1")
+    dash_url = f"http://127.0.0.1:{DASHBOARD_PORT}"
+    if dash_bind not in ("127.0.0.1", "localhost", "::1"):
+        token_file = os.path.join(os.path.expanduser("~"), ".hy_memory", ".dashboard_token")
+        try:
+            with open(token_file) as f:
+                token = f.read().strip()
+            dash_url = f"{dash_url}/?token={token}"
+        except Exception:
+            pass
+    print(f"  {BOLD}Dashboard:{RESET}  {dash_url}")
+    print(f"  {BOLD}Upstream:{RESET}   http://127.0.0.1:{UPSTREAM_PORT}")
+    if _vector_provider() != "zvec":
+        print(f"  {BOLD}Qdrant:{RESET}     http://127.0.0.1:{QDRANT_PORT}")
+    else:
+        print(dim(f"  Vector store: zvec (no Qdrant sidecar)"))
     print()
 
 
@@ -632,22 +688,7 @@ def start_all(detach_requested: bool = False) -> None:
             banner()
             print(f"  {BOLD}{GREEN}All services already running.{RESET}")
             print()
-            dash_bind = os.environ.get("HY_DASH_BIND", "127.0.0.1")
-            dash_url = f"http://127.0.0.1:{DASHBOARD_PORT}"
-            if dash_bind not in ("127.0.0.1", "localhost", "::1"):
-                token_file = os.path.join(
-                    os.path.expanduser("~"), ".hy_memory", ".dashboard_token"
-                )
-                try:
-                    with open(token_file) as f:
-                        token = f.read().strip()
-                    dash_url = f"{dash_url}/?token={token}"
-                except Exception:
-                    pass
-            print(f"  {BOLD}Dashboard:{RESET}  {dash_url}")
-            print(f"  {BOLD}Upstream:{RESET}   http://127.0.0.1:{UPSTREAM_PORT}")
-            print(f"  {BOLD}Qdrant:{RESET}     http://127.0.0.1:{QDRANT_PORT}")
-            print()
+            _print_service_urls()
             print(dim("  Run 'hyatlas stop' to shut down, or re-run with restart confirmation."))
             print()
             # Exit cleanly (no health check loop since we're not managing services)
@@ -669,20 +710,7 @@ def start_all(detach_requested: bool = False) -> None:
     print()
     print(f"  {BOLD}{GREEN}All services running!{RESET}")
     print()
-    dash_bind = os.environ.get("HY_DASH_BIND", "127.0.0.1")
-    dash_url = f"http://127.0.0.1:{DASHBOARD_PORT}"
-    if dash_bind not in ("127.0.0.1", "localhost", "::1"):
-        token_file = os.path.join(os.path.expanduser("~"), ".hy_memory", ".dashboard_token")
-        try:
-            with open(token_file) as f:
-                token = f.read().strip()
-            dash_url = f"{dash_url}/?token={token}"
-        except Exception:
-            pass
-    print(f"  {BOLD}Dashboard:{RESET}  {dash_url}")
-    print(f"  {BOLD}Upstream:{RESET}   http://127.0.0.1:{UPSTREAM_PORT}")
-    print(f"  {BOLD}Qdrant:{RESET}     http://127.0.0.1:{QDRANT_PORT}")
-    print()
+    _print_service_urls()
     print(dim("  Press Ctrl+C to stop all services"))
     print()
 
@@ -792,6 +820,25 @@ def show_status() -> None:
             print(warn(f"{svc['name']:20s} port {port}  listening but unhealthy"))
         else:
             print(fail(f"{svc['name']:20s} port {port}  not running"))
+    if _vector_provider(cfg) == "zvec":
+        detail = "zvec (server not running)"
+        if is_port_listening(UPSTREAM_PORT) and health_check(
+            f"http://127.0.0.1:{UPSTREAM_PORT}/info", "hy-memory-server"
+        ):
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{UPSTREAM_PORT}/api/v1/status", timeout=15
+                ) as resp:
+                    st = json.loads(resp.read().decode("utf-8", errors="replace"))
+                detail = (
+                    f"provider=zvec collection={st.get('vdb_collection', '?')} "
+                    f"(server active)"
+                )
+            except Exception:
+                detail = "provider=zvec (server active, status timeout)"
+        else:
+            detail = _zvec_status_line(cfg)
+        print(ok(f"{'Zvec store':20s} {detail}"))
     print()
 
 
@@ -904,6 +951,10 @@ def stop_all():
                 print(dim(f"{svc['name']} — no process found on port {port}"))
         else:
             print(dim(f"{svc['name']} — not running"))
+    if _vector_provider() == "zvec" and is_port_listening(QDRANT_PORT):
+        killed = _kill_on_port_sync(QDRANT_PORT, timeout=10.0)
+        if killed:
+            print(ok(f"Legacy Qdrant stopped (killed {killed} process(es) on :{QDRANT_PORT})"))
     print()
     print(ok("Done."))
 
@@ -968,22 +1019,7 @@ def _do_start(services: list, project_root: str, detached: bool) -> None:
     print()
     print(f"  {BOLD}{GREEN}All services running (detached).{RESET}")
     print()
-    dash_bind = os.environ.get("HY_DASH_BIND", "127.0.0.1")
-    dash_url = f"http://127.0.0.1:{DASHBOARD_PORT}"
-    if dash_bind not in ("127.0.0.1", "localhost", "::1"):
-        token_file = os.path.join(
-            os.path.expanduser("~"), ".hy_memory", ".dashboard_token"
-        )
-        try:
-            with open(token_file) as f:
-                token = f.read().strip()
-            dash_url = f"{dash_url}/?token={token}"
-        except Exception:
-            pass
-    print(f"  {BOLD}Dashboard:{RESET}  {dash_url}")
-    print(f"  {BOLD}Upstream:{RESET}   http://127.0.0.1:{UPSTREAM_PORT}")
-    print(f"  {BOLD}Qdrant:{RESET}     http://127.0.0.1:{QDRANT_PORT}")
-    print()
+    _print_service_urls()
     print(dim("  Services are detached. Run 'hyatlas stop' to shut down."))
     print(dim("  They will survive closing this terminal."))
     print()

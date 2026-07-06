@@ -489,6 +489,76 @@ def wire_graph_endpoint(handler_cls, json_resp_fn, get_client_fn):
     logger.info("[integrations] graph endpoint wired: GET /api/v1/graph + /api/v1/breaker")
 
 
+# ─── 6b. VDB dashboard helpers (zvec-safe, no second DB open) ───────────────
+
+def wire_vdb_dashboard(handler_cls, json_resp_fn, get_client_fn):
+    """Expose layer counts and scroll via the in-process vector store."""
+    from . import vdb_dashboard
+
+    orig_get = handler_cls.do_GET
+    orig_post = handler_cls.do_POST
+
+    def patched_do_get(self):
+        try:
+            raw = self.path.split("?")[0].rstrip("/")
+            if raw == "/api/v1/vdb/layer_count":
+                qs = parse_qs(urlparse(self.path).query)
+                layer = (qs.get("layer") or [""])[0]
+                if not layer:
+                    json_resp_fn(self, 400, {"error": "layer is required"})
+                    return
+                latest = (qs.get("require_is_latest") or ["true"])[0].lower() not in (
+                    "false",
+                    "0",
+                    "no",
+                )
+                client = get_client_fn()
+                n = vdb_dashboard.layer_count(client, layer, require_is_latest=latest)
+                json_resp_fn(self, 200, {"count": n, "layer": layer})
+                return
+        except Exception as e:
+            logger.warning("[vdb-dashboard] GET dispatch error: %s", e)
+        return orig_get(self)
+
+    def patched_do_post(self):
+        path = self.path.split("?")[0].rstrip("/")
+        if path == "/api/v1/vdb/scroll":
+            try:
+                from .core.server import _read_json_body
+
+                body = _read_json_body(self)
+                if body is None:
+                    json_resp_fn(self, 400, {"error": "invalid JSON body"})
+                    return
+                mode = body.get("mode", "")
+                client = get_client_fn()
+                if mode == "l1_raw":
+                    uids = body.get("user_ids") or []
+                    limit = int(body.get("limit") or 1500)
+                    items = vdb_dashboard.scroll_l1(client, uids, limit=limit)
+                    json_resp_fn(self, 200, {"items": items})
+                    return
+                if mode == "payload_by_ids":
+                    ids = body.get("memory_ids") or []
+                    by_id = vdb_dashboard.payload_by_ids(client, ids)
+                    json_resp_fn(self, 200, {"payloads": by_id})
+                    return
+                json_resp_fn(self, 400, {"error": "unknown mode"})
+                return
+            except Exception as e:
+                logger.warning("[vdb-dashboard] POST scroll error: %s", e)
+                json_resp_fn(self, 500, {"error": str(e)})
+                return
+        return orig_post(self)
+
+    handler_cls.do_GET = patched_do_get
+    handler_cls.do_POST = patched_do_post
+    logger.info(
+        "[integrations] vdb dashboard wired: GET /api/v1/vdb/layer_count, "
+        "POST /api/v1/vdb/scroll"
+    )
+
+
 # ─── 7. L5/L6/L7 Counts (raw Kuzu Cypher bypass) ─────────────────────────────
 
 def wire_graph_counts(client_cls):
@@ -999,6 +1069,9 @@ def wire_all():
     # 6. Graph endpoint
     wire_graph_endpoint(MemoryHTTPHandler, _json_response, _get_client)
 
+    # 6b. Dashboard VDB (zvec / qdrant via live client)
+    wire_vdb_dashboard(MemoryHTTPHandler, _json_response, _get_client)
+
     # 7. L5/L6/L7 counts
     wire_graph_counts(HyMemoryClient)
 
@@ -1023,4 +1096,4 @@ def wire_all():
     # 14. In-process embedding (local sentence-transformers, no API)
     wire_inprocess_embed(EmbedService)
 
-    logger.info("[integrations] all 14 integrations wired successfully")
+    logger.info("[integrations] all 15 integrations wired successfully")

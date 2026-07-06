@@ -23,6 +23,7 @@ import os
 import sys
 import time
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add src to path
@@ -112,6 +113,10 @@ def import_zvec(zvec_path: str, points: list, dims: int = 1024):
                 continue
             if dtype == "ARRAY_STRING":
                 payload[key] = [str(v) for v in val] if isinstance(val, list) else [str(val)]
+            elif key in ("memory_at", "gmt_created", "gmt_modified", "valid_from", "valid_until", "last_accessed_at") and isinstance(val, (int, float)) and val > 0:
+                payload[key] = datetime.fromtimestamp(val, tz=timezone.utc).isoformat()
+            elif key in ("memory_at", "gmt_created", "gmt_modified", "valid_from", "valid_until", "last_accessed_at") and isinstance(val, str) and val.isdigit():
+                payload[key] = datetime.fromtimestamp(int(val), tz=timezone.utc).isoformat()
             elif isinstance(val, (dict, list)):
                 payload[key] = json.dumps(val, ensure_ascii=False)
             elif isinstance(val, bool):
@@ -252,6 +257,13 @@ def main():
         print()
         print(f"Total migration time: {t3-t0:.1f}s")
         print()
+        if args.verify:
+            print("Step 3: Verifying migration...")
+            ok = verify_migration(args.qdrant_host, args.qdrant_port, args.qdrant_collection, args.zvec_path)
+            if not ok:
+                raise SystemExit(1)
+            return
+
         print("Next steps:")
         print("  1. Update config: vector_store.provider = 'zvec'")
         print("  2. Restart server")
