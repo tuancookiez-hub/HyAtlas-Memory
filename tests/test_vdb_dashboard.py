@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from hyatlas_memory.core.models.memory import MemoryLayer, MemoryNode, MemoryStatus
+
 
 def test_payload_by_ids_handles_memorynode_fields():
+    """payload_by_ids must read importance/access_count from MemoryNode attrs."""
     from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
-    from hyatlas_memory.core.models.memory import MemoryNode, MemoryLayer, MemoryStatus
+    from hyatlas_memory import vdb_dashboard
 
     class FakeVS(ZvecVectorStore):
         def __init__(self):
@@ -13,8 +16,6 @@ def test_payload_by_ids_handles_memorynode_fields():
             self._path = None
 
     vs = FakeVS()
-
-    # Build a minimal MemoryNode with the real attribute names
     n = MemoryNode(
         node_id="m1",
         layer=MemoryLayer.L2_FACT,
@@ -23,7 +24,6 @@ def test_payload_by_ids_handles_memorynode_fields():
         user_id="tuanc",
         agent_id="default_agent",
     )
-    # set attributes that exist on MemoryNode after init
     n.importance = "high"
     n.access_count = 7
 
@@ -33,9 +33,7 @@ def test_payload_by_ids_handles_memorynode_fields():
         async def get_by_ids(self, ids):
             return [n]
 
-    from hyatlas_memory import vdb_dashboard
-
-    out = vdb_dashboard.payload_by_ids(FakeClient(), ["m1"])
+    out = vdb_dashboard._payload_by_ids_async(FakeClient(), ["m1"])
     assert out == {"m1": {"importance": "high", "access_count": 7}}, out
 
 
