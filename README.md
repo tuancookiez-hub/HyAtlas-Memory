@@ -440,7 +440,7 @@ assets/                    # infographic images
 # 1. Clone + editable install
 git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 cd HyAtlas-Memory
-uv pip install -e ".[dev,test]"
+pip install -e ".[dev,test]"
 
 # 2. Run tests
 pytest                     # 33 tests pass offline, 19 skipped (need live server)
@@ -451,7 +451,7 @@ ruff check .
 mypy src/
 
 # 4. Live reload during plugin dev
-uv pip install -e . --force-reinstall
+pip install -e . --force-reinstall
 ```
 
 ## Migration from in-fork plugin
