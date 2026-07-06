@@ -54,3 +54,21 @@ def test_config_validate_lite_without_llm(monkeypatch, tmp_path):
     layout.cfgfile().write_text(json.dumps({"mode": "lite", "llm": {}}), encoding="utf-8")
 
     assert cli.validate(type("Args", (), {})()) == 0
+
+
+def test_config_validate_rejects_qdrant_runtime(monkeypatch, tmp_path):
+    monkeypatch.setenv("HYATLAS_HOME", str(tmp_path))
+
+    import hyatlas_memory.config_cli as cli
+    import hyatlas_memory.layout as layout
+
+    cli = importlib.reload(cli)
+    layout = importlib.reload(layout)
+    layout.ensure()
+    layout.cfgfile().write_text(json.dumps({
+        "mode": "lite",
+        "llm": {},
+        "vector_store": {"provider": "qdrant"},
+    }), encoding="utf-8")
+
+    assert cli.validate(type("Args", (), {})()) == 1

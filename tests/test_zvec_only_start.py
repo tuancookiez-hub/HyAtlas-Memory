@@ -21,7 +21,7 @@ def test_services_omit_qdrant_when_zvec(monkeypatch, tmp_path):
     assert "Hy-Memory Server" in names
 
 
-def test_services_include_qdrant_when_qdrant(monkeypatch, tmp_path):
+def test_services_reject_qdrant_runtime(monkeypatch, tmp_path):
     cfg = tmp_path / "config" / "hy_memory.json"
     cfg.parent.mkdir(parents=True)
     cfg.write_text(
@@ -34,4 +34,5 @@ def test_services_include_qdrant_when_qdrant(monkeypatch, tmp_path):
 
     start = importlib.reload(start)
     names = [s["name"] for s in start._services("/tmp/project")]
-    assert "Qdrant" in names
+    assert "Qdrant" not in names
+    assert "Hy-Memory Server" in names

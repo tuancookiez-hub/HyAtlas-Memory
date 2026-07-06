@@ -18,6 +18,7 @@
 5. **Console TUI showed false Qdrant "down"** — health row now Zvec when provider=zvec.
 6. **L1_RAW sweep hardcoded to Qdrant** — silently no-op'd on zvec (storage bloat). Now provider-aware; zvec path reuses live handle + `delete_by_filter`.
 7. **Docs** — pyproject + README state Zvec is default.
+8. **Runtime cleanup** — removed Qdrant runtime adapter path + `bm25_fastembed.py`. Qdrant is archive/migration-only; zvec is the sole runtime backend. `bm25.py` (in-memory write-time dedup) retained. Read keyword channel = Zvec native FTS.
 
 ## Live verification
 - `search` (user `221727702992945152`) → 13 hits, real content

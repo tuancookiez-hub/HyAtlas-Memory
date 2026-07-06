@@ -41,7 +41,7 @@ async def _layer_count_async(client, layer: str, *, require_is_latest: bool) -> 
     if name == "QdrantVectorStore":
         from qdrant_client.models import FieldCondition, Filter, MatchValue
 
-        from .core.data.vector_store_qdrant import _run_in_vdb_pool
+        from .core.data.vector_store_zvec import _run_in_vdb_pool
 
         must = [FieldCondition(key="layer", match=MatchValue(value=layer))]
         if require_is_latest:

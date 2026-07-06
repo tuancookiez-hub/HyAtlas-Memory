@@ -3,7 +3,7 @@ Hybrid V2 Read Pipeline — Embed + Keyword Search + Graph Evidence.
 
 Multi-signal fusion architecture:
   - Channel 1: VDB Semantic Search (vector cosine similarity)
-  - Channel 2: VDB Keyword Search (Qdrant text index, independent retrieval)
+  - Channel 2: VDB Keyword Search (Zvec native FTS, independent retrieval)
   - Channel 3: Graph Semantic Search (L6_SCHEMA + L7_INTENTION)
 
 Scoring:

@@ -2885,13 +2885,8 @@ def apply_auto_forgetting_patch() -> bool:
         logger.debug("[hy-memory/patches] auto-forgetting: hybrid_v2 not importable")
         return False
 
-    try:
-        import importlib.util as _ilu2
-        if not _ilu2.find_spec("hy_memory.data.vector_store_qdrant"):
-            raise ImportError
-    except ImportError:
-        logger.debug("[hy-memory/patches] auto-forgetting: vector store not importable")
-        return False
+    # Zvec-only runtime: Qdrant adapter is intentionally absent. The patch
+    # only needs the hybrid_v2 scoring module and System2 writer hooks below.
 
     # ── Part 1: Recency scoring ──
     # Patch score_vdb_node to include recency decay as a 4th factor.

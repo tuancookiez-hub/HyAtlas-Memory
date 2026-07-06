@@ -172,11 +172,7 @@ def _qdrant_service() -> dict:
 
 
 def _services(project_root: str) -> list[dict]:
-    cfg = _read_config()
-    provider = _vector_provider(cfg)
     services: list[dict] = []
-    if provider != "zvec":
-        services.append(_qdrant_service())
     services.extend([
         {
             "name": "Hy-Memory Server",
@@ -244,8 +240,8 @@ def _read_config() -> dict | None:
 def _vector_provider(cfg: dict | None = None) -> str:
     raw = cfg if cfg is not None else _read_config()
     if not raw:
-        return os.environ.get("MEMORY_VECTOR_STORE", "qdrant").lower()
-    return str((raw.get("vector_store") or {}).get("provider") or "qdrant").lower()
+        return os.environ.get("MEMORY_VECTOR_STORE", "zvec").lower()
+    return str((raw.get("vector_store") or {}).get("provider") or "zvec").lower()
 
 
 def _zvec_status_line(cfg: dict | None) -> str:
