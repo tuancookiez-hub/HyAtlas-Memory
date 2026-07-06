@@ -95,11 +95,11 @@ def show(_: Namespace) -> int:
         warnings.append(f"using legacy config at {path}")
     for p in _legacy_data_paths():
         if p.exists():
-            warnings.append(f"legacy data still present at {p}")
+            warnings.append(f"legacy Qdrant data still present at {p}")
     if warnings:
         print()
         for w in warnings:
-            print(f"WARNING: {w}; run `hyatlas migrate layout --apply` to consolidate into HYATLAS_HOME.")
+            print(f"NOTE: {w}. Runtime uses Zvec. Archive with `hyatlas archive qdrant` or delete manually if no longer needed.")
     return 0
 
 

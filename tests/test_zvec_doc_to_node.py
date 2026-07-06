@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 
 def test_doc_to_node_normalizes_epoch_strings():
     """Migrated Qdrant timestamps arrive as epoch strings like '1782866658'."""
-    from types import SimpleNamespace
 
     from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
 

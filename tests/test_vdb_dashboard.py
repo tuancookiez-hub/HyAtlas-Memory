@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 
+from hyatlas_memory import vdb_dashboard
 from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
 from hyatlas_memory.core.models.memory import MemoryLayer, MemoryNode, MemoryStatus
-from hyatlas_memory import vdb_dashboard
 
 
 def test_payload_by_ids_handles_memorynode_fields():

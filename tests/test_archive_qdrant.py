@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 
 def test_archive_qdrant_dry_layout(monkeypatch, tmp_path):
     data = tmp_path / "data" / "qdrant"
@@ -10,8 +8,9 @@ def test_archive_qdrant_dry_layout(monkeypatch, tmp_path):
 
     monkeypatch.setenv("HYATLAS_HOME", str(tmp_path))
 
-    import hyatlas_memory.archive_cli as arc
     from argparse import Namespace
+
+    import hyatlas_memory.archive_cli as arc
 
     rc = arc.archive_qdrant(Namespace(label="test", force=False))
     assert rc == 0

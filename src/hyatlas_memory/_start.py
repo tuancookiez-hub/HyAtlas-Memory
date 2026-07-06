@@ -779,12 +779,12 @@ def _warn_legacy_paths() -> None:
         warnings.append(f"using legacy config at {cfg}")
     for p in (Path.home() / ".hy_memory", Path("C:/qdrant-data") if sys.platform == "win32" else Path.home() / "qdrant-data"):
         if p.exists():
-            warnings.append(f"legacy data still present at {p}")
+            warnings.append(f"legacy Qdrant data still present at {p}")
     if warnings:
-        print(warn("Legacy paths detected:"))
+        print(dim("Legacy paths (non-blocking):"))
         for w in warnings:
-            print(warn(f"  - {w}"))
-        print(dim("  Run `hyatlas migrate layout --apply` to consolidate into HYATLAS_HOME."))
+            print(dim(f"  - {w}"))
+        print(dim("  Runtime uses Zvec. Archive with `hyatlas archive qdrant` or delete manually if no longer needed."))
 
 
 def show_status() -> None:
