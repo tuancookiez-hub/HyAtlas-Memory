@@ -1,6 +1,14 @@
 // Global state
 const REFRESH_S = window.REFRESH_S || 30;
 const USER_IDS = window.USER_IDS || [];
+
+// Safely convert a possibly-string/null epoch-seconds value to a valid Date
+// or null. Migrated L1_RAW entries can have non-numeric gmt_created, which
+// produces Invalid Date and crashes .toISOString() / .getTime().
+function tsToDate(ts) {
+  const n = Number(ts);
+  return n > 0 ? new Date(n * 1000) : null;
+}
 let currentPage = 'overview';
 let allMemories = [];
 let layerCountsData = null;  // actual Qdrant counts per layer (used by Memory Composition bar)
@@ -441,8 +449,9 @@ function renderActivityChart() {
   }
   
   allMemories.forEach(m => {
-    if (m.gmt_created) {
-      const date = new Date(m.gmt_created * 1000).toISOString().split('T')[0];
+    const ts = Number(m.gmt_created);
+    if (ts > 0) {
+      const date = new Date(ts * 1000).toISOString().split('T')[0];
       if (days.hasOwnProperty(date)) {
         days[date]++;
       }
@@ -624,7 +633,7 @@ function showMemoryDetail(memory) {
       </div>
 
       <div class="text-xs text-muted font-mono mb-3">id: ${memory.memory_id}</div>
-      <div class="text-xs text-muted mb-4">${new Date(memory.gmt_created * 1000).toLocaleString()}</div>
+      <div class="text-xs text-muted mb-4">${tsToDate(memory.gmt_created)?.toLocaleString() ?? '—'}</div>
 
       <div class="text-sm mb-4" style="white-space: pre-wrap; word-break: break-word;">${escapeHtml(title)}</div>
 
@@ -706,9 +715,9 @@ function renderMemoryDetailPage(memory) {
   const impVal = imp === null ? null : imp.toFixed(2);
   const accVal = acc === null ? '—' : String(acc);
 
-  const createdTs = memory.gmt_created ? new Date(memory.gmt_created * 1000) : null;
-  const updatedTs = memory.gmt_updated && (!memory.gmt_created || (memory.gmt_updated - memory.gmt_created > 60))
-    ? new Date(memory.gmt_updated * 1000) : null;
+  const createdTs = tsToDate(memory.gmt_created);
+  const updatedTs = memory.gmt_updated && (!memory.gmt_created || (Number(memory.gmt_updated) - Number(memory.gmt_created) > 60))
+    ? tsToDate(memory.gmt_updated) : null;
   const createdStr = createdTs ? createdTs.toLocaleString() : '—';
   const updatedStr = updatedTs ? updatedTs.toLocaleString() : null;
 
@@ -1052,9 +1061,9 @@ document.addEventListener('click', (e) => {
 
 document.getElementById('export-json').addEventListener('click', () => {
   const today = allMemories.filter(m => {
-    const created = new Date(m.gmt_created * 1000);
+    const created = tsToDate(m.gmt_created);
     const now = new Date();
-    return created.toDateString() === now.toDateString();
+    return created && created.toDateString() === now.toDateString();
   });
   
   const blob = new Blob([JSON.stringify(today, null, 2)], { type: 'application/json' });
@@ -1070,8 +1079,8 @@ function renderToday() {
   const since = Date.now() - 24 * 60 * 60 * 1000;
 
   let filtered = allMemories.filter(m => {
-    const created = new Date(m.gmt_created * 1000);
-    return created.getTime() >= since;
+    const created = tsToDate(m.gmt_created);
+    return created && created.getTime() >= since;
   });
   
   if (todayFilter === 'vdb') {
@@ -1166,7 +1175,7 @@ document.querySelectorAll('#page-system .tab').forEach(tab => {
 function renderSystem() {
   // System info
   const uptime = metricsData?.uptime_seconds ? formatUptime(metricsData.uptime_seconds) : '—';
-  const lastMemory = allMemories.length > 0 ? new Date(allMemories[0].gmt_created * 1000).toLocaleString() : '—';
+  const lastMemory = allMemories.length > 0 ? (tsToDate(allMemories[0].gmt_created)?.toLocaleString() ?? '—') : '—';
   
   const infoHtml = `
     <div class="kv-item">
@@ -1434,7 +1443,7 @@ function updateRightSidebar(page) {
   } else if (page === 'today') {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const todayMemories = allMemories.filter(m => new Date(m.gmt_created * 1000) >= today);
+    const todayMemories = allMemories.filter(m => { const d = tsToDate(m.gmt_created); return d && d >= today; });
     renderTodaySummary(todayMemories);
   } else if (page === 'system') {
     // System page has its own layout
@@ -1472,7 +1481,7 @@ function renderOverviewSidebar() {
   // Prefer gmt_updated over gmt_created for the "ago" text — recent
   // UPDATEs of older memories should show as recent (otherwise the
   // "Last ingestion" timer looks stale when only UPDATEs are happening).
-  const sortKey = m => m.gmt_updated || m.gmt_created || 0;
+  const sortKey = m => Number(m.gmt_updated || m.gmt_created) || 0;
   recent.sort((a, b) => sortKey(b) - sortKey(a));
   recent = recent.slice(0, 10);
 
