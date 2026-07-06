@@ -19,6 +19,7 @@
 - Reverted runtime config to Qdrant for stability. Keep Zvec work as v3.1 spike until adapter has a reliable Windows close/reopen contract and startup tests.
 - Tuna decision: once Zvec is implemented properly and passes lifecycle/E2E gates, remove Qdrant instead of keeping dual backends long-term.
 - Zvec hardening pass added temp-store lifecycle tests, removed normal-startup LOCK deletion, unified runtime/migration path resolution, and fixed migration point-id/schema coercion. Full pytest: 52 passed, 5 skipped. Live runtime remains Qdrant (`agent_memories_1024`, 6,443 points).
+- Added `hyatlas zvec doctor`, fixed status collection suffix handling, and proved a temp Zvec config can boot the real server on an isolated port. Full pytest: 57 passed, 5 skipped. Live runtime remains Qdrant (`agent_memories_1024`, 6,457 points). Real doctor still reports the old production Zvec path cannot reopen (`Can't open lock file`), so cutover remains blocked until that path is replaced or repaired.
 
 ## Completed This Session
 1. Diagnosed upstream hy-memory 1.2.20 — confirmed no think-block handling, no L5 graph, same Kuzu WAL bug

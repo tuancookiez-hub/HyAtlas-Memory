@@ -102,4 +102,4 @@ except Exception as _e:
     traceback.print_exc()
 
 from hyatlas_memory.core.server import run_server
-run_server(port=19527, host="127.0.0.1")
+run_server(port=int(os.environ.get("HY_MEMORY_PORT", "19527")), host=os.environ.get("HY_MEMORY_HOST", "127.0.0.1"))

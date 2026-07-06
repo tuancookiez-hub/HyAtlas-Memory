@@ -238,13 +238,22 @@ def _read_config() -> dict | None:
 
 
 def _collection(cfg: dict | None) -> str:
+    def norm(name: str, dims: int) -> str:
+        suffix = f"_{dims}"
+        if name.endswith(suffix):
+            return name
+        return f"{name}{suffix}"
+
     if not cfg:
         return os.environ.get("MEMORY_VECTOR_COLLECTION", "agent_memories_1024")
     vec = cfg.get("vector_store") or {}
+    dims = int((cfg.get("embedder") or {}).get("dims", 1024))
     if vec.get("collection"):
-        return str(vec["collection"])
-    dims = (cfg.get("embedder") or {}).get("dims", 1024)
-    return os.environ.get("MEMORY_VECTOR_COLLECTION", f"agent_memories_{dims}")
+        return norm(str(vec["collection"]), dims)
+    env = os.environ.get("MEMORY_VECTOR_COLLECTION")
+    if env:
+        return env
+    return f"agent_memories_{dims}"
 
 
 def _qdrant_collection_status(port: int, cfg: dict | None) -> tuple[str, int | None, int | None]:
