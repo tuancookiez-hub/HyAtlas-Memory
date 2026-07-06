@@ -327,18 +327,37 @@ class ZvecVectorStore(VectorStoreBase):
     def _doc_to_node(self, doc: Any, include_vector: bool = False) -> MemoryNode:
         """Convert zvec Doc back to MemoryNode."""
         import json
+        from datetime import datetime, timezone
+
         payload = {}
         for name, _ in _FIELD_SCHEMA:
             try:
                 val = doc.field(name)
-                if val is not None:
-                    # Deserialize JSON strings back to dicts
-                    if name in ("custom", "meta_info") and isinstance(val, str):
-                        try:
-                            val = json.loads(val)
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-                    payload[name] = val
+                if val is None:
+                    continue
+                # Deserialize JSON strings back to dicts
+                if name in ("custom", "meta_info") and isinstance(val, str):
+                    try:
+                        val = json.loads(val)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                # Migrated Qdrant payloads store timestamps as unix epoch
+                # strings (e.g. "1782866658"); normalize to ISO for parse_dt.
+                if name in (
+                    "memory_at",
+                    "gmt_created",
+                    "gmt_modified",
+                    "valid_from",
+                    "valid_until",
+                    "last_accessed_at",
+                ) and isinstance(val, str):
+                    try:
+                        f = float(val)
+                        if f > 0:
+                            val = datetime.fromtimestamp(f, tz=timezone.utc).isoformat()
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+                payload[name] = val
             except Exception:
                 pass
 

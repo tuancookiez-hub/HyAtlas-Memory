@@ -115,10 +115,6 @@ async def _payload_by_ids_async(client, memory_ids: list[str]) -> dict[str, dict
     for n in nodes:
         imp = getattr(n, "importance", None)
         acc = getattr(n, "access_count", None)
-        if imp is None and n.meta_info:
-            imp = n.meta_info.get("importance")
-        if acc is None and n.meta_info:
-            acc = n.meta_info.get("access_count")
         by_id[n.node_id] = {
             "importance": imp,
             "access_count": acc,
