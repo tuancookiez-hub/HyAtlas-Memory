@@ -67,7 +67,7 @@ class KVStoreConfig:
 class KVEntry:
     """KV 条目（含过期时间）"""
     value: Any
-    expires_at: Optional[datetime] = None
+    expires_at: datetime | None = None
     
     def is_expired(self) -> bool:
         if self.expires_at is None:
@@ -82,7 +82,7 @@ class KVStore:
     提供简单的键值存取能力。
     """
     
-    def __init__(self, config: Optional[KVStoreConfig] = None):
+    def __init__(self, config: KVStoreConfig | None = None):
         """
         初始化 KV 存储
         
@@ -124,7 +124,7 @@ class KVStore:
     
     def _init_memory(self) -> None:
         """初始化内存存储"""
-        self._memory_store: Dict[str, KVEntry] = {}
+        self._memory_store: dict[str, KVEntry] = {}
     
     def _make_key(self, key: str) -> str:
         """生成带前缀的键"""
@@ -256,7 +256,7 @@ class KVStore:
         
         return False
     
-    def keys(self, pattern: str = "*") -> List[str]:
+    def keys(self, pattern: str = "*") -> list[str]:
         """
         获取匹配的键列表
         
@@ -272,7 +272,7 @@ class KVStore:
         if self.config.backend == "memory":
             import fnmatch
             result = []
-            for key in self._memory_store.keys():
+            for key in self._memory_store:
                 if fnmatch.fnmatch(key, full_pattern):
                     result.append(key[prefix_len:])
             return result
@@ -283,7 +283,7 @@ class KVStore:
         
         return []
     
-    def mget(self, keys: List[str]) -> Dict[str, Any]:
+    def mget(self, keys: list[str]) -> dict[str, Any]:
         """
         批量获取
         
@@ -300,7 +300,7 @@ class KVStore:
                 result[key] = value
         return result
     
-    def mset(self, items: Dict[str, Any], ttl: int = None) -> bool:
+    def mset(self, items: dict[str, Any], ttl: int = None) -> bool:
         """
         批量设置
         
@@ -339,7 +339,7 @@ class KVStore:
             if keys:
                 self._client.delete(*keys)
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         if self.config.backend == "memory":
             return {

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 History Store - SQLite 审计追踪
 
@@ -90,7 +89,7 @@ class HistoryStore:
             config: MemoryConfig 实例，从 config.history 读取配置
         """
         self._db_path = config.history.db_path
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
 
     async def initialize(self) -> None:
         """创建表和索引（如果不存在）"""
@@ -125,7 +124,7 @@ class HistoryStore:
         layer: str,
         isolation_key: str,
         actor_id: str = "",
-        extra: Optional[Dict[str, Any]] = None,
+        extra: dict[str, Any] | None = None,
     ) -> int:
         """记录 ADD 事件"""
         return await self._insert(
@@ -148,7 +147,7 @@ class HistoryStore:
         change_reason: str,
         isolation_key: str = "",
         actor_id: str = "",
-        extra: Optional[Dict[str, Any]] = None,
+        extra: dict[str, Any] | None = None,
     ) -> int:
         """记录 UPDATE 事件"""
         return await self._insert(
@@ -170,7 +169,7 @@ class HistoryStore:
         content: str,
         isolation_key: str,
         actor_id: str = "",
-        extra: Optional[Dict[str, Any]] = None,
+        extra: dict[str, Any] | None = None,
     ) -> int:
         """记录 DELETE 事件"""
         return await self._insert(
@@ -188,7 +187,7 @@ class HistoryStore:
         isolation_key: str,
         results_count: int,
         actor_id: str = "",
-        extra: Optional[Dict[str, Any]] = None,
+        extra: dict[str, Any] | None = None,
     ) -> int:
         """记录 SEARCH 事件"""
         search_extra = {"query": query, "results_count": results_count}
@@ -207,7 +206,7 @@ class HistoryStore:
     # 查询
     # ================================================================
 
-    async def get_history(self, memory_id: str) -> List[Dict[str, Any]]:
+    async def get_history(self, memory_id: str) -> list[dict[str, Any]]:
         """
         获取某条记忆的完整变更历史。
 
@@ -219,7 +218,7 @@ class HistoryStore:
         """
         return await _run_in_sqlite_pool(self._get_history_sync, memory_id)
 
-    def _get_history_sync(self, memory_id: str) -> List[Dict[str, Any]]:
+    def _get_history_sync(self, memory_id: str) -> list[dict[str, Any]]:
         if self._conn is None:
             return []
         cursor = self._conn.execute(
@@ -232,7 +231,7 @@ class HistoryStore:
         self,
         isolation_key: str,
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         获取某用户/隔离键的最近操作。
 
@@ -245,7 +244,7 @@ class HistoryStore:
         """
         return await _run_in_sqlite_pool(self._get_recent_sync, isolation_key, limit)
 
-    def _get_recent_sync(self, isolation_key: str, limit: int) -> List[Dict[str, Any]]:
+    def _get_recent_sync(self, isolation_key: str, limit: int) -> list[dict[str, Any]]:
         if self._conn is None:
             return []
         cursor = self._conn.execute(
@@ -307,7 +306,7 @@ class HistoryStore:
         layer: str = None,
         actor_id: str = "",
         role: str = "",
-        extra: Optional[Dict[str, Any]] = None,
+        extra: dict[str, Any] | None = None,
     ) -> int:
         """插入一条历史记录，返回记录 ID"""
         return await _run_in_sqlite_pool(
@@ -339,7 +338,7 @@ class HistoryStore:
         layer: str = None,
         actor_id: str = "",
         role: str = "",
-        extra: Optional[Dict[str, Any]] = None,
+        extra: dict[str, Any] | None = None,
     ) -> int:
         if self._conn is None:
             return -1

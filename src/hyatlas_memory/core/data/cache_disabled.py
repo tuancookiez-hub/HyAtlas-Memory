@@ -34,7 +34,7 @@ class DisabledCache(CacheBase):
         pass
 
     # ── KV ──
-    async def _get(self, key: str) -> Optional[str]:
+    async def _get(self, key: str) -> str | None:
         return None
 
     async def _set(self, key: str, value: str, ttl: int = 0) -> None:
@@ -47,14 +47,14 @@ class DisabledCache(CacheBase):
         pass
 
     # ── Profile ──
-    async def get_profile(self, isolation_key: str) -> Optional[Any]:
+    async def get_profile(self, isolation_key: str) -> Any | None:
         return None
 
     async def update_profile_cache(self, node: Any) -> None:
         pass
 
     # ── Node cache ──
-    async def get_node(self, node_id: str) -> Optional[Any]:
+    async def get_node(self, node_id: str) -> Any | None:
         return None
 
     async def cache_node(self, node: Any) -> None:
@@ -70,17 +70,17 @@ class DisabledCache(CacheBase):
     async def push_intention(self, intention: Any) -> None:
         pass
 
-    async def check_intentions(self, *args, **kwargs) -> List[Any]:
+    async def check_intentions(self, *args, **kwargs) -> list[Any]:
         return []
 
     async def mark_intention_triggered(self, intention_id: str) -> None:
         pass
 
     # ── Gap Map ──
-    async def get_gap_map(self, isolation_key: str) -> Optional[List[Any]]:
+    async def get_gap_map(self, isolation_key: str) -> list[Any] | None:
         return None
 
-    async def set_gap_map(self, isolation_key: str, gaps: List[Any]) -> None:
+    async def set_gap_map(self, isolation_key: str, gaps: list[Any]) -> None:
         pass
 
     async def invalidate_gap_map(self, isolation_key: str) -> None:
@@ -90,53 +90,53 @@ class DisabledCache(CacheBase):
     async def enqueue_system2_task(self, *args, **kwargs) -> str:
         return str(uuid.uuid4())
 
-    async def get_active_isolation_keys(self) -> List[str]:
+    async def get_active_isolation_keys(self) -> list[str]:
         return []
 
-    async def dequeue_system2_task(self, *args, **kwargs) -> Optional[Dict[str, Any]]:
+    async def dequeue_system2_task(self, *args, **kwargs) -> dict[str, Any] | None:
         return None
 
     async def get_system2_queue_length(self, *args, **kwargs) -> int:
         return 0
 
     # ── Task status ──
-    async def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
+    async def get_task_status(self, task_id: str) -> dict[str, Any] | None:
         return None
 
-    async def get_task_statuses(self, task_ids: List[str]) -> List[Dict[str, Any]]:
+    async def get_task_statuses(self, task_ids: list[str]) -> list[dict[str, Any]]:
         return []
 
     async def update_task_status(self, *args, **kwargs) -> bool:
         return True
 
     # ── Session state ──
-    async def get_session_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+    async def get_session_state(self, session_id: str) -> dict[str, Any] | None:
         return None
 
-    async def set_session_state(self, session_id: str, state: Dict[str, Any]) -> None:
+    async def set_session_state(self, session_id: str, state: dict[str, Any]) -> None:
         pass
 
     # ── Stats ──
-    async def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> dict[str, Any]:
         return {"backend": "disabled", "cache_hits": 0, "cache_misses": 0, "total_entries": 0}
 
     # ── Write records ──
     async def store_write_record(self, *args, **kwargs) -> bool:
         return True
 
-    async def get_write_record(self, request_id: str) -> Optional[Dict[str, Any]]:
+    async def get_write_record(self, request_id: str) -> dict[str, Any] | None:
         return None
 
     async def store_memory_operation(self, *args, **kwargs) -> bool:
         return True
 
-    async def get_memory_operations(self, *args, **kwargs) -> List[Dict[str, Any]]:
+    async def get_memory_operations(self, *args, **kwargs) -> list[dict[str, Any]]:
         return []
 
     async def store_pipeline_log(self, *args, **kwargs) -> bool:
         return True
 
-    async def get_pipeline_logs(self, *args, **kwargs) -> List[Dict[str, Any]]:
+    async def get_pipeline_logs(self, *args, **kwargs) -> list[dict[str, Any]]:
         return []
 
     # ── Metrics (shims — not in original CacheBase but called by background tasks) ──

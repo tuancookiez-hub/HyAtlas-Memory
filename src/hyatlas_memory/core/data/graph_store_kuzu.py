@@ -297,7 +297,7 @@ class KuzuGraphStore(GraphStoreBase):
             else:
                 logger.warning(f"Failed to create vector index memory_content_idx: {e}")
 
-    def _execute(self, query: str, params: Optional[Dict[str, Any]] = None) -> Any:
+    def _execute(self, query: str, params: dict[str, Any] | None = None) -> Any:
         """执行 Cypher 查询 (GraphStore 不可用时返回 None)"""
         if not self._available or self._conn is None:
             return None
@@ -497,7 +497,7 @@ class KuzuGraphStore(GraphStoreBase):
 
         return node.node_id
 
-    async def get_node(self, node_id: str) -> Optional[MemoryNode]:
+    async def get_node(self, node_id: str) -> MemoryNode | None:
         """获取单个 Memory 节点"""
         if not self._available:
             return None
@@ -512,7 +512,7 @@ class KuzuGraphStore(GraphStoreBase):
             return None
         return self._row_to_memory_node(rows[0][0])
 
-    async def get_nodes_by_ids(self, node_ids: List[str]) -> List[MemoryNode]:
+    async def get_nodes_by_ids(self, node_ids: list[str]) -> list[MemoryNode]:
         """批量获取"""
         if not self._available or not node_ids:
             return []
@@ -526,15 +526,15 @@ class KuzuGraphStore(GraphStoreBase):
     async def get_all_nodes(
         self,
         isolation_key: str,
-        layer: Optional[MemoryLayer] = None,
-        status: Optional[MemoryStatus] = None,
+        layer: MemoryLayer | None = None,
+        status: MemoryStatus | None = None,
         limit: int = 100,
-    ) -> List[MemoryNode]:
+    ) -> list[MemoryNode]:
         """按条件获取节点列表"""
         if not self._available:
             return []
         conditions = ["m.isolation_key = $ik"]
-        params: Dict[str, Any] = {"ik": isolation_key}
+        params: dict[str, Any] = {"ik": isolation_key}
 
         if layer:
             conditions.append("m.layer = $layer")
@@ -554,7 +554,7 @@ class KuzuGraphStore(GraphStoreBase):
             nodes.append(self._row_to_memory_node(row[0]))
         return nodes
 
-    async def get_profile(self, isolation_key: str) -> Optional[MemoryNode]:
+    async def get_profile(self, isolation_key: str) -> MemoryNode | None:
         """获取 L5 Identity Profile 节点"""
         if not self._available:
             return None
@@ -570,14 +570,14 @@ class KuzuGraphStore(GraphStoreBase):
             return None
         return self._row_to_memory_node(rows[0][0])
 
-    async def update_node(self, node_id: str, updates: Dict[str, Any]) -> bool:
+    async def update_node(self, node_id: str, updates: dict[str, Any]) -> bool:
         """更新节点属性"""
         if not self._available:
             return False
         if not updates:
             return True
         set_clauses = []
-        params: Dict[str, Any] = {"nid": node_id}
+        params: dict[str, Any] = {"nid": node_id}
         for key, value in updates.items():
             safe_key = key.replace("-", "_")
             set_clauses.append(f"m.{safe_key} = ${safe_key}")
@@ -634,15 +634,15 @@ class KuzuGraphStore(GraphStoreBase):
     async def delete_by_metadata(
         self,
         user_id: str,
-        agent_id: Optional[str] = None,
-        session_id: Optional[str] = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
     ) -> int:
         """按 metadata 删除该用户范围内的图数据（Memory + User + Topic + 孤立 VdbRef）"""
         if not self._available:
             return 0
         try:
             conditions = ["m.user_id = $uid"]
-            params: Dict[str, Any] = {"uid": user_id}
+            params: dict[str, Any] = {"uid": user_id}
             if agent_id is not None:
                 conditions.append("m.agent_id = $aid")
                 params["aid"] = agent_id
@@ -669,7 +669,7 @@ class KuzuGraphStore(GraphStoreBase):
 
             # User 节点（按 user_id / agent_id / session 粒度）
             user_conds = ["u.user_id = $uid"]
-            user_params: Dict[str, Any] = {"uid": user_id}
+            user_params: dict[str, Any] = {"uid": user_id}
             if session_id is not None:
                 ik = f"{user_id}::{agent_id or 'default_agent'}::{session_id}"
                 user_conds.append("u.isolation_key = $ik")
@@ -685,7 +685,7 @@ class KuzuGraphStore(GraphStoreBase):
 
             # Topic 节点（isolation_key 与 User 同格式）
             topic_conds = ["t.isolation_key STARTS WITH $pfx"]
-            topic_params: Dict[str, Any] = {"pfx": f"{user_id}::"}
+            topic_params: dict[str, Any] = {"pfx": f"{user_id}::"}
             if agent_id is not None and session_id is None:
                 topic_params["pfx"] = f"{user_id}::{agent_id}::"
             elif session_id is not None:
@@ -724,7 +724,7 @@ class KuzuGraphStore(GraphStoreBase):
         source_id: str,
         target_id: str,
         edge_type: str,
-        properties: Optional[Dict[str, Any]] = None,
+        properties: dict[str, Any] | None = None,
     ) -> bool:
         """添加 Memory→Memory 关系边 (RELATED_TO)，自动建双向边"""
         if not self._available:
@@ -853,9 +853,9 @@ class KuzuGraphStore(GraphStoreBase):
 
     async def find_referencing_memories(
         self,
-        vdb_node_ids: List[str],
+        vdb_node_ids: list[str],
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """反向查找: VDB node_id → 引用它的 Graph Memory 节点"""
         if not self._available or not vdb_node_ids:
             return []
@@ -885,7 +885,7 @@ class KuzuGraphStore(GraphStoreBase):
                 logger.debug(f"find_referencing_memories for {vdb_id}: {e}")
         return results[:limit]
 
-    async def get_evidence_vdbrefs(self, memory_node_id: str) -> List[Dict[str, Any]]:
+    async def get_evidence_vdbrefs(self, memory_node_id: str) -> list[dict[str, Any]]:
         """获取一个 Graph Memory 的全部 DERIVED_FROM evidence VdbRef"""
         if not self._available:
             return []
@@ -912,10 +912,10 @@ class KuzuGraphStore(GraphStoreBase):
 
     async def expand_from_anchors(
         self,
-        anchor_ids: List[str],
+        anchor_ids: list[str],
         hop: int = 1,
         max_nodes: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """从锚点节点出发，沿图边扩展 N 跳"""
         if not self._available or not anchor_ids:
             return []
@@ -987,11 +987,11 @@ class KuzuGraphStore(GraphStoreBase):
 
     async def expand_with_tags(
         self,
-        anchor_ids: List[str],
+        anchor_ids: list[str],
         hop: int = 2,
         max_nodes: int = 500,
         isolation_key: str = "",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """BFS 展开：RELATED_TO + TAGGED_WITH(双向)，N 跳。"""
         if not self._available or not anchor_ids:
             return []
@@ -1078,13 +1078,13 @@ class KuzuGraphStore(GraphStoreBase):
 
     async def vector_search(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         isolation_key: str,
-        layers: Optional[List[str]] = None,
+        layers: list[str] | None = None,
         limit: int = 10,
         score_threshold: float = 0.0,
         user_id: str = "",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """V_con 向量检索 Graph Memory 节点"""
         if not self._available or not query_embedding:
             return []
@@ -1142,10 +1142,10 @@ class KuzuGraphStore(GraphStoreBase):
 
     async def beh_vector_search(
         self,
-        query_beh_embedding: List[float],
+        query_beh_embedding: list[float],
         isolation_key: str,
         limit: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """V_beh 向量检索 L6 basic 节点 (sweeper 用)
 
         beh_embedding 不建 HNSW 索引（Kuzu 限制：被索引列不能 SET），
@@ -1207,8 +1207,8 @@ class KuzuGraphStore(GraphStoreBase):
     async def update_embedding(
         self,
         node_id: str,
-        embedding: Optional[List[float]] = None,
-        beh_embedding: Optional[List[float]] = None,
+        embedding: list[float] | None = None,
+        beh_embedding: list[float] | None = None,
     ) -> bool:
         """更新节点的 embedding / beh_embedding 向量属性
 
@@ -1262,9 +1262,9 @@ class KuzuGraphStore(GraphStoreBase):
 
     async def find_cores_from_basics(
         self,
-        basic_ids: List[str],
+        basic_ids: list[str],
         max_hops: int = 2,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """从 L6 basic 出发，沿 RELATED_TO / CROSS_ABSTRACTS_TO 找 L6 core"""
         if not self._available or not basic_ids:
             return []
@@ -1297,7 +1297,7 @@ class KuzuGraphStore(GraphStoreBase):
                 logger.debug(f"find_cores_from_basics for {nid}: {e}")
         return results
 
-    async def get_cross_abstracts_targets(self, basic_id: str) -> List[str]:
+    async def get_cross_abstracts_targets(self, basic_id: str) -> list[str]:
         """查询某个 L6 basic 已有的 CROSS_ABSTRACTS_TO → core node_id 列表"""
         if not self._available:
             return []
@@ -1321,7 +1321,7 @@ class KuzuGraphStore(GraphStoreBase):
     # 统计
     # ================================================================
 
-    async def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> dict[str, Any]:
         """获取图统计"""
         if not self._available:
             return {"backend": "kuzu", "available": False, "reason": "file lock not acquired"}

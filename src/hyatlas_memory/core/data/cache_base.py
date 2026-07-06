@@ -37,7 +37,7 @@ class CacheBase(ABC):
     # ================================================================
 
     @abstractmethod
-    async def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> dict[str, Any]:
         ...
 
     # ================================================================
@@ -54,9 +54,9 @@ class CacheBase(ABC):
         memory_id: str,
         content: str,
         layer: str = "",
-        old_memory_id: Optional[str] = None,
+        old_memory_id: str | None = None,
         reason: str = "",
-        supersedes: Optional[List[str]] = None,
+        supersedes: list[str] | None = None,
     ) -> bool:
         """记录一条知识库变动操作（ADD / EVOLVE）"""
         ...
@@ -64,11 +64,11 @@ class CacheBase(ABC):
     @abstractmethod
     async def get_memory_operations(
         self,
-        request_id: Optional[str] = None,
-        memory_id: Optional[str] = None,
-        user_id: Optional[str] = None,
+        request_id: str | None = None,
+        memory_id: str | None = None,
+        user_id: str | None = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """查询知识库变动记录，支持按 request_id / memory_id / user_id 过滤"""
         ...
 
@@ -86,7 +86,7 @@ class CacheBase(ABC):
         prompt: str,
         response: str,
         parsed: str = "",
-        memory_ids: Optional[List[str]] = None,
+        memory_ids: list[str] | None = None,
         elapsed_ms: float = 0,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
@@ -98,10 +98,10 @@ class CacheBase(ABC):
     @abstractmethod
     async def get_pipeline_logs(
         self,
-        request_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        step: Optional[str] = None,
+        request_id: str | None = None,
+        user_id: str | None = None,
+        step: str | None = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """查询 pipeline 中间结果日志"""
         ...

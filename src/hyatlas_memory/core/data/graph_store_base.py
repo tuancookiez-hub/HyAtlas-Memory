@@ -56,7 +56,7 @@ class GraphStoreBase(ABC):
         ...
 
     @abstractmethod
-    async def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> dict[str, Any]:
         """获取图统计信息"""
         ...
 
@@ -84,12 +84,12 @@ class GraphStoreBase(ABC):
         ...
 
     @abstractmethod
-    async def get_node(self, node_id: str) -> Optional[MemoryNode]:
+    async def get_node(self, node_id: str) -> MemoryNode | None:
         """获取单个 Memory 节点"""
         ...
 
     @abstractmethod
-    async def get_nodes_by_ids(self, node_ids: List[str]) -> List[MemoryNode]:
+    async def get_nodes_by_ids(self, node_ids: list[str]) -> list[MemoryNode]:
         """批量获取 Memory 节点"""
         ...
 
@@ -97,20 +97,20 @@ class GraphStoreBase(ABC):
     async def get_all_nodes(
         self,
         isolation_key: str,
-        layer: Optional[MemoryLayer] = None,
-        status: Optional[MemoryStatus] = None,
+        layer: MemoryLayer | None = None,
+        status: MemoryStatus | None = None,
         limit: int = 100,
-    ) -> List[MemoryNode]:
+    ) -> list[MemoryNode]:
         """按条件获取节点列表"""
         ...
 
     @abstractmethod
-    async def get_profile(self, isolation_key: str) -> Optional[MemoryNode]:
+    async def get_profile(self, isolation_key: str) -> MemoryNode | None:
         """获取 L5 Identity Profile 节点"""
         ...
 
     @abstractmethod
-    async def update_node(self, node_id: str, updates: Dict[str, Any]) -> bool:
+    async def update_node(self, node_id: str, updates: dict[str, Any]) -> bool:
         """更新节点属性"""
         ...
 
@@ -128,8 +128,8 @@ class GraphStoreBase(ABC):
     async def delete_by_metadata(
         self,
         user_id: str,
-        agent_id: Optional[str] = None,
-        session_id: Optional[str] = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
     ) -> int:
         """
         按 metadata 字段组合删除 Memory 节点。
@@ -154,7 +154,7 @@ class GraphStoreBase(ABC):
         source_id: str,
         target_id: str,
         edge_type: str,
-        properties: Optional[Dict[str, Any]] = None,
+        properties: dict[str, Any] | None = None,
     ) -> bool:
         """添加 Memory→Memory 关系边 (RELATED_TO)"""
         ...
@@ -176,7 +176,7 @@ class GraphStoreBase(ABC):
     async def get_all_topics(
         self,
         isolation_key: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """获取某 isolation_key 下的所有 Topic 节点
 
         返回 [{topic_id, name, embedding}]，embedding 可能为 None（旧数据）
@@ -185,9 +185,9 @@ class GraphStoreBase(ABC):
 
     async def tag_bridge_search(
         self,
-        topic_ids: List[str],
+        topic_ids: list[str],
         limit: int = 20,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Tag 桥接召回：从 Topic 节点反向查找关联的 Memory 节点
 
         即 MATCH (t:Topic)<-[:TAGGED_WITH]-(m:Memory) WHERE m.status = 'active'
@@ -209,9 +209,9 @@ class GraphStoreBase(ABC):
 
     async def find_referencing_memories(
         self,
-        vdb_node_ids: List[str],
+        vdb_node_ids: list[str],
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """反向查找: 给定 VDB node_id 列表，找到 Graph 中引用它们的 Memory 节点
 
         即 MATCH (v:VdbRef)<-[:DERIVED_FROM]-(m:Memory)
@@ -219,7 +219,7 @@ class GraphStoreBase(ABC):
         """
         return []  # 默认 no-op
 
-    async def get_evidence_vdbrefs(self, memory_node_id: str) -> List[Dict[str, Any]]:
+    async def get_evidence_vdbrefs(self, memory_node_id: str) -> list[dict[str, Any]]:
         """获取一个 Graph Memory 节点的所有 DERIVED_FROM evidence VdbRef
 
         返回 [{node_id, layer}]
@@ -233,20 +233,20 @@ class GraphStoreBase(ABC):
     @abstractmethod
     async def expand_from_anchors(
         self,
-        anchor_ids: List[str],
+        anchor_ids: list[str],
         hop: int = 1,
         max_nodes: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """从锚点节点出发，沿图边扩展 N 跳"""
         ...
 
     async def expand_with_tags(
         self,
-        anchor_ids: List[str],
+        anchor_ids: list[str],
         hop: int = 2,
         max_nodes: int = 500,
         isolation_key: str = "",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """从锚点出发，沿 RELATED_TO + TAGGED_WITH(双向) 展开 N 跳。
 
         路径包括:
@@ -265,13 +265,13 @@ class GraphStoreBase(ABC):
 
     async def vector_search(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         isolation_key: str,
-        layers: Optional[List[str]] = None,
+        layers: list[str] | None = None,
         limit: int = 10,
         score_threshold: float = 0.0,
         user_id: str = "",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """V_con 向量检索 Graph Memory 节点
 
         使用 embedding 列的 HNSW 索引做 ANN 检索。
@@ -285,10 +285,10 @@ class GraphStoreBase(ABC):
 
     async def beh_vector_search(
         self,
-        query_beh_embedding: List[float],
+        query_beh_embedding: list[float],
         isolation_key: str,
         limit: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """V_beh 向量检索 L6 basic 节点 (sweeper 用)
 
         使用 beh_embedding 列的 HNSW 索引做 ANN 检索。
@@ -299,8 +299,8 @@ class GraphStoreBase(ABC):
     async def update_embedding(
         self,
         node_id: str,
-        embedding: Optional[List[float]] = None,
-        beh_embedding: Optional[List[float]] = None,
+        embedding: list[float] | None = None,
+        beh_embedding: list[float] | None = None,
     ) -> bool:
         """更新节点的 embedding / beh_embedding 向量属性"""
         return False  # 默认 no-op
@@ -319,9 +319,9 @@ class GraphStoreBase(ABC):
 
     async def find_cores_from_basics(
         self,
-        basic_ids: List[str],
+        basic_ids: list[str],
         max_hops: int = 2,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """从 L6 basic 出发，沿 RELATED_TO / CROSS_ABSTRACTS_TO 找 L6 core 节点
 
         返回 [{node_id, content, confidence}]，已去重
@@ -331,6 +331,6 @@ class GraphStoreBase(ABC):
     async def get_cross_abstracts_targets(
         self,
         basic_id: str,
-    ) -> List[str]:
+    ) -> list[str]:
         """查询某个 L6 basic 已有的 CROSS_ABSTRACTS_TO 边指向的 core node_id 列表"""
         return []  # 默认 no-op

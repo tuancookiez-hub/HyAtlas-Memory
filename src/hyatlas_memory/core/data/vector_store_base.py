@@ -91,17 +91,17 @@ class VectorStoreBase(ABC):
         ...
 
     @abstractmethod
-    async def upsert_batch(self, nodes: List[MemoryNode]) -> List[str]:
+    async def upsert_batch(self, nodes: list[MemoryNode]) -> list[str]:
         """批量写入"""
         ...
 
     @abstractmethod
-    async def update_embedding(self, node_id: str, embedding: List[float]) -> bool:
+    async def update_embedding(self, node_id: str, embedding: list[float]) -> bool:
         """仅更新向量（payload 不变）"""
         ...
 
     @abstractmethod
-    async def update_payload(self, node_id: str, updates: Dict[str, Any]) -> bool:
+    async def update_payload(self, node_id: str, updates: dict[str, Any]) -> bool:
         """
         仅更新 payload 字段（向量不变）
         
@@ -121,20 +121,20 @@ class VectorStoreBase(ABC):
     @abstractmethod
     async def search(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         isolation_key: str = "",
-        isolation_keys: Optional[List[str]] = None,
-        user_id: Optional[str] = None,
-        user_ids: Optional[List[str]] = None,
-        agent_ids: Optional[List[str]] = None,
-        layers: Optional[List[MemoryLayer]] = None,
+        isolation_keys: list[str] | None = None,
+        user_id: str | None = None,
+        user_ids: list[str] | None = None,
+        agent_ids: list[str] | None = None,
+        layers: list[MemoryLayer] | None = None,
         limit: int = 10,
         score_threshold: float = 0.0,
-        status_filter: Optional[List[MemoryStatus]] = None,
+        status_filter: list[MemoryStatus] | None = None,
         only_latest: bool = True,
-        tags_match_any: Optional[List[str]] = None,
-        created_after: Optional[float] = None,
-    ) -> List[Dict[str, Any]]:
+        tags_match_any: list[str] | None = None,
+        created_after: float | None = None,
+    ) -> list[dict[str, Any]]:
         """
         语义检索
 
@@ -164,11 +164,11 @@ class VectorStoreBase(ABC):
         ...
 
     @abstractmethod
-    async def get_by_id(self, node_id: str) -> Optional[MemoryNode]:
+    async def get_by_id(self, node_id: str) -> MemoryNode | None:
         """按 ID 获取"""
         ...
 
-    async def get_by_ids(self, node_ids: List[str]) -> List[MemoryNode]:
+    async def get_by_ids(self, node_ids: list[str]) -> list[MemoryNode]:
         """
         批量按 ID 获取（默认实现：串行调用 get_by_id）。
         后端可覆盖此方法以使用批量 API 提升效率。
@@ -180,7 +180,7 @@ class VectorStoreBase(ABC):
                 results.append(node)
         return results
 
-    async def get_embeddings(self, node_ids: List[str]) -> Dict[str, List[float]]:
+    async def get_embeddings(self, node_ids: list[str]) -> dict[str, list[float]]:
         """
         批量取节点向量（用于去重时本地算 pairwise cosine，不调 embedding API）。
 
@@ -190,7 +190,7 @@ class VectorStoreBase(ABC):
         Returns:
             {node_id: embedding}，取不到向量的 node_id 不出现在返回里。
         """
-        out: Dict[str, List[float]] = {}
+        out: dict[str, list[float]] = {}
         nodes = await self.get_by_ids(node_ids)
         for n in nodes:
             emb = getattr(n, "embedding", None)
@@ -216,8 +216,8 @@ class VectorStoreBase(ABC):
     async def delete_by_metadata(
         self,
         user_id: str,
-        agent_id: Optional[str] = None,
-        session_id: Optional[str] = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
     ) -> int:
         """
         按 metadata 字段组合删除向量（与 search 同一过滤思路）。
@@ -240,11 +240,11 @@ class VectorStoreBase(ABC):
     async def list_by_user(
         self,
         user_id: str,
-        agent_id: Optional[str] = None,
+        agent_id: str | None = None,
         limit: int = 10000,
-        status_filter: Optional[List] = None,
-        layers: Optional[List[MemoryLayer]] = None,
-    ) -> List[MemoryNode]:
+        status_filter: list | None = None,
+        layers: list[MemoryLayer] | None = None,
+    ) -> list[MemoryNode]:
         """
         枚举某用户的记忆节点（含 embedding）。
 
@@ -262,7 +262,7 @@ class VectorStoreBase(ABC):
     # ================================================================
 
     @abstractmethod
-    async def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> dict[str, Any]:
         """获取集合统计"""
         ...
 
@@ -290,7 +290,7 @@ class VectorStoreBase(ABC):
     _supports_tag_index: bool = False
 
     async def upsert_tag_embedding(
-        self, user_id: str, tag: str, embedding: List[float]
+        self, user_id: str, tag: str, embedding: list[float]
     ) -> None:
         """写入 (user_id, tag) 的 embedding。幂等：同 (user_id, tag) 永远落同一 point。"""
         raise NotImplementedError("tag_index not supported by this backend")
@@ -306,10 +306,10 @@ class VectorStoreBase(ABC):
     async def search_tag_embeddings(
         self,
         user_id: str,
-        query_embedding: List[float],
+        query_embedding: list[float],
         topk: int = 5,
         min_score: float = 0.5,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         在指定 user 的 tag_index 中做向量检索，返回 [{"tag": ..., "score": ...}, ...]。
         按 score 降序。分数低于 min_score 的被过滤。
@@ -338,7 +338,7 @@ class VectorStoreBase(ABC):
         *,
         entity_text: str,
         entity_type: str,
-        embedding: List[float],
+        embedding: list[float],
         memory_id: str,
         user_id: str,
         agent_id: str = "",
@@ -354,12 +354,12 @@ class VectorStoreBase(ABC):
     async def search_entities(
         self,
         *,
-        query_embedding: List[float],
+        query_embedding: list[float],
         user_id: str,
-        agent_ids: Optional[List[str]] = None,
+        agent_ids: list[str] | None = None,
         top_k: int = 500,
         min_score: float = 0.0,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """在指定 user 的 entity store 中做向量检索。
 
         返回 [{"entity_id", "data", "entity_type", "linked_memory_ids", "score"}, ...]，
@@ -368,13 +368,13 @@ class VectorStoreBase(ABC):
         raise NotImplementedError("entity store not supported by this backend")
 
     async def list_entities(
-        self, *, user_id: str, agent_ids: Optional[List[str]] = None, top_k: int = 10000
-    ) -> List[Dict[str, Any]]:
+        self, *, user_id: str, agent_ids: list[str] | None = None, top_k: int = 10000
+    ) -> list[dict[str, Any]]:
         """列出指定 user 的全部 entity 记录（用于迁移/清理/统计）。"""
         raise NotImplementedError("entity store not supported by this backend")
 
     async def delete_entities_for_memory(
-        self, *, memory_id: str, user_id: str, agent_ids: Optional[List[str]] = None
+        self, *, memory_id: str, user_id: str, agent_ids: list[str] | None = None
     ) -> int:
         """从所有 entity 的 linked_memory_ids 中剔除 memory_id；空链则删除该 entity。
 
@@ -402,12 +402,12 @@ class VectorStoreBase(ABC):
         self,
         query: str,
         top_k: int = 10,
-        user_id: Optional[str] = None,
-        agent_ids: Optional[List[str]] = None,
-        layers: Optional[List[MemoryLayer]] = None,
-        status_filter: Optional[List[MemoryStatus]] = None,
+        user_id: str | None = None,
+        agent_ids: list[str] | None = None,
+        layers: list[MemoryLayer] | None = None,
+        status_filter: list[MemoryStatus] | None = None,
         only_latest: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Full-text keyword search via payload text index.
 
@@ -445,7 +445,7 @@ class VectorStoreBase(ABC):
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"tag_index::{user_id}::{tag}"))
 
     @staticmethod
-    def _node_to_payload(node: MemoryNode) -> Dict[str, Any]:
+    def _node_to_payload(node: MemoryNode) -> dict[str, Any]:
         """将 MemoryNode 转换为通用 payload 字典（所有后端共用相同结构）"""
         # search_text: content + tags 拼接，过 lemmatize_for_bm25 (jieba 中文 + spaCy 英文)
         # 后再写入。配合 Qdrant whitespace tokenizer，让查询/索引两侧统一用 jieba 分词，
@@ -500,6 +500,6 @@ class VectorStoreBase(ABC):
         }
 
     @staticmethod
-    def _payload_to_node(payload: Dict[str, Any]) -> MemoryNode:
+    def _payload_to_node(payload: dict[str, Any]) -> MemoryNode:
         """从 payload 字典重建 MemoryNode"""
         return MemoryNode.from_dict(payload)

@@ -158,6 +158,11 @@ ignore = [
     "SIM105",  # try/except/pass is intentional for process management
     "SIM115",  # long-lived log files can't use context managers
 ]
+"src/hyatlas_memory/core/data/*" = [
+    "UP035",  # typing.List/Dict/Tuple — forked upstream SDK, uses old-style annotations
+    "N802",   # GraphStore() alias — backward compat, can't rename
+    "SIM118", # .keys() in — forked upstream style
+]
 "src/hyatlas_memory/_start.py" = [
     "SIM105",  # try/except/pass is intentional for process management
     "SIM115",  # long-lived log files can't use context managers

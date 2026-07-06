@@ -84,7 +84,7 @@ class RDB:
     - ORM 集成（可选）
     """
     
-    def __init__(self, config: Optional[RDBConfig] = None):
+    def __init__(self, config: RDBConfig | None = None):
         """初始化 RDB"""
         self.config = config or RDBConfig()
         self._pool = None
@@ -109,8 +109,8 @@ class RDB:
     async def query(
         self,
         sql: str,
-        params: List[Any] = None
-    ) -> List[Dict[str, Any]]:
+        params: list[Any] = None
+    ) -> list[dict[str, Any]]:
         """
         执行查询
         
@@ -128,7 +128,7 @@ class RDB:
     async def execute(
         self,
         sql: str,
-        params: List[Any] = None
+        params: list[Any] = None
     ) -> int:
         """
         执行语句（INSERT/UPDATE/DELETE）
@@ -147,7 +147,7 @@ class RDB:
     async def execute_many(
         self,
         sql: str,
-        params_list: List[List[Any]]
+        params_list: list[list[Any]]
     ) -> int:
         """
         批量执行
@@ -179,8 +179,8 @@ class RDB:
     async def get_one(
         self,
         sql: str,
-        params: List[Any] = None
-    ) -> Optional[Dict[str, Any]]:
+        params: list[Any] = None
+    ) -> dict[str, Any] | None:
         """
         获取单条记录
         
@@ -188,6 +188,6 @@ class RDB:
         """
         raise NotImplementedError("RDB.get_one is not implemented yet")
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """获取连接池统计信息"""
         raise NotImplementedError("RDB.get_stats is not implemented yet")
