@@ -8,6 +8,16 @@ import sys
 import time
 import urllib.request
 
+import pytest
+
+try:
+    import zvec as _zvec  # noqa: F401
+    _zvec_available = True
+except ImportError:
+    _zvec_available = False
+
+pytestmark = pytest.mark.skipif(not _zvec_available, reason="zvec not installed")
+
 
 def port() -> int:
     sock = socket.socket()

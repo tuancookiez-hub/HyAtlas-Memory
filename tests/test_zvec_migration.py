@@ -5,16 +5,26 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from hyatlas_memory.core.config import MemoryConfig
-from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore, resolve_zvec_path
+import pytest
 
-spec = importlib.util.spec_from_file_location(
+try:
+    import zvec as _zvec  # noqa: F401
+    _zvec_available = True
+except ImportError:
+    _zvec_available = False
+
+pytestmark = pytest.mark.skipif(not _zvec_available, reason="zvec not installed")
+
+_spec = importlib.util.spec_from_file_location(
     "migrate_qdrant_to_zvec",
     Path(__file__).resolve().parents[1] / "scripts" / "migrate_qdrant_to_zvec.py",
 )
-mod = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = mod
-spec.loader.exec_module(mod)
+mod = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = mod
+_spec.loader.exec_module(mod)
+
+from hyatlas_memory.core.config import MemoryConfig
+from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore, resolve_zvec_path
 
 
 def test_migration_import_uses_runtime_schema_and_releases_store(monkeypatch, tmp_path):

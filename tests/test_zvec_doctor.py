@@ -3,6 +3,16 @@ from __future__ import annotations
 import importlib
 import json
 
+import pytest
+
+try:
+    import zvec as _zvec  # noqa: F401
+    _zvec_available = True
+except ImportError:
+    _zvec_available = False
+
+pytestmark = pytest.mark.skipif(not _zvec_available, reason="zvec not installed")
+
 
 def test_zvec_doctor_registered(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("HYATLAS_HOME", str(tmp_path))

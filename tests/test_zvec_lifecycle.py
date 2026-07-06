@@ -9,6 +9,14 @@ from pathlib import Path
 
 import pytest
 
+try:
+    import zvec as _zvec  # noqa: F401
+    _zvec_available = True
+except ImportError:
+    _zvec_available = False
+
+pytestmark = pytest.mark.skipif(not _zvec_available, reason="zvec not installed")
+
 from hyatlas_memory.core.config import MemoryConfig
 from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore, resolve_zvec_path
 from hyatlas_memory.core.models.memory import MemoryLayer, MemoryNode

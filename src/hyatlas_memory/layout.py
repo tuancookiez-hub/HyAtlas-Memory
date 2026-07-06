@@ -151,6 +151,10 @@ def qdrant_data() -> Path | None:
     raw = os.environ.get("HYATLAS_QDRANT_DATA")
     if raw:
         return Path(raw)
+    # Check HYATLAS_HOME-aware path first (test + migrated installs)
+    q = qdata()
+    if q.exists():
+        return q
     _, cfg = find_qdrant()
     if cfg and cfg.exists():
         for line in cfg.read_text(errors="ignore").splitlines():

@@ -2,6 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
+try:
+    import zvec as _zvec  # noqa: F401
+    _zvec_available = True
+except ImportError:
+    _zvec_available = False
+
+pytestmark = pytest.mark.skipif(not _zvec_available, reason="zvec not installed")
+
 
 def test_doc_to_node_normalizes_epoch_strings():
     """Migrated Qdrant timestamps arrive as epoch strings like '1782866658'."""
