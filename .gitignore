@@ -54,8 +54,8 @@ secrets/
 *.db
 *.db-wal
 *.db-shm
-data/
-runtime/
+/data/
+/runtime/
 
 # Logs
 *.log
