@@ -3092,7 +3092,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 "evolution": evolution_score,
                 "activity": activity_score,
                 "latency": latency_score,
-                "composite": round((evolution_score * 0.5 + activity_score * 0.3 + latency_score * 0.2)),
+                "composite": round(evolution_score * 0.5 + activity_score * 0.3 + latency_score * 0.2),
             },
             "score_breakdown": {
                 "evolution": [
