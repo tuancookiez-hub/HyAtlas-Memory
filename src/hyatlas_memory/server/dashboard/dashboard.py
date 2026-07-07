@@ -50,7 +50,7 @@ REFRESH_S = int(os.environ.get("HY_DASH_REFRESH_S", "30"))
 import pathlib as _pathlib
 import secrets as _secrets
 
-_DASH_TOKEN_FILE = _pathlib._pathlib.Path.home() / ".hy_memory" / ".dashboard_token"
+_DASH_TOKEN_FILE = _pathlib.Path.home() / ".hy_memory" / ".dashboard_token"
 DASH_TOKEN: str | None = None
 
 def _get_or_create_token() -> str:
@@ -135,9 +135,9 @@ def _l5_export_path() -> _pathlib.Path:
         home = _pathlib.Path(get_hermes_home())
     except Exception:
         if sys.platform == "win32":
-            home = _pathlib._pathlib.Path.home() / "AppData" / "Local" / "hermes"
+            home = _pathlib.Path.home() / "AppData" / "Local" / "hermes"
         else:
-            home = _pathlib._pathlib.Path.home() / ".local" / "share" / "hermes"
+            home = _pathlib.Path.home() / ".local" / "share" / "hermes"
     return home / "logs" / "l5_kuzu_export.json"
 
 # Known user IDs × agent IDs for querying memories.
