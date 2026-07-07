@@ -24,6 +24,7 @@ entry path.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -35,15 +36,27 @@ from .installer import _install_plugin_shim, _update_config
 from .process import StackManager
 
 
+def _should_auto_detach() -> bool:
+    """Detach when the launcher is not an interactive foreground terminal session."""
+    if os.environ.get("HYATLAS_FOREGROUND", "").strip().lower() in ("1", "true", "yes", "on"):
+        return False
+    if os.environ.get("HYATLAS_START_DETACHED", "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    # Background jobs often redirect stdout only; either non-TTY is enough to detach.
+    return not sys.stdin.isatty() or not sys.stdout.isatty()
+
+
 def _run_start(args) -> int:
     """Start the HyAtlas stack.
 
     Foreground: blocks until Ctrl+C (services share the launching console).
     Detached: children survive terminal close; use ``hyatlas start --detach``.
-    Non-interactive shells (no TTY) auto-detach so background jobs do not kill the stack.
+    Auto-detach when stdin/stdout is not a TTY (background jobs, log redirection).
     """
     detach = bool(getattr(args, "detach", False))
-    if not detach and not sys.stdin.isatty():
+    if getattr(args, "foreground", False):
+        detach = False
+    elif not detach and _should_auto_detach():
         detach = True
     _start.detach = detach
     _start.force_restart = bool(getattr(args, "restart", False))
@@ -121,6 +134,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # Legacy start/stop/status
     p_start = sub.add_parser("start", help="Start the HyAtlas stack")
+    p_start.add_argument(
+        "--foreground",
+        action="store_true",
+        help="Stay attached (default when run in an interactive terminal)",
+    )
     p_start.add_argument(
         "--detach",
         action="store_true",
