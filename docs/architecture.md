@@ -1,164 +1,139 @@
 # HyAtlas-Memory Architecture
 
-> **Scope note:** This document describes the local architecture of this **community implementation** of the [official Hy-Memory framework](https://memory.hunyuan.tencent.com) (by Tencent Hunyuan). The canonical 6-layer model and the three operating modes (Lite / Pro / Ultra) are defined on the official page. This implementation extends the official 6-layer spec with an **experimental 7th layer (L7 = intention)** for proactive intent detection; L7 is **not** part of the official framework and is documented here only for the benefit of contributors working on this code.
+> **Scope:** Community implementation of the [official Hy-Memory framework](https://memory.hunyuan.tencent.com) (Tencent Hunyuan), extended with an experimental **L7 intention** layer. This document reflects **HyAtlas v3.2.1** unless a section is marked historical.
 
-This document explains the system design, layer semantics, and the
-verified-2026-06-16 implementation choices that aren't visible from
-the README.
+---
+
+## HyAtlas v3.2 stack (current)
+
+| Component | Choice |
+|-----------|--------|
+| **Vector DB (L0–L4 VDB)** | **Zvec** in-process (`vector_store.provider: zvec`) — no Qdrant sidecar |
+| **Graph (L5–L7)** | **Kuzu** embedded at `~/.hyatlas/data/kuzu_db` |
+| **Cache** | DisabledCache / minimal SQLite where needed |
+| **Modes** | `lite` · `pro` · `ultra` (default for graph + digest) |
+| **Hermes** | `user_id=hermes-user`, `agent_id=**default**` — [HYATLAS_HERMES.md](./HYATLAS_HERMES.md) |
+| **L4** | **Retired** — no writer; identity in **L2**; legacy rows archived |
+| **Evolution** | `client.digest()` / `POST /api/v1/digest` — System 2 agent + sweeper (not batch `l5_full_pipeline` as primary) |
+
+**Start:** `hyatlas start` (server :19527, dashboard :8765). **Cleanup:** [CLEANUP.md](./CLEANUP.md).
+
+---
 
 ## Layer mapping: this impl vs. the official spec
 
-| This impl | Official (memory.hunyuan.tencent.com) | Purpose |
-|-----------|---------------------------------------|---------|
-| L1 raw | **L1 原始痕迹** | Verbatim session entries, time-ordered |
-| L2 fact | **L2 原子事实** | Atomic facts extracted by LLM |
-| L3 summary | (folded into L2 in official) | Periodic L2 rollups |
-| L4 identity | **L3 身份画像** | Long-lived user/agent identity facts |
-| L5 pipeline | **L4 心智** | Async ingest into Kuzu graph |
-| L6 schema | **L5 模式** | Typed entity/relationship schema |
-| L7 intention | **L6 意图** (proactive) | Proactive intent detection, async tasks |
-| — | — | **L7 in this impl = experimental extension, not in official spec** |
+| This impl (v3.2) | Official (memory.hunyuan.tencent.com) | Purpose |
+|------------------|---------------------------------------|---------|
+| L1 raw | **L1 原始痕迹** | Verbatim / shadow ingest |
+| L2 fact | **L2 原子事实** | Atomic facts (Hermes capture) |
+| L3 summary | (often folded in official L2) | Rollups / session summaries |
+| L4 identity | **L3 身份画像** (legacy) | **Retired in HyAtlas** → use **L2** |
+| L5 knowledge | **L4 心智** / graph facts | Kuzu knowledge nodes |
+| L6 schema | **L5 模式** | Behavioral schemas in Kuzu |
+| L7 intention | **L6 意图** (proactive) | Experimental extension |
 
-The official 6-layer spec maps roughly onto our 6 layers L1-L6 with one difference: official L2 (原子事实) includes what we call L3 (summary); we keep them separate for query ergonomics. Our L7 (intention) is the experimental extension.
+Our L7 is **not** in the official 6-layer spec. Official identity (L3) maps to **L2 + L6** in practice after L4 retirement.
 
-## The 7 layers in detail (this implementation)
+---
 
-### L1 — Raw
-- **What**: Verbatim user/agent message text, time-ordered.
-- **Where**: `~/.hyatlas/data/l1_raw.jsonl` (one JSON per line).
-- **Why raw**: capture the exact words; downstream layers do interpretation.
-- **Dedup**: patch #6 + #7 — exact-duplicate detector uses the embedder
-  to compute cosine similarity; if `sim > 0.95` for a recent window of
-  N adds, the new entry is skipped (not stored). This is the "live"
-  dedup gate that keeps the layer from filling with repeats.
+## System 1 / System 2
 
-### L2 — Fact
-- **What**: Atomic facts extracted from L1 by the LLM, each with
-  `(subject, predicate, object, confidence, timestamp)`.
-- **Where**: Kuzu graph (nodes are entities, edges are predicates).
-- **Schema**: defined in `patches.py` `L2_FACT_SCHEMA` and applied at
-  first run if the graph is empty.
-- **Mode dependency**: only `pro` and `ultra` modes populate L2.
-  `lite` skips LLM extraction.
+- **System 1 (online):** `add()` → embedding + fact extraction → **Zvec** (chiefly **L2**). `search()` / reader injects profile + facts + graph-aware channels.
 
-### L3 — Summary
-- **What**: Coherent narrative rollups of recent L2 facts, regenerated
-  every 20 L2 adds (configurable via `HY_MEMORY_L3_TRIGGER_EVERY`).
-- **Trigger**: patch #4 + #5 (the "dedup gate now reachable" patch) is
-  the carrier that makes the trigger reachable from the write path
-  without breaking the L2 fast-path.
-- **Mode dependency**: only `ultra` mode populates L3.
+- **System 2 (digest):** Scheduled or manual **digest** clusters **fresh L2** for `user_id`/`agent_id`, runs **system2_agent** (LLM JSON ops: `create_schema`, `add_evidence`, `add_edge`), writes **L5–L7** in Kuzu; **cross_domain_sweeper** may merge L6 basics into cores.
 
-### L4 — Identity
-- **What**: Long-lived user/agent identity facts (name, preferences,
-  recurring project names, etc.) promoted from L2 when they survive N
-  re-summarizations unchanged.
-- **Where**: Kuzu graph, with a special `l4_identity` layer tag on
-  edges.
-- **Why separated**: identity facts need higher priority in the
-  prompt budget than transient context. The `_flatten_memories` order
-  (`profile → proactive → normal`) puts L4 facts first.
+A user-visible `search()` merges both: fast VDB recall plus graph-backed schema/intention signals when ultra + hybrid reader paths are enabled.
 
-### L5 — Pipeline
-- **What**: Async orchestration of batch ingest, entity resolution,
-  relation classification, NER fallback, Kuzu ingest, digest write.
-- **Why async**: the full L5 cycle takes 10+ minutes for 1000 facts;
-  running it inline would block every write.
-- **Schedule**: manual (via `python -m server.bin.l5_full_pipeline`)
-  or `hourly` / `daily` via the config.
-- **Dashboard reads live (v2.0.0+, Patch 23)**: the dashboard queries the
-  server's `GET /api/v1/graph` endpoint, which reads Kuzu directly through
-  the server's open `graph_store` connection. No JSON export needed for
-  day-to-day viewing. The `l5_export_json.py` script remains available as
-  a snapshot/backup tool and as a fallback if the live endpoint is down.
+---
 
-### L6 — Schema
-- **What**: Typed entity and relationship categories. Read by L5
-  during relation classification to constrain the LLM's output.
-- **Where**: Kuzu graph schema (read at startup).
-
-### L7 — Intention
-- **What**: Proactive intent detection — L5 looks at recent L2 facts
-  and surfaces follow-up questions, "did you mean to do X?" prompts,
-  and async tasks the agent should consider.
-- **Output**: a `proactive` channel in the search response, populated
-  with up to N items per query.
-
-## System 1 / System 2 duality
-
-The "dual processing" in the description is operationalized as:
-
-- **System 1 (fast path)**: `add()` returns immediately after
-  embedding + L2 fact extraction. The user sees their message
-  acknowledged. L1 raw, L2 fact, L4 identity updates happen here.
-
-- **System 2 (slow path)**: L5 runs asynchronously, doing the
-  cross-fact reasoning, schema validation, and graph ingest that
-  System 1 can't afford.
-
-A user-visible read (`search()`) merges both: System 1 results
-(profile/normal channels) come back instantly; the proactive channel
-may include System 2 outputs if the L5 cycle has completed recently.
-
-## Why a 7-layer model (and how it relates to the official 6)
-
-Most agent memory systems use 2-3 layers (raw + summary, or facts
-only). The [official Hy-Memory framework](https://memory.hunyuan.tencent.com)
-defines a 6-layer model; this implementation extends that to 7 with
-an experimental proactive-intent layer (L7).
-
-The mapping in the table above is the canonical reference. The 7-layer
-model in this implementation maps cleanly to the cognitive-architecture
-literature:
-
-| Layer | Cognitive analog |
-|-------|-----------------|
-| L1 raw | sensory buffer (iconic memory) |
-| L2 fact | working memory, post-perceptual |
-| L3 summary | episodic memory, recapped |
-| L4 identity | semantic memory, self-concept |
-| L5 pipeline | consolidation (think "sleep replay") |
-| L6 schema | schemas / scripts |
-| L7 intention | prospective memory, intentions |
-
-The mapping is intentional but loose — the layers in this implementation
-are pragmatic engineering choices that happen to align with the
-psychology. Don't read too much into the count being 7.
-
-## Verified-2026-06-16 status (this implementation)
-
-This is the v0.1.0 release of the community implementation. All 7
-layers are functional locally; L1-L6 correspond to the [official 6-layer
-spec](https://memory.hunyuan.tencent.com) and L7 is experimental:
+## Storage architecture
 
 ```text
-L1 raw:     ✓ writes, ✓ dedup patch, ✓ time-ordered
-L2 fact:    ✓ LLM extraction, ✓ Kuzu ingest, ✓ schema
-L3 summary: ✓ rollup every 20 adds, ✓ Kuzu-backed
-L4 identity:✓ promoted from L2, ✓ prioritized in prompt
-L5 pipeline:✓ 7 steps + orchestrator, ✓ run-id logging, ✓ mutex
-L6 schema:  ✓ applied at first run, ✓ read at L5 step 2
-L7 intention:✓ proactive channel in search response
+┌─────────────────────────────────────────┐
+│  Hermes Agent / HTTP API (19527)        │
+│  add · search · list · digest           │
+└───────────────┬─────────────────────────┘
+                │
+     ┌──────────┴──────────┐
+     ▼                     ▼
+┌─────────┐         ┌─────────────┐
+│  Zvec   │         │   Kuzu      │
+│ L0–L4   │         │ L5 L6 L7    │
+│ (VDB)   │         │ (graph)     │
+└─────────┘         └─────────────┘
 ```
 
-Tested with: Hermes Agent v0.16.0, Python 3.11.15, Kuzu 0.4.x,
-Qdrant 1.7.x, on Windows 10.
+**Integrations** (`integrations.py`): graph endpoint (`/api/v1/graph` with `layer_counts` + optional `?layer=l6_schema`), VDB dashboard helpers, digest wiring, L1 sweep (Zvec-safe), L5 in-process hooks, etc.
 
-## Why this is a separate package
+---
 
-HyAtlas-Memory was originally a plugin inside the `hermes-agent` fork
-at `plugins/memory/hy_memory/`. The split into its own package happened
-for two reasons:
+## Graph API (dashboard + proof)
 
-1. **Survives `hermes update`.** A `git reset --hard origin/main` on
-   the fork would have wiped the plugin; a separate pip package
-   survives any upstream change.
+- Default `GET /api/v1/graph` returns **L5** nodes + relations for visualization.
+- `GET /api/v1/graph?layer=l6_schema&n=10` — browse behavioral schemas.
+- Dashboard: `/api/layer-health`, `/api/l6-schemas` — see [DASHBOARD.md](./DASHBOARD.md).
 
-2. **Testable in isolation.** The package has its own `pyproject.toml`,
-   its own test suite, and its own entry point. CI on the public repo
-   doesn't need a fork of hermes-agent to run.
+---
 
-The cost: a peer-dependency on `hermes-agent` (declared in
-`pyproject.toml`). Users install both packages; the plugin's entry
-point is discovered by Hermes at runtime via the
-`hermes.memory_provider` group.
+## Layer notes (v3.2)
+
+### L2 — Fact
+
+Primary capture layer for Hermes. Namespace must match digest (`default`, not `default_agent`).
+
+### L4 — Identity (retired)
+
+Historical `l4_identity` VDB rows may remain; System 2 **does not** read L4 as an input layer. Archive before deletion.
+
+### L5 — Knowledge
+
+Graph entities and extracted knowledge nodes; grows on digest (+ evidence on facts).
+
+### L6 — Schema
+
+“When [context], the user [pattern]…” — searchable as `l6_schema`. Count in `layer_counts`, not necessarily in per-user VDB layer histogram.
+
+### L7 — Intention
+
+Experimental proactive layer in Kuzu.
+
+---
+
+## Cognitive mapping (loose)
+
+| Layer | Analog |
+|-------|--------|
+| L2 fact | working / episodic facts |
+| L3 summary | episodic rollups |
+| L5 knowledge | semantic network |
+| L6 schema | scripts / self-model patterns |
+| L7 intention | prospective memory |
+
+---
+
+## Verified status (2026-07-08, v3.2.1)
+
+Single-user Hermes path on Windows:
+
+```text
+L2 capture:     ✓ hermes-user / default
+Digest:         ✓ POST /api/v1/digest, cron launcher
+L5 graph:       ✓ Kuzu layer_counts (e.g. 1500+ nodes)
+L6 schemas:     ✓ graph + search (500+ typical); digest may add evidence without +count every run
+L4:             ✓ retired (legacy rows only)
+Vector store:   ✓ Zvec (Qdrant runtime removed)
+```
+
+Tested with: Python 3.11, Hermes Agent, Kuzu, **Zvec**, Windows 10/11.
+
+---
+
+## Why a separate package
+
+HyAtlas-Memory ships as **`hyatlas-memory`** (pip) with a Hermes plugin shim so memory survives fork updates and has its own CI. See README “Migration from in-fork plugin”.
+
+---
+
+## Historical sections
+
+Older docs (pre–v3.1) described Qdrant + batch `l5_full_pipeline` as primary; that path is **migration/legacy**. Refer to [CHANGELOG.md](../CHANGELOG.md) for zvec cutover and v3.2 Hermes/digest work.

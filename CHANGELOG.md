@@ -9,6 +9,7 @@
 - **Docs** — `NOW.md` refreshed; `docs/CLEANUP.md` for post-zvec disk hygiene; superseded `PLAN.md` → `docs/archive/`.
 - **Compose** — `docker-compose.yml` marked legacy (runtime is zvec via `hyatlas start`).
 - **README / DASHBOARD** — Zvec-first quick start, Hermes docs links, new API endpoints documented.
+- **LAYERS / architecture** — Rewritten for v3.2: Zvec, L4 retired, L5–L7 graph semantics, digest-first evolution.
 
 ## [3.2.0] — 2026-07-07
 
