@@ -1227,8 +1227,16 @@ function renderSystem() {
       <div class="kv-value">${layerHealthData.fresh_l2_for_digest ?? '—'}</div>
     </div>
     <div class="kv-item">
-      <div class="kv-label">L6 for isolation key</div>
-      <div class="kv-value">${layerHealthData.l6_graph_sample_for_key ?? '—'} (sample)</div>
+      <div class="kv-label">Graph L5 / L6 / relations</div>
+      <div class="kv-value font-mono text-sm">${layerHealthData.graph_layer_counts ? `${layerHealthData.graph_layer_counts.l5_knowledge ?? '—'} / ${layerHealthData.graph_layer_counts.l6_schema ?? '—'} / ${layerHealthData.graph_relation_count ?? '—'}` : '—'}</div>
+    </div>
+    <div class="kv-item">
+      <div class="kv-label">Digest log</div>
+      <div class="kv-value">${escapeHtml(layerHealthData.digest_log_status || '—')}${layerHealthData.digest_log_mtime ? ` · ${new Date(layerHealthData.digest_log_mtime * 1000).toLocaleString()}` : ''}</div>
+    </div>
+    <div class="kv-item">
+      <div class="kv-label">Manual digest</div>
+      <div class="kv-value font-mono text-xs break-all">${escapeHtml(layerHealthData.digest_command || '—')}</div>
     </div>
     ` : ''}
   `;

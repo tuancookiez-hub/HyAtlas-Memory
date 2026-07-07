@@ -34,6 +34,10 @@ Or from repo (foreground):
 python scripts/run_digest_once.py hermes-user default
 ```
 
+## Dashboard proof
+
+Settings → **System** tab shows `/api/layer-health`: digest namespace, fresh L2, graph L5/L6, digest log status (`ok` / `stale`), and the Windows manual digest command.
+
 ## Environment
 
 ```bash

@@ -50,7 +50,7 @@ REFRESH_S = int(os.environ.get("HY_DASH_REFRESH_S", "30"))
 import pathlib as _pathlib
 import secrets as _secrets
 
-_DASH_TOKEN_FILE = _pathlib.Path.home() / ".hy_memory" / ".dashboard_token"
+_DASH_TOKEN_FILE = _pathlib._pathlib.Path.home() / ".hy_memory" / ".dashboard_token"
 DASH_TOKEN: str | None = None
 
 def _get_or_create_token() -> str:
@@ -135,9 +135,9 @@ def _l5_export_path() -> _pathlib.Path:
         home = _pathlib.Path(get_hermes_home())
     except Exception:
         if sys.platform == "win32":
-            home = _pathlib.Path.home() / "AppData" / "Local" / "hermes"
+            home = _pathlib._pathlib.Path.home() / "AppData" / "Local" / "hermes"
         else:
-            home = _pathlib.Path.home() / ".local" / "share" / "hermes"
+            home = _pathlib._pathlib.Path.home() / ".local" / "share" / "hermes"
     return home / "logs" / "l5_kuzu_export.json"
 
 # Known user IDs × agent IDs for querying memories.
@@ -3314,17 +3314,54 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                     if n.get("layer") == "l6_schema"
                     and n.get("isolation_key") == isolation_key
                 )
+                _, graph_api = hy("GET", "/api/v1/graph", None, timeout=60)
+                graph_layer_counts = (graph_api or {}).get("layer_counts") or {}
+                graph_relations = (graph_api or {}).get("relation_count")
             except Exception as e:
                 return self._json(500, {"error": str(e)})
+            log_path = _pathlib.Path.home() / ".hyatlas" / "logs" / "digest_run_latest.log"
+            digest_log_status = "missing"
+            digest_log_mtime = None
+            if log_path.is_file():
+                digest_log_mtime = log_path.stat().st_mtime
+                try:
+                    tail = log_path.read_text(encoding="utf-8", errors="replace")[-12000:]
+                    if "AFTER " in tail and "no_clusters" not in tail:
+                        digest_log_status = "ok"
+                    elif "HTTP 200" in tail:
+                        digest_log_status = "partial"
+                    else:
+                        digest_log_status = "stale"
+                except OSError:
+                    digest_log_status = "unreadable"
+            archive_dir = _pathlib.Path.home() / ".hyatlas" / "archive"
+            l4_archives = sorted(archive_dir.glob("l4_identity_pre_migrate_*.jsonl"))
+            local_app = os.environ.get("LOCALAPPDATA", "")
+            if local_app:
+                digest_win = f'python "{local_app}\\hermes\\scripts\\run_hyatlas_digest.py"'
+            else:
+                digest_win = "python %LOCALAPPDATA%\\hermes\\scripts\run_hyatlas_digest.py"
             return self._json(200, {
                 "user_id": user_id,
                 "agent_id": agent_id,
                 "isolation_key": isolation_key,
                 "vdb_layer_counts": counts,
+                "graph_layer_counts": graph_layer_counts,
+                "graph_relation_count": graph_relations,
                 "fresh_l2_for_digest": fresh_l2,
                 "l6_graph_sample_for_key": l6_for_key,
                 "l4_status": "retired_migrated_to_l2",
-                "digest_command": f"python scripts/run_digest_once.py {user_id} {agent_id}",
+                "l4_archive_path": str(l4_archives[-1]) if l4_archives else None,
+                "digest_command": digest_win,
+                "digest_log_path": str(log_path),
+                "digest_log_status": digest_log_status,
+                "digest_log_mtime": digest_log_mtime,
+                "layer_notes": {
+                    "l1_raw": "Often 0 under Hermes key: L1 shadowed after L2 extract.",
+                    "l4_identity": "No writer; legacy rows only.",
+                    "l6_schema": "Graph (Kuzu) is canonical; VDB l6 count may be 0.",
+                    "l5_knowledge": "Use graph_layer_counts for L5–L7 totals.",
+                },
             })
 
         if path == "/api/layer-counts":
