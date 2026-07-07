@@ -9,14 +9,29 @@ Single-user HyAtlas expects **one namespace** for capture + digest + sweeper.
 
 Do **not** use `default_agent` for digest unless you intentionally stored memories under that agent (legacy L5 blobs).
 
-## Commands
+## Weekly digest (Hermes cron)
+
+A **script-only** cron job is already scheduled:
+
+- **Name:** `HyAtlas weekly digest`
+- **Schedule:** every **7 days** (`every 168h` / `10080m`)
+- **Script:** `%LOCALAPPDATA%\hermes\scripts\run_hyatlas_digest.py`
+- **Deliver:** `local` (log only; read `~/.hyatlas/logs/digest_run_latest.log`)
+
+List jobs: Hermes `cronjob` list / TUI cron tab.
+
+## Manual digest (always use this on Windows)
+
+Do **not** run `python /f/HyAtlas-Memory/...` from git-bash in background — MSYS can mangle paths to `F:\f\...`.
+
+```text
+python %LOCALAPPDATA%\hermes\scripts\run_hyatlas_digest.py
+```
+
+Or from repo (foreground):
 
 ```bash
-# Preflight + digest (correct defaults)
 python scripts/run_digest_once.py hermes-user default
-
-# Weekly evolution (see cron or scripts/scheduled_digest.py)
-python scripts/scheduled_digest.py
 ```
 
 ## Environment
