@@ -199,6 +199,15 @@ def _services(project_root: str) -> list[dict]:
 def _child_env() -> dict[str, str]:
     env = os.environ.copy()
     env.pop("PYTHONHOME", None)
+    # Enable the in-process L5 knowledge-graph extraction (reads L2 facts from
+    # the live zvec store and writes entities/relations to Kuzu during digest).
+    # This replaces the legacy stop-server batch pipeline (MEMORY_L5_VERSION=1),
+    # which could not stop the server managed by `hyatlas start`.
+    env.setdefault("MEMORY_L5_VERSION", "2")
+    # Disable the broken stop-server L5 auto-trigger: in-process extraction
+    # already runs L5 inside digest, so spawning the batch pipeline is redundant
+    # and always fails to stop the server.
+    env["MEMORY_L5_AUTO"] = "false"
     return env
 
 
@@ -1019,6 +1028,7 @@ def _do_start(services: list, project_root: str, detached: bool) -> None:
     print(dim("  Services are detached. Run 'hyatlas stop' to shut down."))
     print(dim("  They will survive closing this terminal."))
     print()
+    sys.exit(0)
 
 
 # ── Main ────────────────────────────────────────────────────────────────

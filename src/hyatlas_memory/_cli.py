@@ -38,11 +38,15 @@ from .process import StackManager
 def _run_start(args) -> int:
     """Start the HyAtlas stack.
 
-    If no args and not detached, run in foreground. If --detach, detach
-    and exit. Otherwise delegate to the legacy ``hyatlas start`` behavior.
+    Foreground: blocks until Ctrl+C (services share the launching console).
+    Detached: children survive terminal close; use ``hyatlas start --detach``.
+    Non-interactive shells (no TTY) auto-detach so background jobs do not kill the stack.
     """
-    _start.detach = args.detach
-    _start.force_restart = args.restart
+    detach = bool(getattr(args, "detach", False))
+    if not detach and not sys.stdin.isatty():
+        detach = True
+    _start.detach = detach
+    _start.force_restart = bool(getattr(args, "restart", False))
     if _start.detach:
         _start._start_detached_and_exit()
         return 0
@@ -104,6 +108,11 @@ def _run_setup_hermes(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """Main entry point for the ``hyatlas`` CLI."""
+    raw = list(argv) if argv is not None else sys.argv[1:]
+    global_detach = "--detach" in raw
+    global_restart = "--restart" in raw
+    filtered = [a for a in raw if a not in ("--detach", "--restart")]
+
     parser = argparse.ArgumentParser(
         prog="hyatlas",
         description="HyAtlas-Memory command-line tool",
@@ -112,7 +121,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # Legacy start/stop/status
     p_start = sub.add_parser("start", help="Start the HyAtlas stack")
-    p_start.add_argument("--detach", action="store_true", help="Run detached")
+    p_start.add_argument(
+        "--detach",
+        action="store_true",
+        help="Detach services (survive terminal close). Also: hyatlas --detach start",
+    )
     p_start.add_argument("--restart", action="store_true", help="Force restart if running")
     p_start.set_defaults(func=_run_start)
 
@@ -191,10 +204,17 @@ def main(argv: list[str] | None = None) -> int:
     p_console = sub.add_parser("console", help="Show live status console (Ctrl+C to exit)")
     p_console.set_defaults(func=lambda _: _memory_cli._cmd_console(argparse.Namespace(no_start=False)))
 
-    args = parser.parse_args(argv)
+    args = parser.parse_args(filtered)
+    if getattr(args, "func", None) is _run_start:
+        if not getattr(args, "detach", False):
+            args.detach = global_detach
+        if not getattr(args, "restart", False):
+            args.restart = global_restart
     if not hasattr(args, "func"):
-        # Bare `hyatlas` with no args — start in foreground (legacy behavior).
-        return _run_start(argparse.Namespace(detach=False, restart=False))
+        # Bare `hyatlas` with no args — start (foreground if TTY, else detached).
+        return _run_start(
+            argparse.Namespace(detach=global_detach, restart=global_restart)
+        )
     return args.func(args) or 0
 
 
