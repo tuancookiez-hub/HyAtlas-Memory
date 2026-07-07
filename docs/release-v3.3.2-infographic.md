@@ -1,109 +1,114 @@
-# v3.3.2 release infographic — copy & layout spec
+# v3.3.2 release infographic — match v3.2.1 layout
 
-Use for GitHub Release asset, X post, or `image_generate` prompt.  
-**Canvas:** 1200×675 (16:9) or 1080×1350 (4:5 for X). **Style:** match HyAtlas dashboard — bg `#050505`, panels `#151b2b`, text `#c8d6e5`, accent `#4ade80` (scores), `#4a6fa5` (data), muted `#6b7280`.
+**Reference asset (yours):** v3.2.1 infographic — `1672×941`, dark HyAtlas brand, evolution story.  
+**New asset:** `assets/hyatlas-v3.3.2-quality-metrics.png` — **same canvas size and visual system**, swap story to Quality Metrics.
 
----
-
-## Headline (top, Playfair or similar)
-
-**HyAtlas v3.3.2**  
-*Measure memory, not vibes*
-
-Sub: **Quality Metrics** — new dashboard tab · 7-day LLM token rollup · weekly baseline
+> I couldn’t render your PNG in-tool on this host; this spec maps **slot-for-slot** off the v3.2.1 README narrative (*second brain that evolves — capture, weekly digest, graph patterns*) and your 3.2.1 graphic. Reuse fonts, margins, icon style, and bottom pill bar from 3.2.1.
 
 ---
 
-## Left column — “What shipped”
+## Canvas & style (lock to 3.2.1)
 
-1. **New sidebar tab: Quality Metrics**  
-   Same nav as Overview / Settings — dedicated page, not buried in Settings.
-
-2. **Your numbers (7-day window)**  
-   - Composite / Evolution / Activity / Latency scores  
-   - **LLM tokens** on memory writes (extract + reconcile)  
-   - System1 writes · System2 digests · fresh L2 · graph L5/L6/L7  
-
-3. **Save baseline**  
-   One click → `~/.hyatlas/metrics/quality_baseline.json`  
-   Next week: **Δ** on VDB, L6, relations, tokens.
-
-4. **API**  
-   `GET /api/quality-metrics` · `POST /api/quality-baseline`  
-   `GET /api/v1/metrics` → `llm_tokens`
+| Property | Value |
+|----------|--------|
+| Size | **1672 × 941** px |
+| Background | Near-black `#050505`–`#0a0e1a`, subtle grid or vignette if 3.2.1 had it |
+| Title font | Serif display (Playfair-class) — same as 3.2.1 |
+| Body | Inter / system sans |
+| Data | JetBrains Mono for token counts & API paths |
+| Accents | Green `#4ade80` (healthy/scores), blue `#4a6fa5` (data), purple for graph if 3.2.1 used it |
 
 ---
 
-## Center — mock UI strip (optional visual)
+## Slot map: v3.2.1 → v3.3.2
 
-Mini wireframe: sidebar item **Quality Metrics** highlighted → 4 stat cards:
-
-| COMPOSITE | EVOLUTION | ACTIVITY | LATENCY |
-|-----------|-----------|----------|---------|
-| *live*    | *live*    | *live*   | *live*  |
-
-Below: **LLM tokens (7d)** — large monospace number (pull from dashboard after restart).
-
----
-
-## Right column — “Reference (published)”
-
-Label clearly: **Industry reference — not measured on your instance**
-
-| Metric | Ref % |
-|--------|-------|
-| Context tokens ↓ | **35%** |
-| Memory count ↓ | **25%** |
-| Long-term utility ↑ | **88%** |
-
-Source line (small): Tencent Hy-Memory · OpenClaw integration (published).
+| Region (3.2.1) | 3.2.1 copy theme | **v3.3.2 replacement** |
+|----------------|------------------|-------------------------|
+| **Top title** | HyAtlas **v3.2.1** (or v3.2) | HyAtlas **v3.3.2** |
+| **Tagline** | Second brain that **evolves** | **Measure memory, not vibes** |
+| **Sub-tag** | Capture · weekly digest · graph patterns | **Quality Metrics tab** · 7d LLM tokens · weekly baseline |
+| **Center flow (3 nodes)** | ① Capture → ② Weekly digest → ③ Graph / L6 patterns | ① **Memory writes** (S1 extract) → ② **7d rollup** (scores + `llm_tokens`) → ③ **Save baseline** (week-over-week Δ) |
+| **Side / layer strip** | 6 active layers + L7 experimental | **4 score cards:** Composite · Evolution · Activity · Latency (mini dashboard mock) |
+| **Stack pills (bottom)** | Zvec · Kuzu · Hermes · digest cron | **Same pills** + add **:8765 Quality Metrics** |
+| **Callout box** | L6 visible / graph counts (if on 3.2.1) | **Reference (published):** 35% ctx tokens ↓ · 25% memories ↓ · 88% utility ↑ — *industry ref, not your stack* |
 
 ---
 
-## Bottom bar — stack reminder
+## Exact text blocks (paste into Figma / generator)
 
-**Zvec** · **Kuzu L5–L7** · **Hermes** `hermes-user` / `default` · **Weekly digest cron**
-
-`hyatlas restart` → open **http://127.0.0.1:8765** → Quality Metrics → **Save baseline**
-
----
-
-## Live numbers to paste (optional — refresh before export)
-
-Run after `hyatlas restart` and one day of use:
-
-```bash
-curl -s http://127.0.0.1:8765/api/quality-metrics
+### Header
+```
+HyAtlas v3.3.2
+Measure memory, not vibes
+Quality Metrics — new dashboard tab
 ```
 
-Use from JSON:
+### Center arrows (three nodes)
+```
+① CAPTURE
+Every chat → facts in Zvec (System1)
+LLM tokens counted per write
 
-- `snapshot.scores.composite`
-- `snapshot.llm_tokens_7d.total`
-- `snapshot.graph.l6` / `relations`
-- `snapshot.fresh_l2_for_digest`
-- `snapshot.digest_log_status`
+② ROLLUP (7 DAYS)
+Composite · Evolution · Activity · Latency
+GET /api/quality-metrics
 
-Example footer line for graphic:  
-*Your stack · L6 568 · relations 7922 · digest ok* (replace with curl output).
+③ BASELINE
+Save snapshot → compare next week
+Δ VDB · L6 · relations · tokens
+```
+
+### Right or lower panel — reference
+```
+Published benchmarks (Tencent Hy-Memory)
+Not measured on your instance
+
+35%  fewer context tokens
+25%  fewer memories
+88%  long-term utility
+
+Your instance: live scores on dashboard
+```
+
+### Bottom strip
+```
+Zvec  ·  Kuzu L5–L7  ·  Hermes  ·  weekly digest  ·  localhost:8765
+```
+
+### Optional live footer (from curl before export)
+```
+L6 · relations · digest · composite score
+```
+Fill from: `curl -s http://127.0.0.1:8765/api/quality-metrics`
 
 ---
 
-## GitHub Release
+## README / Release wiring
 
-- **Tag:** `v3.3.2`  
-- **Title:** `v3.3.2 — Quality Metrics dashboard`  
-- **Asset filename:** `hyatlas-v3.3.2-quality-metrics.png`  
-- **Body bullets:** copy from `CHANGELOG.md` [3.3.2] + link to this spec.
+After PNG is done:
+
+```html
+<img src="./assets/hyatlas-v3.3.2-quality-metrics.png"
+     alt="HyAtlas v3.3.2: Quality Metrics — 7d token rollup, dashboard scores, weekly baseline"
+     width="720" />
+```
+
+Place **above** or **replace** the v3.2 second-brain image in README for the current release highlight (keep 3.2 image in CHANGELOG or older section if you want history).
+
+**GitHub Release:** tag `v3.3.2`, attach PNG, body from `CHANGELOG.md` [3.3.2].
 
 ---
 
-## Short X / social (≤280 chars template)
+## image_generate prompt (sibling of 3.2.1)
 
-HyAtlas v3.3.2: new **Quality Metrics** tab on the dashboard — 7d LLM token rollup on memory writes, weekly baseline compare, plus published Hy-Memory ref benchmarks (labeled, not your numbers). Zvec + Kuzu + Hermes. `github.com/tuancookiez-hub/HyAtlas-Memory`
+Use if you want Hermes/FAL to draft; then **tweak in Figma** to match 3.2.1 pixel-perfect.
+
+```
+Infographic 1672x941, dark navy-black background, matching prior HyAtlas v3.2 release poster style: large serif title "HyAtlas v3.3.2", subtitle "Measure memory not vibes", horizontal three-step flow with rounded cards and arrows: (1) Memory writes System1 token count (2) 7-day rollup dashboard scores (3) Save weekly baseline delta, right side four small metric cards COMPOSITE EVOLUTION ACTIVITY LATENCY, lower right box "Reference 35% 25% 88%" with small disclaimer industry benchmarks, bottom row pill badges Zvec Kuzu Hermes digest port 8765, mint green and steel blue accents, clean tech aesthetic, no watermark
+```
 
 ---
 
-## image_generate prompt (optional)
+## Social
 
-Dark premium tech infographic, 16:9, title "HyAtlas v3.3.2 Quality Metrics", subtitle "Measure memory not vibes", three columns: left bullet features new dashboard tab token rollup baseline, center four score cards and large token counter, right three percentage badges 35% 25% 88% with disclaimer "industry reference", bottom strip Zvec Kuzu Hermes digest, colors black navy mint green accents, no fake logos, clean typography.
+**X:** HyAtlas v3.3.2 — same evolution story as 3.2.1, now with **numbers**: Quality Metrics tab, 7d LLM token rollup on writes, one-click weekly baseline. Ref benchmarks labeled honestly. [PNG] github.com/tuancookiez-hub/HyAtlas-Memory
