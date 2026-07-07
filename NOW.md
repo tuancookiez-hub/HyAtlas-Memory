@@ -1,11 +1,11 @@
 # HyAtlas-Memory — NOW.md
 
 ## Current state (2026-07-08)
-**v3.3.0 on `main` — Quality Metrics tab + token rollup + weekly baseline.**
+**v3.3.0 shipped** — `main` @ `e891c7b`, tag **`v3.3.0`**, [GitHub Release](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.3.0) with infographic asset.
 
 - **Dashboard:** New **Quality Metrics** page (sidebar). Scores, 7d LLM tokens on memory writes, graph/digest stats, **Save baseline** for week-over-week Δ.
 - **Server:** Token accumulation on each memory write; `/api/quality-metrics` aggregates health + metrics.
-- **Release:** Tag `v3.3.0` after push; infographic spec in release notes / Discord.
+- **Release:** ~~Tag `v3.3.0` after push~~ **Done** — release published with PNG.
 
 | Area | Status |
 |------|--------|
