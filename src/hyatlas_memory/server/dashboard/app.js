@@ -1411,8 +1411,8 @@ function renderQuality() {
   const breakdown = snap.score_breakdown || {};
   const llm = snap.llm_tokens_7d || {};
   const graph = snap.graph || {};
-  const comparison = root.comparison || {};
   const tips = root.tips || [];
+  const glance = root.at_a_glance || {};
 
   const barRow = (label, value, maxVal = 100, sub = '') => {
     const v = value != null ? Number(value) : 0;
@@ -1428,23 +1428,57 @@ function renderQuality() {
       </div>`;
   };
 
-  const introEl = document.getElementById('quality-intro');
-  if (introEl) {
-    introEl.innerHTML = `<span class="caption-icon">ⓘ</span> This page answers: <strong>Is memory getting smarter over time?</strong> Higher evolution + growing L6/L7 after digest = compounding. Save a baseline weekly to see what changed.`;
-  }
+  const trendIcon = (t) => (t === 'up' ? '↑' : t === 'down' ? '↓' : '→');
+  const trendClass = (t) => (t === 'up' ? 'trend-up' : t === 'down' ? 'trend-down' : 'trend-flat');
 
-  const heroEl = document.getElementById('quality-hero');
-  if (heroEl) {
+  const vitalsEl = document.getElementById('quality-vitals');
+  if (vitalsEl) {
     const overall = scores.composite != null ? scores.composite : '—';
-    heroEl.innerHTML = `
-      <div class="quality-overall">
-        <div class="quality-overall-num">${overall}</div>
-        <div class="quality-overall-label">OVERALL (0–100)</div>
+    const grade = glance.grade || '—';
+    const health = glance.health_label || '';
+    const tone = glance.tone || 'neutral';
+    const headline = glance.headline || '';
+    const pulse = glance.pulse || [];
+    const highlights = glance.highlights || [];
+    const visit = glance.since_last_visit;
+
+    const pulseHtml = pulse.map(p => {
+      const d = p.delta;
+      const deltaStr = d == null ? '' : (d > 0 ? `+${d}` : `${d}`);
+      return `<div class="quality-pulse-chip ${trendClass(p.trend)}">
+        <div class="quality-pulse-label">${escapeHtml(p.label)}</div>
+        <div class="quality-pulse-value">${p.value ?? '—'}${escapeHtml(p.suffix || '')}</div>
+        <div class="quality-pulse-meta">${trendIcon(p.trend)} ${escapeHtml(deltaStr)} <span class="text-muted">${escapeHtml(p.context || '')}</span></div>
+      </div>`;
+    }).join('');
+
+    const hiHtml = highlights.map(h => `
+      <li class="quality-highlight"><span class="quality-hi-icon">${escapeHtml(h.icon || '✓')}</span>${escapeHtml(h.text || '')}</li>`).join('');
+
+    let visitLine = '';
+    if (visit && visit.composite_delta != null && visit.composite_delta !== 0) {
+      const sign = visit.composite_delta > 0 ? '+' : '';
+      visitLine = `<p class="quality-visit-note">${sign}${visit.composite_delta} overall ${escapeHtml(visit.label || '')}</p>`;
+    }
+
+    vitalsEl.innerHTML = `
+      <div class="quality-vitals-grid tone-${tone}">
+        <div class="quality-grade-ring">
+          <div class="quality-grade-letter">${escapeHtml(grade)}</div>
+          <div class="quality-grade-sub">${escapeHtml(health)}</div>
+        </div>
+        <div class="quality-vitals-main">
+          <div class="quality-vitals-score">${overall}<span class="quality-vitals-denom">/100</span></div>
+          <p class="quality-vitals-headline">${escapeHtml(headline)}</p>
+          ${visitLine}
+          <ul class="quality-highlight-list">${hiHtml}</ul>
+        </div>
       </div>
-      <div class="quality-hero-bars">
-        ${barRow('Evolution — digest & patterns', scores.evolution, 100, guides.evolution)}
-        ${barRow('Activity — capture volume', scores.activity, 100, guides.activity)}
-        ${barRow('Latency — write speed', scores.latency, 100, guides.latency)}
+      <div class="quality-pulse-row">${pulseHtml}</div>
+      <div class="quality-hero-bars quality-hero-bars-compact">
+        ${barRow('Evolution', scores.evolution, 100)}
+        ${barRow('Activity', scores.activity, 100)}
+        ${barRow('Latency', scores.latency, 100)}
       </div>`;
   }
 
@@ -1481,16 +1515,6 @@ function renderQuality() {
         <div class="kv-value text-sm">${escapeHtml(guides[k] || '')}</div></div>`).join('');
   }
 
-  const hintEl = document.getElementById('quality-baseline-hint');
-  if (hintEl) {
-    if (comparison.has_baseline && comparison.baseline_at) {
-      const when = new Date(comparison.baseline_at * 1000).toLocaleString();
-      hintEl.innerHTML = `Baseline: <strong>${escapeHtml(when)}</strong>. Comparison section = since then.`;
-    } else {
-      hintEl.innerHTML = '<strong>Save baseline</strong> once per week (e.g. Sunday after digest) to unlock “better / worse” explanations.';
-    }
-  }
-
   const liveEl = document.getElementById('quality-live');
   if (liveEl) {
     const tpm = snap.tokens_per_memory_index;
@@ -1508,29 +1532,14 @@ function renderQuality() {
     `;
   }
 
-  const cmpEl = document.getElementById('quality-comparison');
-  if (cmpEl) {
-    if (!comparison.has_baseline || !comparison.items || !comparison.items.length) {
-      cmpEl.innerHTML = '<p class="composition-caption">No baseline — comparison unlocks after you click Save baseline.</p>';
-    } else {
-      const verdictLabel = { improved: 'Better', flat: 'Same', worse: 'Worse', unknown: '?' };
-      cmpEl.innerHTML = `<table class="quality-table"><thead><tr><th></th><th>Metric</th><th>Was</th><th>Now</th><th>Δ</th><th>What it means</th></tr></thead><tbody>` +
-        comparison.items.map(it => {
-          const d = it.delta;
-          const deltaStr = d == null ? '—' : (d > 0 ? `+${d}` : `${d}`);
-          const v = it.verdict || 'unknown';
-          return `<tr class="verdict-${v}"><td class="quality-verdict">${verdictLabel[v] || v}</td>
-            <td>${escapeHtml(it.label)}</td><td>${it.before ?? '—'}</td><td>${it.now ?? '—'}</td><td>${deltaStr}</td>
-            <td class="quality-table-note">${escapeHtml(it.explanation || '')}</td></tr>`;
-        }).join('') + '</tbody></table>';
-    }
-  }
-
+  const nudgePanel = document.getElementById('quality-nudge-panel');
   const tipsEl = document.getElementById('quality-tips');
   if (tipsEl) {
     if (!tips.length) {
-      tipsEl.innerHTML = '<p class="composition-caption">All clear — use Hermes, let cron digest run, revisit next week.</p>';
+      if (nudgePanel) nudgePanel.style.display = 'none';
+      tipsEl.innerHTML = '';
     } else {
+      if (nudgePanel) nudgePanel.style.display = '';
       tipsEl.innerHTML = tips.map(t => `
         <div class="quality-tip priority-${escapeHtml(t.priority || 'low')}">
           <div class="quality-tip-title">${escapeHtml(t.title || '')}</div>
@@ -1542,20 +1551,7 @@ function renderQuality() {
 
   const jsonEl = document.getElementById('quality-json');
   if (jsonEl) {
-    jsonEl.textContent = JSON.stringify({ snapshot: snap, comparison: root.comparison, tips: root.tips }, null, 2);
-  }
-}
-
-async function saveQualityBaseline() {
-  try {
-    const resp = await fetch('/api/quality-baseline', { method: 'POST' });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || resp.statusText);
-    qualityData = await fetchJSON('/api/quality-metrics');
-    renderQuality();
-    alert('Baseline saved at ' + (data.path || 'metrics/quality_baseline.json'));
-  } catch (e) {
-    alert('Failed to save baseline: ' + e.message);
+    jsonEl.textContent = JSON.stringify(root, null, 2);
   }
 }
 

@@ -2997,6 +2997,224 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         root.mkdir(parents=True, exist_ok=True)
         return root / "quality_baseline.json"
 
+    def _quality_history_path(self):
+        import pathlib
+        try:
+            from hyatlas_memory.layout import home as hy_home
+            root = hy_home() / "metrics"
+        except Exception:
+            root = pathlib.Path.home() / ".hyatlas" / "metrics"
+        root.mkdir(parents=True, exist_ok=True)
+        return root / "quality_history.json"
+
+    def _load_quality_history(self) -> list:
+        hp = self._quality_history_path()
+        if not hp.is_file():
+            legacy = self._quality_baseline_path()
+            if legacy.is_file():
+                try:
+                    one = json.loads(legacy.read_text(encoding="utf-8"))
+                    if isinstance(one, dict) and one.get("captured_at"):
+                        hp.write_text(json.dumps([one], indent=2), encoding="utf-8")
+                        return [one]
+                except (OSError, json.JSONDecodeError, TypeError):
+                    pass
+            return []
+        try:
+            data = json.loads(hp.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
+        except (OSError, json.JSONDecodeError, TypeError):
+            return []
+
+    def _record_quality_snapshot(self, snap: dict) -> list:
+        import time as _time
+
+        history = self._load_quality_history()
+        now = float(snap.get("captured_at") or _time.time())
+        compact = {
+            "captured_at": now,
+            "vdb_points": snap.get("vdb_points"),
+            "fresh_l2_for_digest": snap.get("fresh_l2_for_digest"),
+            "graph": snap.get("graph"),
+            "digest_log_status": snap.get("digest_log_status"),
+            "llm_tokens_7d": snap.get("llm_tokens_7d"),
+            "sys1_writes_7d": snap.get("sys1_writes_7d"),
+            "sys2_digests_7d": snap.get("sys2_digests_7d"),
+            "scores": snap.get("scores"),
+        }
+        if history:
+            last = history[-1]
+            last_at = float(last.get("captured_at") or 0)
+            if now - last_at < 4 * 3600:
+                history[-1] = compact
+            else:
+                history.append(compact)
+        else:
+            history.append(compact)
+        if len(history) > 96:
+            history = history[-96:]
+        try:
+            self._quality_history_path().write_text(
+                json.dumps(history, indent=2), encoding="utf-8"
+            )
+        except OSError:
+            pass
+        return history
+
+    def _pick_ref_snapshot(self, history: list, days: float = 7) -> dict | None:
+        import time as _time
+
+        if not history or len(history) < 2:
+            return None
+        now = _time.time()
+        target = now - days * 86400
+        candidates = [h for h in history if float(h.get("captured_at") or 0) <= target]
+        if candidates:
+            return candidates[-1]
+        return history[0]
+
+    def _build_at_a_glance(self, snap: dict, history: list) -> dict:
+        import time as _time
+
+        scores = snap.get("scores") or {}
+        composite = int(scores.get("composite") or 0)
+        digest_status = snap.get("digest_log_status") or "missing"
+        graph = snap.get("graph") or {}
+        l6 = int(graph.get("l6") or 0)
+        rel = int(graph.get("relations") or 0)
+        fresh = int(snap.get("fresh_l2_for_digest") or 0)
+        sys1 = int(snap.get("sys1_writes_7d") or 0)
+
+        if composite >= 80:
+            grade, label, tone = "A", "Excellent", "positive"
+        elif composite >= 65:
+            grade, label, tone = "B", "Strong", "positive"
+        elif composite >= 45:
+            grade, label, tone = "C", "Fair", "neutral"
+        else:
+            grade, label, tone = "D", "Needs attention", "caution"
+
+        if digest_status == "ok" and composite >= 70:
+            headline = "Your memory stack is in great shape — digest is healthy and scores look strong."
+        elif digest_status == "ok":
+            headline = "Digest is running; keep chatting and let patterns compound in the graph."
+        elif digest_status in ("partial", "stale"):
+            headline = "Memories are capturing; a full digest run will push evolution higher."
+        else:
+            headline = "Worth a quick check on digest — everything else can still look fine day to day."
+
+        ref = self._pick_ref_snapshot(history, days=7)
+        prev = history[-1] if history else None
+
+        def _delta(now_val, was_val):
+            if was_val is None or now_val is None:
+                return None
+            try:
+                return int(now_val) - int(was_val)
+            except (TypeError, ValueError):
+                return None
+
+        def _trend(d):
+            if d is None:
+                return "flat"
+            if d > 0:
+                return "up"
+            if d < 0:
+                return "down"
+            return "flat"
+
+        ref_sc = (ref or {}).get("scores") or {}
+        prev_sc = (prev or {}).get("scores") or {}
+        d_comp = _delta(composite, ref_sc.get("composite"))
+        d_l6 = (
+            _delta(l6, int(((ref or {}).get("graph") or {}).get("l6") or 0))
+            if ref
+            else None
+        )
+        d_rel = (
+            _delta(rel, int(((ref or {}).get("graph") or {}).get("relations") or 0))
+            if ref
+            else None
+        )
+
+        pulse = [
+            {
+                "label": "Overall",
+                "value": composite,
+                "suffix": "/100",
+                "trend": _trend(d_comp),
+                "delta": d_comp,
+                "context": "vs ~7d ago" if ref else "building trend",
+            },
+            {
+                "label": "Evolution",
+                "value": scores.get("evolution"),
+                "suffix": "",
+                "trend": _trend(_delta(scores.get("evolution"), ref_sc.get("evolution"))),
+                "delta": _delta(scores.get("evolution"), ref_sc.get("evolution")),
+                "context": "digest & patterns",
+            },
+            {
+                "label": "L6 patterns",
+                "value": l6,
+                "suffix": "",
+                "trend": _trend(d_l6),
+                "delta": d_l6,
+                "context": "graph schemas",
+            },
+            {
+                "label": "Relations",
+                "value": rel,
+                "suffix": "",
+                "trend": _trend(d_rel),
+                "delta": d_rel,
+                "context": "knowledge links",
+            },
+        ]
+
+        highlights = []
+        if digest_status == "ok":
+            highlights.append({"icon": "✓", "text": "Last digest run looks healthy"})
+        if l6 >= 50:
+            highlights.append({"icon": "✓", "text": f"{l6} learned patterns (L6) in your graph"})
+        if rel >= 500:
+            highlights.append({"icon": "✓", "text": f"{rel:,} entity links — recall has structure"})
+        if sys1 >= 3:
+            highlights.append({"icon": "✓", "text": f"{sys1} memory writes in the last 7 days"})
+        if d_comp is not None and d_comp > 0:
+            highlights.append({"icon": "↑", "text": f"Overall score up {d_comp} vs a week ago"})
+        elif d_comp is not None and d_comp == 0 and composite >= 65:
+            highlights.append({"icon": "→", "text": "Holding steady at a strong level"})
+        if fresh < 40 and digest_status == "ok":
+            highlights.append({"icon": "✓", "text": "Digest queue under control"})
+        if not highlights:
+            highlights.append(
+                {
+                    "icon": "◎",
+                    "text": "Use Hermes — this page updates automatically as you go",
+                }
+            )
+
+        since_visit = None
+        if prev:
+            since_visit = {
+                "composite_delta": _delta(composite, prev_sc.get("composite")),
+                "label": "since your last dashboard visit",
+            }
+
+        return {
+            "grade": grade,
+            "health_label": label,
+            "tone": tone,
+            "headline": headline,
+            "pulse": pulse,
+            "highlights": highlights[:5],
+            "trend_source": "auto_history",
+            "reference_at": ref.get("captured_at") if ref else None,
+            "since_last_visit": since_visit,
+            "history_points": len(history),
+        }
+
     def _build_quality_metrics(self) -> dict:
         import pathlib
         import time as _time
@@ -3142,153 +3360,44 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             "tokens_per_memory_index": tokens_per_memory,
         }
 
-        baseline = None
-        delta = None
-        bp = self._quality_baseline_path()
-        if bp.is_file():
-            try:
-                baseline = json.loads(bp.read_text(encoding="utf-8"))
-                delta = {
-                    "vdb_points": vdb_pts - int(baseline.get("vdb_points") or 0),
-                    "fresh_l2": fresh_l2 - int(baseline.get("fresh_l2_for_digest") or 0),
-                    "l6": (gcounts.get("l6_schema") or 0) - int((baseline.get("graph") or {}).get("l6") or 0),
-                    "relations": relations - int((baseline.get("graph") or {}).get("relations") or 0),
-                    "llm_tokens_total": llm_total - int((baseline.get("llm_tokens_7d") or {}).get("total") or 0),
-                }
-            except (OSError, json.JSONDecodeError, TypeError, ValueError):
-                baseline = None
-
         guides = {
-            "composite": "Weighted blend: 50% evolution, 30% activity, 20% latency. Rises when digest runs, graph grows, and writes stay fast.",
-            "evolution": "Is System2 doing its job? Points from last digest (ok/partial), fresh L2 waiting to be digested, and L6 schema count in Kuzu.",
-            "activity": "How much capture happened in 7 days — Hermes chats turned into memories (System1 writes) and digest runs (System2).",
-            "latency": "Average milliseconds for a memory write pipeline. Lower is snappier; high latency often means LLM or disk load.",
-            "fresh_l2": "Facts not yet processed by digest. Some backlog is normal; steady growth without digest lowers evolution score.",
-            "l6": "Reusable patterns extracted from your facts. More L6 usually means memory is compounding, not just piling up chat logs.",
-            "relations": "Links in the knowledge graph. Growth after digest means entities are connecting across sessions.",
-            "llm_tokens": "Tokens spent on extract/reconcile when saving memories (7d). Track over time — efficiency improves when fewer tokens produce the same facts.",
+            "composite": "Weighted blend: 50% evolution, 30% activity, 20% latency.",
+            "evolution": "Digest health, fresh L2 queue, and L6 patterns in the graph.",
+            "activity": "Memory writes and digest runs in the last 7 days.",
+            "latency": "Average System1 write speed — lower feels snappier.",
+            "fresh_l2": "Facts waiting for digest — some backlog is normal.",
+            "l6": "Reusable patterns — memory compounding, not just chat logs.",
+            "relations": "Entity links in Kuzu — richer long-term recall.",
+            "llm_tokens": "Tokens on extract/reconcile when saving memories (7d).",
         }
 
-        comparison = {"has_baseline": baseline is not None, "baseline_at": None, "items": []}
-        if baseline and delta is not None:
-            comparison["baseline_at"] = baseline.get("captured_at")
-            l6_now = gcounts.get("l6_schema") or 0
-            l6_was = int((baseline.get("graph") or {}).get("l6") or 0)
-            rel_was = int((baseline.get("graph") or {}).get("relations") or 0)
-
-            def _item(key, label, before, now, better, why_up, why_flat, why_down):
-                d = (now - before) if (before is not None and now is not None) else None
-                if d is None:
-                    verdict = "unknown"
-                    note = "No prior value in baseline."
-                elif d > 0:
-                    verdict = "improved" if better == "higher" else "worse"
-                    note = why_up if verdict == "improved" else why_down
-                elif d < 0:
-                    verdict = "worse" if better == "higher" else "improved"
-                    note = why_down if verdict == "worse" else why_up
-                else:
-                    verdict = "flat"
-                    note = why_flat
-                return {
-                    "key": key,
-                    "label": label,
-                    "before": before,
-                    "now": now,
-                    "delta": d,
-                    "better_when": better,
-                    "verdict": verdict,
-                    "explanation": note,
-                }
-
-            sc = snapshot.get("scores") or {}
-            sb = baseline.get("scores") or {}
-            comparison["items"] = [
-                _item(
-                    "composite", "Overall quality score",
-                    sb.get("composite"), sc.get("composite"), "higher",
-                    "Memory pipeline is healthier than when you saved baseline.",
-                    "Same overall score — check individual rows below.",
-                    "Score dropped — often digest stall, less capture, or slower writes.",
-                ),
-                _item(
-                    "l6", "L6 schemas (patterns)",
-                    l6_was, l6_now, "higher",
-                    "Digest (or graph growth) added patterns — memory is structuring itself.",
-                    "No new schemas since baseline — run digest if fresh L2 is high.",
-                    "L6 count fell — unusual; check graph health in Settings.",
-                ),
-                _item(
-                    "relations", "Graph relations",
-                    rel_was, relations, "higher",
-                    "More connections between entities — richer long-term recall.",
-                    "Graph links unchanged — normal if digest did not add clusters.",
-                    "Relations down — investigate Kuzu / digest logs.",
-                ),
-                _item(
-                    "fresh_l2", "Fresh L2 (digest queue)",
-                    baseline.get("fresh_l2_for_digest"), fresh_l2, "lower",
-                    "Queue shrank — digest consumed facts (good if digest ok).",
-                    "Queue stable — match digest cadence to chat volume.",
-                    "Queue grew — schedule digest or run manual script.",
-                ),
-                _item(
-                    "vdb_points", "Stored memory points",
-                    baseline.get("vdb_points"), vdb_pts, "higher",
-                    "More durable memories captured since baseline.",
-                    "Store size flat — less new capture in this window.",
-                    "Point count dropped — pruning or deletes occurred.",
-                ),
-                _item(
-                    "llm_tokens", "LLM tokens (7d window)",
-                    int((baseline.get("llm_tokens_7d") or {}).get("total") or 0),
-                    llm_total, "lower",
-                    "Less token spend per window — cheaper capture (or fewer writes).",
-                    "Token use similar — compare alongside write count.",
-                    "More tokens — more writes or heavier extract; watch cost.",
-                ),
-            ]
+        history = self._load_quality_history()
+        at_a_glance = self._build_at_a_glance(snapshot, history)
+        self._record_quality_snapshot(snapshot)
 
         tips = []
         if digest_status != "ok":
             tips.append({
                 "priority": "high",
-                "title": "Fix digest health",
-                "body": f"Digest log is «{digest_status}». Evolution score is capped until a successful weekly (or manual) digest runs.",
-                "action": "Run digest from Settings → System command, then re-open this page.",
+                "title": "Digest needs a run",
+                "body": f"Log status is «{digest_status}» — evolution score stays capped until digest succeeds.",
+                "action": "Settings → System → run digest when LLM credits are OK.",
             })
         if fresh_l2 > 80:
             tips.append({
                 "priority": "medium",
-                "title": "Large fresh L2 queue",
-                "body": f"{fresh_l2} facts await System2. Memory is capturing faster than it is consolidating.",
-                "action": "Trigger digest when LLM billing is healthy.",
-            })
-        if not baseline:
-            tips.append({
-                "priority": "low",
-                "title": "Save a baseline",
-                "body": "Without a snapshot, this page cannot explain what improved since last week.",
-                "action": "Click «Save baseline» after a good digest — compare on your next visit.",
-            })
-        elif llm_total == 0:
-            tips.append({
-                "priority": "low",
-                "title": "Token rollup empty",
-                "body": "No LLM tokens recorded in 7d — usually means no new writes after upgrade/restart, or metrics just started.",
-                "action": "Use Hermes normally; tokens appear on the next memory capture.",
+                "title": "Big digest queue",
+                "body": f"{fresh_l2} fresh facts waiting — capture is outpacing consolidation.",
+                "action": "Trigger digest when billing is healthy.",
             })
 
         return {
             "window_days": 7,
             "snapshot": snapshot,
-            "baseline": baseline,
-            "delta_since_baseline": delta,
-            "baseline_path": str(bp),
+            "at_a_glance": at_a_glance,
             "metrics_7d": m7,
             "metrics_1h": m1,
             "guides": guides,
-            "comparison": comparison,
             "tips": tips,
         }
 
@@ -3948,9 +4057,12 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         if path == "/api/quality-baseline":
             try:
                 snap = self._build_quality_metrics().get("snapshot") or {}
-                bp = self._quality_baseline_path()
-                bp.write_text(json.dumps(snap, indent=2), encoding="utf-8")
-                return self._json(200, {"ok": True, "path": str(bp), "snapshot": snap})
+                hp = self._quality_history_path()
+                hp.write_text(
+                    json.dumps([snap], indent=2),
+                    encoding="utf-8",
+                )
+                return self._json(200, {"ok": True, "path": str(hp), "note": "legacy; history is auto-recorded"})
             except OSError as e:
                 return self._json(500, {"error": str(e)})
 

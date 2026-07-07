@@ -377,45 +377,29 @@
       <div class="page-header">
         <div class="page-label">08 // QUALITY METRICS</div>
         <h1 class="page-title">Quality Metrics</h1>
-        <div class="page-subtitle">Track whether your memory is compounding — scores, what they mean, and what changed since your last baseline.</div>
+        <div class="page-subtitle">Live health of your memory — no setup, trends update every time you open this page.</div>
       </div>
 
-      <div class="composition-caption mb-4" id="quality-intro"></div>
-
-      <div class="panel">
-        <div class="panel-title mb-4">SCORE AT A GLANCE</div>
-        <div class="quality-hero" id="quality-hero"></div>
+      <div class="panel quality-vitals-panel">
+        <div id="quality-vitals"></div>
       </div>
 
       <div class="panel">
-        <div class="panel-title mb-4">WHY THESE NUMBERS (TRANSPARENT MATH)</div>
-        <p class="composition-caption mb-3" id="quality-weights"></p>
-        <div id="quality-breakdown"></div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-title mb-4">GLOSSARY</div>
-        <div class="kv-list" id="quality-glossary"></div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-header flex justify-between items-center">
-          <div class="panel-title">RIGHT NOW (7-DAY WINDOW)</div>
-          <button class="btn" type="button" onclick="saveQualityBaseline()">Save baseline</button>
-        </div>
-        <div class="composition-caption mb-3" id="quality-baseline-hint"></div>
+        <div class="panel-title mb-4">LIVE SIGNALS (7D)</div>
         <div class="kv-list" id="quality-live"></div>
       </div>
 
-      <div class="panel">
-        <div class="panel-title mb-4">COMPARED TO YOUR BASELINE</div>
-        <div id="quality-comparison"></div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-title mb-4">WHAT TO DO NEXT</div>
+      <div class="panel" id="quality-nudge-panel" style="display:none;">
+        <div class="panel-title mb-4">GENTLE NUDGE</div>
         <div id="quality-tips"></div>
       </div>
+
+      <details class="panel">
+        <summary class="panel-title" style="cursor: pointer; list-style: none;">How scores are calculated</summary>
+        <p class="composition-caption mb-3" id="quality-weights"></p>
+        <div id="quality-breakdown"></div>
+        <div class="kv-list mt-4" id="quality-glossary"></div>
+      </details>
 
       <details class="panel" style="margin-top: 1rem;">
         <summary class="panel-title" style="cursor: pointer; list-style: none;">Advanced (raw JSON)</summary>
