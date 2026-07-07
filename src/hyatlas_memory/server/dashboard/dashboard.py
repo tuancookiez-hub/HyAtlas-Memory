@@ -3053,12 +3053,11 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             history.append(compact)
         if len(history) > 96:
             history = history[-96:]
-        try:
+        from contextlib import suppress
+        with suppress(OSError):
             self._quality_history_path().write_text(
                 json.dumps(history, indent=2), encoding="utf-8"
             )
-        except OSError:
-            pass
         return history
 
     def _pick_ref_snapshot(self, history: list, days: float = 7) -> dict | None:
@@ -3074,8 +3073,6 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         return history[0]
 
     def _build_at_a_glance(self, snap: dict, history: list) -> dict:
-        import time as _time
-
         scores = snap.get("scores") or {}
         composite = int(scores.get("composite") or 0)
         digest_status = snap.get("digest_log_status") or "missing"
