@@ -271,8 +271,8 @@ async def prepare_materials(
 
     isolation_key = MemoryNode.build_isolation_key(user_id, agent_id or "default")
 
-    # ① VDB: 取 L2_FACT + L4_IDENTITY（可选 L3_SUMMARY）
-    _s2_layers = [MemoryLayer.L2_FACT, MemoryLayer.L4_IDENTITY]
+    # ① VDB: L2_FACT (+ optional L3_SUMMARY). L4 retired — identity lives in L2.
+    _s2_layers = [MemoryLayer.L2_FACT]
     if _S2_SUMMARY_ENABLED:
         _s2_layers.append(MemoryLayer.L3_SUMMARY)
     all_facts = await vector_store.list_by_user(

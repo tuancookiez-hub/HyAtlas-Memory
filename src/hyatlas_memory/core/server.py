@@ -472,7 +472,10 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
         if not user_id:
             _json_response(self, 400, {"error": "user_id is required"})
             return
-        agent_id = body.get("agent_id", "default_agent")
+        agent_id = body.get(
+            "agent_id",
+            os.getenv("HY_MEMORY_AGENT_ID", "default"),
+        )
         client = _get_client()
         try:
             result = client.digest(user_id=user_id, agent_id=agent_id)

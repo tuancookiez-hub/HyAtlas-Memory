@@ -1019,7 +1019,7 @@ class HyMemoryClient:
     def digest(
         self,
         user_id: str,
-        agent_id: str = "default_agent",
+        agent_id: str = "default",
     ) -> dict[str, Any]:
         """
         手动触发 System 2 认知加工（ultra 模式专用，同步阻塞直到完成）。
@@ -1060,7 +1060,7 @@ class HyMemoryClient:
     async def async_digest(
         self,
         user_id: str,
-        agent_id: str = "default_agent",
+        agent_id: str = "default",
     ) -> dict[str, Any]:
         """手动触发 System 2 认知加工（异步）"""
         t0 = __import__("time").perf_counter()

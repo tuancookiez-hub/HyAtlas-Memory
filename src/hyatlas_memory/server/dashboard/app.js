@@ -12,6 +12,7 @@ function tsToDate(ts) {
 let currentPage = 'overview';
 let allMemories = [];
 let layerCountsData = null;  // actual Qdrant counts per layer (used by Memory Composition bar)
+let layerHealthData = null;  // per-user/agent counts from /api/layer-health
 let statusData = null;
 let infoData = null;
 let storageData = null;
@@ -27,7 +28,7 @@ const LAYERS = {
   'l1_raw': { name: 'Raw', desc: 'Unprocessed sensory and contextual inputs', color: '#3d8b8b' },
   'l2_fact': { name: 'Facts', desc: 'Discrete, verifiable pieces of information', color: '#6b4c9a' },
   'l3_summary': { name: 'Summaries', desc: 'Syntheses of multiple facts, events, and observations', color: '#4a6fa5' },
-  'l4_identity': { name: 'Identity', desc: 'Self-concept, roles, preferences, and defining characteristics', color: '#d4af37' },
+  'l4_identity': { name: 'Identity (retired)', desc: 'Legacy layer — migrated to L2 facts; archive only', color: '#888888' },
   'l5_knowledge': { name: 'Knowledge', desc: 'Consolidated understanding and expertise', color: '#3d8b8b' },
   'l6_schema': { name: 'Schemas', desc: 'Structural patterns and organizational frameworks', color: '#6b4c9a' },
   'l7_intention': { name: 'Meta Principles', desc: 'Core values, timeless truths, and highest-order principles', color: '#d4af37' }
@@ -142,7 +143,7 @@ async function fetchJSON(url, options = {}) {
 
 async function loadAllData() {
   try {
-    const [status, info, memories, storage, metrics, codingCount, codingMemories, layerCounts, graphCounts, l5] = await Promise.all([
+    const [status, info, memories, storage, metrics, codingCount, codingMemories, layerCounts, graphCounts, layerHealth, l5] = await Promise.all([
       fetchJSON('/api/status'),
       fetchJSON('/api/info'),
       fetchJSON('/api/memories?limit=500'),
@@ -152,9 +153,11 @@ async function loadAllData() {
       fetchJSON('/api/coding-memories?limit=500'),
       fetchJSON('/api/layer-counts'),
       fetchJSON('/api/graph-counts'),
+      fetchJSON('/api/layer-health').catch(() => null),
       fetchJSON('/api/l5/graph').catch(() => null),  // L5 may not exist yet; ignore failure
     ]);
     l5Graph = l5;
+    layerHealthData = layerHealth;
 
     statusData = status;
     infoData = info;
@@ -1214,6 +1217,20 @@ function renderSystem() {
       <div class="kv-label">Last Memory</div>
       <div class="kv-value">${lastMemory}</div>
     </div>
+    ${layerHealthData ? `
+    <div class="kv-item">
+      <div class="kv-label">Digest namespace</div>
+      <div class="kv-value font-mono text-sm">${escapeHtml(layerHealthData.user_id)} / ${escapeHtml(layerHealthData.agent_id)}</div>
+    </div>
+    <div class="kv-item">
+      <div class="kv-label">Fresh L2 (digest fuel)</div>
+      <div class="kv-value">${layerHealthData.fresh_l2_for_digest ?? '—'}</div>
+    </div>
+    <div class="kv-item">
+      <div class="kv-label">L6 for isolation key</div>
+      <div class="kv-value">${layerHealthData.l6_graph_sample_for_key ?? '—'} (sample)</div>
+    </div>
+    ` : ''}
   `;
   
   document.getElementById('system-info').innerHTML = infoHtml;

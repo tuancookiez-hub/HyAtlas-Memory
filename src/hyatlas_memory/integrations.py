@@ -407,7 +407,7 @@ def wire_l5_auto_trigger(s2_cls):
     if not hasattr(s2_cls, "_original_digest"):
         s2_cls._original_digest = s2_cls.digest
 
-    async def _digest_with_l5(self, user_id, agent_id="default_agent"):
+    async def _digest_with_l5(self, user_id, agent_id="default"):
         result = await self._original_digest(user_id=user_id, agent_id=agent_id)
         result["l5_trigger"] = _should_trigger()
         if result["l5_trigger"]["triggered"]:

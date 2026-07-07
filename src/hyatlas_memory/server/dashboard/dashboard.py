@@ -3282,6 +3282,51 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             except Exception as e:
                 return self._json(500, {"error": str(e)})
 
+        if path == "/api/layer-health":
+            user_id = os.environ.get("HY_MEMORY_USER_ID", "hermes-user")
+            agent_id = os.environ.get("HY_MEMORY_AGENT_ID", "default")
+            isolation_key = f"{user_id}::{agent_id}::default_session"
+            layer_keys = [
+                "l0_basic_info", "l1_raw", "l2_fact", "l3_summary", "l4_identity",
+                "l5_knowledge", "l6_schema", "l7_intention",
+            ]
+            counts = {k: 0 for k in layer_keys}
+            fresh_l2 = 0
+            try:
+                _, listed = hy(
+                    "POST",
+                    "/api/v1/list",
+                    {"user_id": user_id, "agent_id": agent_id, "limit": 5000},
+                    timeout=120,
+                )
+                vdb = (listed or {}).get("vdb") or {}
+                for m in vdb.get("memories") or []:
+                    layer = m.get("layer")
+                    if layer in counts:
+                        counts[layer] += 1
+                    if layer == "l2_fact" and (m.get("custom") or {}).get("s2_evidence_count", 0) < 1:
+                        fresh_l2 += 1
+                graph = (listed or {}).get("graph") or {}
+                gnodes = graph.get("nodes") or []
+                l6_for_key = sum(
+                    1
+                    for n in gnodes
+                    if n.get("layer") == "l6_schema"
+                    and n.get("isolation_key") == isolation_key
+                )
+            except Exception as e:
+                return self._json(500, {"error": str(e)})
+            return self._json(200, {
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "isolation_key": isolation_key,
+                "vdb_layer_counts": counts,
+                "fresh_l2_for_digest": fresh_l2,
+                "l6_graph_sample_for_key": l6_for_key,
+                "l4_status": "retired_migrated_to_l2",
+                "digest_command": f"python scripts/run_digest_once.py {user_id} {agent_id}",
+            })
+
         if path == "/api/layer-counts":
             layer_keys = [
                 "l0_basic_info", "l1_raw", "l2_fact", "l3_summary", "l4_identity",
