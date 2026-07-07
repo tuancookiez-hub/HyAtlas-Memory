@@ -1,9 +1,9 @@
 # HyAtlas-Memory — NOW.md
 
 ## Current state (2026-07-08)
-**v3.3.0 shipped** — `main` @ `e891c7b`, tag **`v3.3.0`**, [GitHub Release](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.3.0) with infographic asset.
+**v3.3.1 shipped** — `main` @ `e3bc372` (reactive quality vitals) + version bump, tag **`v3.3.1`**.
 
-- **Dashboard:** New **Quality Metrics** page (sidebar). Scores, 7d LLM tokens on memory writes, graph/digest stats, **Save baseline** for week-over-week Δ.
+- **Dashboard:** Quality Metrics tab redesigned — no "Save baseline" button, auto history (`~/.hyatlas/metrics/quality_history.json`), grade ring + at-a-glance vitals, trend pulse chips, nudges only when needed.
 - **Server:** Token accumulation on each memory write; `/api/quality-metrics` aggregates health + metrics.
 - **Release:** ~~Tag `v3.3.0` after push~~ **Done** — release published with PNG.
 

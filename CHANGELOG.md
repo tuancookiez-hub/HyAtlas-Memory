@@ -1,6 +1,15 @@
 # Changelog
 
-## [3.3.0] — 2026-07-08
+## [3.3.1] — 2026-07-08
+
+### Quality Metrics — reactive redesign (dashboard)
+
+- **Dropped the manual "Save baseline" button and the weekly ritual.** Trends are now automatic: every dashboard load appends a snapshot to `~/.hyatlas/metrics/quality_history.json` (legacy `quality_baseline.json` is migrated on first read). Week-over-week deltas compare ~7 days back with no user action.
+- **New hero "Vitals" panel** — grade ring (A–D), large **/100** composite score, a plain-language headline, and green check highlights (digest ok, L6 count, relations, writes) so the page reads "my metrics are good" at a glance.
+- **Pulse chips** — Overall / Evolution / L6 / Relations with ↑/↓ trend arrows and deltas vs last week (shows "building trend" until enough history exists).
+- **Nudges only when needed** — the "What to do next" panel is hidden unless digest is broken or the fresh-L2 queue is backed up, keeping the page calm.
+- **Math moved to a collapsed "How scores are calculated" section** so the score composition and glossary no longer dominate the first view.
+- `POST /api/quality-baseline` retained as a no-op compatibility shim (writes history, returns a note).
 
 ### Quality Metrics (dashboard)
 

@@ -1,5 +1,5 @@
 name: hy_memory
-version: 3.3.0
+version: 3.3.1
 description: "HyAtlas-Memory — 7-layer cognitive memory with System1/System2 dual processing, evolution chains, and Kuzu graph. Auto-starts the stack on first use."
 pip_dependencies:
   - hyatlas-memory
