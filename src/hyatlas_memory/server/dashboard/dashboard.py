@@ -3109,6 +3109,127 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             except (OSError, json.JSONDecodeError, TypeError, ValueError):
                 baseline = None
 
+        guides = {
+            "composite": "Weighted blend: 50% evolution, 30% activity, 20% latency. Rises when digest runs, graph grows, and writes stay fast.",
+            "evolution": "Is System2 doing its job? Points from last digest (ok/partial), fresh L2 waiting to be digested, and L6 schema count in Kuzu.",
+            "activity": "How much capture happened in 7 days — Hermes chats turned into memories (System1 writes) and digest runs (System2).",
+            "latency": "Average milliseconds for a memory write pipeline. Lower is snappier; high latency often means LLM or disk load.",
+            "fresh_l2": "Facts not yet processed by digest. Some backlog is normal; steady growth without digest lowers evolution score.",
+            "l6": "Reusable patterns extracted from your facts. More L6 usually means memory is compounding, not just piling up chat logs.",
+            "relations": "Links in the knowledge graph. Growth after digest means entities are connecting across sessions.",
+            "llm_tokens": "Tokens spent on extract/reconcile when saving memories (7d). Track over time — efficiency improves when fewer tokens produce the same facts.",
+        }
+
+        comparison = {"has_baseline": baseline is not None, "baseline_at": None, "items": []}
+        if baseline and delta is not None:
+            comparison["baseline_at"] = baseline.get("captured_at")
+            l6_now = gcounts.get("l6_schema") or 0
+            l6_was = int((baseline.get("graph") or {}).get("l6") or 0)
+            rel_was = int((baseline.get("graph") or {}).get("relations") or 0)
+
+            def _item(key, label, before, now, better, why_up, why_flat, why_down):
+                d = (now - before) if (before is not None and now is not None) else None
+                if d is None:
+                    verdict = "unknown"
+                    note = "No prior value in baseline."
+                elif d > 0:
+                    verdict = "improved" if better == "higher" else "worse"
+                    note = why_up if verdict == "improved" else why_down
+                elif d < 0:
+                    verdict = "worse" if better == "higher" else "improved"
+                    note = why_down if verdict == "worse" else why_up
+                else:
+                    verdict = "flat"
+                    note = why_flat
+                return {
+                    "key": key,
+                    "label": label,
+                    "before": before,
+                    "now": now,
+                    "delta": d,
+                    "better_when": better,
+                    "verdict": verdict,
+                    "explanation": note,
+                }
+
+            sc = snapshot.get("scores") or {}
+            sb = baseline.get("scores") or {}
+            comparison["items"] = [
+                _item(
+                    "composite", "Overall quality score",
+                    sb.get("composite"), sc.get("composite"), "higher",
+                    "Memory pipeline is healthier than when you saved baseline.",
+                    "Same overall score — check individual rows below.",
+                    "Score dropped — often digest stall, less capture, or slower writes.",
+                ),
+                _item(
+                    "l6", "L6 schemas (patterns)",
+                    l6_was, l6_now, "higher",
+                    "Digest (or graph growth) added patterns — memory is structuring itself.",
+                    "No new schemas since baseline — run digest if fresh L2 is high.",
+                    "L6 count fell — unusual; check graph health in Settings.",
+                ),
+                _item(
+                    "relations", "Graph relations",
+                    rel_was, relations, "higher",
+                    "More connections between entities — richer long-term recall.",
+                    "Graph links unchanged — normal if digest did not add clusters.",
+                    "Relations down — investigate Kuzu / digest logs.",
+                ),
+                _item(
+                    "fresh_l2", "Fresh L2 (digest queue)",
+                    baseline.get("fresh_l2_for_digest"), fresh_l2, "lower",
+                    "Queue shrank — digest consumed facts (good if digest ok).",
+                    "Queue stable — match digest cadence to chat volume.",
+                    "Queue grew — schedule digest or run manual script.",
+                ),
+                _item(
+                    "vdb_points", "Stored memory points",
+                    baseline.get("vdb_points"), vdb_pts, "higher",
+                    "More durable memories captured since baseline.",
+                    "Store size flat — less new capture in this window.",
+                    "Point count dropped — pruning or deletes occurred.",
+                ),
+                _item(
+                    "llm_tokens", "LLM tokens (7d window)",
+                    int((baseline.get("llm_tokens_7d") or {}).get("total") or 0),
+                    llm_total, "lower",
+                    "Less token spend per window — cheaper capture (or fewer writes).",
+                    "Token use similar — compare alongside write count.",
+                    "More tokens — more writes or heavier extract; watch cost.",
+                ),
+            ]
+
+        tips = []
+        if digest_status != "ok":
+            tips.append({
+                "priority": "high",
+                "title": "Fix digest health",
+                "body": f"Digest log is «{digest_status}». Evolution score is capped until a successful weekly (or manual) digest runs.",
+                "action": "Run digest from Settings → System command, then re-open this page.",
+            })
+        if fresh_l2 > 80:
+            tips.append({
+                "priority": "medium",
+                "title": "Large fresh L2 queue",
+                "body": f"{fresh_l2} facts await System2. Memory is capturing faster than it is consolidating.",
+                "action": "Trigger digest when LLM billing is healthy.",
+            })
+        if not baseline:
+            tips.append({
+                "priority": "low",
+                "title": "Save a baseline",
+                "body": "Without a snapshot, this page cannot explain what improved since last week.",
+                "action": "Click «Save baseline» after a good digest — compare on your next visit.",
+            })
+        elif llm_total == 0:
+            tips.append({
+                "priority": "low",
+                "title": "Token rollup empty",
+                "body": "No LLM tokens recorded in 7d — usually means no new writes after upgrade/restart, or metrics just started.",
+                "action": "Use Hermes normally; tokens appear on the next memory capture.",
+            })
+
         return {
             "window_days": 7,
             "snapshot": snapshot,
@@ -3117,14 +3238,9 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             "baseline_path": str(bp),
             "metrics_7d": m7,
             "metrics_1h": m1,
-            "reference_benchmarks": {
-                "source": "Tencent Hy-Memory (OpenClaw integration, published)",
-                "disclaimer": "Industry reference only — not measured on this instance.",
-                "context_token_reduction_pct": 35,
-                "memory_count_reduction_pct": 25,
-                "long_term_utility_gain_pct": 88,
-                "note": "Compare your 7d LLM token rollup and memory growth to this over time.",
-            },
+            "guides": guides,
+            "comparison": comparison,
+            "tips": tips,
         }
 
     def do_GET(self) -> None:

@@ -1407,73 +1407,110 @@ function renderQuality() {
   const root = qualityData || {};
   const snap = root.snapshot || {};
   const scores = snap.scores || {};
-  const ref = root.reference_benchmarks || {};
+  const guides = root.guides || {};
   const llm = snap.llm_tokens_7d || {};
   const graph = snap.graph || {};
+  const comparison = root.comparison || {};
+  const tips = root.tips || [];
 
-  const scoreCard = (label, val) => `
-    <div class="stat-card">
+  const scoreCard = (label, val, guideKey) => {
+    const hint = guides[guideKey] || '';
+    return `
+    <div class="stat-card" style="min-height: 120px;">
       <div class="stat-label">${label}</div>
       <div class="stat-value">${val != null ? val : '—'}</div>
+      <div class="quality-score-hint">${escapeHtml(hint)}</div>
     </div>`;
+  };
+
+  const introEl = document.getElementById('quality-intro');
+  if (introEl) {
+    introEl.innerHTML = `<span class="caption-icon">ⓘ</span> Scores are computed from <strong>your</strong> HyAtlas instance (last 7 days). Save a baseline after a good week so the comparison section explains what got better or worse — not generic industry numbers.`;
+  }
 
   const scoresEl = document.getElementById('quality-scores');
   if (scoresEl) {
     scoresEl.innerHTML = [
-      scoreCard('COMPOSITE', scores.composite),
-      scoreCard('EVOLUTION', scores.evolution),
-      scoreCard('ACTIVITY (7D)', scores.activity),
-      scoreCard('LATENCY', scores.latency),
+      scoreCard('OVERALL', scores.composite, 'composite'),
+      scoreCard('EVOLUTION', scores.evolution, 'evolution'),
+      scoreCard('ACTIVITY', scores.activity, 'activity'),
+      scoreCard('LATENCY', scores.latency, 'latency'),
     ].join('');
+  }
+
+  const hintEl = document.getElementById('quality-baseline-hint');
+  if (hintEl) {
+    if (comparison.has_baseline && comparison.baseline_at) {
+      const when = new Date(comparison.baseline_at * 1000).toLocaleString();
+      hintEl.innerHTML = `Baseline saved <strong>${escapeHtml(when)}</strong> — deltas below are since that snapshot.`;
+    } else {
+      hintEl.innerHTML = 'No baseline yet. After digest succeeds, click <strong>Save baseline</strong> — next visit shows plain-language “improved / flat / worse” rows.';
+    }
   }
 
   const liveEl = document.getElementById('quality-live');
   if (liveEl) {
+    const tpm = snap.tokens_per_memory_index;
     liveEl.innerHTML = `
-      <div class="kv-item"><div class="kv-label">LLM tokens (7d, memory writes)</div>
-        <div class="kv-value font-mono">${llm.total != null ? llm.total.toLocaleString() : '—'} <span class="text-muted text-xs">prompt ${llm.prompt ?? '—'} · completion ${llm.completion ?? '—'}</span></div></div>
-      <div class="kv-item"><div class="kv-label">Tokens per memory (index)</div>
-        <div class="kv-value">${snap.tokens_per_memory_index != null ? snap.tokens_per_memory_index : '—'}</div></div>
-      <div class="kv-item"><div class="kv-label">System1 writes (7d)</div>
-        <div class="kv-value">${snap.sys1_writes_7d ?? '—'}</div></div>
-      <div class="kv-item"><div class="kv-label">System2 digests (7d)</div>
-        <div class="kv-value">${snap.sys2_digests_7d ?? '—'}</div></div>
-      <div class="kv-item"><div class="kv-label">Fresh L2 · digest log</div>
-        <div class="kv-value">${snap.fresh_l2_for_digest ?? '—'} · ${escapeHtml(snap.digest_log_status || '—')}</div></div>
-      <div class="kv-item"><div class="kv-label">Graph L5 / L6 / L7 / rels</div>
-        <div class="kv-value font-mono text-sm">${graph.l5 ?? '—'} / ${graph.l6 ?? '—'} / ${graph.l7 ?? '—'} / ${graph.relations ?? '—'}</div></div>
+      <div class="kv-item"><div class="kv-label">LLM tokens on memory writes (7d)</div>
+        <div class="kv-value font-mono">${llm.total != null ? llm.total.toLocaleString() : '—'}
+          <span class="text-muted text-xs"> · ${escapeHtml(guides.llm_tokens || '')}</span></div></div>
+      <div class="kv-item"><div class="kv-label">Tokens per stored point (rough index)</div>
+        <div class="kv-value">${tpm != null ? tpm : '—'} <span class="text-muted text-xs">total tokens ÷ VDB points</span></div></div>
+      <div class="kv-item"><div class="kv-label">System1 writes · System2 digests (7d)</div>
+        <div class="kv-value">${snap.sys1_writes_7d ?? '—'} writes · ${snap.sys2_digests_7d ?? '—'} digests</div></div>
+      <div class="kv-item"><div class="kv-label">Fresh L2 queue · digest log</div>
+        <div class="kv-value">${snap.fresh_l2_for_digest ?? '—'} waiting · log <strong>${escapeHtml(snap.digest_log_status || '—')}</strong>
+          <span class="text-muted text-xs"> · ${escapeHtml(guides.fresh_l2 || '')}</span></div></div>
+      <div class="kv-item"><div class="kv-label">Graph L5 / L6 / L7 · relations</div>
+        <div class="kv-value font-mono text-sm">${graph.l5 ?? '—'} / ${graph.l6 ?? '—'} / ${graph.l7 ?? '—'} · ${graph.relations ?? '—'} rels
+          <span class="text-muted text-xs"> · ${escapeHtml(guides.l6 || '')}</span></div></div>
     `;
   }
 
-  const deltaEl = document.getElementById('quality-delta');
-  if (deltaEl) {
-    const d = root.delta_since_baseline;
-    if (d && root.baseline) {
-      deltaEl.innerHTML = `<span class="caption-icon">Δ</span> Since baseline: VDB ${d.vdb_points >= 0 ? '+' : ''}${d.vdb_points}, fresh L2 ${d.fresh_l2 >= 0 ? '+' : ''}${d.fresh_l2}, L6 ${d.l6 >= 0 ? '+' : ''}${d.l6}, relations ${d.relations >= 0 ? '+' : ''}${d.relations}, LLM tokens ${d.llm_tokens_total >= 0 ? '+' : ''}${d.llm_tokens_total}`;
+  const cmpEl = document.getElementById('quality-comparison');
+  if (cmpEl) {
+    if (!comparison.has_baseline || !comparison.items || !comparison.items.length) {
+      cmpEl.innerHTML = '<p class="composition-caption">Save a baseline to see row-by-row explanations (e.g. “L6 up → digest added patterns”).</p>';
     } else {
-      deltaEl.innerHTML = '<span class="caption-icon">ⓘ</span> No baseline yet — click <strong>Save baseline</strong> when you start a weekly check.';
+      const verdictLabel = { improved: '↑ Better', flat: '→ Unchanged', worse: '↓ Worse', unknown: '?' };
+      cmpEl.innerHTML = comparison.items.map(it => {
+        const d = it.delta;
+        const deltaStr = d == null ? '—' : (d > 0 ? `+${d}` : `${d}`);
+        const v = it.verdict || 'unknown';
+        return `
+        <div class="quality-compare-row verdict-${v}">
+          <div class="quality-compare-head">
+            <span class="quality-verdict">${verdictLabel[v] || v}</span>
+            <strong>${escapeHtml(it.label)}</strong>
+            <span class="text-muted font-mono text-sm">${it.before ?? '—'} → ${it.now ?? '—'} (${deltaStr})</span>
+          </div>
+          <p class="quality-compare-body">${escapeHtml(it.explanation || '')}</p>
+        </div>`;
+      }).join('');
     }
   }
 
-  const refDisc = document.getElementById('quality-ref-disclaimer');
-  if (refDisc) {
-    refDisc.innerHTML = `<span class="caption-icon">ⓘ</span> ${escapeHtml(ref.disclaimer || '')} Source: ${escapeHtml(ref.source || '')}.`;
-  }
-
-  const refEl = document.getElementById('quality-reference');
-  if (refEl) {
-    refEl.innerHTML = [
-      scoreCard('CTX TOKEN ↓ (ref)', ref.context_token_reduction_pct != null ? `${ref.context_token_reduction_pct}%` : '—'),
-      scoreCard('MEMORY COUNT ↓ (ref)', ref.memory_count_reduction_pct != null ? `${ref.memory_count_reduction_pct}%` : '—'),
-      scoreCard('LONG-TERM UTILITY ↑ (ref)', ref.long_term_utility_gain_pct != null ? `${ref.long_term_utility_gain_pct}%` : '—'),
-    ].join('');
+  const tipsEl = document.getElementById('quality-tips');
+  if (tipsEl) {
+    if (!tips.length) {
+      tipsEl.innerHTML = '<p class="composition-caption">Nothing urgent — keep chatting with Hermes, let weekly digest run, refresh this page next week.</p>';
+    } else {
+      tipsEl.innerHTML = tips.map(t => `
+        <div class="quality-tip priority-${escapeHtml(t.priority || 'low')}">
+          <div class="quality-tip-title">${escapeHtml(t.title || '')}</div>
+          <p>${escapeHtml(t.body || '')}</p>
+          <p class="text-muted text-sm"><strong>Action:</strong> ${escapeHtml(t.action || '')}</p>
+        </div>`).join('');
+    }
   }
 
   const jsonEl = document.getElementById('quality-json');
   if (jsonEl) {
     jsonEl.textContent = JSON.stringify({
       snapshot: snap,
-      delta_since_baseline: root.delta_since_baseline,
+      comparison: root.comparison,
+      tips: root.tips,
       metrics_7d: root.metrics_7d,
     }, null, 2);
   }
