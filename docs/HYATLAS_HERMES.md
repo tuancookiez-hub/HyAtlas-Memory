@@ -15,8 +15,8 @@ A **script-only** cron job is already scheduled:
 
 - **Name:** `HyAtlas weekly digest`
 - **Schedule:** every **7 days** (`every 168h` / `10080m`)
-- **Script:** `%LOCALAPPDATA%\hermes\scripts\run_hyatlas_digest.py`
-- **Deliver:** `local` (log only; read `~/.hyatlas/logs/digest_run_latest.log`)
+- **Script:** `%LOCALAPPDATA%\hermes\scripts\run_hyatlas_digest.py` (source template: `scripts/run_hyatlas_digest_launcher.py` in repo)
+- **Deliver:** `discord:1523091423556276365` (same thread as smart-memory-prune; one-line summary from launcher stdout)
 
 List jobs: Hermes `cronjob` list / TUI cron tab.
 
