@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Sequence
+from collections.abc import Sequence
 
 # Align with intent.py: ASCII tokens + CJK segments from jieba/lemmatize.
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9]+|[\u4e00-\u9fff]+")

@@ -3290,7 +3290,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 "l0_basic_info", "l1_raw", "l2_fact", "l3_summary", "l4_identity",
                 "l5_knowledge", "l6_schema", "l7_intention",
             ]
-            counts = {k: 0 for k in layer_keys}
+            counts = dict.fromkeys(layer_keys, 0)
             fresh_l2 = 0
             try:
                 _, listed = hy(

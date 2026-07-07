@@ -10,6 +10,7 @@ Unset = L5 off.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -274,7 +275,7 @@ async def _get_recent_l2_facts(vector_store, user_id: str, watermark: float, lim
     layer in Python — so we do exactly that here.
     """
     try:
-        from hyatlas_memory.core.models.memory import MemoryLayer, MemoryStatus
+        from hyatlas_memory.core.models.memory import MemoryStatus
 
         user_ids = _l5_user_ids(user_id)
         facts: list[dict] = []
@@ -547,9 +548,11 @@ async def _embed_entities_to_vdb(
         logger.warning("[L5] no vector_store on s2_writer; skipping entity embed")
         return False
 
-    import asyncio
     from hyatlas_memory.core.models.memory import (
-        MemoryLayer, MemoryNode, MemoryStatus, SourceType,
+        MemoryLayer,
+        MemoryNode,
+        MemoryStatus,
+        SourceType,
     )
 
     try:
