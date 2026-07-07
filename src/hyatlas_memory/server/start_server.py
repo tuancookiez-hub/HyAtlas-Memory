@@ -41,6 +41,9 @@ base_url, url_src = _resolve("base_url")
 
 os.environ["MEMORY_MODE"] = os.environ.get("MEMORY_MODE_OVERRIDE") or config.get("mode", "ultra")
 os.environ["MEMORY_DATA_DIR"] = os.environ.get("MEMORY_DATA_DIR") or str(layout.home())
+os.environ["MEMORY_GRAPH_DB_PATH"] = os.environ.get("MEMORY_GRAPH_DB_PATH") or str(
+    layout.datadir() / "kuzu_db"
+)
 os.environ["MEMORY_LOG_DIR"] = os.environ.get("MEMORY_LOG_DIR") or str(layout.logs())
 os.environ["MEMORY_PIPELINE_DEFAULT_VERSION"] = os.environ.get("MEMORY_PIPELINE_DEFAULT_VERSION") or "ultra"
 os.environ["MEMORY_SUMMARY_ENABLED_IN_SYS2"] = os.environ.get("MEMORY_SUMMARY_ENABLED_IN_SYS2") or "true"

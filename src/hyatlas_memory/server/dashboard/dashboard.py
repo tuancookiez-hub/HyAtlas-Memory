@@ -3300,7 +3300,15 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             try:
                 _, graph_data = hy("GET", "/api/v1/graph", None)
                 if isinstance(graph_data, dict):
-                    counts["l5_knowledge"] = max(counts.get("l5_knowledge", 0), graph_data.get("node_count", 0))
+                    lc = graph_data.get("layer_counts") or {}
+                    counts["l5_knowledge"] = max(
+                        counts.get("l5_knowledge", 0),
+                        lc.get("l5_knowledge", graph_data.get("node_count", 0)),
+                    )
+                    counts["l6_schema"] = max(counts.get("l6_schema", 0), lc.get("l6_schema", 0))
+                    counts["l7_intention"] = max(
+                        counts.get("l7_intention", 0), lc.get("l7_intention", 0)
+                    )
             except Exception:
                 pass
             total = sum(counts.values())

@@ -352,7 +352,16 @@ def wire_l1_dedup_skip(client_cls):
 # ─── 4. L5 Auto-Trigger ──────────────────────────────────────────────────────
 
 def wire_l5_auto_trigger(s2_cls):
-    """Spawn L5 pipeline from S2 digest cycle (debounced)."""
+    """Spawn L5 pipeline from S2 digest cycle (debounced).
+
+    No-op when the in-process L5 path (MEMORY_L5_VERSION=2) is active: that path
+    already extracts the knowledge graph inside digest(), so spawning the
+    stop-server batch pipeline is redundant and — under `hyatlas start` — always
+    fails to stop the server.
+    """
+    if os.getenv("MEMORY_L5_VERSION", "").strip() == "2":
+        logger.info("[integrations] L5 auto-trigger disabled (in-process L5 v2 active)")
+        return
     if getattr(s2_cls, "_l5_auto_trigger_wrapped", False):
         return
 
@@ -413,8 +422,16 @@ def wire_l5_auto_trigger(s2_cls):
 # ─── 5. L5 In-Process Extraction ─────────────────────────────────────────────
 
 def wire_l5_inprocess(s2_cls):
-    """Hook L5 entity extraction into S2's sweeper cycle (in-process)."""
-    if os.getenv("MEMORY_L5_VERSION", "").strip() != "2":
+    """Hook L5 entity extraction into S2's sweeper cycle (in-process).
+
+    Enabled by default post-v3.1.0 (zvec-only runtime). The in-process path
+    reads L2 facts from the live zvec store and writes entities/relations to
+    Kuzu during digest. Only disabled when MEMORY_L5_VERSION is explicitly set
+    to "1" (legacy stop-server batch) or "off"/"false".
+    """
+    version = os.getenv("MEMORY_L5_VERSION", "").strip().lower()
+    if version in ("1", "off", "false", "0"):
+        logger.info(f"[integrations] L5 in-process disabled (MEMORY_L5_VERSION={version!r})")
         return
     if getattr(s2_cls, "_l5_inprocess_wrapped", False):
         return
@@ -484,24 +501,40 @@ def wire_graph_endpoint(handler_cls, json_resp_fn, get_client_fn):
         node_q = (
             "MATCH (m:Memory) WHERE m.layer = 'l5_knowledge' "
             "RETURN m.node_id AS id, m.content AS name, m.content_type AS ct, "
-            "m.confidence AS conf, m.extra_json AS extra, m.created_at AS ca"
+            "m.confidence AS conf, m.extra_json AS extra, m.custom_json AS cust, "
+            "m.created_at AS ca"
         )
+
+        def _merge_meta(extra_raw, cust_raw) -> dict:
+            meta: dict = {}
+            for raw in (cust_raw, extra_raw):
+                if not raw:
+                    continue
+                try:
+                    blob = json.loads(raw) if isinstance(raw, str) else {}
+                    if isinstance(blob, dict):
+                        meta.update(blob)
+                except (ValueError, TypeError):
+                    pass
+            return meta
+
         try:
             result = conn.execute(node_q)
             while result.has_next():
                 row = result.get_next()
-                try:
-                    extra = json.loads(row[4]) if row[4] else {}
-                except (ValueError, TypeError):
-                    extra = {}
+                extra = _merge_meta(row[4], row[5])
+                ct = row[2] or extra.get("content_type", "")
+                entity_type = extra.get("entity_type") or extra.get("entityType")
+                if not entity_type and isinstance(ct, str) and ct.startswith("ENTITY_"):
+                    entity_type = ct.replace("ENTITY_", "", 1)
                 nodes.append({
                     "node_id": row[0], "name": row[1], "content_type": row[2],
                     "confidence": row[3],
-                    "entity_type": extra.get("entity_type", "CONCEPT"),
+                    "entity_type": entity_type or "CONCEPT",
                     "mention_count": extra.get("mention_count", 1),
                     "aliases": extra.get("aliases", []),
                     "source": extra.get("source", "l5_digest"),
-                    "created_at": str(row[5]) if row[5] is not None else None,
+                    "created_at": str(row[6]) if row[6] is not None else None,
                 })
         except Exception as e:
             json_resp(handler, 500, {"error": f"node query failed: {e}"})
@@ -549,10 +582,25 @@ def wire_graph_endpoint(handler_cls, json_resp_fn, get_client_fn):
             t = r.get("relation_type", "related_to")
             rel_type_dist[t] = rel_type_dist.get(t, 0) + 1
 
+        layer_counts: dict[str, int] = {}
+        for layer in ("l5_knowledge", "l6_schema", "l7_intention"):
+            try:
+                cq = (
+                    f"MATCH (m:Memory) WHERE m.layer = '{layer}' "
+                    "RETURN count(m) AS c"
+                )
+                cres = conn.execute(cq)
+                if cres.has_next():
+                    layer_counts[layer] = int(cres.get_next()[0])
+            except Exception as e:
+                logger.warning(f"[graph-endpoint] layer count {layer} failed: {e}")
+
         json_resp(handler, 200, {
             "node_count": len(nodes), "relation_count": len(relations),
             "nodes": nodes, "relations": relations,
             "type_distribution": type_dist, "relation_type_distribution": rel_type_dist,
+            "layer_counts": layer_counts,
+            "graph_db_path": getattr(gs, "_db_path", None),
         })
 
     handler_cls.do_GET = patched_do_get
