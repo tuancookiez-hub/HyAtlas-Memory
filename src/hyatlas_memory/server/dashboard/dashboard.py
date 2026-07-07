@@ -287,7 +287,7 @@ def _extract_memories(payload: dict) -> list[dict]:
             "metadata": meta,
             "status": m.get("status", ""),
             "memory_at": m.get("memory_at"),
-            "gmt_created": m.get("gmt_created"),
+            "gmt_created": _to_unix_ts(m.get("gmt_created")),
             "importance": m.get("importance") if m.get("importance") is not None else meta.get("importance"),
             "access_count": m.get("access_count") if m.get("access_count") is not None else meta.get("access_count"),
             "user_id": m.get("user_id") or meta.get("user_id") or "",
@@ -349,7 +349,7 @@ def _fetch_l1_raw_from_qdrant(limit_total: int = 1500) -> list[dict]:
             "metadata":   {},
             "status":     pl.get("status", "active"),
             "memory_at":  None,
-            "gmt_created": pl.get("gmt_created", 0),
+            "gmt_created": _to_unix_ts(pl.get("gmt_created", 0)),
             "user_id":    pl.get("user_id"),
             "agent_id":   pl.get("agent_id"),
             "session_id": pl.get("session_id"),
@@ -365,8 +365,15 @@ def _fetch_l1_raw_from_vdb(limit_total: int = 1500) -> list[dict]:
         {"mode": "l1_raw", "user_ids": HERMES_USER_IDS, "limit": limit_total},
     )
     if code == 200 and isinstance(body, dict):
-        return body.get("items") or []
-    return _fetch_l1_raw_from_qdrant(limit_total=limit_total)
+        items = body.get("items") or []
+    else:
+        items = _fetch_l1_raw_from_qdrant(limit_total=limit_total)
+    # Upstream returns gmt_created as an ISO string; normalize to a Unix
+    # int so the dashboard's `Date(ts * 1000)` math never hits NaN.
+    for m in items:
+        if isinstance(m, dict):
+            m["gmt_created"] = _to_unix_ts(m.get("gmt_created"))
+    return items
 
 
 def _enrich_with_qdrant_payload(memories: list[dict]) -> list[dict]:

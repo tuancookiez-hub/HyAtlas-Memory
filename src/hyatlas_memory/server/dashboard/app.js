@@ -288,17 +288,22 @@ function updateGlobalStatus() {
       }, allMemories[0])
     : null;
   if (lastMemory && lastMemory.gmt_created) {
-    const ago = Math.floor((Date.now() / 1000 - lastMemory.gmt_created) / 60);
-    if (ago < 60) {
-      meta.textContent = `Last memory: ${ago}m ago`;
-    } else if (ago < 1440) {
-      const hours = Math.floor(ago / 60);
-      const mins = ago % 60;
-      meta.textContent = `Last memory: ${hours}h ${mins}m ago`;
+    const ts = Number(lastMemory.gmt_created);
+    if (!Number.isFinite(ts) || ts <= 0) {
+      meta.textContent = 'Last memory: —';
     } else {
-      const days = Math.floor(ago / 1440);
-      const hours = Math.floor((ago % 1440) / 60);
-      meta.textContent = `Last memory: ${days}d ${hours}h ago`;
+      const ago = Math.floor((Date.now() / 1000 - ts) / 60);
+      if (ago < 60) {
+        meta.textContent = `Last memory: ${ago}m ago`;
+      } else if (ago < 1440) {
+        const hours = Math.floor(ago / 60);
+        const mins = ago % 60;
+        meta.textContent = `Last memory: ${hours}h ${mins}m ago`;
+      } else {
+        const days = Math.floor(ago / 1440);
+        const hours = Math.floor((ago % 1440) / 60);
+        meta.textContent = `Last memory: ${days}d ${hours}h ago`;
+      }
     }
   } else {
     meta.textContent = 'Last memory: —';
