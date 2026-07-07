@@ -2,7 +2,7 @@
 
 A personal, local, single-user long-term memory stack for Hermes Agent — built by forking the Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan) and refining it into something tuned for one person's daily, multi-session use. Includes the experimental L7 intention layer. Apache 2.0 licensed.
 
-> **v3.3.1** — Quality Metrics redesigned: reactive, auto-tracking (no weekly baseline button), grade ring + at-a-glance vitals. See [CHANGELOG](./CHANGELOG.md).
+> **v3.3.2** — Sidebar "Last memory" NaN fixed (L1_RAW timestamp normalization) + README reframed as a personal local single-user stack. See [CHANGELOG](./CHANGELOG.md).
 
 <p align="center">
   <img src="./assets/hyatlas-v3.3.0-quality-metrics.png" alt="HyAtlas v3.3.0: Quality Metrics — 7d token rollup, dashboard scores, weekly baseline" width="720" />

@@ -1,6 +1,17 @@
 # Changelog
 
-## [3.3.1] — 2026-07-08
+## [3.3.2] — 2026-07-08
+
+### Bug fix + docs
+
+- **Sidebar "Last memory: NaN" fixed.** The L1_RAW memories fetched via the upstream `/api/v1/vdb/scroll` endpoint carried `gmt_created` as a raw ISO **string**; the sidebar did `Date.now()/1000 - "<string>"` → `NaN`. Now normalized to a Unix int at the source (`_fetch_l1_raw_from_vdb`), alongside the existing `_extract_memories` / `_fetch_l1_raw_from_qdrant` paths. Verified live: `gmt_created` returns an int; sidebar shows "Last memory: Xm/h/d ago".
+- **README reframed.** No longer described as a "community implementation of the official framework." Now positioned as a personal, local, single-user long-term memory stack — forked from Hy-Memory and refined for one person's daily multi-session use.
+- **Package description** (`pyproject.toml`) updated to match.
+
+### Known state (not bugs)
+
+- **DEGRADED** status is expected while the Hyper LLM provider returns `402` (out of credits). `vdb`/`embed` are `ok`; only `llm` is erroring. Top up billing to flip it to OPERATIONAL.
+- **Activity = 0 / LLM tokens = —** on Quality Metrics are expected until real writes + digests flow through the instrumented runtime (and the LLM is live). The counters exist; nothing is feeding them yet in the current stack. The dashboard reads them from the upstream `/api/v1/metrics` endpoint.
 
 ### Quality Metrics — reactive redesign (dashboard)
 
