@@ -1,9 +1,9 @@
 # HyAtlas-Memory — NOW.md
 
 ## Current State (2026-07-07)
-**v3.1.0 COMPLETE on `main` (deep-reviewed). Zvec is the sole runtime vector store. All release surfaces consistent + search verified.**
+**v3.2.0 on `main` — Hermes-aligned digest, L4 retired, weekly evolution cron, graph L5/L6 verified.**
 
-- Version: **3.1.0**
+- Version: **3.2.0**
 - Config: `vector_store.provider: zvec`, collection `agent_memories_1024`
 - Zvec path: `~/.hyatlas/zvec/agent_memories_1024` (~6.5k docs)
 - Qdrant: archived at `~/.hyatlas/archive/qdrant_v3_1_0_release.zip` (119 MiB); not started
