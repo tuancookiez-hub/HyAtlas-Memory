@@ -1,6 +1,6 @@
 # Changelog
 
-## [3.3.2] — 2026-07-08
+## [3.3.0] — 2026-07-08
 
 ### Quality Metrics (dashboard)
 
