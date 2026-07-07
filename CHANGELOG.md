@@ -7,7 +7,7 @@
 - **New sidebar tab** — **Quality Metrics**: composite/evolution/activity/latency scores, 7-day window.
 - **LLM token rollup** — `MetricsCollector.record_llm_tokens()` on System1 extract/reconcile; exposed via `GET /api/v1/metrics` → `llm_tokens`.
 - **APIs** — `GET /api/quality-metrics`, `POST /api/quality-baseline` (weekly snapshot at `~/.hyatlas/metrics/quality_baseline.json`).
-- **Reference panel** — Tencent Hy-Memory published benchmarks (35% / 25% / 88%) labeled industry reference, not local measurement.
+- **UX (post-release)** — Transparent score breakdown (digest / fresh L2 / L6 components), hero + progress bars, baseline comparison table with plain-language verdicts, actionable tips; removed unrelated industry benchmark panel.
 - **Assets** — `assets/hyatlas-v3.3.0-quality-metrics.png` (README hero).
 
 ## [3.2.1] — 2026-07-08
