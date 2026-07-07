@@ -48,10 +48,12 @@ If it's a large change (new layer, new store, breaking change), start a discussi
 ### Prerequisites
 
 - Python 3.10+ (3.11+ recommended)
-- [uv](https://github.com/astral-sh/uv) (fast pip alternative) or pip
-- [Qdrant](https://qdrant.tech/) running locally (Docker, native, or via the project's scripts)
-- [Hermes Agent](https://github.com/NousResearch/hermes-agent) installed and on PATH
+- [uv](https://github.com/astral-sh/uv) or pip
+- **Zvec** (default) — no separate vector daemon; `hyatlas start` brings up server + dashboard
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent) on PATH (for plugin integration tests)
 - Git
+
+> **Legacy:** Qdrant is only for [migration](docs/CLEANUP.md) from pre–v3.1 installs.
 
 ### Clone and install
 
@@ -59,30 +61,33 @@ If it's a large change (new layer, new store, breaking change), start a discussi
 git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 cd HyAtlas-Memory
 
-# Editable install with dev + test extras
 uv pip install -e ".[dev,test]"
-# or:
-pip install -e ".[dev,test]"
+# or: pip install -e ".[dev,test]"
 ```
 
-### Start Qdrant
+### Start the stack (Zvec)
 
 ```bash
-# Docker (easiest)
-docker run -d -p 6333:6333 -p 6334:6334 \
-  -v $(pwd)/qdrant_data:/qdrant/storage \
-  --name hyatlas-qdrant \
-  qdrant/qdrant
-
-# Or use the project script (if present)
-python scripts/start_qdrant.py
+hyatlas start          # or hyatlas start --detach
+hyatlas status
+curl http://127.0.0.1:19527/info
+curl http://127.0.0.1:8765/api/health
 ```
 
-Verify:
+Config: `~/.hyatlas/config/hy_memory.json` with `"vector_store": {"provider": "zvec", ...}`.
+
+### Legacy: Qdrant (migration only)
+
+<details>
+<summary>Only if migrating old Qdrant data</summary>
+
 ```bash
-curl http://127.0.0.1:6333/collections
-# Should return: {"result":{"collections":[]}}
+docker run -d -p 6333:6333 -v $(pwd)/qdrant_data:/qdrant/storage qdrant/qdrant
+python scripts/migrate_qdrant_to_zvec.py --apply --verify
 ```
+
+See `docs/CLEANUP.md` and `hyatlas archive qdrant`.
+</details>
 
 ### Run tests
 
@@ -193,7 +198,7 @@ HyAtlas-Memory/
 
 - **Test names**: `test_<unit_being_tested>_<scenario>` — e.g., `test_search_with_empty_query_returns_empty`
 - **Use fixtures** for shared setup, not module-level globals
-- **Mock external calls** (Qdrant, upstream server) — tests should run without those running
+- **Mock external calls** (live memory server) — unit tests should run offline; integration tests use `pytest -m integration` with `hyatlas start`
 - **One assertion per test** when possible (multiple asserts are OK if testing one behavior)
 - **Parametrize** for similar tests with different inputs
 

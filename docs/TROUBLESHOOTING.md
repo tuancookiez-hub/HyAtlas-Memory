@@ -188,9 +188,33 @@ curl 'http://127.0.0.1:8765/api/memories?limit=5' | jq '.memories[0]'
 
 ---
 
-## Qdrant issues
+## Vector store issues (Zvec — default)
 
-**Symptom:** Errors mentioning Qdrant, vector store, or "collection not found".
+**Symptom:** Search/add fails, VDB errors in server logs, dashboard layer counts all zero.
+
+**Diagnosis:**
+
+```bash
+hyatlas status
+curl http://127.0.0.1:19527/healthz
+curl http://127.0.0.1:19527/api/v1/vdb/layer_count?layer=l2_fact
+hyatlas zvec doctor   # if available in your CLI build
+```
+
+**Fix:**
+
+- Ensure `vector_store.provider` is `zvec` in `~/.hyatlas/config/hy_memory.json`.
+- Restart: `hyatlas stop` then `hyatlas start` (or `--detach`).
+- If you migrated from Qdrant, re-run `scripts/migrate_qdrant_to_zvec.py --verify` with server stopped.
+- Disk: check `~/.hyatlas/zvec/` exists and is writable.
+
+---
+
+## Qdrant issues (legacy / migration only)
+
+> HyAtlas **v3.1+** does not require Qdrant at runtime. Use this section only if you still run Qdrant for migration or an old compose stack.
+
+**Symptom:** Errors mentioning Qdrant, port 6333, or "collection not found" while `provider` is still `qdrant`.
 
 **Diagnosis:**
 ```bash

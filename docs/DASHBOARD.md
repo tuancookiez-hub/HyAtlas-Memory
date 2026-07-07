@@ -180,15 +180,30 @@ The dashboard's HTTP server (`server/dashboard/dashboard.py`) exposes these endp
 
 ### Response shapes
 
-Most endpoints return JSON with at least:
+**`/api/memories`** (paginated list):
+
 ```json
 {
-  "memories": [...],
+  "memories": [],
   "total": 1234,
   "offset": 0,
   "limit": 25
 }
 ```
+
+**`/api/graph-counts`**:
+
+```json
+{
+  "l5_knowledge": 1594,
+  "l6_schema": 568,
+  "l7_intention": 188,
+  "relation_count": 8128,
+  "total": 2350
+}
+```
+
+Graph layer totals come from `layer_counts` on `GET /api/v1/graph` (not VDB scroll).
 
 For full schemas, see the `if path ==` branches in `server/dashboard/dashboard.py` (`do_GET` method).
 

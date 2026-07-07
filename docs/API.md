@@ -1,424 +1,156 @@
 # HTTP API Reference
 
-> Complete reference for the local HTTP server embedded in HyAtlas-Memory. Two servers run on your machine — this doc covers both.
+> **HyAtlas v3.2.1** — Two local HTTP servers: memory **19527**, dashboard **8765**. Vector data is **Zvec** (via server `/api/v1/vdb/*`); graph **L5–L7** is **Kuzu** (`GET /api/v1/graph`).
 
-## Architecture
-
-```
-┌─────────────────────┐
-│ Hermes Agent        │  (the agent runtime)
-│   + plugin client   │
-└──────────┬──────────┘
-           │ HTTP
-           ▼
-┌─────────────────────┐  ← port 19527 (upstream SDK)
-│ Hy-Memory (upstream)│     (uvicorn, port 19527)
-│   - embedding       │
-│   - LLM extraction  │
-│   - vector search   │
-└──────────┬──────────┘
-           │ HTTP
-           ▼
-┌─────────────────────┐  ← port 8765 (this server)
-│ dashboard.py        │     (BaseHTTPRequestHandler)
-│   - aggregation     │
-│   - L1_RAW from     │
-│     Qdrant directly │
-│   - L5 from Kuzu    │
-│   - coding from     │
-│     sqlite          │
-└──────────┬──────────┘
-           │ static
-           ▼
-┌─────────────────────┐
-│ Browser @ :8765     │  (dashboard.html + Three.js)
-└─────────────────────┘
-```
-
-The dashboard is a **thin aggregator** — it calls the upstream Hy-Memory SDK server, merges data from Qdrant/Kuzu directly, and serves a single-page JS app.
+See also: [DASHBOARD.md](./DASHBOARD.md) (UI), [HYATLAS_HERMES.md](./HYATLAS_HERMES.md) (identity + digest).
 
 ---
 
-## Server 1: Upstream Hy-Memory SDK (`127.0.0.1:19527`)
+## Architecture
 
-This is the unmodified upstream SDK. You don't need to call it directly — the plugin and dashboard both proxy to it. Documented here for completeness.
+```text
+Hermes plugin / CLI
+        │ HTTP
+        ▼
+┌───────────────────────────────┐  :19527
+│ Hy-Memory server              │
+│  Zvec VDB · embed · LLM ·     │
+│  Kuzu graph · digest          │
+└───────────────┬───────────────┘
+                │ HTTP (proxy)
+                ▼
+┌───────────────────────────────┐  :8765
+│ dashboard.py                  │
+│  aggregates · layer-health    │
+│  static SPA                   │
+└───────────────────────────────┘
+```
 
-### Endpoints (passthrough)
+The dashboard is a **thin aggregator** — it proxies the memory server, enriches layer counts, and serves `dashboard.html`.
+
+---
+
+## Server 1: Memory server (`127.0.0.1:19527`)
+
+Stdlib HTTP server (`hyatlas_memory.core.server`). Integrations add graph + VDB dashboard routes.
+
+### Core routes
 
 | Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/` | Server info |
-| `GET` | `/info` | Build info |
-| `GET` | `/api/v1/status` | VDB + LLM status |
-| `GET` | `/api/v1/metrics?minutes=N` | Activity metrics |
-| `POST` | `/api/v1/list` | List memories (paginated, single user_id) |
-| `POST` | `/api/v1/search` | Vector search (body: `{query, user_id, top_k, ...}`) |
-| `POST` | `/api/v1/add` | Add a memory |
-| `POST` | `/api/v1/delete` | Delete a memory |
+|--------|------|---------|
+| `GET` | `/info` | Name, version, mode, uptime, data_dir |
+| `GET` | `/healthz` | Deep check (VDB, embedder, LLM) |
+| `POST` | `/api/v1/add` | Write memory |
+| `POST` | `/api/v1/search` | Hybrid search (`query`, `user_id`, `agent_id`, `top_k`, …) |
+| `POST` | `/api/v1/list` | List memories (VDB + optional graph payload) |
+| `GET` | `/api/v1/memories/:id` | Single memory |
+| `PUT` | `/api/v1/memories/:id` | Update content |
+| `DELETE` | `/api/v1/memories/:id` | Delete |
+| `POST` | `/api/v1/delete_all` | Delete all for user |
+| `POST` | `/api/v1/digest` | **System 2 digest** (ultra) — body: `{"user_id","agent_id"}` |
 
-The plugin uses `src/hyatlas_memory/client.py` (urllib-based, zero deps) to call these. See the [client source](../src/hyatlas_memory/client.py) for request/response shapes.
+### HyAtlas integration routes
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/v1/graph` | Kuzu graph. Default layer **L5**. Query: `layer=l5_knowledge\|l6_schema\|l7_intention`, `n`, `rels`, `type`, `q` |
+| `GET` | `/api/v1/breaker` | VDB circuit breaker status |
+| `GET` | `/api/v1/vdb/layer_count` | Per-layer VDB count (`layer`, `require_is_latest`) |
+| `POST` | `/api/v1/vdb/scroll` | Scroll VDB points (dashboard L1 feed) |
+
+**Graph response (typical):**
+
+```json
+{
+  "nodes": [ { "node_id": "...", "name": "...", "layer": "l5_knowledge", "entity_type": "..." } ],
+  "relations": [ { "source": "...", "target": "...", "type": "..." } ],
+  "layer_counts": { "l5_knowledge": 1594, "l6_schema": 568, "l7_intention": 188 },
+  "node_count": 1594,
+  "relation_count": 8128
+}
+```
+
+**Digest example:**
+
+```bash
+curl -X POST http://127.0.0.1:19527/api/v1/digest \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"hermes-user","agent_id":"default"}'
+```
 
 ---
 
 ## Server 2: Dashboard (`127.0.0.1:8765`)
 
-This is what your browser talks to. Full endpoint reference below.
+Loopback only, no auth. JSON unless serving HTML/assets.
 
-### Conventions
+### Health & proxy
 
-- All responses are JSON unless noted
-- Errors return `{error: "message"}` with appropriate HTTP status
-- CORS is **not** enabled — the dashboard expects same-origin
-- No authentication — the server only listens on `127.0.0.1` (loopback only)
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/` | SPA HTML |
+| `GET` | `/api/health` | `{status, upstream}` |
+| `GET` | `/api/status` | Proxy `/api/v1/status` |
+| `GET` | `/api/info` | Proxy `/info` |
+| `GET` | `/api/storage` | VDB provider + on-disk sizes (`zvec`, Kuzu, …) |
 
-### Authentication model
+### Memory & metrics
 
-There is **no auth**. The dashboard binds exclusively to `127.0.0.1` (loopback), meaning it's only reachable from the same machine. Don't expose it to a network without putting it behind a reverse proxy with auth.
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/memories` | Paginated list (`offset`, `limit`) |
+| `GET` | `/api/metrics?minutes=N` | Activity metrics |
+| `POST` | `/api/search` | Proxy `/api/v1/search` |
 
----
+### Layer & graph counts
 
-### `GET /`
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/layer-counts` | L0–L4 via `/api/v1/vdb/layer_count`; L5–L7 merged from `/api/v1/graph` `layer_counts` |
+| `GET` | `/api/graph-counts` | L5/L6/L7 + `relation_count` from live graph |
+| `GET` | `/api/layer-health` | Hermes digest readiness (namespace, `fresh_l2_for_digest`, graph counts, digest log, L6 sample hints) |
+| `GET` | `/api/l6-schemas?n=8&q=` | Sample L6 nodes from graph |
+| `GET` | `/api/l5/graph` | Proxy live `/api/v1/graph` (fallback: export JSON) |
+| `GET` | `/api/l5/context` | L5 context string for agent injection |
 
-Serves `server/dashboard/dashboard.html` as `text/html`. The page is a self-contained SPA — HTML + CSS + JavaScript + Three.js (CDN).
+**`/api/layer-health` fields (v3.2):**
 
-**Response headers:**
-- `Content-Type: text/html; charset=utf-8`
-- `Cache-Control: no-store, no-cache, must-revalidate` (force fresh load)
+- `vdb_layer_counts`, `graph_layer_counts`, `graph_relation_count`
+- `fresh_l2_for_digest` — L2 with `s2_evidence_count < 1`
+- `digest_log_status` — `ok` | `partial` | `stale` | `missing`
+- `l4_status` — `retired_migrated_to_l2`
+- `layer_notes` — L1 shadowing, L6 graph-canonical, etc.
 
----
+### Coding memory (optional sqlite)
 
-### `GET /assets/{path}`
-
-Static files from `server/dashboard/assets/`. Used for favicons and icons.
-
-**Path-traversal guard:** any path containing `..`, starting with `/`, or containing `\` returns `400 Bad Request`.
-
-**Content-Type:** mapped by extension (`.png` → `image/png`, `.svg` → `image/svg+xml`, etc.)
-
-**Caching:**
-- Paths containing "icon" or `favicon.ico`: `Cache-Control: public, max-age=86400`
-- Everything else: `Cache-Control: no-store`
-
-**Example:**
-```bash
-curl http://127.0.0.1:8765/assets/hy-memory-icon.png -o icon.png
-```
-
----
-
-### `GET /api/health`
-
-Health check. Always returns `200 OK` if the dashboard is running.
-
-**Response:**
-```json
-{
-  "status": "ok",
-  "upstream": "http://127.0.0.1:19527"
-}
-```
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/coding-count` | Totals from `coding_memory.db` |
+| `GET` | `/api/coding-memories` | List coding memories |
 
 ---
 
-### `GET /api/status`
-
-Proxies `/api/v1/status` from the upstream server.
-
-**Response:** passthrough from upstream — see the upstream SDK docs.
-
----
-
-### `GET /api/info`
-
-Proxies `/info` from the upstream server.
-
----
-
-### `GET /api/storage`
-
-Storage stats — both VDB metadata and on-disk file sizes.
-
-**Response:**
-```json
-{
-  "vdb": {
-    "provider": "qdrant",
-    "collection": "l1_raw",
-    "points": 1234,
-    "dims": 768
-  },
-  "files": {
-    "vector_db": "12.34 MB",
-    "cache.db": "0.56 MB",
-    "history.db": "0.12 MB",
-    "kuzu_db": "4.78 MB"
-  }
-}
-```
-
-File sizes are computed by walking the directory tree (for Kuzu's multi-file layout).
-
----
-
-### `GET /api/memories`
-
-Paginated list of memories across **all user scopes** (deduplicated by `memory_id`).
-
-**Query parameters:**
-- `offset` (int, default `0`) — pagination offset
-- `limit` (int, default `25`, max `500`) — max items to return
-
-**Behavior:**
-1. Queries `/api/v1/list` for each user in `HERMES_USER_IDS` (comma-separated env var)
-2. Fetches L1_RAW directly from Qdrant (upstream filters these out)
-3. Merges, deduplicates by `memory_id`
-4. Sorts by `gmt_created` descending
-
-**Response:**
-```json
-{
-  "memories": [
-    {
-      "memory_id": "abc123",
-      "user_id": "tuan",
-      "layer": "l2_fact",
-      "content": "The user prefers TypeScript",
-      "gmt_created": 1718726400,
-      "gmt_updated": 1718726400,
-      "score": null,
-      "session_id": "...",
-      ...
-    }
-  ],
-  "total": 1234,
-  "offset": 0,
-  "limit": 25
-}
-```
-
----
-
-### `GET /api/metrics?minutes=N`
-
-Activity metrics. Proxies `/api/v1/metrics?minutes=N` upstream.
-
-**Query parameters:**
-- `minutes` (int, default `60`) — time window
-
----
-
-### `GET /api/coding-count`
-
-Count of coding-session memories. Reads from `~/.hyatlas/data/coding_memory.db` (sqlite).
-
-**Response:**
-```json
-{
-  "total": 200,
-  "today": 5
-}
-```
-
----
-
-### `GET /api/coding-memories?limit=N`
-
-List of coding-session memories. Reads from `coding_memory.db`.
-
-**Query parameters:**
-- `limit` (int, default `25`, max `200`)
-
-**Response:**
-```json
-{
-  "memories": [
-    {
-      "memory_id": "...",
-      "task": "...",
-      "solution": "...",
-      "search_keys": "...",
-      "workspace_id": "...",
-      "branch": "...",
-      "session_id": "...",
-      "confidence": 0.95,
-      "source": "...",
-      "type": "...",
-      "created_at": "...",
-      "updated_at": "..."
-    }
-  ],
-  "total": 200
-}
-```
-
----
-
-### `GET /api/layer-counts`
-
-Active memory counts per layer, queried directly from Qdrant.
-
-**Behavior:** For each L0–L4 collection, runs a `count` query. L5–L7 come from Kuzu (via `/api/graph-counts`).
-
-**Response:**
-```json
-{
-  "counts": {
-    "l0_basic_info": 4,
-    "l1_raw": 52,
-    "l2_fact": 288,
-    "l3_summary": 127,
-    "l4_identity": 29
-  },
-  "total": 500
-}
-```
-
----
-
-### `GET /api/graph-counts`
-
-Counts for L5/L6/L7 from the Kuzu graph.
-
-**Response:**
-```json
-{
-  "l5_knowledge": 5,
-  "l6_schema": 282,
-  "l7_intention": 173,
-  "total": 460
-}
-```
-
----
-
-### `GET /api/l5/graph`
-
-Full L5 knowledge graph (nodes + relations).
-
-> **v2.0.0+ (Patch 23):** the dashboard proxies to the live server endpoint
-> `GET /api/v1/graph`, which queries Kuzu directly via the server's open
-> graph-store connection. Returns real-time data — no stale export file.
-> Falls back to `l5_kuzu_export.json` only if the upstream server is down.
-
-**Response:**
-```json
-{
-  "nodes": [
-    {
-      "node_id": "abc",
-      "name": "TypeScript",
-      "entity_type": "TECHNOLOGY",
-      "layer": "l5_knowledge",
-      "mention_count": 42,
-      "confidence": 0.95,
-      "aliases": ["TS", "tsc"]
-    }
-  ],
-  "relations": [
-    {
-      "source": "abc",
-      "target": "def",
-      "type": "uses",
-      "weight": 0.8
-    }
-  ],
-  "edges": [...],  // alias for relations (for compat)
-  "stats": {
-    "node_count": 460,
-    "relation_count": 1200
-  }
-}
-```
-
----
-
-### `GET /api/l5/context?n=15&type=TOOL`
-
-Format L5 entities for injection into the agent's LLM context. This is what the agent "sees" when it uses L5 memory.
-
-**Query parameters:**
-- `n` (int, default `15`, max `50`) — max entities
-- `type` (string, optional) — filter by `entity_type`
-
-**Response:**
-```json
-{
-  "context": "Known entities: TypeScript (TECHNOLOGY, mentioned 42x)...\nRelations: TypeScript -> used_in -> ProjectX",
-  "entities": [ /* same shape as /api/l5/graph nodes */ ]
-}
-```
-
----
-
-### `POST /api/search`
-
-Passthrough to upstream `/api/v1/search`.
-
-**Request body:**
-```json
-{
-  "query": "TypeScript preferences",
-  "user_id": "tuan",
-  "top_k": 10
-}
-```
-
-**Response:** passthrough from upstream.
-
----
-
-## Error responses
+## Errors
 
 | Status | Meaning |
-|---|---|
-| `400` | Bad request (malformed params, path traversal, etc.) |
-| `404` | Endpoint not found |
-| `500` | Internal server error (e.g., sqlite/db failure) |
-| `502` | Upstream Hy-Memory SDK server unreachable |
-
-All error responses are JSON:
-```json
-{
-  "error": "human-readable message"
-}
-```
+|--------|---------|
+| `400` | Bad request |
+| `404` | Not found |
+| `500` | Dashboard/internal error |
+| `502` | Upstream :19527 unreachable |
 
 ---
 
-## Programmatic access
-
-You can call these endpoints from any HTTP client. Examples:
+## Programmatic examples
 
 ```bash
-# Health check
 curl http://127.0.0.1:8765/api/health
-
-# Get 50 most recent memories
-curl 'http://127.0.0.1:8765/api/memories?limit=50' | jq
-
-# Search
-curl -X POST http://127.0.0.1:8765/api/search \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "TypeScript", "user_id": "tuan", "top_k": 5}'
-
-# L5 context
-curl 'http://127.0.0.1:8765/api/l5/context?n=10' | jq .entities
-```
-
-```python
-import urllib.request
-import json
-
-req = urllib.request.Request("http://127.0.0.1:8765/api/health")
-with urllib.request.urlopen(req) as resp:
-    data = json.loads(resp.read())
-    print(data)
+curl http://127.0.0.1:19527/api/v1/graph?layer=l6_schema&n=5
+curl 'http://127.0.0.1:8765/api/layer-health'
 ```
 
 ---
 
 ## Versioning
 
-These endpoints are **stable** for the current major version. Breaking changes (path, request shape, response shape) will bump a major version and be noted in the [CHANGELOG](../CHANGELOG.md).
-
-New fields added to responses are **non-breaking** — clients should ignore unknown fields.
+Response fields may grow without a major bump. Breaking path/shape changes are noted in [CHANGELOG.md](../CHANGELOG.md).

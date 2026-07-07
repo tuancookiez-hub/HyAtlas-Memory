@@ -3431,32 +3431,20 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             })
 
         if path == "/api/graph-counts":
-            # Counts of L6/L7 from the Kuzu graph (NOT in Qdrant).
-            # We don't have direct Kuzu access from the proxy, so we use
-            # the Hy-Memory /api/v1/list endpoint and count graph nodes
-            # by layer.
-            l6_count = 0
-            l7_count = 0
-            # Use the fast /api/v1/graph endpoint (one call) instead of
-            # looping through /api/v1/list per user (3 × 15s timeout).
+            # L5–L7 from Kuzu via live /api/v1/graph (layer_counts).
+            l5_count = l6_count = l7_count = 0
+            relation_count = None
             try:
-                _, graph_data = hy("GET", "/api/v1/graph", None)
+                _, graph_data = hy("GET", "/api/v1/graph", None, timeout=60)
                 if isinstance(graph_data, dict):
-                    # /api/v1/graph returns total node_count (L5 entities);
-                    # L6/L7 are not distinguished here, so we still check
-                    # the VDB layer count for those.
-                    pass
+                    lc = graph_data.get("layer_counts") or {}
+                    l5_count = int(lc.get("l5_knowledge") or graph_data.get("node_count") or 0)
+                    l6_count = int(lc.get("l6_schema") or 0)
+                    l7_count = int(lc.get("l7_intention") or 0)
+                    relation_count = graph_data.get("relation_count")
             except Exception:
                 pass
-            l6_count = _vdb_layer_count("l6_schema", require_is_latest=False)
-            l7_count = _vdb_layer_count("l7_intention", require_is_latest=False)
-            # L5 from /api/v1/graph (node_count) or VDB fallback.
-            l5_count = 0
-            try:
-                _, graph_data = hy("GET", "/api/v1/graph", None)
-                if isinstance(graph_data, dict):
-                    l5_count = graph_data.get("node_count", 0)
-            except Exception:
+            if l5_count == 0:
                 l5_export_path = str(_l5_export_path())
                 try:
                     with open(l5_export_path, encoding="utf-8") as f:
@@ -3465,13 +3453,12 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                         if node.get("layer") == "l5_knowledge":
                             l5_count += 1
                 except (FileNotFoundError, json.JSONDecodeError):
-                    pass
-            if l5_count == 0:
-                l5_count = _vdb_layer_count("l5_knowledge", require_is_latest=False)
+                    l5_count = _vdb_layer_count("l5_knowledge", require_is_latest=False)
             return self._json(200, {
                 "l5_knowledge": l5_count,
                 "l6_schema": l6_count,
                 "l7_intention": l7_count,
+                "relation_count": relation_count,
                 "total": l5_count + l6_count + l7_count,
             })
 

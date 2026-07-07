@@ -210,7 +210,7 @@ hyatlas memory ls                   # same as list
 ```
 
 The `write` command goes through the same LLM fact-extraction pipeline
-as a Hermes conversation turn, so the memory lands in qdrant with proper
+as a Hermes conversation turn, so the memory lands in **Zvec** with proper
 `layer`, `importance`, and `access_count` populated.
 
 The `reflect` command outputs the exact `<relevant-memories>` block the
@@ -249,7 +249,7 @@ provider.sync_turn(
 ```
 
 The upstream `hy-memory` server handles LLM-based fact extraction,
-importance scoring, and qdrant indexing automatically. ~8s indexing
+importance scoring, and vector indexing automatically. ~8s indexing
 delay before the memory shows on the dashboard.
 
 > **v3.0.0:** The upstream SDK is now forked into first-party code.
@@ -275,29 +275,27 @@ profile. The default is `hermes-user` for the main profile.
 Memory flows through two parallel paths — a fast path for real-time awareness, and a slow path for deep consolidation:
 
 <p align="center">
-  <img src="./assets/02-dual-path-memory.png" alt="Dual-path memory: System 1 online fast path (L1 raw, L2 fact, fast recall injection) and System 2 background consolidation (L3 summary, L4 identity, L5 Kuzu graph, L6 schema, L7 intention)" width="900" />
+  <img src="./assets/02-dual-path-memory.png" alt="Dual-path memory diagram (see docs/LAYERS.md for v3.2 layer semantics)" width="900" />
 </p>
 
 **System 1 — Fast Path** handles every message you send. It captures raw text, extracts atomic facts via LLM, and injects relevant context back into the agent. This happens in milliseconds — you never wait for memory.
 
-**System 2 — Background Consolidation** runs asynchronously. It takes the accumulated facts and builds something deeper: session summaries, identity profiles, a relationship graph, domain schemas, and proactive intent detection. This is where raw data becomes understanding.
+**System 2 — Background Consolidation** runs on **digest** (manual or cron). It clusters fresh **L2** facts into **L5** knowledge, **L6** behavioral schemas, and **L7** intentions in Kuzu. L4 identity is **retired** — preferences live in L2 + L6.
 
 ## The 7 memory layers
 
-Every piece of memory lives in one of seven layers, each with a specific purpose and trigger:
+Canonical reference: **[docs/LAYERS.md](docs/LAYERS.md)**. Summary:
 
-| Layer | Purpose | Triggers |
-|-------|---------|----------|
-| **L0 basic info** | Stable user facts (location, employer, equipment) | automatic |
-| **L1 raw** | Verbatim session entries, time-ordered | every `add` |
-| **L2 fact** | Atomic facts extracted by LLM | every `add` |
-| **L3 summary** | Periodic L2 rollups (coherent narratives) | every 20 adds |
-| **L4 identity** | Long-lived user/agent facts (preferences, persona) | automatic |
-| **L5 pipeline** | Async ingest into Kuzu graph for relational queries | background |
-| **L6 schema** | Typed entity/relationship schema | L5 step |
-| **L7 intention** | Proactive intent detection, async tasks | L5 step |
-
-L0–L2 run on the fast path (every message). L3–L7 run on the background path (async). L7 is an experimental extension — proactive intent detection that surfaces follow-up questions and task suggestions the agent should consider.
+| Layer | Purpose | Store |
+|-------|---------|-------|
+| **L0** | Profile snippets | Zvec |
+| **L1** | Raw / shadow ingest | Zvec (often 0 under Hermes key) |
+| **L2** | Atomic facts (capture) | Zvec |
+| **L3** | Summaries / rollups | Zvec |
+| **L4** | **Retired** identity VDB | Legacy rows only |
+| **L5** | Knowledge graph | Kuzu |
+| **L6** | Behavioral schemas | Kuzu |
+| **L7** | Intentions (experimental) | Kuzu |
 
 ### Retrieval scoring (4-factor MemoryScorer)
 
@@ -314,7 +312,7 @@ HyAtlas-Memory populates the `importance` and `access` factors that upstream lea
 
 | Field | How it's populated | Default |
 |---|---|---|
-| `importance` | Layer-derived: `l4_identity=1.0`, `l2_fact=0.8`, `l3_summary=0.6`, `l0_basic_info=0.5`, `l1_raw=0.3` | **ON** |
+| `importance` | Layer-derived: `l2_fact=0.8`, `l3_summary=0.6`, `l0_basic_info=0.5`, `l1_raw=0.3` (legacy `l4_identity=1.0` if present) | **ON** |
 | `access_count` | Incremented on every recall (fire-and-forget thread) | **ON** |
 
 Both run on existing points too — a one-shot backfill (`scripts/backfill_importance.py`) populates them across the corpus, and new memories pick them up automatically on write.
@@ -405,7 +403,7 @@ src/hyatlas_memory/        # the plugin (Python package)
     client.py              # HyMemoryClient — the core memory engine
     config.py              # MemoryConfig + LLM/embedder/vector config
     core/                  # embed service, merger, scorer
-    data/                  # vector stores (Qdrant), graph store (Kuzu), cache, history
+    data/                  # Zvec store, Kuzu graph, cache, history
     models/                # memory + request data models
     pipelines/             # writer, readers (legacy/hybrid_v2/hybrid_tag), system2 agent
     server.py              # HTTP server (port 19527)
