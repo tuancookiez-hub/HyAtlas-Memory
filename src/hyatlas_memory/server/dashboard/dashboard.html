@@ -91,6 +91,14 @@
       <span>Settings / System</span>
     </div>
 
+    <div class="nav-item" data-page="quality">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 3v18h18"/>
+        <path d="M7 16l4-8 4 5 5-9"/>
+      </svg>
+      <span>Quality Metrics</span>
+    </div>
+
     <div class="nav-item" data-page="l5">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="6" cy="6" r="3"/>
@@ -361,6 +369,37 @@
           <div class="panel-title mb-4">DIAGNOSTICS</div>
           <pre id="diagnostics-json" style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text); white-space: pre-wrap; overflow-x: auto;"></pre>
         </div>
+      </div>
+    </div>
+
+    <!-- Page: Quality Metrics -->
+    <div class="page-section" id="page-quality">
+      <div class="page-header">
+        <div class="page-label">08 // QUALITY METRICS</div>
+        <h1 class="page-title">Quality Metrics</h1>
+        <div class="page-subtitle">Your stack health (7-day window), LLM token rollup on memory writes, and industry reference benchmarks.</div>
+      </div>
+
+      <div class="stat-grid" id="quality-scores"></div>
+
+      <div class="panel">
+        <div class="panel-header flex justify-between items-center">
+          <div class="panel-title">YOUR INSTANCE (7 DAYS)</div>
+          <button class="btn" type="button" onclick="saveQualityBaseline()">Save baseline (weekly compare)</button>
+        </div>
+        <div class="kv-list" id="quality-live"></div>
+        <div id="quality-delta" class="composition-caption mt-4"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title mb-4">REFERENCE BENCHMARKS (PUBLISHED)</div>
+        <div class="composition-caption mb-4" id="quality-ref-disclaimer"></div>
+        <div class="stat-grid" id="quality-reference"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title mb-4">TOKEN &amp; ACTIVITY DETAIL</div>
+        <pre id="quality-json" style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text); white-space: pre-wrap; overflow-x: auto; max-height: 320px;"></pre>
       </div>
     </div>
 

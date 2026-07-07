@@ -18,6 +18,7 @@ let statusData = null;
 let infoData = null;
 let storageData = null;
 let metricsData = null;
+let qualityData = null;
 let codingCountData = null;
 let l5Graph = null;  // full response from /api/l5/graph
 let activityChart = null;
@@ -144,7 +145,7 @@ async function fetchJSON(url, options = {}) {
 
 async function loadAllData() {
   try {
-    const [status, info, memories, storage, metrics, codingCount, codingMemories, layerCounts, graphCounts, layerHealth, l6Schemas, l5] = await Promise.all([
+    const [status, info, memories, storage, metrics, codingCount, codingMemories, layerCounts, graphCounts, layerHealth, l6Schemas, l5, quality] = await Promise.all([
       fetchJSON('/api/status'),
       fetchJSON('/api/info'),
       fetchJSON('/api/memories?limit=500'),
@@ -157,6 +158,7 @@ async function loadAllData() {
       fetchJSON('/api/layer-health').catch(() => null),
       fetchJSON('/api/l6-schemas?n=6').catch(() => null),
       fetchJSON('/api/l5/graph').catch(() => null),  // L5 may not exist yet; ignore failure
+      fetchJSON('/api/quality-metrics').catch(() => null),
     ]);
     l5Graph = l5;
     layerHealthData = layerHealth;
@@ -243,6 +245,7 @@ async function loadAllData() {
 
     storageData = storage;
     metricsData = metrics;
+    qualityData = quality;
     codingCountData = codingCount;
 
     renderAll();
@@ -307,6 +310,7 @@ function renderAll() {
   renderLayers();
   renderToday();
   renderSystem();
+  renderQuality();
   updateRightSidebar(currentPage);
 }
 
@@ -1397,6 +1401,95 @@ function renderSystem() {
   };
   
   document.getElementById('diagnostics-json').textContent = JSON.stringify(diagnostics, null, 2);
+}
+
+function renderQuality() {
+  const root = qualityData || {};
+  const snap = root.snapshot || {};
+  const scores = snap.scores || {};
+  const ref = root.reference_benchmarks || {};
+  const llm = snap.llm_tokens_7d || {};
+  const graph = snap.graph || {};
+
+  const scoreCard = (label, val) => `
+    <div class="stat-card">
+      <div class="stat-label">${label}</div>
+      <div class="stat-value">${val != null ? val : '—'}</div>
+    </div>`;
+
+  const scoresEl = document.getElementById('quality-scores');
+  if (scoresEl) {
+    scoresEl.innerHTML = [
+      scoreCard('COMPOSITE', scores.composite),
+      scoreCard('EVOLUTION', scores.evolution),
+      scoreCard('ACTIVITY (7D)', scores.activity),
+      scoreCard('LATENCY', scores.latency),
+    ].join('');
+  }
+
+  const liveEl = document.getElementById('quality-live');
+  if (liveEl) {
+    liveEl.innerHTML = `
+      <div class="kv-item"><div class="kv-label">LLM tokens (7d, memory writes)</div>
+        <div class="kv-value font-mono">${llm.total != null ? llm.total.toLocaleString() : '—'} <span class="text-muted text-xs">prompt ${llm.prompt ?? '—'} · completion ${llm.completion ?? '—'}</span></div></div>
+      <div class="kv-item"><div class="kv-label">Tokens per memory (index)</div>
+        <div class="kv-value">${snap.tokens_per_memory_index != null ? snap.tokens_per_memory_index : '—'}</div></div>
+      <div class="kv-item"><div class="kv-label">System1 writes (7d)</div>
+        <div class="kv-value">${snap.sys1_writes_7d ?? '—'}</div></div>
+      <div class="kv-item"><div class="kv-label">System2 digests (7d)</div>
+        <div class="kv-value">${snap.sys2_digests_7d ?? '—'}</div></div>
+      <div class="kv-item"><div class="kv-label">Fresh L2 · digest log</div>
+        <div class="kv-value">${snap.fresh_l2_for_digest ?? '—'} · ${escapeHtml(snap.digest_log_status || '—')}</div></div>
+      <div class="kv-item"><div class="kv-label">Graph L5 / L6 / L7 / rels</div>
+        <div class="kv-value font-mono text-sm">${graph.l5 ?? '—'} / ${graph.l6 ?? '—'} / ${graph.l7 ?? '—'} / ${graph.relations ?? '—'}</div></div>
+    `;
+  }
+
+  const deltaEl = document.getElementById('quality-delta');
+  if (deltaEl) {
+    const d = root.delta_since_baseline;
+    if (d && root.baseline) {
+      deltaEl.innerHTML = `<span class="caption-icon">Δ</span> Since baseline: VDB ${d.vdb_points >= 0 ? '+' : ''}${d.vdb_points}, fresh L2 ${d.fresh_l2 >= 0 ? '+' : ''}${d.fresh_l2}, L6 ${d.l6 >= 0 ? '+' : ''}${d.l6}, relations ${d.relations >= 0 ? '+' : ''}${d.relations}, LLM tokens ${d.llm_tokens_total >= 0 ? '+' : ''}${d.llm_tokens_total}`;
+    } else {
+      deltaEl.innerHTML = '<span class="caption-icon">ⓘ</span> No baseline yet — click <strong>Save baseline</strong> when you start a weekly check.';
+    }
+  }
+
+  const refDisc = document.getElementById('quality-ref-disclaimer');
+  if (refDisc) {
+    refDisc.innerHTML = `<span class="caption-icon">ⓘ</span> ${escapeHtml(ref.disclaimer || '')} Source: ${escapeHtml(ref.source || '')}.`;
+  }
+
+  const refEl = document.getElementById('quality-reference');
+  if (refEl) {
+    refEl.innerHTML = [
+      scoreCard('CTX TOKEN ↓ (ref)', ref.context_token_reduction_pct != null ? `${ref.context_token_reduction_pct}%` : '—'),
+      scoreCard('MEMORY COUNT ↓ (ref)', ref.memory_count_reduction_pct != null ? `${ref.memory_count_reduction_pct}%` : '—'),
+      scoreCard('LONG-TERM UTILITY ↑ (ref)', ref.long_term_utility_gain_pct != null ? `${ref.long_term_utility_gain_pct}%` : '—'),
+    ].join('');
+  }
+
+  const jsonEl = document.getElementById('quality-json');
+  if (jsonEl) {
+    jsonEl.textContent = JSON.stringify({
+      snapshot: snap,
+      delta_since_baseline: root.delta_since_baseline,
+      metrics_7d: root.metrics_7d,
+    }, null, 2);
+  }
+}
+
+async function saveQualityBaseline() {
+  try {
+    const resp = await fetch('/api/quality-baseline', { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || resp.statusText);
+    qualityData = await fetchJSON('/api/quality-metrics');
+    renderQuality();
+    alert('Baseline saved at ' + (data.path || 'metrics/quality_baseline.json'));
+  } catch (e) {
+    alert('Failed to save baseline: ' + e.message);
+  }
 }
 
 function renderRadarChart(components) {

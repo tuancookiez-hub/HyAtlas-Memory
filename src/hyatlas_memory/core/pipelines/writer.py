@@ -1192,6 +1192,12 @@ class MemoryWriter(WritePipeline):
             # Metrics: S1 完成 + VDB ops
             _mc = MetricsCollector.get()
             _mc.sys1_end(response.extra["timing"], success=True)
+            _ext = response.extra.get("extract_tokens") or {}
+            _rec = response.extra.get("reconcile_tokens") or {}
+            _mc.record_llm_tokens(
+                int(_ext.get("prompt", 0) or 0) + int(_rec.get("prompt", 0) or 0),
+                int(_ext.get("completion", 0) or 0) + int(_rec.get("completion", 0) or 0),
+            )
             if _ops_count > 0:
                 for _ in range(_ops_count):
                     _mc.record_vdb_op(_ops_avg_ms)

@@ -181,6 +181,16 @@ class MetricsCollector:
             self._bucket["graph_ops"] += 1
             self._bucket["graph_ops_sum_ms"] += elapsed_ms
 
+    def record_llm_tokens(self, prompt: int = 0, completion: int = 0) -> None:
+        """Accumulate LLM tokens from System1 extract/reconcile (per write)."""
+        total = max(0, int(prompt)) + max(0, int(completion))
+        if total <= 0:
+            return
+        with self._mu:
+            self._bucket["llm_prompt_tokens"] += max(0, int(prompt))
+            self._bucket["llm_completion_tokens"] += max(0, int(completion))
+            self._bucket["llm_total_tokens"] += total
+
     # ================================================================
     # 查询 API
     # ================================================================
@@ -267,6 +277,14 @@ class MetricsCollector:
             storage_ops["graph_ops_total"] = agg["graph_ops"]
             storage_ops["graph_ops_avg_ms"] = round(agg["graph_ops_sum_ms"] / agg["graph_ops"], 1)
 
+        llm_tokens = {}
+        if agg.get("llm_total_tokens", 0) > 0:
+            llm_tokens = {
+                "prompt": agg.get("llm_prompt_tokens", 0),
+                "completion": agg.get("llm_completion_tokens", 0),
+                "total": agg.get("llm_total_tokens", 0),
+            }
+
         return {
             "uptime_seconds": round(time.time() - self._start_time, 1),
             "window_minutes": minutes,
@@ -284,6 +302,7 @@ class MetricsCollector:
                 "sys2_completed_last_60s": sys2_last_60s,
             },
             "storage_ops": storage_ops,
+            "llm_tokens": llm_tokens,
             "sys2_requests": {
                 "total": agg["sys2_started"],
                 "completed": agg["sys2_completed"],
@@ -344,6 +363,9 @@ class MetricsCollector:
             "vdb_ops_sum_ms": 0.0,
             "graph_ops": 0,
             "graph_ops_sum_ms": 0.0,
+            "llm_prompt_tokens": 0,
+            "llm_completion_tokens": 0,
+            "llm_total_tokens": 0,
         }
 
     @staticmethod
@@ -380,6 +402,9 @@ class MetricsCollector:
             agg["vdb_ops_sum_ms"] += b.get("vdb_ops_sum_ms", 0)
             agg["graph_ops"] += b.get("graph_ops", 0)
             agg["graph_ops_sum_ms"] += b.get("graph_ops_sum_ms", 0)
+            agg["llm_prompt_tokens"] += b.get("llm_prompt_tokens", 0)
+            agg["llm_completion_tokens"] += b.get("llm_completion_tokens", 0)
+            agg["llm_total_tokens"] += b.get("llm_total_tokens", 0)
             # timing sums
             for key, val in b.get("sys1_timing_sums", {}).items():
                 agg["sys1_timing_sums"][key] = agg["sys1_timing_sums"].get(key, 0) + val

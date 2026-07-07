@@ -2,7 +2,7 @@
 
 A community implementation of the official Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan, `memory.hunyuan.tencent.com`) for Hermes Agent. Includes the experimental L7 intention layer. Apache 2.0 licensed.
 
-> **v3.2.1** — Cleanup release: L6 visible in dashboard/graph API, `docs/CLEANUP.md`, Hermes digest + prune cron. See [CHANGELOG](./CHANGELOG.md).
+> **v3.3.2** — Quality Metrics dashboard tab, 7-day LLM token rollup on memory writes, weekly baseline compare. See [CHANGELOG](./CHANGELOG.md).
 
 <p align="center">
   <img src="./assets/hyatlas-v3.2-second-brain-evolution.png" alt="HyAtlas v3.2: second brain that evolves — capture, weekly digest, graph patterns" width="720" />

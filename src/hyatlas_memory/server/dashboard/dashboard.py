@@ -2987,6 +2987,146 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         self.end_headers()
         self.wfile.write(body)
 
+    def _quality_baseline_path(self):
+        import pathlib
+        try:
+            from hyatlas_memory.layout import home as hy_home
+            root = hy_home() / "metrics"
+        except Exception:
+            root = pathlib.Path.home() / ".hyatlas" / "metrics"
+        root.mkdir(parents=True, exist_ok=True)
+        return root / "quality_baseline.json"
+
+    def _build_quality_metrics(self) -> dict:
+        import pathlib
+        import time as _time
+
+        _, m7 = hy("GET", "/api/v1/metrics?minutes=10080", timeout=15)
+        _, m1 = hy("GET", "/api/v1/metrics?minutes=60", timeout=10)
+        _, status = hy("GET", "/api/v1/status", timeout=10)
+        _, graph = hy("GET", "/api/v1/graph", None, timeout=60)
+        m7 = m7 or {}
+        m1 = m1 or {}
+        status = status or {}
+        graph = graph or {}
+        gcounts = graph.get("layer_counts") or {}
+
+        user_id = os.environ.get("HY_MEMORY_USER_ID", "hermes-user")
+        agent_id = os.environ.get("HY_MEMORY_AGENT_ID", "default")
+        fresh_l2 = 0
+        l2_total = 0
+        try:
+            _, listed = hy(
+                "POST",
+                "/api/v1/list",
+                {"user_id": user_id, "agent_id": agent_id, "limit": 5000},
+                timeout=120,
+            )
+            for m in ((listed or {}).get("vdb") or {}).get("memories") or []:
+                if m.get("layer") == "l2_fact":
+                    l2_total += 1
+                    if (m.get("custom") or {}).get("s2_evidence_count", 0) < 1:
+                        fresh_l2 += 1
+        except Exception:
+            pass
+
+        log_path = pathlib.Path.home() / ".hyatlas" / "logs" / "digest_run_latest.log"
+        digest_status = "missing"
+        if log_path.is_file():
+            try:
+                tail = log_path.read_text(encoding="utf-8", errors="replace")[-12000:]
+                if "AFTER " in tail and "no_clusters" not in tail:
+                    digest_status = "ok"
+                elif "HTTP 200" in tail:
+                    digest_status = "partial"
+                else:
+                    digest_status = "stale"
+            except OSError:
+                digest_status = "unreadable"
+
+        llm7 = (m7.get("llm_tokens") or {})
+        llm_total = int(llm7.get("total") or 0)
+        vdb_pts = int(status.get("vdb_points") or 0)
+        sys1_done = int((m7.get("requests") or {}).get("completed") or 0)
+        sys2_done = int((m7.get("sys2_requests") or {}).get("completed") or 0)
+        lat = (m7.get("avg_latency_ms") or {}).get("sys1_total")
+        relations = int(graph.get("relation_count") or 0)
+
+        tokens_per_memory = None
+        if llm_total > 0 and vdb_pts > 0:
+            tokens_per_memory = round(llm_total / vdb_pts, 2)
+
+        digest_pts = {"ok": 40, "partial": 22, "stale": 12, "missing": 5, "unreadable": 3}
+        evolution_score = min(
+            100,
+            digest_pts.get(digest_status, 5)
+            + min(35, fresh_l2 // 3)
+            + min(25, (gcounts.get("l6_schema") or 0) // 25),
+        )
+        activity_score = min(100, sys1_done * 2 + sys2_done * 5)
+        latency_score = 100
+        if lat is not None and lat > 0:
+            latency_score = max(0, min(100, int(100 - (lat - 200) / 20)))
+
+        snapshot = {
+            "captured_at": _time.time(),
+            "vdb_points": vdb_pts,
+            "l2_facts": l2_total,
+            "fresh_l2_for_digest": fresh_l2,
+            "graph": {
+                "l5": gcounts.get("l5_knowledge"),
+                "l6": gcounts.get("l6_schema"),
+                "l7": gcounts.get("l7_intention"),
+                "relations": relations,
+            },
+            "digest_log_status": digest_status,
+            "llm_tokens_7d": llm7,
+            "sys1_writes_7d": sys1_done,
+            "sys2_digests_7d": sys2_done,
+            "avg_sys1_latency_ms": lat,
+            "scores": {
+                "evolution": evolution_score,
+                "activity": activity_score,
+                "latency": latency_score,
+                "composite": round((evolution_score * 0.5 + activity_score * 0.3 + latency_score * 0.2)),
+            },
+            "tokens_per_memory_index": tokens_per_memory,
+        }
+
+        baseline = None
+        delta = None
+        bp = self._quality_baseline_path()
+        if bp.is_file():
+            try:
+                baseline = json.loads(bp.read_text(encoding="utf-8"))
+                delta = {
+                    "vdb_points": vdb_pts - int(baseline.get("vdb_points") or 0),
+                    "fresh_l2": fresh_l2 - int(baseline.get("fresh_l2_for_digest") or 0),
+                    "l6": (gcounts.get("l6_schema") or 0) - int((baseline.get("graph") or {}).get("l6") or 0),
+                    "relations": relations - int((baseline.get("graph") or {}).get("relations") or 0),
+                    "llm_tokens_total": llm_total - int((baseline.get("llm_tokens_7d") or {}).get("total") or 0),
+                }
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                baseline = None
+
+        return {
+            "window_days": 7,
+            "snapshot": snapshot,
+            "baseline": baseline,
+            "delta_since_baseline": delta,
+            "baseline_path": str(bp),
+            "metrics_7d": m7,
+            "metrics_1h": m1,
+            "reference_benchmarks": {
+                "source": "Tencent Hy-Memory (OpenClaw integration, published)",
+                "disclaimer": "Industry reference only — not measured on this instance.",
+                "context_token_reduction_pct": 35,
+                "memory_count_reduction_pct": 25,
+                "long_term_utility_gain_pct": 88,
+                "note": "Compare your 7d LLM token rollup and memory growth to this over time.",
+            },
+        }
+
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
 
@@ -3177,6 +3317,9 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         if path == "/api/metrics":
             code, payload = hy("GET", "/api/v1/metrics?minutes=60", timeout=10)
             return self._json(code or 502, payload)
+
+        if path.split("?")[0] == "/api/quality-metrics":
+            return self._json(200, self._build_quality_metrics())
 
         if path == "/api/status":
             code, payload = hy("GET", "/api/v1/status", timeout=10)
@@ -3636,6 +3779,15 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 return self._json(400, {"error": f"bad body: {e}"})
             code, payload = hy("POST", "/api/v1/search", body, timeout=90)
             return self._json(code or 502, payload)
+
+        if path == "/api/quality-baseline":
+            try:
+                snap = self._build_quality_metrics().get("snapshot") or {}
+                bp = self._quality_baseline_path()
+                bp.write_text(json.dumps(snap, indent=2), encoding="utf-8")
+                return self._json(200, {"ok": True, "path": str(bp), "snapshot": snap})
+            except OSError as e:
+                return self._json(500, {"error": str(e)})
 
         self._json(404, {"error": "not found"})
 
