@@ -1,6 +1,6 @@
 # HyAtlas-Memory
 
-A community implementation of the official Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan, `memory.hunyuan.tencent.com`) for Hermes Agent. Includes the experimental L7 intention layer. Apache 2.0 licensed.
+A personal, local, single-user long-term memory stack for Hermes Agent — built by forking the Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan) and refining it into something tuned for one person's daily, multi-session use. Includes the experimental L7 intention layer. Apache 2.0 licensed.
 
 > **v3.3.1** — Quality Metrics redesigned: reactive, auto-tracking (no weekly baseline button), grade ring + at-a-glance vitals. See [CHANGELOG](./CHANGELOG.md).
 
@@ -12,7 +12,7 @@ A community implementation of the official Hy-Memory 7-layer cognitive memory fr
   <img src="./assets/hyatlas-v3.2-second-brain-evolution.png" alt="HyAtlas v3.2: second brain that evolves — capture, weekly digest, graph patterns" width="640" />
 </p>
 
-> **v3.0.0** is a full SDK fork — the entire hy-memory 1.2.20 codebase (48,371 lines) is now first-party code under `src/hyatlas_memory/core/`. No external `hy-memory` dependency. Includes L5 knowledge graph (upstream stub), emotion-aware memory strength, reasoning model support, and operational hardening.
+> **v3.0.0** forked the entire hy-memory 1.2.20 codebase (48,371 lines) into first-party code under `src/hyatlas_memory/core/` — no external `hy-memory` dependency — so it could be shaped for a single local user instead of a multi-tenant service. Includes L5 knowledge graph (upstream stub), emotion-aware memory strength, reasoning model support, and operational hardening.
 
 <p align="center">
   <a href="https://tuancookiez-hub.github.io/tuandev-portfolio/"><img src="https://img.shields.io/badge/Built%20by-Tuan%20Dev-blueviolet?style=for-the-badge" alt="Built by Tuan Dev"></a>
