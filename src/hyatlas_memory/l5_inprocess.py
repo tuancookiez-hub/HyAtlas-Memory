@@ -23,8 +23,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Config from env
-_L5_VERSION = os.getenv("MEMORY_L5_VERSION", "").strip()
-_L5_ENABLED = _L5_VERSION == "2"
+_L5_VERSION = os.getenv("MEMORY_L5_VERSION", "").strip().lower()
+# Enabled by default post-v3.1.0 (zvec-only). Only the legacy stop-server
+# batch mode ("1") disables the in-process path.
+_L5_ENABLED = _L5_VERSION != "1"
 _L5_WATERMARK_PATH = Path(os.getenv(
     "MEMORY_L5_WATERMARK_PATH",
     str(Path.home() / "AppData" / "Local" / "hermes" / "logs" / "l5_pipeline_state.json"),
@@ -34,6 +36,8 @@ _L5_RELATION_FLOOR = float(os.getenv("MEMORY_L5_RELATION_FLOOR", "0.6"))
 _L5_DEDUP_MERGE = float(os.getenv("MEMORY_L5_DEDUP_MERGE", "0.92"))
 _L5_DEDUP_REVIEW = float(os.getenv("MEMORY_L5_DEDUP_REVIEW", "0.75"))
 _L5_MAX_FACTS_PER_DIGEST = int(os.getenv("MEMORY_L5_MAX_FACTS", "50"))
+# Legacy Qdrant endpoint — removed in v3.1.0 (zvec is the only VDB now).
+# Kept for backward-compat reads of MEMORY_L5_QDRANT_URL but unused by default.
 _L5_QDRANT_URL = os.getenv("MEMORY_L5_QDRANT_URL", "http://127.0.0.1:6333")
 _L5_COLLECTION = os.getenv("MEMORY_L5_COLLECTION", "agent_memories_1024")
 
@@ -237,67 +241,82 @@ def _l5_user_ids(primary: str) -> list[str]:
 
 def _fact_ts(payload: dict) -> float:
     gmt = payload.get("gmt_created") or payload.get("memory_at") or 0
-    try:
+    if isinstance(gmt, (int, float)):
         return float(gmt)
-    except (TypeError, ValueError):
-        return 0.0
+    if isinstance(gmt, datetime):
+        return gmt.timestamp()
+    if isinstance(gmt, str):
+        s = gmt.strip()
+        # Unix timestamp as a string
+        try:
+            return float(s)
+        except ValueError:
+            pass
+        # ISO datetime string
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            pass
+    return 0.0
 
 
-async def _get_recent_l2_facts(graph_store, user_id: str, watermark: float, limit: int = 50) -> list[dict]:
-    """Get L2 facts created after the watermark from Qdrant (all store user_ids)."""
-    import requests
+async def _get_recent_l2_facts(vector_store, user_id: str, watermark: float, limit: int = 50) -> list[dict]:
+    """Get L2 facts created after the watermark from the live zvec vector store.
+
+    Replaces the legacy Qdrant scroll path (Qdrant was removed in v3.1.0; zvec
+    is the only VDB). Reads all store user_ids so facts sharded across ids are
+    all seen.
+
+    NOTE: zvec's ``list_by_user`` uses a zero-vector probe; when a ``layers``
+    filter is passed the combination returns nothing (the zero-vector query
+    scores 0 and is dropped before the filter applies). The proven enumeration
+    path used by ``list_memories`` is to fetch ALL active nodes and filter the
+    layer in Python — so we do exactly that here.
+    """
     try:
+        from hyatlas_memory.core.models.memory import MemoryLayer, MemoryStatus
+
         user_ids = _l5_user_ids(user_id)
-        must = [
-            {"key": "layer", "match": {"value": "l2_fact"}},
-            {"key": "status", "match": {"value": "active"}},
-        ]
-        if len(user_ids) == 1:
-            must.append({"key": "user_id", "match": {"value": user_ids[0]}})
-        else:
-            must.append({"key": "user_id", "match": {"any": user_ids}})
-
         facts: list[dict] = []
-        offset = None
-        page_limit = min(256, max(limit * 4, 64))
 
-        while len(facts) < limit:
-            body: dict = {
-                "limit": page_limit,
-                "with_payload": True,
-                "with_vector": False,
-                "filter": {"must": must},
-            }
-            if offset is not None:
-                body["offset"] = offset
-            resp = requests.post(
-                f"{_L5_QDRANT_URL}/collections/{_L5_COLLECTION}/points/scroll",
-                json=body,
-                timeout=60,
-            )
-            resp.raise_for_status()
-            data = resp.json().get("result") or {}
-            points = data.get("points") or []
-            if not points:
-                break
-            for p in points:
-                payload = p.get("payload", {})
-                ts = _fact_ts(payload)
+        for uid in user_ids:
+            try:
+                nodes = await vector_store.list_by_user(
+                    user_id=uid,
+                    limit=20000,
+                    status_filter=[MemoryStatus.ACTIVE],
+                )
+            except Exception as e:
+                logger.warning(f"[L5] list_by_user failed for {uid}: {e}")
+                continue
+            for n in nodes:
+                # n.layer may be a MemoryLayer enum, the bare value "l2_fact",
+                # or the enum repr string "MemoryLayer.L2_FACT" (as stored in zvec).
+                layer_val = getattr(n, "layer", None)
+                if hasattr(layer_val, "value"):
+                    layer_val = layer_val.value
+                layer_val = str(layer_val).replace("MemoryLayer.", "").lower()
+                if layer_val != "l2_fact":
+                    continue
+                # Prefer the node attribute; custom may be a JSON string.
+                gmt = getattr(n, "gmt_created", None) or getattr(n, "memory_at", None)
+                if not gmt:
+                    custom = getattr(n, "custom", None)
+                    if isinstance(custom, dict):
+                        gmt = custom.get("gmt_created") or custom.get("memory_at")
+                ts = _fact_ts({"gmt_created": gmt, "memory_at": None})
                 if ts > watermark:
                     facts.append({
-                        "id": p["id"],
-                        "content": payload.get("content", ""),
+                        "id": n.node_id,
+                        "content": n.content or "",
                         "gmt_created": ts,
                     })
-            offset = data.get("next_page_offset")
-            if offset is None:
-                break
 
         facts.sort(key=lambda f: f["gmt_created"])
         return facts[:limit]
 
     except Exception as e:
-        logger.warning(f"[L5] could not fetch L2 facts from Qdrant: {e}")
+        logger.warning(f"[L5] could not fetch L2 facts from vector store: {e}")
         return []
 
 
@@ -506,20 +525,32 @@ async def _write_relations(
     return written
 
 
-async def _embed_entities_to_qdrant(
+async def _embed_entities_to_vdb(
     s2_writer,
     entities: list[dict],
     name_to_id: dict[str, str],
     user_id: str,
     agent_id: str,
-):
-    """Embed entity content and write to Qdrant for semantic search."""
-    import asyncio
+) -> bool:
+    """Embed entity names and upsert them into the live zvec VDB for semantic search.
 
-    import requests
-
+    Replaces the legacy Qdrant write (Qdrant removed in v3.1.0). Entities are
+    written as ``l5_knowledge`` nodes in the same zvec collection the rest of the
+    memory lives in, so they surface in normal recall. Best-effort: any failure
+    is logged and returns False so the graph write is still counted as progress.
+    """
     if not entities:
         return False
+
+    vector_store = getattr(s2_writer, "_vector_store", None)
+    if vector_store is None:
+        logger.warning("[L5] no vector_store on s2_writer; skipping entity embed")
+        return False
+
+    import asyncio
+    from hyatlas_memory.core.models.memory import (
+        MemoryLayer, MemoryNode, MemoryStatus, SourceType,
+    )
 
     try:
         texts = [ent["name"] for ent in entities]
@@ -541,41 +572,44 @@ async def _embed_entities_to_qdrant(
 
         if embeddings is None:
             embed_url = os.getenv("MEMORY_L5_EMBED_URL", "http://127.0.0.1:19528/v1/embeddings")
+            import requests
             resp = requests.post(embed_url, json={"input": texts}, timeout=30)
             vectors = resp.json()["data"]
             embeddings = [v["embedding"] for v in vectors]
 
-        points = []
+        written = 0
         for i, ent in enumerate(entities):
             name = ent["name"]
             node_id = name_to_id.get(name, _slugify(name))
-            points.append({
-                "id": _qdrant_point_id(node_id),
-                "vector": embeddings[i],
-                "payload": {
-                    "layer": "l5_knowledge",
-                    "status": "active",
-                    "user_id": user_id,
-                    "agent_id": agent_id,
-                    "content": name,
-                    "content_type": f"ENTITY_{ent.get('type', 'OTHER')}",
-                    "node_id": node_id,
-                    "gmt_created": int(time.time()),
-                },
-            })
+            try:
+                node = MemoryNode(
+                    node_id=node_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    session_id="default_session",
+                    layer=MemoryLayer.L5_KNOWLEDGE,
+                    content=name,
+                    status=MemoryStatus.ACTIVE,
+                    confidence=ent.get("confidence", 0.7),
+                    source_type=SourceType.INFERRED,
+                    gmt_created=datetime.now(),
+                    valid_from=datetime.now(),
+                    embedding=embeddings[i],
+                    custom={
+                        "entity_type": ent.get("type", "OTHER"),
+                        "content_type": f"ENTITY_{ent.get('type', 'OTHER')}",
+                        "source_fact_id": ent.get("source_fact_id", ""),
+                    },
+                    tags=[f"ENTITY_{ent.get('type', 'OTHER')}"],
+                )
+                await vector_store.upsert(node)
+                written += 1
+            except Exception as e:
+                logger.warning(f"[L5] could not upsert entity {name} to zvec: {e}")
 
-        resp = requests.put(
-            f"{_L5_QDRANT_URL}/collections/{_L5_COLLECTION}/points",
-            json={"points": points},
-            timeout=30,
-        )
-        if resp.status_code == 200:
-            logger.info(f"[L5] embedded {len(points)} entities to Qdrant")
-            return True
-        logger.warning(
-            f"[L5] Qdrant embed write failed: {resp.status_code} body={resp.text[:300]}"
-        )
-        return False
+        if written:
+            logger.info(f"[L5] embedded {written} entities to zvec")
+        return written > 0
 
     except Exception as e:
         logger.warning(f"[L5] entity embedding failed: {e}")
@@ -600,14 +634,18 @@ async def run_l5_inprocess(
     if not graph_store or not getattr(graph_store, "_available", False):
         return {"skipped": "graph_store not available"}
 
+    vector_store = getattr(s2_writer, "_vector_store", None)
+    if vector_store is None:
+        return {"skipped": "vector_store not available"}
+
     start = time.time()
 
     try:
         # 1. Read watermark
         watermark = _read_watermark()
 
-        # 2. Get recent L2 facts
-        facts = await _get_recent_l2_facts(graph_store, user_id, watermark, _L5_MAX_FACTS_PER_DIGEST)
+        # 2. Get recent L2 facts from the live zvec vector store
+        facts = await _get_recent_l2_facts(vector_store, user_id, watermark, _L5_MAX_FACTS_PER_DIGEST)
         if not facts:
             return {"skipped": "no new facts since watermark"}
 
@@ -625,16 +663,16 @@ async def run_l5_inprocess(
         # 5. Write relations to Kuzu
         rel_count = await _write_relations(graph_store, relations, name_to_id)
 
-        # 6. Embed entities to Qdrant
-        qdrant_ok = await _embed_entities_to_qdrant(s2_writer, entities, name_to_id, user_id, agent_id)
+        # 6. Embed entities into zvec VDB for semantic recall
+        vdb_ok = await _embed_entities_to_vdb(s2_writer, entities, name_to_id, user_id, agent_id)
 
         # 7. Update watermark only when something actually persisted
         latest_ts = max(f["gmt_created"] for f in facts)
-        if ent_written > 0 or rel_count > 0 or qdrant_ok:
+        if ent_written > 0 or rel_count > 0 or vdb_ok:
             _write_watermark(latest_ts)
             graph_store._checkpoint()
         else:
-            logger.warning("[L5] watermark not advanced: no Kuzu/Qdrant writes succeeded")
+            logger.warning("[L5] watermark not advanced: no Kuzu/zvec writes succeeded")
 
         elapsed = time.time() - start
         result = {

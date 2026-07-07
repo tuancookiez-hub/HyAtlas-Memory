@@ -1444,12 +1444,16 @@ def apply_l5_auto_trigger_patch() -> bool:
 # ---------------------------------------------------------------------------
 
 def apply_l5_inprocess_patch() -> bool:
-    """Hook L5 entity extraction into S2's sweeper cycle (in-process, no lock conflict)."""
-    import os
-    version = os.getenv("MEMORY_L5_VERSION", "").strip()
+    """Hook L5 entity extraction into S2's sweeper cycle (in-process, no lock conflict).
 
-    if version != "2":
-        logger.info(f"[hy-memory/patches] L5 in-process patch skipped (MEMORY_L5_VERSION={version!r}, need '2')")
+    Enabled by default post-v3.1.0 (zvec-only runtime). Disabled only when
+    MEMORY_L5_VERSION is explicitly "1" (legacy stop-server batch).
+    """
+    import os
+    version = os.getenv("MEMORY_L5_VERSION", "").strip().lower()
+
+    if version == "1":
+        logger.info(f"[hy-memory/patches] L5 in-process patch skipped (MEMORY_L5_VERSION={version!r}, legacy batch)")
         return False
 
     from hy_memory.pipelines.system2_writer import System2Writer
