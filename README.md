@@ -5,7 +5,11 @@ A community implementation of the official Hy-Memory 7-layer cognitive memory fr
 > **v3.3.0** — Quality Metrics dashboard tab, 7-day LLM token rollup on memory writes, weekly baseline compare. See [CHANGELOG](./CHANGELOG.md).
 
 <p align="center">
-  <img src="./assets/hyatlas-v3.2-second-brain-evolution.png" alt="HyAtlas v3.2: second brain that evolves — capture, weekly digest, graph patterns" width="720" />
+  <img src="./assets/hyatlas-v3.3.0-quality-metrics.png" alt="HyAtlas v3.3.0: Quality Metrics — 7d token rollup, dashboard scores, weekly baseline" width="720" />
+</p>
+
+<p align="center">
+  <img src="./assets/hyatlas-v3.2-second-brain-evolution.png" alt="HyAtlas v3.2: second brain that evolves — capture, weekly digest, graph patterns" width="640" />
 </p>
 
 > **v3.0.0** is a full SDK fork — the entire hy-memory 1.2.20 codebase (48,371 lines) is now first-party code under `src/hyatlas_memory/core/`. No external `hy-memory` dependency. Includes L5 knowledge graph (upstream stub), emotion-aware memory strength, reasoning model support, and operational hardening.
