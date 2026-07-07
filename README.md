@@ -2,6 +2,12 @@
 
 A community implementation of the official Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan, `memory.hunyuan.tencent.com`) for Hermes Agent. Includes the experimental L7 intention layer. Apache 2.0 licensed.
 
+> **v3.2.0** — Hermes-aligned digest (`agent_id=default`), L4 retired, weekly evolution cron, and proven L5/L6 graph growth. See [CHANGELOG](./CHANGELOG.md).
+
+<p align="center">
+  <img src="./assets/hyatlas-v3.2-second-brain-evolution.png" alt="HyAtlas v3.2: second brain that evolves — capture, weekly digest, graph patterns" width="720" />
+</p>
+
 > **v3.0.0** is a full SDK fork — the entire hy-memory 1.2.20 codebase (48,371 lines) is now first-party code under `src/hyatlas_memory/core/`. No external `hy-memory` dependency. Includes L5 knowledge graph (upstream stub), emotion-aware memory strength, reasoning model support, and operational hardening.
 
 <p align="center">
