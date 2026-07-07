@@ -3063,10 +3063,14 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             + min(35, fresh_l2 // 3)
             + min(25, (gcounts.get("l6_schema") or 0) // 25),
         )
-        activity_score = min(100, sys1_done * 2 + sys2_done * 5)
         latency_score = 100
         if lat is not None and lat > 0:
             latency_score = max(0, min(100, int(100 - (lat - 200) / 20)))
+
+        digest_component = digest_pts.get(digest_status, 5)
+        fresh_component = min(35, fresh_l2 // 3)
+        l6_component = min(25, (gcounts.get("l6_schema") or 0) // 25)
+        activity_score = min(100, sys1_done * 2 + sys2_done * 5)
 
         snapshot = {
             "captured_at": _time.time(),
@@ -3089,6 +3093,51 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 "activity": activity_score,
                 "latency": latency_score,
                 "composite": round((evolution_score * 0.5 + activity_score * 0.3 + latency_score * 0.2)),
+            },
+            "score_breakdown": {
+                "evolution": [
+                    {
+                        "label": "Digest log health",
+                        "points": digest_component,
+                        "max": 40,
+                        "detail": f"status={digest_status}",
+                    },
+                    {
+                        "label": "Fresh L2 backlog (feeds digest)",
+                        "points": fresh_component,
+                        "max": 35,
+                        "detail": f"{fresh_l2} facts waiting",
+                    },
+                    {
+                        "label": "L6 schemas in graph",
+                        "points": l6_component,
+                        "max": 25,
+                        "detail": f"{gcounts.get('l6_schema') or 0} patterns",
+                    },
+                ],
+                "activity": [
+                    {
+                        "label": "System1 memory writes (7d)",
+                        "points": min(100, sys1_done * 2),
+                        "max": 100,
+                        "detail": f"{sys1_done} completed requests",
+                    },
+                    {
+                        "label": "System2 digest runs (7d)",
+                        "points": min(100, sys2_done * 5),
+                        "max": 100,
+                        "detail": f"{sys2_done} completed digests",
+                    },
+                ],
+                "latency": [
+                    {
+                        "label": "Avg System1 write latency",
+                        "points": latency_score,
+                        "max": 100,
+                        "detail": f"{lat} ms" if lat is not None else "no samples",
+                    },
+                ],
+                "composite_weights": "50% evolution + 30% activity + 20% latency",
             },
             "tokens_per_memory_index": tokens_per_memory,
         }
