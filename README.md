@@ -2,7 +2,7 @@
 
 A community implementation of the official Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan, `memory.hunyuan.tencent.com`) for Hermes Agent. Includes the experimental L7 intention layer. Apache 2.0 licensed.
 
-> **v3.2.0** — Hermes-aligned digest (`agent_id=default`), L4 retired, weekly evolution cron, and proven L5/L6 graph growth. See [CHANGELOG](./CHANGELOG.md).
+> **v3.2.1** — Cleanup release: L6 visible in dashboard/graph API, `docs/CLEANUP.md`, Hermes digest + prune cron. See [CHANGELOG](./CHANGELOG.md).
 
 <p align="center">
   <img src="./assets/hyatlas-v3.2-second-brain-evolution.png" alt="HyAtlas v3.2: second brain that evolves — capture, weekly digest, graph patterns" width="720" />
@@ -49,7 +49,9 @@ pip install -e .
 hyatlas setup hermes        # installs plugin + config + tests auto-start
 ```
 
-That's it. The first time you run Hermes after setup, the provider automatically starts Qdrant, the upstream server, and the dashboard in the background — no manual commands needed.
+That's it. The first time you run Hermes after setup, the provider automatically starts the **memory server** and **dashboard** in the background ( **Zvec** in-process — no Qdrant sidecar by default).
+
+**Hermes + evolution:** see [docs/HYATLAS_HERMES.md](docs/HYATLAS_HERMES.md) (identity `hermes-user` / `default`, weekly digest, L6 in graph).
 
 **If you want to see what's happening:**
 
@@ -63,9 +65,9 @@ hyatlas stop            # shut down the stack
 >
 > **`hyatlas console`** is read-only. Shows live service health and recent memory activity (writes, recalls, errors). Closing it does NOT stop the stack.
 
-**Need a vector store?** HyAtlas-Memory v3.1.0 uses **Zvec** by default — an in-process store, no separate binary or port. If you prefer Qdrant, install it (download from [qdrant.tech](https://qdrant.tech/documentation/guides/install/), or `docker run -d -p 6333:6333 qdrant/qdrant`) and set `vector_store.provider: "qdrant"` in your config.
+**Vector store:** **Zvec** is the default (v3.1+). No separate binary or port. Qdrant is **migration/archive only** — see [docs/CLEANUP.md](docs/CLEANUP.md) and `hyatlas archive qdrant`.
 
-**Want Docker instead?** See [Path A — Docker](#path-a--docker-recommended) below.
+**Want Docker instead?** See [Path A — Docker (legacy)](#path-a--docker-legacy-qdrant-compose) below.
 
 **Configure (optional):** edit `~/.hyatlas/config/hy_memory.json` to add your LLM key:
 
@@ -92,9 +94,11 @@ hyatlas stop            # shut down the stack
 
 ---
 
-### Path A — Docker (alternative)
+### Path A — Docker (legacy Qdrant compose)
 
-For users who prefer containers. Everything isolated, no Python/Qdrant setup on host.
+> **Prefer native:** `hyatlas start` (Zvec). The compose file is kept for **migration reference** only — see header in `docker-compose.yml`.
+
+For users who still run the old Qdrant-based compose:
 
 ```bash
 # 1. Get docker-compose.yml (one-time)
@@ -103,7 +107,7 @@ curl -O https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/do
 # 2. Configure your LLM key (one-time)
 echo 'HY_MEMORY_LLM_API_KEY=***' > .env
 
-# 3. Start the stack (Qdrant + upstream server + dashboard)
+# 3. Start the stack (legacy: Qdrant + server + dashboard)
 docker-compose up -d
 
 # 4. Wait ~15s, then verify
@@ -130,9 +134,11 @@ Data lives in `./qdrant_storage` and `~/.hyatlas` (mounted to the host), so it s
 
 | Service | Port | URL | Purpose |
 |---|---|---|---|
-| Qdrant | 6333 | `http://127.0.0.1:6333/dashboard` | Vector store (raw vectors + payload) |
-| Upstream hy-memory | 19527 | `http://127.0.0.1:19527/info` | Embedding + LLM extraction + search |
+| Zvec (in-process) | — | (no HTTP) | Default vector store (v3.1+) |
+| Upstream hy-memory | 19527 | `http://127.0.0.1:19527/info` | Embedding + LLM extraction + search + graph |
 | HyAtlas dashboard | 8765 | `http://127.0.0.1:8765` | Web UI: explore, observe, manage |
+
+Legacy Qdrant sidecar (compose / migration only): port **6333**.
 
 The dashboard is the main thing you'll interact with. The other two are infrastructure.
 
@@ -170,7 +176,7 @@ Agents (or you in the TUI) can explicitly search memories:
 **Stack management** — the bundled `hyatlas` entry point:
 
 ```bash
-hyatlas start           # start the full stack (Qdrant → server → dashboard)
+hyatlas start           # start server + dashboard (Zvec; no Qdrant by default)
 hyatlas stop            # stop all services
 hyatlas status          # check what's running
 hyatlas console         # open live status window (Ctrl+C to close)
@@ -432,6 +438,8 @@ assets/                    # infographic images
 
 ## Documentation
 
+- **[docs/HYATLAS_HERMES.md](docs/HYATLAS_HERMES.md)** — Hermes identity, digest cron, L6 proof
+- **[docs/CLEANUP.md](docs/CLEANUP.md)** — Post-zvec disk/repo cleanup
 - **[docs/DASHBOARD.md](docs/DASHBOARD.md)** — Web UI reference (all 6 pages, Observatory controls, animations)
 - **[docs/API.md](docs/API.md)** — HTTP API reference (every endpoint, request/response shapes)
 - **[docs/LAYERS.md](docs/LAYERS.md)** — Per-layer deep-dive (L0–L7: what, where, when)
@@ -450,7 +458,7 @@ pip install -e ".[dev,test]"
 
 # 2. Run tests
 pytest                     # 33 tests pass offline, 19 skipped (need live server)
-pytest -m integration      # integration tests, needs Qdrant + server running
+pytest -m integration      # integration tests; needs `hyatlas start` (Zvec + server)
 
 # 3. Lint
 ruff check .
@@ -474,7 +482,7 @@ cd HyAtlas-Memory
 pip install -e .
 
 # 3. Your config and data stay where they were
-#    ~/.hyatlas/        (config, data, logs, Kuzu DB, Qdrant storage)
+#    ~/.hyatlas/        (config, data, logs, Kuzu DB, Zvec store)
 #    ~/.hyatlas/config/hy_memory.json  (config)
 ```
 
@@ -492,8 +500,9 @@ Built by [Tuan Dev](https://tuancookiez-hub.github.io/tuandev-portfolio/). Archi
 
 Uses:
 
-- [Kuzu](https://kuzudb.com/) — embedded graph database (L1 raw + L5 graph)
-- [Qdrant](https://qdrant.tech/) / [Chroma](https://www.trychroma.com/) / [FAISS](https://faiss.ai/) — vector store backends
+- [Zvec](https://github.com/alibaba/zvec) — default in-process vector store (v3.1+)
+- [Kuzu](https://kuzudb.com/) — embedded graph database (L5–L7 graph)
+- [Qdrant](https://qdrant.tech/) — migration/archive source only at runtime
 - [SentenceTransformers](https://www.sbert.net/) — local embedding model
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) — the host agent runtime
 

@@ -3364,6 +3364,35 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 },
             })
 
+        if path.split("?")[0] == "/api/l6-schemas":
+            qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            try:
+                n = min(max(int((qs.get("n") or ["8"])[0]), 1), 20)
+            except (ValueError, TypeError):
+                n = 8
+            q = ((qs.get("q") or [""])[0] or "").strip().lower()
+            try:
+                _, data = hy(
+                    "GET",
+                    f"/api/v1/graph?layer=l6_schema&n=50&rels=false",
+                    None,
+                    timeout=90,
+                )
+                nodes = (data or {}).get("nodes") or []
+                if q:
+                    nodes = [
+                        x for x in nodes
+                        if q in (x.get("name") or "").lower()
+                    ]
+                nodes = nodes[:n]
+                return self._json(200, {
+                    "graph_l6_total": (data or {}).get("layer_counts", {}).get("l6_schema"),
+                    "count": len(nodes),
+                    "schemas": nodes,
+                })
+            except Exception as e:
+                return self._json(500, {"error": str(e)})
+
         if path == "/api/layer-counts":
             layer_keys = [
                 "l0_basic_info", "l1_raw", "l2_fact", "l3_summary", "l4_identity",

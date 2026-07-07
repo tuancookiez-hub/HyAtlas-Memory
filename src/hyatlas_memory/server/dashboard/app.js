@@ -13,6 +13,7 @@ let currentPage = 'overview';
 let allMemories = [];
 let layerCountsData = null;  // actual Qdrant counts per layer (used by Memory Composition bar)
 let layerHealthData = null;  // per-user/agent counts from /api/layer-health
+let l6SchemasData = null;    // sample L6 schemas from /api/l6-schemas
 let statusData = null;
 let infoData = null;
 let storageData = null;
@@ -143,7 +144,7 @@ async function fetchJSON(url, options = {}) {
 
 async function loadAllData() {
   try {
-    const [status, info, memories, storage, metrics, codingCount, codingMemories, layerCounts, graphCounts, layerHealth, l5] = await Promise.all([
+    const [status, info, memories, storage, metrics, codingCount, codingMemories, layerCounts, graphCounts, layerHealth, l6Schemas, l5] = await Promise.all([
       fetchJSON('/api/status'),
       fetchJSON('/api/info'),
       fetchJSON('/api/memories?limit=500'),
@@ -154,10 +155,12 @@ async function loadAllData() {
       fetchJSON('/api/layer-counts'),
       fetchJSON('/api/graph-counts'),
       fetchJSON('/api/layer-health').catch(() => null),
+      fetchJSON('/api/l6-schemas?n=6').catch(() => null),
       fetchJSON('/api/l5/graph').catch(() => null),  // L5 may not exist yet; ignore failure
     ]);
     l5Graph = l5;
     layerHealthData = layerHealth;
+    l6SchemasData = l6Schemas;
 
     statusData = status;
     infoData = info;
@@ -1237,6 +1240,14 @@ function renderSystem() {
     <div class="kv-item">
       <div class="kv-label">Manual digest</div>
       <div class="kv-value font-mono text-xs break-all">${escapeHtml(layerHealthData.digest_command || '—')}</div>
+    </div>
+    ` : ''}
+    ${l6SchemasData && l6SchemasData.schemas && l6SchemasData.schemas.length ? `
+    <div class="kv-item" style="grid-column:1/-1">
+      <div class="kv-label">L6 schemas (sample ${l6SchemasData.count} / ${l6SchemasData.graph_l6_total ?? '—'} in graph)</div>
+      <ul class="text-sm" style="margin:8px 0 0;padding-left:18px;line-height:1.45">
+        ${l6SchemasData.schemas.map(s => `<li style="margin-bottom:8px"><span class="font-mono text-xs text-muted">${escapeHtml((s.node_id || '').slice(0,8))}</span> ${escapeHtml((s.name || '').slice(0,220))}${(s.name || '').length > 220 ? '…' : ''}</li>`).join('')}
+      </ul>
     </div>
     ` : ''}
   `;

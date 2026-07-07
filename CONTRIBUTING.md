@@ -2,6 +2,8 @@
 
 > Thanks for your interest in contributing! This is a community implementation of the official [Hy-Memory framework](https://memory.hunyuan.tencent.com) by Tencent Hunyuan. All contributions are welcome — bug reports, docs, code, tests, and design feedback.
 
+> **Local dev (2026+):** use `hyatlas start` with **zvec** (`vector_store.provider: zvec`). Qdrant steps below are **legacy/migration** only. See `docs/CLEANUP.md`.
+
 ## Code of conduct
 
 Be respectful. We're all here to build something useful. Disagreements are fine; personal attacks are not. Assume good faith. When in doubt, follow the [Contributor Covenant](https://www.contributor-covenant.org/).

@@ -485,6 +485,10 @@ def wire_graph_endpoint(handler_cls, json_resp_fn, get_client_fn):
             return
         etype = qs.get("type", [None])[0]
         search = qs.get("q", [None])[0]
+        layer = (qs.get("layer", ["l5_knowledge"])[0] or "l5_knowledge").strip()
+        if layer not in ("l5_knowledge", "l6_schema", "l7_intention"):
+            json_resp(handler, 400, {"error": "layer must be l5_knowledge, l6_schema, or l7_intention"})
+            return
         include_rels = qs.get("rels", ["true"])[0].lower() not in ("false", "0", "no")
 
         client = get_client()
@@ -499,7 +503,7 @@ def wire_graph_endpoint(handler_cls, json_resp_fn, get_client_fn):
 
         nodes = []
         node_q = (
-            "MATCH (m:Memory) WHERE m.layer = 'l5_knowledge' "
+            f"MATCH (m:Memory) WHERE m.layer = '{layer}' "
             "RETURN m.node_id AS id, m.content AS name, m.content_type AS ct, "
             "m.confidence AS conf, m.extra_json AS extra, m.custom_json AS cust, "
             "m.created_at AS ca"
@@ -529,6 +533,7 @@ def wire_graph_endpoint(handler_cls, json_resp_fn, get_client_fn):
                     entity_type = ct.replace("ENTITY_", "", 1)
                 nodes.append({
                     "node_id": row[0], "name": row[1], "content_type": row[2],
+                    "layer": layer,
                     "confidence": row[3],
                     "entity_type": entity_type or "CONCEPT",
                     "mention_count": extra.get("mention_count", 1),
@@ -551,7 +556,7 @@ def wire_graph_endpoint(handler_cls, json_resp_fn, get_client_fn):
             nodes = nodes[:max_n]
 
         relations = []
-        if include_rels and nodes:
+        if include_rels and nodes and layer == "l5_knowledge":
             node_names = {n["name"] for n in nodes}
             rel_q = (
                 "MATCH (a:Memory)-[r:RELATED_TO]->(b:Memory) "

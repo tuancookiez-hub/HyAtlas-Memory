@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.2.1] — 2026-07-08
+
+### Cleanup & L6 visibility
+
+- **Graph API** — `GET /api/v1/graph?layer=l6_schema|l7_intention` returns schema/intention nodes (not only L5).
+- **Dashboard** — `/api/l6-schemas` + Settings → System sample list (568 L6 in Kuzu).
+- **Docs** — `NOW.md` refreshed; `docs/CLEANUP.md` for post-zvec disk hygiene; superseded `PLAN.md` → `docs/archive/`.
+- **Compose** — `docker-compose.yml` marked legacy (runtime is zvec via `hyatlas start`).
+- **README / DASHBOARD** — Zvec-first quick start, Hermes docs links, new API endpoints documented.
+
 ## [3.2.0] — 2026-07-07
 
 ### Hermes single-user second brain (evolution + honesty)
@@ -7,7 +17,7 @@
 - **Digest namespace** — default `agent_id` is `default` (matches Hermes writer); preflight warns on mismatch.
 - **L4 retired** — identity archive script, S2 no longer reads L4, dashboard labels L4 as retired → L2; `/api/layer-health` for digest readiness.
 - **Windows digest** — canonical launcher `%LOCALAPPDATA%\hermes\scripts
-un_hyatlas_digest.py`; weekly Hermes cron (`no_agent`, script-only).
+un_hyatlas_digest.py`; weekly Hermes cron (`no_agent`, script-only); Discord summary on same thread as memory prune.
 - **Graph / retrieval** — Kuzu path pinned at server start; L5–L7 layer counts on graph API; BM25 public API restored.
 - **CLI** — auto-detach for non-TTY `hyatlas start`; L5 in-process extraction hardening.
 

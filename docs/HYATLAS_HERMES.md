@@ -36,7 +36,13 @@ python scripts/run_digest_once.py hermes-user default
 
 ## Dashboard proof
 
-Settings → **System** tab shows `/api/layer-health`: digest namespace, fresh L2, graph L5/L6, digest log status (`ok` / `stale`), and the Windows manual digest command.
+Settings → **System** tab shows `/api/layer-health`: digest namespace, fresh L2, graph L5/L6, digest log status (`ok` / `stale`), the Windows manual digest command, and a **sample of L6 schemas** from `/api/l6-schemas`.
+
+## L6 (behavioral schemas)
+
+- Canonical store: **Kuzu graph** (`layer_counts.l6_schema`, often **568+**). VDB `l6_schema: 0` is normal.
+- Browse: `GET http://127.0.0.1:19527/api/v1/graph?layer=l6_schema&n=10` or dashboard `/api/l6-schemas?n=8`.
+- Digest may **add evidence** to existing schemas without increasing the L6 count every run.
 
 ## Environment
 

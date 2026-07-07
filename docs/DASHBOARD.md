@@ -140,7 +140,9 @@ Configuration and diagnostics:
 
 - **Storage** — VDB provider, collection name, point count, embedding dimensions, file sizes
 - **Configuration** — current `HERMES_USER_IDS`, upstream URL, model names
-- **System info** — Python version, Qdrant version, Kuzu version
+- **System info** — Python version, vector store provider (Zvec / legacy Qdrant), Kuzu version
+- **Hermes / digest** — `/api/layer-health`: namespace, fresh L2, graph L5/L6/relations, digest log status, manual digest command
+- **L6 samples** — `/api/l6-schemas` (Settings → System lists behavioral schemas from Kuzu)
 
 ---
 
@@ -163,6 +165,8 @@ The dashboard's HTTP server (`server/dashboard/dashboard.py`) exposes these endp
 | `GET` | `/api/coding-count` | Total coding memory count |
 | `GET` | `/api/layer-counts` | Counts per layer (L0–L4 from VDB) |
 | `GET` | `/api/graph-counts` | Counts for L5/L6/L7 (from Kuzu graph) |
+| `GET` | `/api/layer-health` | Hermes digest readiness: VDB + graph counts, fresh L2, digest log status |
+| `GET` | `/api/l6-schemas?n=8&q=` | Sample L6 behavioral schemas from graph (`layer=l6_schema`) |
 | `GET` | `/api/l5/graph` | Full L5 knowledge graph (nodes + relations). v2.0.0+ reads live from the server's `/api/v1/graph` (Patch 23); falls back to `l5_kuzu_export.json` only if the upstream is down. |
 | `GET` | `/api/l5/context?memory_id=...` | Context for a specific memory. Same live-first / fallback pattern as `/api/l5/graph`. |
 | `POST` | `/api/search` | Body: `{query, user_id, top_k, ...}` — passthrough to `/api/v1/search` |

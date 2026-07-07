@@ -1,3 +1,5 @@
+# LEGACY: Qdrant-based compose for migration reference only.
+# Default local stack: `hyatlas start` (zvec in-process, no Qdrant sidecar).
 services:
   qdrant:
     image: qdrant/qdrant:latest
