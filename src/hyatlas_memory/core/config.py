@@ -177,6 +177,24 @@ class LLMConfig:
             )
         if self.base_url is None:
             self.base_url = os.getenv("MEMORY_LLM_BASE_URL", os.getenv("LLM_BASE_URL"))
+        if self.extra_headers is None:
+            val = os.getenv("MEMORY_LLM_EXTRA_HEADERS")
+            if val:
+                import json as _json
+
+                try:
+                    self.extra_headers = _json.loads(val)
+                except Exception:
+                    pass
+        if self.extra_body is None:
+            val = os.getenv("MEMORY_LLM_EXTRA_BODY")
+            if val:
+                import json as _json
+
+                try:
+                    self.extra_body = _json.loads(val)
+                except Exception:
+                    pass
         if self.temperature is None:
             self.temperature = _get_env_float("MEMORY_LLM_TEMPERATURE", 0.1)
         if self.max_tokens is None:

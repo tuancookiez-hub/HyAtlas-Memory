@@ -38,7 +38,11 @@ _S2_MAX_UNCLUSTERED_FACTS = int(os.getenv("MEMORY_S2_MAX_UNCLUSTERED_FACTS", "15
 # 簇内 embedding 余弦相似度 ≥ 此阈值视为重复，只保留一条（防系统重复写入闯关）
 _S2_CLUSTER_DEDUP_COSINE = float(os.getenv("MEMORY_S2_CLUSTER_DEDUP_COSINE", "0.92"))
 # 量控制：单次 LLM 调用最多处理多少个 cluster，超出则分多批循环（防 prompt 上下文爆炸）
-_S2_MAX_CLUSTERS_PER_CALL = int(os.getenv("MEMORY_S2_MAX_CLUSTERS_PER_CALL", "8"))
+_S2_MAX_CLUSTERS_PER_CALL = int(os.getenv("MEMORY_S2_MAX_CLUSTERS_PER_CALL", "4"))
+# 量控制：单次 LLM 调用最多携带多少条事实；单个大 cluster 也必须拆分
+_S2_MAX_FACTS_PER_CALL = int(os.getenv("MEMORY_S2_MAX_FACTS_PER_CALL", "8"))
+# S2 输出是短 JSON 操作；限制推理生成预算，避免 reasoning 吞满上下文而无 JSON。
+_S2_MAX_TOKENS = int(os.getenv("MEMORY_S2_MAX_TOKENS", "1024"))
 # 量控制：一个认知周期最多处理多少个 cluster（0 = 不限）；超出留到下个周期重新聚类
 _S2_MAX_CLUSTERS_PER_RUN = int(os.getenv("MEMORY_S2_MAX_CLUSTERS_PER_RUN", "0"))
 
@@ -602,6 +606,17 @@ async def run_system2_agent(
     lang = _detect_language(materials)
     system_prompt = _build_single_call_system_prompt(lang)
     user_msg = _build_materials_message(materials, lang=lang)
+    logger.warning(
+        "[S2-agent] prompt composition: system_chars=%d user_chars=%d "
+        "clusters=%d facts=%d unprocessed=%d forward=%d reverse=%d",
+        len(system_prompt),
+        len(user_msg),
+        len(materials.get("clusters", []) or []),
+        sum(len(c.get("facts", [])) for c in materials.get("clusters", []) or []),
+        len(materials.get("unprocessed_facts", []) or []),
+        len(materials.get("graph_forward", []) or []),
+        len(materials.get("graph_reverse", []) or []),
+    )
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -612,7 +627,7 @@ async def run_system2_agent(
     try:
         response = await llm_provider.complete_messages(
             messages=messages,
-            max_tokens=config.llm.agent_max_tokens or 4000,
+            max_tokens=min(config.llm.agent_max_tokens or 4000, _S2_MAX_TOKENS),
             temperature=config.llm.temperature,
         )
     except Exception as e:
@@ -633,7 +648,8 @@ async def run_system2_agent(
     if operations is None:
         logger.warning("[S2-agent] Failed to parse operations JSON from response")
         return {
-            "success": True,
+            "success": False,
+            "error": "invalid_operations_json",
             "tool_calls": [],
             "tool_call_log": [],
             "agent_reasoning": agent_reasoning,
@@ -730,21 +746,49 @@ async def run_system2_agent_batched(
 
     clusters = materials.get("clusters", []) or []
 
-    # cluster 数不超过单次上限：单次（保持原语义）
-    if len(clusters) <= per_call:
-        result = await run_system2_agent(materials, tool_executor, config)
-        result["batches"] = 1
-        result["clusters_total"] = len(clusters)
-        result["clusters_processed"] = len(clusters)
-        return result
-
-    # 本周期处理上限
+    # 本周期处理上限先应用于原始 cluster，避免 fact 分片绕过周期预算。
     if per_run > 0 and len(clusters) > per_run:
         logger.info(
             f"[S2-agent] clusters={len(clusters)} > per_run={per_run}, "
             f"processing first {per_run} this cycle, rest deferred to next cycle"
         )
         clusters = clusters[:per_run]
+
+    # 一个 cluster 可能本身包含过多事实；只按 cluster 数分批不足以控制上下文。
+    # 分片保留原事实顺序和 node_id，禁止静默丢弃证据。
+    fact_limit = max(1, _S2_MAX_FACTS_PER_CALL)
+    parts: list[dict[str, Any]] = []
+    split = False
+    for cluster in clusters:
+        facts = cluster.get("facts", []) or []
+        if len(facts) <= fact_limit:
+            parts.append(cluster)
+            continue
+        split = True
+        for start in range(0, len(facts), fact_limit):
+            part = dict(cluster)
+            part["facts"] = facts[start:start + fact_limit]
+            part["part"] = f"{start // fact_limit + 1}/{(len(facts) + fact_limit - 1) // fact_limit}"
+            parts.append(part)
+        logger.info(
+            f"[S2-agent] split cluster facts={len(facts)} into "
+            f"{(len(facts) + fact_limit - 1) // fact_limit} parts"
+        )
+    clusters = parts
+
+    # If the workload exceeds the fact budget, keep each fact part in its own call.
+    # This is conservative but prevents several small clusters from rebuilding a large prompt.
+    total_facts = sum(len(c.get("facts", []) or []) for c in clusters)
+    batch_call = 1 if total_facts > fact_limit or split else per_call
+
+    if len(clusters) <= batch_call:
+        sub_materials = dict(materials)
+        sub_materials["clusters"] = clusters
+        result = await run_system2_agent(sub_materials, tool_executor, config)
+        result["batches"] = 1
+        result["clusters_total"] = len(materials.get("clusters", []) or [])
+        result["clusters_processed"] = len(clusters)
+        return result
 
     # 聚合容器
     agg_tool_calls: list[dict[str, Any]] = []
@@ -755,27 +799,34 @@ async def run_system2_agent_batched(
     total_completion_tokens = 0
     total_elapsed_ms = 0.0
     batches = 0
-    any_success = False
+    all_success = True
+    errors: list[str] = []
 
-    n_batches = (len(clusters) + per_call - 1) // per_call
+    n_batches = (len(clusters) + batch_call - 1) // batch_call
     logger.info(
-        f"[S2-agent] batched mode: {len(clusters)} clusters → "
-        f"{n_batches} batches × {per_call} clusters/call"
+        f"[S2-agent] batched mode: {len(clusters)} cluster parts → "
+        f"{n_batches} batches × {batch_call} parts/call"
     )
 
-    for bi in range(0, len(clusters), per_call):
-        batch_clusters = clusters[bi:bi + per_call]
+    for bi in range(0, len(clusters), batch_call):
+        batch_clusters = clusters[bi:bi + batch_call]
         batches += 1
 
-        # 子 materials：本批 clusters + 共享 graph/tags；
-        # unprocessed_facts 只保留不在本批 cluster 内的（避免重复，仍受 _S2_MAX_UNCLUSTERED_FACTS 限制）
+        # 子 materials：本批 clusters + 与本批 facts 相关的 graph 引用；
+        # 未聚类补充只在首批发送，避免在每个 fact part 中重复占用上下文。
         batch_node_ids = {f["node_id"] for c in batch_clusters for f in c.get("facts", [])}
         all_unclustered = materials.get("unprocessed_facts", []) or []
-        batch_unclustered = [f for f in all_unclustered if f.get("node_id") not in batch_node_ids]
+        batch_unclustered = all_unclustered if bi == 0 else []
+        all_reverse = materials.get("graph_reverse", []) or []
+        batch_reverse = [
+            r for r in all_reverse
+            if r.get("evidence_vdb_id") in batch_node_ids
+        ]
 
         sub_materials = dict(materials)
         sub_materials["clusters"] = batch_clusters
         sub_materials["unprocessed_facts"] = batch_unclustered
+        sub_materials["graph_reverse"] = batch_reverse
 
         batch_result = await run_system2_agent(sub_materials, tool_executor, config)
 
@@ -790,7 +841,10 @@ async def run_system2_agent_batched(
         total_prompt_tokens += batch_result.get("total_prompt_tokens", 0) or 0
         total_completion_tokens += batch_result.get("total_completion_tokens", 0) or 0
         total_elapsed_ms += batch_result.get("elapsed_ms", 0) or 0
-        any_success = any_success or bool(batch_result.get("success"))
+        ok = bool(batch_result.get("success"))
+        all_success = all_success and ok
+        if not ok:
+            errors.append(str(batch_result.get("error", "system2_batch_failed")))
 
     logger.info(
         f"[S2-agent] batched done: {batches} batches, "
@@ -798,7 +852,8 @@ async def run_system2_agent_batched(
     )
 
     return {
-        "success": any_success,
+        "success": all_success,
+        "error": errors[0] if errors else "",
         "tool_calls": agg_tool_calls,
         "tool_call_log": agg_tool_call_log,
         "agent_reasoning": "\n\n".join(agg_reasoning_parts),
@@ -886,25 +941,26 @@ def _parse_operations_json(text: str) -> list[dict[str, Any]] | None:
     """Parse JSON array of operations from LLM response text."""
     import re
 
-    # Try to find ```json ... ``` block
-    match = re.search(r'```json\s*([\s\S]*?)\s*```', text)
+    text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
+
+    # Try to find a fenced block, allowing uppercase language tags.
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, flags=re.IGNORECASE)
     if match:
         json_str = match.group(1).strip()
     else:
-        # Try raw JSON array
-        match = re.search(r'\[\s*\{[\s\S]*\}\s*\]', text)
-        if match:
-            json_str = match.group(0)
-        elif '[]' in text:
-            return []
-        else:
+        # Decode the first raw array while tolerating a short prose prefix.
+        start = text.find("[")
+        if start < 0:
             return None
+        try:
+            result, _ = json.JSONDecoder().raw_decode(text[start:])
+        except json.JSONDecodeError:
+            return None
+        return result if isinstance(result, list) else None
 
     try:
         result = json.loads(json_str)
-        if isinstance(result, list):
-            return result
-        return None
+        return result if isinstance(result, list) else None
     except json.JSONDecodeError:
         logger.warning(f"[S2-agent] JSON parse failed: {json_str[:200]}")
         return None

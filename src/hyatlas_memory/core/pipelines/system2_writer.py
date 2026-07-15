@@ -162,7 +162,7 @@ class System2Writer(WritePipeline):
           - agent_generate_ms（纯 LLM 时间，= agent elapsed - tools 总耗时）
           - tools_avg_ms（tool 平均执行耗时）
         """
-        from .system2_agent import prepare_materials, run_system2_agent, s2_agent_skip_reason
+        from .system2_agent import prepare_materials, run_system2_agent_batched, s2_agent_skip_reason
         from .system2_tools import System2ToolExecutor
 
         user_id = payload["user_id"]
@@ -220,7 +220,7 @@ class System2Writer(WritePipeline):
             agent_id=agent_id,
         )
 
-        agent_result = await run_system2_agent(
+        agent_result = await run_system2_agent_batched(
             materials=materials,
             tool_executor=tool_executor,
             config=self.config,
@@ -317,7 +317,7 @@ class System2Writer(WritePipeline):
         """
         System 2 Agent — 预处理 + LLM Agent + Graph tools
         """
-        from .system2_agent import prepare_materials, run_system2_agent, s2_agent_skip_reason
+        from .system2_agent import prepare_materials, run_system2_agent_batched, s2_agent_skip_reason
         from .system2_tools import System2ToolExecutor
 
         user_id = payload["user_id"]
@@ -378,7 +378,7 @@ class System2Writer(WritePipeline):
             agent_id=agent_id,
         )
 
-        agent_result = await run_system2_agent(
+        agent_result = await run_system2_agent_batched(
             materials=materials,
             tool_executor=tool_executor,
             config=self.config,
@@ -647,6 +647,16 @@ class System2Writer(WritePipeline):
             "created_at": datetime.now().isoformat(),
         }
         results = await self._run_system2_workers(payload)
+
+        agent = results.get("system2_agent") if isinstance(results, dict) else None
+        if isinstance(agent, dict) and not agent.get("success", False):
+            return {
+                "success": False,
+                "request_id": request_id,
+                "tasks_processed": 0,
+                "error": agent.get("error", "system2_agent_failed"),
+                "results": results,
+            }
 
         # Cross-domain sweeper（在 System2 之后执行一次）
         sweeper_result = await self._run_cross_domain_sweeper(

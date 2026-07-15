@@ -528,8 +528,19 @@ class LLMProvider:
                 logger.debug(
                     f"[llm] response: {len(response.content)} chars, "
                     f"tokens={response.tokens_used}, "
+                    f"finish={response.finish_reason}, "
                     f"tool_calls={len(response.tool_calls) if response.tool_calls else 0}"
                 )
+                if not response.content.strip() and not response.tool_calls:
+                    prompt_chars = sum(len(str(m.get("content", ""))) for m in messages)
+                    detail = (
+                        f"empty LLM response (finish={response.finish_reason}, "
+                        f"prompt_chars={prompt_chars}, tokens={response.tokens_used})"
+                    )
+                    if response.finish_reason == "length":
+                        logger.warning(f"[llm] {detail}; not retrying")
+                        return response
+                    raise RuntimeError(detail)
 
                 return response
 

@@ -30,6 +30,11 @@ def post_json(path: str, body: dict, timeout: int = 120) -> dict:
         return json.loads(r.read().decode())
 
 
+PROFILE_AGENTS = frozenset({
+    "default", "research", "sentinel", "work-backend", "work-frontend", "trading", "hestia",
+})
+
+
 def preflight(user_id: str, agent_id: str) -> dict:
     """Warn when digest agent_id does not match where VDB facts live."""
     chosen = post_json("/api/v1/list", {"user_id": user_id, "agent_id": agent_id, "limit": 5000})
@@ -43,7 +48,7 @@ def preflight(user_id: str, agent_id: str) -> dict:
     )
     alt = None
     alt_l2 = 0
-    if agent_id != "default":
+    if agent_id not in PROFILE_AGENTS:
         try:
             d = post_json("/api/v1/list", {"user_id": user_id, "agent_id": "default", "limit": 5000})
             am = (d.get("vdb") or {}).get("memories") or []
