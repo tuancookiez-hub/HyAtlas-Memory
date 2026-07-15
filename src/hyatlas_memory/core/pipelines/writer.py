@@ -1085,6 +1085,13 @@ class MemoryWriter(WritePipeline):
                     _l1_error = str(persist_err)
                     s.set_error(_l1_error)
                     logger.error(f"V1 Write: Persist failed (non-fatal): {persist_err}", exc_info=True)
+                    # Persist failure MUST surface as a failed write, not
+                    # silently swallow into success=True. Without this, callers
+                    # think data was saved when nothing actually landed.
+                    response.success = False
+                    response.error_code = 502
+                    response.error_message = f"[PERSIST_FAILED] {persist_err}"
+                    return response
             _l1_ms = (datetime.now() - _t_l1).total_seconds() * 1000
             # sparse 全文向量是否随本次 upsert 写入（tencent + BM25 可用时为 True）
             _sparse_enabled = bool(getattr(vector_store, "supports_fulltext", False))

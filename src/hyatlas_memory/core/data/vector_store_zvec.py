@@ -416,12 +416,36 @@ class ZvecVectorStore(VectorStoreBase):
 
     async def update_payload(self, node_id: str, updates: dict[str, Any]) -> bool:
         """Update only payload fields (vector unchanged)."""
+        import json
         import zvec
+        clean = {}
+        for name, val in updates.items():
+            if val is None:
+                continue
+            if name in ("custom", "meta_info") and isinstance(val, (dict, list)):
+                clean[name] = json.dumps(val, ensure_ascii=False)
+            elif name in ("meta_tags", "supersedes", "superseded_by", "tags"):
+                clean[name] = [str(v) for v in val] if isinstance(val, list) else [str(val)]
+            elif name in ("memory_at", "gmt_created", "gmt_modified", "valid_from", "valid_until", "last_accessed_at") and isinstance(val, (int, float)) and val > 0:
+                from datetime import datetime, timezone
+                clean[name] = datetime.fromtimestamp(val, tz=timezone.utc).isoformat()
+            elif isinstance(val, bool):
+                clean[name] = "true" if val else "false"
+            else:
+                clean[name] = str(val) if val != "" else None
+
         point_id = self._node_id_to_point_id(node_id)
         try:
             def _update():
+                # zvec requires the full doc shape on update — fetch the existing
+                # embedding so a payload-only update doesn't trip schema validation.
+                existing = self._coll.fetch([point_id], include_vector=True)
+                vectors = None
+                doc = existing.get(point_id) if existing else None
+                if doc is not None and getattr(doc, "vectors", None):
+                    vectors = {"embedding": doc.vectors.get("embedding")}
                 self._coll.update(zvec.DocList([
-                    zvec.Doc(id=point_id, fields=updates)
+                    zvec.Doc(id=point_id, fields=clean, vectors=vectors)
                 ]))
                 self._coll.flush()
             await _run_in_vdb_pool(_update)
@@ -571,11 +595,20 @@ class ZvecVectorStore(VectorStoreBase):
     async def delete_by_filter(self, filt: str) -> int:
         """Delete points matching a zvec filter string. Returns count deleted."""
         try:
+            import zvec
+            dims = self.config.vector_store.embedding_dims or 1024
+            def _count():
+                rows = self._coll.query(
+                    queries=zvec.Query(field_name="embedding", vector=[0.0] * dims),
+                    topk=100_000, filter=filt,
+                )
+                return len(rows)
+            n = await _run_in_vdb_pool(_count)
             def _delete():
                 self._coll.delete_by_filter(filter=filt)
                 self._coll.flush()
             await _run_in_vdb_pool(_delete)
-            return -1
+            return n
         except Exception as e:
             logger.warning(f"[zvec] delete_by_filter failed: {e}")
             return 0
@@ -583,13 +616,21 @@ class ZvecVectorStore(VectorStoreBase):
     async def delete_by_isolation_key(self, isolation_key: str) -> int:
         """Delete all points under an isolation key."""
         try:
-            def _delete():
-                self._coll.delete_by_filter(
-                    filter=f'isolation_key = {_quote(isolation_key)}'
+            import zvec
+            dims = self.config.vector_store.embedding_dims or 1024
+            filt = f'isolation_key = {_quote(isolation_key)}'
+            def _count():
+                rows = self._coll.query(
+                    queries=zvec.Query(field_name="embedding", vector=[0.0] * dims),
+                    topk=100_000, filter=filt,
                 )
+                return len(rows)
+            n = await _run_in_vdb_pool(_count)
+            def _delete():
+                self._coll.delete_by_filter(filter=filt)
                 self._coll.flush()
             await _run_in_vdb_pool(_delete)
-            return -1
+            return n
         except Exception as e:
             logger.warning(f"[zvec] delete_by_isolation_key failed: {e}")
             return 0
@@ -600,7 +641,7 @@ class ZvecVectorStore(VectorStoreBase):
         agent_id: str | None = None,
         session_id: str | None = None,
     ) -> int:
-        """Delete by metadata field combination."""
+        """Delete by metadata field combination. Returns count deleted."""
         parts = [f"user_id = {_quote(user_id)}"]
         if agent_id is not None:
             parts.append(f"agent_id = {_quote(agent_id)}")
@@ -609,11 +650,20 @@ class ZvecVectorStore(VectorStoreBase):
         filt = " AND ".join(parts)
 
         try:
+            import zvec
+            dims = self.config.vector_store.embedding_dims or 1024
+            def _count():
+                rows = self._coll.query(
+                    queries=zvec.Query(field_name="embedding", vector=[0.0] * dims),
+                    topk=100_000, filter=filt,
+                )
+                return len(rows)
+            n = await _run_in_vdb_pool(_count)
             def _delete():
                 self._coll.delete_by_filter(filter=filt)
                 self._coll.flush()
             await _run_in_vdb_pool(_delete)
-            return -1
+            return n
         except Exception as e:
             logger.warning(f"[zvec] delete_by_metadata failed: {e}")
             return 0
