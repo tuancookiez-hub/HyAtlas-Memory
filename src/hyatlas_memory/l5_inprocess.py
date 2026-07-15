@@ -57,7 +57,7 @@ ALIAS_MAP = {
     "herm": "Hermes", "hermes agent": "Hermes", "hermes-agent": "Hermes",
     "hermes cli": "Hermes", "hermes ai": "Hermes",
     "hy_memory": "Hy-Memory", "hy-memory": "Hy-Memory",
-    "tuanc": "TunaCookie", "tuna cookie": "TunaCookie",
+    # Username aliases — override via HERMES_DISPLAY_NAME env var (default: "User")
 }
 
 SYSTEM_PROMPT = """You extract a knowledge graph from memory facts.
@@ -90,7 +90,7 @@ Relation types: owns, uses, works_on, depends_on, replaces, related_to, is_a, pa
         {"name": "Hermes", "type": "PRODUCT", "confidence": 0.95}
       ],
       "relations": [
-        {"a": "TunaCookie", "b": "Hermes", "type": "uses", "confidence": 0.90}
+        {"a": "<user>", "b": "Hermes", "type": "uses", "confidence": 0.90}
       ]
     }
   ]
@@ -234,7 +234,7 @@ def _l5_user_ids(primary: str) -> list[str]:
     if raw:
         ids = [x.strip() for x in raw.split(",") if x.strip()]
     else:
-        ids = ["hermes-user", "tuanc", "221727702992945152"]
+        ids = ["hermes-user", "<discord_user_id>"]  # override via MEMORY_L5_USER_IDS env var
     if primary and primary not in ids:
         ids.insert(0, primary)
     return ids

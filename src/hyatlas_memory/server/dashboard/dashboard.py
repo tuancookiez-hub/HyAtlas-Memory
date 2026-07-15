@@ -5,7 +5,7 @@
 Talks to the local hyatlas-memory HTTP API (port 19527 by default).
 
 > This dashboard is for the community implementation at
-> github.com/tuancookiez-hub/HyAtlas-Memory. The canonical 6-layer model
+> github.com/<owner>/HyAtlas-Memory. The canonical 6-layer model
 > and three-mode design (Lite/Pro/Ultra) are defined by the official
 > Hy-Memory framework at https://memory.hunyuan.tencent.com.
 
@@ -49,6 +49,7 @@ REFRESH_S = int(os.environ.get("HY_DASH_REFRESH_S", "30"))
 # The token is auto-generated on first run and stored in ~/.hy_memory/.
 import pathlib as _pathlib
 import secrets as _secrets
+from hyatlas_memory.layout import home as hy_home
 
 _DASH_TOKEN_FILE = _pathlib.Path.home() / ".hy_memory" / ".dashboard_token"
 DASH_TOKEN: str | None = None
@@ -80,13 +81,15 @@ QDRANT_BASE = os.environ.get("QDRANT_BASE", "http://127.0.0.1:6333").rstrip("/")
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "agent_memories_1024")
 
 
-def _qdrant_layer_count(layer: str, *, require_is_latest: bool = True) -> int:
+def _qdrant_layer_count(layer: str, *, require_is_latest: bool = True, agent_id: str = "") -> int:
     """Count points in Qdrant for one layer (dashboard composition bar)."""
     must = [{"key": "layer", "match": {"value": layer}}]
     if require_is_latest:
         must.append({"key": "is_latest", "match": {"value": True}})
     elif layer == "l5_knowledge":
         must.append({"key": "status", "match": {"value": "active"}})
+    if agent_id:
+        must.append({"key": "agent_id", "match": {"value": agent_id}})
     body = {"filter": {"must": must}}
     try:
         req = urllib.request.Request(
@@ -101,16 +104,17 @@ def _qdrant_layer_count(layer: str, *, require_is_latest: bool = True) -> int:
         return 0
 
 
-def _vdb_layer_count(layer: str, *, require_is_latest: bool = True) -> int:
+def _vdb_layer_count(layer: str, *, require_is_latest: bool = True, agent_id: str = "") -> int:
     """Layer count via memory server (works with zvec; falls back to Qdrant HTTP)."""
     latest = "true" if require_is_latest else "false"
+    suffix = f"&agent_id={agent_id}" if agent_id else ""
     code, body = hy(
         "GET",
-        f"/api/v1/vdb/layer_count?layer={layer}&require_is_latest={latest}",
+        f"/api/v1/vdb/layer_count?layer={layer}&require_is_latest={latest}{suffix}",
     )
     if code == 200 and isinstance(body, dict) and "count" in body:
         return int(body["count"])
-    return _qdrant_layer_count(layer, require_is_latest=require_is_latest)
+    return _qdrant_layer_count(layer, require_is_latest=require_is_latest, agent_id=agent_id)
 
 
 def _l5_export_path() -> _pathlib.Path:
@@ -146,17 +150,32 @@ def _l5_export_path() -> _pathlib.Path:
 # sessions and profiles. We query every known (user_id, agent_id) pair so
 # the dashboard shows data from every scope, not just the current session.
 #
-# Discovered 2026-06-12 from a Qdrant full scroll:
+# Discovered 2026-06-12 from a full memory scroll:
 #   hermes-user       → 985 points, agent_id="default"
-#   221727702992945152 →  13 points, agent_id="default"
-#   tuancookiez       →   5 points, agent_id="default_agent"
+#   <discord_user_id> →  13 points, agent_id="default"
+#   <legacy_username> →   5 points, agent_id="default_agent"
 # If a new (user_id, agent_id) pair appears in production, add it here.
+# Source-of-truth user_id list for dashboard queries. Defaults are the two
+# public-safe namespaces; override via HYATLAS_DASHBOARD_USER_IDS env var
+# (comma-separated) for personal Discord-user-keyed data.
+_default_user_ids = "hermes-user,<discord_user_id>"
 HERMES_USER_IDS = [
-    "tuanc",            # primary user (memories from l3-summarizer, hermes, default_agent, l5-pipeline, ops-check, etc.)
-    "hermes-user",      # legacy/CLI-added memories
-    "221727702992945152",
-]
+    uid.strip()
+    for uid in os.environ.get("HYATLAS_DASHBOARD_USER_IDS", _default_user_ids).split(",")
+    if uid.strip() and uid.strip() != "<discord_user_id>"
+] or ["hermes-user"]
 HERMES_USER_IDS_JS = json.dumps(HERMES_USER_IDS)  # inject into JS
+PROFILE_AGENT_IDS = ["default", "research", "sentinel", "work-backend", "work-frontend", "trading", "hestia"]
+
+
+def _agent_param(qs: dict) -> str:
+    """Return a validated dashboard agent filter; empty means all agents."""
+    value = (qs.get("agent_id") or [""])[0].strip()
+    if value in ("", "all"):
+        return ""
+    if value not in PROFILE_AGENT_IDS:
+        raise ValueError("invalid agent_id")
+    return value
 
 # Layer colors (matches CSS .layer-l0..l7)
 LAYER_COLORS = {
@@ -297,7 +316,7 @@ def _extract_memories(payload: dict) -> list[dict]:
     return normalized
 
 
-def _fetch_l1_raw_from_qdrant(limit_total: int = 1500) -> list[dict]:
+def _fetch_l1_raw_from_qdrant(limit_total: int = 1500, agent_id: str = "") -> list[dict]:
     """Fetch active L1_RAW memories directly from Qdrant.
 
     Hy-Memory's /api/v1/list intentionally excludes the l1_raw layer from the
@@ -316,12 +335,15 @@ def _fetch_l1_raw_from_qdrant(limit_total: int = 1500) -> list[dict]:
         })
     if not pairs_should:
         return []
+    must = [
+        {"key": "layer", "match": {"value": "l1_raw"}},
+        {"key": "is_latest", "match": {"value": True}},
+    ]
+    if agent_id:
+        must.append({"key": "agent_id", "match": {"value": agent_id}})
     body = {
         "filter": {
-            "must": [
-                {"key": "layer",   "match": {"value": "l1_raw"}},
-                {"key": "is_latest", "match": {"value": True}},
-            ],
+            "must": must,
             "should": pairs_should,
         },
         "limit": limit_total,
@@ -358,16 +380,16 @@ def _fetch_l1_raw_from_qdrant(limit_total: int = 1500) -> list[dict]:
     return items
 
 
-def _fetch_l1_raw_from_vdb(limit_total: int = 1500) -> list[dict]:
+def _fetch_l1_raw_from_vdb(limit_total: int = 1500, agent_id: str = "") -> list[dict]:
     code, body = hy(
         "POST",
         "/api/v1/vdb/scroll",
-        {"mode": "l1_raw", "user_ids": HERMES_USER_IDS, "limit": limit_total},
+        {"mode": "l1_raw", "user_ids": HERMES_USER_IDS, "limit": limit_total, "agent_id": agent_id},
     )
     if code == 200 and isinstance(body, dict):
         items = body.get("items") or []
     else:
-        items = _fetch_l1_raw_from_qdrant(limit_total=limit_total)
+        items = _fetch_l1_raw_from_qdrant(limit_total=limit_total, agent_id=agent_id)
     # Upstream returns gmt_created as an ISO string; normalize to a Unix
     # int so the dashboard's `Date(ts * 1000)` math never hits NaN.
     for m in items:
@@ -2054,7 +2076,7 @@ async function doSearch() {
   const t0 = performance.now();
   const r = await api('/api/search', { method:'POST',
     headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ query: q, user_ids:['221727702992945152','hermes-user'], limit: lim, min_score: minScore }) });
+    body: JSON.stringify({ query: q, user_ids: HERMES_USER_IDS_JS_VALUES, limit: lim, min_score: minScore }) });
   const dt = (performance.now()-t0).toFixed(0);
   document.getElementById('search-elapsed').textContent = `client: ${dt}ms`;
   if (r.status !== 200) { box.innerHTML = `<div class="err-msg">${esc(r.body.error||r.status)}</div>`; return; }
@@ -3219,14 +3241,15 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             "history_points": len(history),
         }
 
-    def _build_quality_metrics(self) -> dict:
+    def _build_quality_metrics(self, requested_agent: str = "") -> dict:
         import pathlib
         import time as _time
 
         _, m7 = hy("GET", "/api/v1/metrics?minutes=10080", timeout=15)
         _, m1 = hy("GET", "/api/v1/metrics?minutes=60", timeout=10)
         _, status = hy("GET", "/api/v1/status", timeout=10)
-        _, graph = hy("GET", "/api/v1/graph", None, timeout=60)
+        graph_path = "/api/v1/graph" + (f"?agent_id={requested_agent}" if requested_agent else "")
+        _, graph = hy("GET", graph_path, None, timeout=60)
         m7 = m7 or {}
         m1 = m1 or {}
         status = status or {}
@@ -3234,7 +3257,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         gcounts = graph.get("layer_counts") or {}
 
         user_id = os.environ.get("HY_MEMORY_USER_ID", "hermes-user")
-        agent_id = os.environ.get("HY_MEMORY_AGENT_ID", "default")
+        agent_id = requested_agent or os.environ.get("HY_MEMORY_AGENT_ID", "default")
         fresh_l2 = 0
         l2_total = 0
         try:
@@ -3252,7 +3275,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         except Exception:
             pass
 
-        log_path = pathlib.Path.home() / ".hyatlas" / "logs" / "digest_run_latest.log"
+        log_path = hy_home() / "logs" / "digest_run_latest.log"
         digest_status = "missing"
         if log_path.is_file():
             try:
@@ -3266,11 +3289,17 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             except OSError:
                 digest_status = "unreadable"
 
+        def num(value, default=0):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
         llm7 = (m7.get("llm_tokens") or {})
-        llm_total = int(llm7.get("total") or 0)
-        vdb_pts = int(status.get("vdb_points") or 0)
-        sys1_done = int((m7.get("requests") or {}).get("completed") or 0)
-        sys2_done = int((m7.get("sys2_requests") or {}).get("completed") or 0)
+        llm_total = num(llm7.get("total"))
+        vdb_pts = num(status.get("vdb_points"))
+        sys1_done = num((m7.get("requests") or {}).get("completed"))
+        sys2_done = num((m7.get("sys2_requests") or {}).get("completed"))
         lat = (m7.get("avg_latency_ms") or {}).get("sys1_total")
         relations = int(graph.get("relation_count") or 0)
 
@@ -3524,23 +3553,52 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             self.wfile.write(body)
             return
 
+        if path == "/api/profiles":
+            profiles = []
+            for agent_id in PROFILE_AGENT_IDS:
+                vdb_count = 0
+                graph_count = 0
+                for uid in HERMES_USER_IDS:
+                    code, payload = hy(
+                        "POST",
+                        "/api/v1/list",
+                        {"user_id": uid, "agent_id": agent_id, "offset": 0, "limit": 1},
+                        timeout=15,
+                    )
+                    if code == 200:
+                        raw = (payload or {}).get("vdb") or {}
+                        vdb_count += int(raw.get("total") or 0)
+                        graph = (payload or {}).get("graph") or {}
+                        graph_count += int(graph.get("total") or len(graph.get("nodes") or []))
+                profiles.append({
+                    "agent_id": agent_id,
+                    "vdb_count": vdb_count,
+                    "graph_count": graph_count,
+                    "memory_count": vdb_count + graph_count,
+                })
+            return self._json(200, {"profiles": profiles})
+
         if path == "/api/memories":
             qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
             try:
                 offset = int(qs.get("offset", ["0"])[0])
                 limit = min(int(qs.get("limit", ["25"])[0]), 500)
+                agent_id = _agent_param(qs)
             except ValueError:
-                return self._json(400, {"error": "bad offset/limit"})
+                return self._json(400, {"error": "bad offset/limit/agent_id"})
             # Query each known user_id and merge results.
             # (the /api/v1/list endpoint only accepts a single user_id)
             all_items = []
             total = 0
             for uid in HERMES_USER_IDS:
-                code, payload = hy("POST", "/api/v1/list", {
+                body = {
                     "user_id": uid,
                     "offset": offset,
                     "limit": max(limit * 2, 100),
-                }, timeout=15)
+                }
+                if agent_id:
+                    body["agent_id"] = agent_id
+                code, payload = hy("POST", "/api/v1/list", body, timeout=15)
                 if code == 200:
                     items = _extract_memories(payload)
                     raw = (payload or {}).get("vdb") or {}
@@ -3560,7 +3618,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             # design, but the dashboard wants to show them. Normalized
             # to the same shape as the items above, so the rest of the
             # dedupe + sort logic just works.
-            l1_raw_items = _fetch_l1_raw_from_vdb()
+            l1_raw_items = _fetch_l1_raw_from_vdb(agent_id=agent_id)
             l1_raw_total = len(l1_raw_items)
             for m in l1_raw_items:
                 mid = m.get("memory_id") or ""
@@ -3590,6 +3648,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 "total": total + l1_raw_total,
                 "offset": offset,
                 "limit": limit,
+                "agent_id": agent_id or "all",
             })
 
         if path == "/api/metrics":
@@ -3597,7 +3656,12 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             return self._json(code or 502, payload)
 
         if path.split("?")[0] == "/api/quality-metrics":
-            return self._json(200, self._build_quality_metrics())
+            qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            try:
+                agent_id = _agent_param(qs)
+            except ValueError:
+                return self._json(400, {"error": "invalid agent_id"})
+            return self._json(200, self._build_quality_metrics(agent_id))
 
         if path == "/api/status":
             code, payload = hy("GET", "/api/v1/status", timeout=10)
@@ -3704,8 +3768,12 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 return self._json(500, {"error": str(e)})
 
         if path == "/api/layer-health":
+            qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
             user_id = os.environ.get("HY_MEMORY_USER_ID", "hermes-user")
-            agent_id = os.environ.get("HY_MEMORY_AGENT_ID", "default")
+            try:
+                agent_id = _agent_param(qs) or os.environ.get("HY_MEMORY_AGENT_ID", "default")
+            except ValueError:
+                return self._json(400, {"error": "invalid agent_id"})
             isolation_key = f"{user_id}::{agent_id}::default_session"
             layer_keys = [
                 "l0_basic_info", "l1_raw", "l2_fact", "l3_summary", "l4_identity",
@@ -3735,12 +3803,15 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                     if n.get("layer") == "l6_schema"
                     and n.get("isolation_key") == isolation_key
                 )
-                _, graph_api = hy("GET", "/api/v1/graph", None, timeout=60)
+                graph_path = "/api/v1/graph" + (f"?agent_id={agent_id}" if agent_id else "")
+                _, graph_api = hy("GET", graph_path, None, timeout=60)
                 graph_layer_counts = (graph_api or {}).get("layer_counts") or {}
                 graph_relations = (graph_api or {}).get("relation_count")
             except Exception as e:
                 return self._json(500, {"error": str(e)})
-            log_path = _pathlib.Path.home() / ".hyatlas" / "logs" / "digest_run_latest.log"
+            log_path = hy_home() / "logs" / f"digest_run_{agent_id}.log"
+            if agent_id == "default" and not log_path.is_file():
+                log_path = hy_home() / "logs" / "digest_run_latest.log"
             digest_log_status = "missing"
             digest_log_mtime = None
             if log_path.is_file():
@@ -3755,7 +3826,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                         digest_log_status = "stale"
                 except OSError:
                     digest_log_status = "unreadable"
-            archive_dir = _pathlib.Path.home() / ".hyatlas" / "archive"
+            archive_dir = hy_home() / "archive"
             l4_archives = sorted(archive_dir.glob("l4_identity_pre_migrate_*.jsonl"))
             local_app = os.environ.get("LOCALAPPDATA", "")
             if local_app:
@@ -3789,13 +3860,17 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
             try:
                 n = min(max(int((qs.get("n") or ["8"])[0]), 1), 20)
+                agent_id = _agent_param(qs)
             except (ValueError, TypeError):
-                n = 8
+                return self._json(400, {"error": "bad n/agent_id"})
             q = ((qs.get("q") or [""])[0] or "").strip().lower()
             try:
+                graph_path = f"/api/v1/graph?layer=l6_schema&n=50&rels=false"
+                if agent_id:
+                    graph_path += f"&agent_id={agent_id}"
                 _, data = hy(
                     "GET",
-                    f"/api/v1/graph?layer=l6_schema&n=50&rels=false",
+                    graph_path,
                     None,
                     timeout=90,
                 )
@@ -3815,6 +3890,11 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 return self._json(500, {"error": str(e)})
 
         if path == "/api/layer-counts":
+            qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            try:
+                agent_id = _agent_param(qs)
+            except ValueError:
+                return self._json(400, {"error": "invalid agent_id"})
             layer_keys = [
                 "l0_basic_info", "l1_raw", "l2_fact", "l3_summary", "l4_identity",
                 "l5_knowledge", "l6_schema", "l7_intention",
@@ -3824,13 +3904,14 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             graph_layers = ("l5_knowledge", "l6_schema", "l7_intention")
             for layer in layer_keys:
                 require_latest = layer not in graph_layers
-                n = _vdb_layer_count(layer, require_is_latest=require_latest)
+                n = _vdb_layer_count(layer, require_is_latest=require_latest, agent_id=agent_id)
                 counts[layer] = n
                 total += n
             # L5/L6/L7 live in Kuzu; use the fast /api/v1/graph endpoint
             # (one call, no per-user loop) instead of the slow /api/v1/list.
             try:
-                _, graph_data = hy("GET", "/api/v1/graph", None)
+                graph_path = "/api/v1/graph" + (f"?agent_id={agent_id}" if agent_id else "")
+                _, graph_data = hy("GET", graph_path, None)
                 if isinstance(graph_data, dict):
                     lc = graph_data.get("layer_counts") or {}
                     counts["l5_knowledge"] = max(
@@ -3852,11 +3933,17 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             })
 
         if path == "/api/graph-counts":
+            qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            try:
+                agent_id = _agent_param(qs)
+            except ValueError:
+                return self._json(400, {"error": "invalid agent_id"})
             # L5–L7 from Kuzu via live /api/v1/graph (layer_counts).
             l5_count = l6_count = l7_count = 0
             relation_count = None
             try:
-                _, graph_data = hy("GET", "/api/v1/graph", None, timeout=60)
+                graph_path = "/api/v1/graph" + (f"?agent_id={agent_id}" if agent_id else "")
+                _, graph_data = hy("GET", graph_path, None, timeout=60)
                 if isinstance(graph_data, dict):
                     lc = graph_data.get("layer_counts") or {}
                     l5_count = int(lc.get("l5_knowledge") or graph_data.get("node_count") or 0)
@@ -3889,11 +3976,17 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
             etype = qs.get("type", [None])[0]
             search = qs.get("q", [None])[0]
+            try:
+                agent_id = _agent_param(qs)
+            except ValueError:
+                return self._json(400, {"error": "invalid agent_id"})
             upstream_qs = []
             if etype:
                 upstream_qs.append(f"type={etype}")
             if search:
                 upstream_qs.append(f"q={search}")
+            if agent_id:
+                upstream_qs.append(f"agent_id={agent_id}")
             upstream_path = "/api/v1/graph"
             if upstream_qs:
                 upstream_path += "?" + "&".join(upstream_qs)
@@ -3919,6 +4012,11 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                          "confidence": e.get("weight", e.get("confidence", 0.8))}
                         for e in l5_data.get("edges", [])
                     ]
+
+                if agent_id:
+                    nodes = [n for n in nodes if n.get("agent_id") == agent_id]
+                    node_names = {n.get("name") for n in nodes}
+                    relations = [r for r in relations if r.get("a") in node_names and r.get("b") in node_names]
 
                 if etype:
                     nodes = [n for n in nodes if n.get("entity_type") == etype]
@@ -3960,11 +4058,17 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             except ValueError:
                 n = 15
             etype = qs.get("type", [None])[0]
+            try:
+                agent_id = _agent_param(qs)
+            except ValueError:
+                return self._json(400, {"error": "invalid agent_id"})
 
             # Try live endpoint first
             graph_params = {"n": str(n), "rels": "false"}
             if etype:
                 graph_params["type"] = etype
+            if agent_id:
+                graph_params["agent_id"] = agent_id
             query_str = "&".join(f"{k}={v}" for k, v in graph_params.items())
             status, data = hy("GET", f"/api/v1/graph?{query_str}", None)
 
@@ -3980,6 +4084,8 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                     return self._json(200, {"context": "(L5 knowledge graph not yet built)", "entities": []})
 
                 nodes = l5_data.get("nodes", [])
+                if agent_id:
+                    nodes = [nd for nd in nodes if nd.get("agent_id") == agent_id]
                 if etype:
                     nodes = [nd for nd in nodes if nd.get("entity_type") == etype]
                 nodes = sorted(nodes, key=lambda x: -x.get("mention_count", 0))[:n]

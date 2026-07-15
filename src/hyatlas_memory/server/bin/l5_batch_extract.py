@@ -58,7 +58,7 @@ Entity types: PERSON, PROJECT, TOOL, MODEL, CONCEPT
 Relation types: works_on, uses, depends_on, replaces, related_to
 
 ## Relation semantics
-- works_on:   PERSON → PROJECT (e.g., TunaCookie works_on Hy-Memory)
+- works_on:   PERSON → PROJECT (e.g., <user> works_on Hy-Memory)
 - uses:       PROJECT → TOOL/MODEL/LIBRARY (e.g., Hy-Memory uses Qdrant)
 - depends_on: anything → anything (one is required for the other to function)
 - replaces:   X replaces Y (e.g., Hy-Memory replaces Hindsight)
@@ -81,7 +81,7 @@ Relation types: works_on, uses, depends_on, replaces, related_to
         {"name": "Hermes", "type": "PROJECT", "confidence": 0.95}
       ],
       "relations": [
-        {"a": "TunaCookie", "b": "Hermes", "type": "works_on", "confidence": 0.85}
+        {"a": "<user>", "b": "Hermes", "type": "works_on", "confidence": 0.85}
       ]
     }
   ]

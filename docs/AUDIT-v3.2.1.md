@@ -1,3 +1,10 @@
+<!--
+STALE DOC NOTICE (2026-07-16):
+This document may be out of date. For current state, see ../NOW.md
+or https://github.com/<owner>/HyAtlas-Memory/blob/main/NOW.md
+Last meaningful refresh: see the date in this header's filename context.
+-->
+
 # Release audit — v3.2.1 (2026-07-08)
 
 Pre-push verification for HyAtlas-Memory documentation + dashboard graph counts.

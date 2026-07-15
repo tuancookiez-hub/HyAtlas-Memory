@@ -394,7 +394,7 @@ def wire_l5_auto_trigger(s2_cls):
         try:
             import subprocess
             import sys
-            flags = 0x00000008  # DETACHED_PROCESS (Windows)
+            flags = 0x00000008 | 0x08000000  # DETACHED_PROCESS | CREATE_NO_WINDOW
             proc = subprocess.Popen(
                 [sys.executable, str(script_path)],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
@@ -486,6 +486,10 @@ def wire_graph_endpoint(handler_cls, json_resp_fn, get_client_fn):
         etype = qs.get("type", [None])[0]
         search = qs.get("q", [None])[0]
         layer = (qs.get("layer", ["l5_knowledge"])[0] or "l5_knowledge").strip()
+        agent_id = (qs.get("agent_id", [""])[0] or "").strip()
+        if agent_id and not all(c.isalnum() or c in "_-" for c in agent_id):
+            json_resp(handler, 400, {"error": "invalid agent_id"})
+            return
         if layer not in ("l5_knowledge", "l6_schema", "l7_intention"):
             json_resp(handler, 400, {"error": "layer must be l5_knowledge, l6_schema, or l7_intention"})
             return
@@ -501,12 +505,13 @@ def wire_graph_endpoint(handler_cls, json_resp_fn, get_client_fn):
             json_resp(handler, 503, {"error": "kuzu connection not initialized"})
             return
 
+        agent_clause = f" AND m.agent_id = '{agent_id}'" if agent_id else ""
         nodes = []
         node_q = (
-            f"MATCH (m:Memory) WHERE m.layer = '{layer}' "
-            "RETURN m.node_id AS id, m.content AS name, m.content_type AS ct, "
-            "m.confidence AS conf, m.extra_json AS extra, m.custom_json AS cust, "
-            "m.created_at AS ca"
+            f"MATCH (m:Memory) WHERE m.layer = '{layer}'{agent_clause} "
+            "RETURN m.node_id AS id, m.content AS name, m.agent_id AS aid, "
+            "m.content_type AS ct, m.confidence AS conf, m.extra_json AS extra, "
+            "m.custom_json AS cust, m.created_at AS ca"
         )
 
         def _merge_meta(extra_raw, cust_raw) -> dict:
@@ -526,20 +531,20 @@ def wire_graph_endpoint(handler_cls, json_resp_fn, get_client_fn):
             result = conn.execute(node_q)
             while result.has_next():
                 row = result.get_next()
-                extra = _merge_meta(row[4], row[5])
-                ct = row[2] or extra.get("content_type", "")
+                extra = _merge_meta(row[5], row[6])
+                ct = row[3] or extra.get("content_type", "")
                 entity_type = extra.get("entity_type") or extra.get("entityType")
                 if not entity_type and isinstance(ct, str) and ct.startswith("ENTITY_"):
                     entity_type = ct.replace("ENTITY_", "", 1)
                 nodes.append({
-                    "node_id": row[0], "name": row[1], "content_type": row[2],
+                    "node_id": row[0], "name": row[1], "agent_id": row[2], "content_type": row[3],
                     "layer": layer,
-                    "confidence": row[3],
+                    "confidence": row[4],
                     "entity_type": entity_type or "CONCEPT",
                     "mention_count": extra.get("mention_count", 1),
                     "aliases": extra.get("aliases", []),
                     "source": extra.get("source", "l5_digest"),
-                    "created_at": str(row[6]) if row[6] is not None else None,
+                    "created_at": str(row[7]) if row[7] is not None else None,
                 })
         except Exception as e:
             json_resp(handler, 500, {"error": f"node query failed: {e}"})
@@ -561,8 +566,9 @@ def wire_graph_endpoint(handler_cls, json_resp_fn, get_client_fn):
             rel_q = (
                 "MATCH (a:Memory)-[r:RELATED_TO]->(b:Memory) "
                 "WHERE a.layer = 'l5_knowledge' AND b.layer = 'l5_knowledge' "
-                "RETURN a.content AS a_name, b.content AS b_name, "
-                "r.relation_type AS rtype, r.weight AS weight"
+                + (f"AND a.agent_id = '{agent_id}' AND b.agent_id = '{agent_id}' " if agent_id else "")
+                + "RETURN a.content AS a_name, b.content AS b_name, "
+                + "r.relation_type AS rtype, r.weight AS weight"
             )
             try:
                 result = conn.execute(rel_q)
@@ -591,7 +597,7 @@ def wire_graph_endpoint(handler_cls, json_resp_fn, get_client_fn):
         for layer in ("l5_knowledge", "l6_schema", "l7_intention"):
             try:
                 cq = (
-                    f"MATCH (m:Memory) WHERE m.layer = '{layer}' "
+                    f"MATCH (m:Memory) WHERE m.layer = '{layer}'{agent_clause} "
                     "RETURN count(m) AS c"
                 )
                 cres = conn.execute(cq)
@@ -635,8 +641,9 @@ def wire_vdb_dashboard(handler_cls, json_resp_fn, get_client_fn):
                     "0",
                     "no",
                 )
+                agent_id = (qs.get("agent_id") or [""])[0]
                 client = get_client_fn()
-                n = vdb_dashboard.layer_count(client, layer, require_is_latest=latest)
+                n = vdb_dashboard.layer_count(client, layer, require_is_latest=latest, agent_id=agent_id)
                 json_resp_fn(self, 200, {"count": n, "layer": layer})
                 return
         except Exception as e:
@@ -658,7 +665,7 @@ def wire_vdb_dashboard(handler_cls, json_resp_fn, get_client_fn):
                 if mode == "l1_raw":
                     uids = body.get("user_ids") or []
                     limit = int(body.get("limit") or 1500)
-                    items = vdb_dashboard.scroll_l1(client, uids, limit=limit)
+                    items = vdb_dashboard.scroll_l1(client, uids, limit=limit, agent_id=body.get("agent_id", ""))
                     json_resp_fn(self, 200, {"items": items})
                     return
                 if mode == "payload_by_ids":
@@ -708,7 +715,8 @@ def wire_graph_counts(client_cls):
         for layer in _graph_layers:
             try:
                 lyr = getattr(layer, "value", str(layer))
-                result = conn.execute(f'MATCH (m:Memory) WHERE m.layer = "{lyr}" RETURN m')
+                agent_clause = f' AND m.agent_id = "{agent_id}"' if agent_id else ""
+                result = conn.execute(f'MATCH (m:Memory) WHERE m.layer = "{lyr}"{agent_clause} RETURN m')
                 while result.has_next():
                     row = result.get_next()
                     if not row:
@@ -721,6 +729,7 @@ def wire_graph_counts(client_cls):
                             node = {k: getattr(node, k, None) for k in (
                                 "node_id", "layer", "content", "confidence",
                                 "tags", "evidence", "isolation_key", "gmt_created", "node_type",
+                                "agent_id",
                             )}
                     graph_nodes.append(node)
             except Exception as e:
@@ -729,12 +738,14 @@ def wire_graph_counts(client_cls):
 
         if user_id:
             graph_nodes = [n for n in graph_nodes if user_id in (n.get("isolation_key") or "")]
+        if agent_id:
+            graph_nodes = [n for n in graph_nodes if n.get("agent_id") == agent_id]
         with contextlib.suppress(Exception):
             graph_nodes = self._sort_memory_nodes(graph_nodes, order=order)
         total = len(graph_nodes)
         page = graph_nodes[offset: offset + limit]
         return {"nodes": list(page), "total": total, "limit": limit, "offset": offset,
-                "isolation_key": f"(all for user={user_id})"}
+                "isolation_key": f"(all for user={user_id}, agent={agent_id})"}
 
     client_cls._original_list_graph_bucket = client_cls._list_graph_bucket
     client_cls._list_graph_bucket = _patched_list
@@ -813,7 +824,7 @@ def wire_s1_l5_context(extractor_cls):
 
 # ─── 9. User Identity (alias expansion) ──────────────────────────────────────
 
-_DEFAULT_ALIASES = "221727702992945152,hermes-user,system:handoff"
+_DEFAULT_ALIASES = os.environ.get("HYATLAS_DEFAULT_USER_ALIASES", "<discord_user_id>,hermes-user,system:handoff")
 
 
 def wire_user_identity(reader_cls):

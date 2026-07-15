@@ -135,9 +135,9 @@ We go with Option A. Clean removal.
 **Steps:**
 1. `git tag v2.1.0-stable` — mark the last known-good state
 2. `git checkout -b feat/v3-fork` from `main`
-3. Backup Kuzu: `cp -r C:/Users/tuanc/.hyatlas/data/kuzu_db C:/Users/tuanc/.hyatlas/data/kuzu_db_backup_v2`
+3. Backup Kuzu: `cp -r C:/Users/<user>/.hyatlas/data/kuzu_db C:/Users/<user>/.hyatlas/data/kuzu_db_backup_v2`
 4. Backup Qdrant config: `cp C:/qdrant/config.yaml C:/qdrant/config.yaml.v2backup`
-5. Export all Qdrant points to JSONL: `python scripts/export_qdrant.py --output C:/Users/tuanc/.hyatlas/snapshots/qdrant_pre_v3.jsonl`
+5. Export all Qdrant points to JSONL: `python scripts/export_qdrant.py --output C:/Users/<user>/.hyatlas/snapshots/qdrant_pre_v3.jsonl`
 6. Record point counts by layer (baseline for post-migration verification):
    - L0: 42, L1: 955, L2: 2376, L3: 309, L4: 1421, L5: 1023, L6: 0 (in Kuzu), L7: 0 (in Kuzu)
    - Total Qdrant: 6126 points
@@ -246,7 +246,7 @@ This is the biggest phase. Split into sub-tasks for parallel dispatch:
 **Step 4c: Qdrant collection recreation with sparse vectors**
 - Current collection `agent_memories_1024`: 6126 points, dense vectors only, no sparse config
 - **Migration script** `scripts/recreate_qdrant_collection.py`:
-  1. Export ALL points to JSONL: scroll all 6126 points with payloads + vectors → `C:/Users/tuanc/.hyatlas/snapshots/qdrant_full_export.jsonl`
+  1. Export ALL points to JSONL: scroll all 6126 points with payloads + vectors → `C:/Users/<user>/.hyatlas/snapshots/qdrant_full_export.jsonl`
   2. Verify export count: `wc -l qdrant_full_export.jsonl` must equal 6126
   3. Create new collection `agent_memories_1024_v3` with:
      - Dense vector: size=1024, distance=cosine (same as before)
@@ -376,8 +376,8 @@ This is the biggest phase. Split into sub-tasks for parallel dispatch:
 - [ ] `fastembed` installable (`pip install fastembed --dry-run`)
 - [ ] `spacy` installable
 - [ ] Qdrant binary accessible at `C:\qdrant\qdrant.exe`
-- [ ] Kuzu DB backed up at `C:/Users/tuanc/.hyatlas/data/kuzu_db_backup_v2`
-- [ ] Qdrant full export at `C:/Users/tuanc/.hyatlas/snapshots/qdrant_pre_v3.jsonl`
+- [ ] Kuzu DB backed up at `C:/Users/<user>/.hyatlas/data/kuzu_db_backup_v2`
+- [ ] Qdrant full export at `C:/Users/<user>/.hyatlas/snapshots/qdrant_pre_v3.jsonl`
 - [ ] Baseline data recorded:
   - Qdrant: 6126 points (L0:42, L1:955, L2:2376, L3:309, L4:1421, L5:1023, L6:0, L7:0)
   - Kuzu L5 graph: 1342 nodes, 5736 relations
