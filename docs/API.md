@@ -1,3 +1,10 @@
+<!--
+STALE DOC NOTICE (2026-07-16):
+This document may be out of date. For current state, see ../NOW.md
+or https://github.com/<owner>/HyAtlas-Memory/blob/main/NOW.md
+Last meaningful refresh: see the date in this header's filename context.
+-->
+
 # HTTP API Reference
 
 > **HyAtlas v3.2.1** — Two local HTTP servers: memory **19527**, dashboard **8765**. Vector data is **Zvec** (via server `/api/v1/vdb/*`); graph **L5–L7** is **Kuzu** (`GET /api/v1/graph`).
@@ -154,3 +161,14 @@ curl 'http://127.0.0.1:8765/api/layer-health'
 ## Versioning
 
 Response fields may grow without a major bump. Breaking path/shape changes are noted in [CHANGELOG.md](../CHANGELOG.md).
+
+## `/api/v1/list` — `include_raw` flag (added 2026-07-16)
+
+Request body now accepts:
+- `include_raw: bool` (default `True`) — when `True`, L1_RAW (unprocessed user input) is included; when `False`, only extracted memories (L2_FACT, L5_KNOWLEDGE, etc.) are returned.
+
+Response: each memory entry now has an `extracted: bool` field indicating whether the LLM extractor has processed it.
+
+## `/api/v1/status` — 3-tier response (added 2026-07-16)
+
+See SERVER.md for full schema. Key change: LLM throttling returns `status: warning` instead of `status: error: 503`. Persisted memory remains readable.

@@ -1,3 +1,10 @@
+<!--
+STALE DOC NOTICE (2026-07-16):
+This document may be out of date. For current state, see ../NOW.md
+or https://github.com/<owner>/HyAtlas-Memory/blob/main/NOW.md
+Last meaningful refresh: see the date in this header's filename context.
+-->
+
 # Memory Layers
 
 > **HyAtlas v3.2.1 (2026-07)** — This doc describes **this repo’s** layer model. Runtime vector store is **Zvec** (in-process). **L4 is retired** for new writes; identity lives in **L2**. Graph layers **L5–L7** live in **Kuzu**.
@@ -120,3 +127,16 @@ Chat (Hermes) → L2 facts (Zvec)
 ## Official spec mapping
 
 Tencent’s [Hy-Memory](https://memory.hunyuan.tencent.com) 6-layer spec is the architectural reference. HyAtlas renumbers/extends for historical fork reasons; see [architecture.md](./architecture.md#layer-mapping-this-impl-vs-the-official-spec) for the mapping table and **L4 retirement** note.
+
+## L1_RAW visibility (added 2026-07-16)
+
+L1 (raw user input) is now visible in `/api/v1/list` by default. Each memory entry has an `extracted: true|false` field. Pass `include_raw=False` to revert to extracted-only.
+
+This fixes the design gap where unprocessed L1 writes were silently hidden from the user-facing list. New behavior:
+
+- Write → L1_RAW always persisted to zvec
+- LLM extraction → creates sibling L2_FACT memory (when extraction succeeds)
+- `/api/v1/list` with default `include_raw=True` → returns L1_RAW + L2_FACT + L5_KNOWLEDGE etc.
+- `extracted: false` on L1_RAW entries marks them as "raw, not yet processed"
+
+If you see `extracted: false` items older than 24h in your list, the LLM extractor rejected that input as not worth extracting — the raw text is preserved and searchable via direct zvec query.

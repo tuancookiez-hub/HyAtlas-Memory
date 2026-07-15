@@ -1,3 +1,10 @@
+<!--
+STALE DOC NOTICE (2026-07-16):
+This document may be out of date. For current state, see ../NOW.md
+or https://github.com/<owner>/HyAtlas-Memory/blob/main/NOW.md
+Last meaningful refresh: see the date in this header's filename context.
+-->
+
 # HyAtlas-Memory Server Components
 
 > **This is a community implementation of the official [Hy-Memory framework](https://memory.hunyuan.tencent.com) (Tencent Hunyuan) for Hermes Agent.** The 6-layer model, the three operating modes (Lite/Pro/Ultra), and the evolution chain semantics are defined by the official framework; this server is the Hermes-targeted runtime that supports them. See the [official docs](https://memory.hunyuan.tencent.com) for the canonical architecture and the [project README](../README.md) for the local community-implementation notes.
@@ -67,3 +74,27 @@ All scripts read the same config as the plugin:
 
 The server uses `~/.hyatlas/` as its data directory by default. Override
 with `HERMES_HOME=/path/to/alt/home` if needed.
+
+
+## 3-tier status (added 2026-07-16)
+
+`/api/v1/status` now returns 3 levels instead of binary ok/error:
+
+```json
+{
+  "status": "ok|warning|error",
+  "vdb": "ok",
+  "embed": "ok",
+  "llm": "ok|warning: ...|rate_limited: ...|error: ...",
+  "write_pipeline": "ok|warning|rate_limited|error",
+  "vdb_provider": "zvec",
+  "vdb_collection": "agent_memories_1024",
+  "embed_dims": 1024
+}
+```
+
+- `ok` — all green
+- `warning` — LLM throttled or partial failure; reads still work, new writes may be queued/degraded
+- `error` — hard failure (VDB down or embed failure); status code 503
+
+LLM rate limits no longer mark the whole stack `error: 503`. Previously persisted memories remain readable even when extraction is throttled.

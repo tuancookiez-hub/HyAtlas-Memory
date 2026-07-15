@@ -50,7 +50,7 @@ DOMAIN_KEYWORDS = {
         "SmallHackathon", "Hugging Face", "Gradio", "LoRA", "Hackathon",
     ],
     "Person": [
-        "TunaCookie", "Zarriq", "Miza", "alvinfei", "Tencent",
+        "<user>", "<user2>", "<user3>", "<user4>", "Tencent",
     ],
     "Model": [
         "Qwen3-4B", "Qwen", "dola-seed", "DeepSeek", "BGE", "BAAI",

@@ -1352,7 +1352,7 @@ def apply_l5_auto_trigger_patch() -> bool:
 
         # Try to spawn the L5 pipeline as a detached subprocess.
         try:
-            creationflags = 0x00000008  # DETACHED_PROCESS (Windows)
+            creationflags = 0x00000008 | 0x08000000  # DETACHED_PROCESS | CREATE_NO_WINDOW
             proc = subprocess.Popen(
                 [sys.executable, str(script_path)],
                 stdout=subprocess.DEVNULL,
@@ -2255,7 +2255,7 @@ def apply_s2_operations_json_patch() -> bool:
 # HYATLAS_USER_IDENTITY=1, force user_id MatchAny across alias list.
 # ---------------------------------------------------------------------------
 
-_DEFAULT_USER_ALIASES = "221727702992945152,hermes-user,system:handoff"
+_DEFAULT_USER_ALIASES = os.environ.get("HYATLAS_DEFAULT_USER_ALIASES", "<discord_user_id>,hermes-user,system:handoff")
 
 
 def _user_identity_enabled() -> bool:

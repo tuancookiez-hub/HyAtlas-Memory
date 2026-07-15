@@ -151,7 +151,7 @@ Update README, INSTALL, CONFIGURATION, MIGRATION, TROUBLESHOOTING.
 Fresh user flow:
 
 ```bash
-git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
+git clone https://github.com/<owner>/HyAtlas-Memory.git
 cd HyAtlas-Memory
 pip install -e .
 hyatlas init

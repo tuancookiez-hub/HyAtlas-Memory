@@ -1,3 +1,10 @@
+<!--
+STALE DOC NOTICE (2026-07-16):
+This document may be out of date. For current state, see ../NOW.md
+or https://github.com/<owner>/HyAtlas-Memory/blob/main/NOW.md
+Last meaningful refresh: see the date in this header's filename context.
+-->
+
 # Troubleshooting
 
 > Common issues and how to fix them. Organized by symptom → diagnosis → fix.
@@ -476,9 +483,24 @@ If the troubleshooting steps don't resolve your issue:
    ```
    This runs a read-only health check across all components.
 
-3. **Open an issue** at https://github.com/tuancookiez-hub/HyAtlas-Memory/issues with:
+3. **Open an issue** at https://github.com/<owner>/HyAtlas-Memory/issues with:
    - Output of `hermes hy-memory doctor`
    - Relevant log lines
    - Steps to reproduce
 
 4. **Join the discussion** (see README for links)
+
+
+## "I wrote something but it doesn't show in list" (added 2026-07-16)
+
+**Symptom:** `c.add(...)` returns `success: True` but `c.list_memories()` doesn't show the new entry.
+
+**Diagnosis:**
+1. List with raw included: `c.list_memories(include_raw=True)` — if you see the entry with `extracted: false`, your LLM extractor rejected the input (often because the input was noisy/marker-laden). The memory IS saved in zvec, just hidden by default.
+2. Check `/api/v1/status` — if `llm: warning` or `rate_limited`, extraction is throttled and your L1_RAW will stay raw until throttling clears.
+
+**Fix:**
+- Pass `include_raw=True` to see all memories including unprocessed raw writes.
+- For noisy input (probes, UUIDs, debug markers), write a clean factual sentence instead. The LLM extractor skips noisy text by design.
+
+This was a known gap before 2026-07-16: L1_RAW writes were silently hidden, making it look like writes "didn't work" when they actually did persist.

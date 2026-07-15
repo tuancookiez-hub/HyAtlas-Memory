@@ -2,7 +2,7 @@
 
 **Created:** 2026-06-29  
 **Status:** Planning Phase  
-**Owner:** @tuancookiez  
+**Owner:** @<maintainer>  
 **Last Updated:** 2026-07-04
 
 ## Overview
@@ -13,7 +13,7 @@ HyAtlas Memory v2.0.0 is currently tagged and working end-to-end for the author'
 - ✅ Pipeline works (L5 entities: 1,172, L6 schemas: 434, L7 intentions: 142)
 - ✅ All 23 patches load successfully
 - ⚠️ Import crash on `pip install hyatlas-memory` (hermes-agent imports not optional)
-- ⚠️ 30+ hardcoded `C:\Users\tuanc\` paths in `bin/` scripts
+- ⚠️ 30+ hardcoded `C:\Users\<user>\` paths in `bin/` scripts
 - ⚠️ 384-dim references still present after 1024-dim migration
 - ⚠️ Kuzu checkpoint documentation missing
 - ⚠️ No automated install testing
@@ -36,8 +36,8 @@ HyAtlas Memory v2.0.0 is currently tagged and working end-to-end for the author'
 
 ### Key Findings
 1. **Import crash (Blocker):** `__init__.py:40-42` imports `agent.memory_provider`, `hermes_constants`, `tools.registry` — not available on PyPI, must be made optional
-2. **Hardcoded paths:** `patches.py:1210` has `C:\Users\tuanc\` fallback; 6+ `bin/` scripts hardcoded to author's setup
-3. **User ID defaults:** Multiple hardcoded `hermes-user` (acceptable), `tuanc`, and Discord snowflake ID
+2. **Hardcoded paths:** `patches.py:1210` has `C:\Users\<user>\` fallback; 6+ `bin/` scripts hardcoded to author's setup
+3. **User ID defaults:** Multiple hardcoded `hermes-user` (acceptable), `<user>`, and Discord snowflake ID (placeholder)
 4. **384-dim legacy:** `patches.py:147,269,891`, `_memory_cli.py:164`, `__init__.py:62` still reference `agent_memories_384`
 5. **Kuzu checkpoint:** WAL accumulates until clean shutdown; `kuzu_db.wal` currently 14MB vs 28KB main file
 
@@ -67,7 +67,7 @@ HyAtlas Memory v2.0.0 is currently tagged and working end-to-end for the author'
 
 #### 1.2 Fix Hardcoded HERMES_HOME Fallback
 - **File:** `src/hyatlas_memory/patches.py:1210`
-- **Problem:** Fallback is `C:\Users\tuanc\AppData\Local\hermes` instead of `~/.hermes`
+- **Problem:** Fallback is `C:\Users\<user>\AppData\Local\hermes` instead of `~/.hermes`
 - **Solution:** Use `Path.home() / ".hermes"` or `Path.home() / "AppData" / "Local" / "hermes"` (Windows)
 - **Acceptance:** ✅
   - Code works on any machine without `HERMES_HOME` env var set
@@ -79,7 +79,7 @@ HyAtlas Memory v2.0.0 is currently tagged and working end-to-end for the author'
 - **Solution:** Parameterized all bin/ scripts to use HERMES_HOME env var with platform-specific fallbacks
 - **Acceptance:** ✅
   - Each script uses dynamic path resolution
-  - No `C:\Users\tuanc\` references in installed package
+  - No `C:\Users\<user>\` references in installed package
 
 #### 1.4 Clean Install Test
 - **Task:** Run full install in Docker or fresh venv
@@ -122,7 +122,7 @@ HyAtlas Memory v2.0.0 is currently tagged and working end-to-end for the author'
 - **Recommendation:** Restart HyAtlas periodically (e.g., weekly via system service) to flush WAL
 
 #### 2.3 User ID Parameterization ✅
-- **Problem:** Multiple hardcoded IDs (`hermes-user`, `tuanc`, Discord snowflake `221727702992945152`)
+- **Problem:** Multiple hardcoded IDs (`hermes-user`, `<discord_user_id>`, Discord snowflake `<snowflake_id>`)
 - **Audit Results:**
   - `user_id` defaults respect `HYATLAS_USER_ID` env var ✅
   - `agent_id` defaults respect `HYATLAS_AGENT_ID` env var ✅

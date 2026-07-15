@@ -12,7 +12,7 @@ license = {file = "LICENSE"}
 # (text/markdown). It's not a valid [project] field for setuptools — must not
 # be added here, or build will fail validation.
 authors = [
-    {name = "Tuan Abdullah", email = "tuancookiez@gmail.com"},
+    {name = "Maintainer", email = "maintainer@example.com"},
 ]
 keywords = [
     "hermes",
@@ -64,7 +64,7 @@ qdrant = ["qdrant-client>=1.7.0"]
 zvec = ["zvec>=0.5.1"]
 # chroma and faiss backends were stripped in v3.0.0 (only qdrant supported)
 # Embedding server (local SentenceTransformers-based; no API key needed)
-local-embed = ["sentence-transformers>=2.0.0", "uvicorn>=0.27.0", "fastapi>=0.100.0"]
+local-embed = ["sentence-transformers>=2.0.0", "huggingface-hub>=1.5.0,<2.0", "uvicorn>=0.27.0", "fastapi>=0.100.0"]
 # Dev tooling
 dev = [
     "pytest>=7.0",
@@ -90,9 +90,9 @@ hy_memory = "hyatlas_memory:HyMemoryProvider"
 hyatlas = "hyatlas_memory.start:main"
 
 [project.urls]
-Homepage = "https://github.com/tuancookiez-hub/HyAtlas-Memory"
-Issues = "https://github.com/tuancookiez-hub/HyAtlas-Memory/issues"
-Source = "https://github.com/tuancookiez-hub/HyAtlas-Memory"
+Homepage = "https://github.com/<owner>/HyAtlas-Memory"
+Issues = "https://github.com/<owner>/HyAtlas-Memory/issues"
+Source = "https://github.com/<owner>/HyAtlas-Memory"
 # Reference to the upstream official framework this package implements.
 # Not affiliated; included for discoverability and source-of-truth accuracy.
 "Upstream Framework" = "https://memory.hunyuan.tencent.com"

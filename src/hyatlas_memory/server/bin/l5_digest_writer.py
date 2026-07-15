@@ -70,8 +70,8 @@ ALIAS_MAP = {
     "hermes cli": "Hermes",
     "hy_memory": "Hy-Memory",
     "hy-memory": "Hy-Memory",
-    "tuanc": "TunaCookie",
-    "tuna cookie": "TunaCookie",
+    # Username aliases — override via HERMES_DISPLAY_NAME env var (default: "User")
+    # username aliases — placeholder, override via env var
     "windows powershell": "PowerShell",
 }
 
@@ -121,7 +121,7 @@ Relation types: owns, visited, lives_in, works_on, uses, depends_on, replaces, f
         {"name": "Hermes", "type": "PROJECT", "confidence": 0.95}
       ],
       "relations": [
-        {"a": "TunaCookie", "b": "Hermes", "type": "works_on", "confidence": 0.90}
+        {"a": "<user>", "b": "Hermes", "type": "works_on", "confidence": 0.90}
       ]
     }
   ]

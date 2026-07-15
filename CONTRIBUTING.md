@@ -21,7 +21,7 @@ The easiest ways to help, ordered roughly by impact:
 
 ## Reporting bugs
 
-Use [GitHub Issues](https://github.com/tuancookiez-hub/HyAtlas-Memory/issues). Include:
+Use [GitHub Issues](https://github.com/<owner>/HyAtlas-Memory/issues). Include:
 
 - **What you did** (exact commands, in order)
 - **What you expected**
@@ -58,7 +58,7 @@ If it's a large change (new layer, new store, breaking change), start a discussi
 ### Clone and install
 
 ```bash
-git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
+git clone https://github.com/<owner>/HyAtlas-Memory.git
 cd HyAtlas-Memory
 
 uv pip install -e ".[dev,test]"
@@ -315,7 +315,7 @@ Scope is optional but helpful: `fix(dashboard): handle empty layer counts`
 
 ## Release process
 
-The maintainer (currently [@tuancookiez-hub](https://github.com/tuancookiez-hub)) cuts releases:
+The maintainer (currently [@<owner>](https://github.com/<owner>)) cuts releases:
 
 1. Bump version in `pyproject.toml` and `src/hyatlas_memory/_version.py`
 2. Update `CHANGELOG.md` with the release notes

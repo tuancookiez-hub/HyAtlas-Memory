@@ -98,6 +98,7 @@ def diagnose_lock() -> str:
              "Where-Object { $_.CommandLine -match 'hy_memory|hymemory|l5_|kuzu' } | "
              "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"],
             capture_output=True, text=True, timeout=10,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
         )
         return result.stdout.strip()[:2000] or result.stderr.strip()[:2000]
     except Exception as e:
@@ -336,8 +337,8 @@ def main():
          "MATCH ()-[r:RELATED_TO]->() WHERE r.relation_type IS NOT NULL RETURN COUNT(r) AS n"),
         ("L5 nodes by entity_type",
          "MATCH (m:Memory {layer: 'l5_knowledge'}) RETURN m.entity_type AS t, COUNT(m) AS n ORDER BY n DESC"),
-        ("TunaCookie works_on (top 5)",
-         "MATCH (a:Memory {layer: 'l5_knowledge', content: 'TunaCookie'})-[r:RELATED_TO {relation_type: 'works_on'}]->(b:Memory) RETURN b.content AS project LIMIT 5"),
+        ("<user> works_on (top 5)",
+         "MATCH (a:Memory {layer: 'l5_knowledge', content: '<user>'})-[r:RELATED_TO {relation_type: 'works_on'}]->(b:Memory) RETURN b.content AS project LIMIT 5"),
         ("Hermes uses (top 10)",
          "MATCH (a:Memory {layer: 'l5_knowledge', content: 'Hermes'})-[r:RELATED_TO {relation_type: 'uses'}]->(b:Memory) RETURN b.content AS tool ORDER BY r.confidence DESC LIMIT 10"),
         ("Hy-Memory 2-hop neighborhood (what uses + what depends on)",

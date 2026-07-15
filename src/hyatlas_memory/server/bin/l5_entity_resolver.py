@@ -6,7 +6,7 @@ Output: resolved entities + relations, with audit log of merges
 
 Pipeline (4 passes):
   1. Case folding (Git ≡ git → Git)
-  2. Alias map (TunaCookie ≡ TuanCookiez, MCP ≡ Model Context Protocol, etc.)
+  2. Alias map (<user> ≡ <Display>, MCP ≡ Model Context Protocol, etc.)
   3. Fuzzy clustering + LLM tiebreaker for ambiguous cases
   4. Noise filtering (UI sections, internal function names that are borderline)
 
@@ -53,10 +53,10 @@ LLM_EXTRA = cfg["llm"].get("extra_body", {})
 # ------------------------------------------------------------------
 ALIAS_MAP = {
     # People
-    "tunacookie":       "TunaCookie",
-    "tuancookiez":       "TunaCookie",
-    "tuan abdullah":     "TunaCookie",   # user's full name from IBKR memory
-    "the user":          "TunaCookie",   # sometimes the LLM extracts "the user" — fold to real name
+    "<user>":       "<Display>",
+    "<github_user>":       "<Display Name>",
+    "<full_name>":      "<Display>",    # placeholder for user's full name
+    "the user":          "<Display>",    # sometimes the LLM extracts "the user" — fold to display name
 
     # Tools (case)
     "git":               "Git",
@@ -112,7 +112,7 @@ ALIAS_MAP = {
     "mcp server status section": None,    # noise — UI section name, filter out
 
     # DIFFERENT ENTITIES — must NOT merge
-    # "tuancookiez-hub" is the user's GitHub org, NOT the user
+    # "<github_user>" is a GitHub handle reference, NOT the user
     # "Hermes" is the project, "Hermes TUI" is a component
     # "MiniMax" is the company, "MiniMax-M3" is a specific model
     # "patch6" / "patch7" / "patch8" are distinct patches

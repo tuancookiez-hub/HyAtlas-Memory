@@ -63,7 +63,7 @@ FOCUS_ENTITIES = [
     ("Chroma",       "Tool"),
 
     # Persons (DOMAIN match)
-    ("TunaCookie",  "Person"),
+    ("<user>",  "Person"),
 
     # Concepts (spaCy NER)
     ("MCP",    "Concept"),
@@ -138,7 +138,7 @@ a brief source sentence, output a JSON object with:
   - "reason": 1-sentence explanation
 
 The relation taxonomy:
-  - works_on: person/agent works on a project (e.g., TunaCookie works_on Hy-Memory)
+  - works_on: person/agent works on a project (e.g., <user> works_on Hy-Memory)
   - uses: project/tool uses another tool/library (e.g., Hy-Memory uses Qdrant)
   - depends_on: project/tool depends on another (e.g., Hy-Memory depends_on Qdrant for storage)
   - replaces: X replaces Y (e.g., Hy-Memory replaces Hindsight)

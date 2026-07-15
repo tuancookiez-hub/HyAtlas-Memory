@@ -91,131 +91,131 @@ F:\HyAtlas-Memory/snapshots
 F:\HyAtlas-Memory/snapshots/tmp
 F:\HyAtlas-Memory/src
 ```
-### `C:\Users\tuanc\AppData\Local\hermes`
+### `C:\Users\<user>\AppData\Local\hermes`
 Size/status:
 ```text
 [Command timed out after 60s]
 ```
 Sample contents:
 ```text
-C:\Users\tuanc\AppData\Local\hermes
-C:\Users\tuanc\AppData\Local\hermes/.archive
-C:\Users\tuanc\AppData\Local\hermes/.archive/references
-C:\Users\tuanc\AppData\Local\hermes/.archive/SKILL.md
-C:\Users\tuanc\AppData\Local\hermes/.env
-C:\Users\tuanc\AppData\Local\hermes/.env.bak-pre-v2-bootstrap
-C:\Users\tuanc\AppData\Local\hermes/.env.bak.1781452442
-C:\Users\tuanc\AppData\Local\hermes/.env.env.bak_hymem_v2_phase_0_5
-C:\Users\tuanc\AppData\Local\hermes/.hermes_history
-C:\Users\tuanc\AppData\Local\hermes/.hy_memory_zhvz2kcj.tmp
-C:\Users\tuanc\AppData\Local\hermes/.models_dev_cache_f1tf0gog.tmp
-C:\Users\tuanc\AppData\Local\hermes/.models_dev_cache_rcf2q0sf.tmp
-C:\Users\tuanc\AppData\Local\hermes/.processes_3fozkr_2.tmp
-C:\Users\tuanc\AppData\Local\hermes/.processes_8wl3_ich.tmp
-C:\Users\tuanc\AppData\Local\hermes/.provider_models_cache_8z9oa3y0.tmp
-C:\Users\tuanc\AppData\Local\hermes/.qdrant-initialized
-C:\Users\tuanc\AppData\Local\hermes/.restart_last_processed.json
-C:\Users\tuanc\AppData\Local\hermes/.skills_prompt_snapshot.json
-C:\Users\tuanc\AppData\Local\hermes/.tirith-install-failed
-C:\Users\tuanc\AppData\Local\hermes/.update_check
-C:\Users\tuanc\AppData\Local\hermes/archive_memories.py
-C:\Users\tuanc\AppData\Local\hermes/assets
-C:\Users\tuanc\AppData\Local\hermes/assets/apple-touch-icon-152.png
-C:\Users\tuanc\AppData\Local\hermes/assets/apple-touch-icon.png
-C:\Users\tuanc\AppData\Local\hermes/assets/favicon-16.png
-C:\Users\tuanc\AppData\Local\hermes/assets/favicon-32.png
-C:\Users\tuanc\AppData\Local\hermes/assets/favicon-48.png
-C:\Users\tuanc\AppData\Local\hermes/assets/favicon-comparison.png
-C:\Users\tuanc\AppData\Local\hermes/assets/favicon-monogram-16.png
-C:\Users\tuanc\AppData\Local\hermes/assets/favicon-monogram-32.png
-C:\Users\tuanc\AppData\Local\hermes/assets/favicon-monogram-48.png
-C:\Users\tuanc\AppData\Local\hermes/assets/favicon-monogram-64.png
-C:\Users\tuanc\AppData\Local\hermes/assets/favicon.ico
-C:\Users\tuanc\AppData\Local\hermes/assets/hy-memory-ch-master.png
-C:\Users\tuanc\AppData\Local\hermes/assets/hy-memory-icon.png
-C:\Users\tuanc\AppData\Local\hermes/assets/hy-memory-winged-tight.png
-C:\Users\tuanc\AppData\Local\hermes/assets/hy-memory-winged.png
-C:\Users\tuanc\AppData\Local\hermes/assets/icon-192.png
-C:\Users\tuanc\AppData\Local\hermes/assets/icon-512.png
-C:\Users\tuanc\AppData\Local\hermes/assets/og-image.png
-C:\Users\tuanc\AppData\Local\hermes/attachments
-C:\Users\tuanc\AppData\Local\hermes/attachments/20260530_050509_42c31f
-C:\Users\tuanc\AppData\Local\hermes/audio_cache
-C:\Users\tuanc\AppData\Local\hermes/audio_cache/tts_20260626_061558.mp3
-C:\Users\tuanc\AppData\Local\hermes/audio_cache/tts_20260626_064030.mp3
-C:\Users\tuanc\AppData\Local\hermes/audio_cache/tts_20260626_174011.mp3
-C:\Users\tuanc\AppData\Local\hermes/audio_cache/tts_20260626_181551.mp3
-C:\Users\tuanc\AppData\Local\hermes/audio_cache/tts_20260626_182529.mp3
-C:\Users\tuanc\AppData\Local\hermes/auth.json
-C:\Users\tuanc\AppData\Local\hermes/auth.json.corrupt
-C:\Users\tuanc\AppData\Local\hermes/auth.lock
-C:\Users\tuanc\AppData\Local\hermes/backup_reset_1779225530
-C:\Users\tuanc\AppData\Local\hermes/backup_reset_1779225530/.env
-C:\Users\tuanc\AppData\Local\hermes/backup_reset_1779225530/auth.json
-C:\Users\tuanc\AppData\Local\hermes/backup_reset_1779225530/config.yaml.old
-C:\Users\tuanc\AppData\Local\hermes/backup_reset_1779225530/discord_command_sync_state.json
-C:\Users\tuanc\AppData\Local\hermes/bench-prompts
-C:\Users\tuanc\AppData\Local\hermes/bench-prompts/model_bench_smoke.txt
-C:\Users\tuanc\AppData\Local\hermes/benchmarks
-C:\Users\tuanc\AppData\Local\hermes/benchmarks/model-fit-2026-07-01
-C:\Users\tuanc\AppData\Local\hermes/bin
-C:\Users\tuanc\AppData\Local\hermes/bin/hymemory.py
-C:\Users\tuanc\AppData\Local\hermes/bin/l5_batch_extract.py
-C:\Users\tuanc\AppData\Local\hermes/bin/l5_digest_writer.py
-C:\Users\tuanc\AppData\Local\hermes/bin/l5_entity_resolver.py
-C:\Users\tuanc\AppData\Local\hermes/bin/l5_export_json.py
-C:\Users\tuanc\AppD
+C:\Users\<user>\AppData\Local\hermes
+C:\Users\<user>\AppData\Local\hermes/.archive
+C:\Users\<user>\AppData\Local\hermes/.archive/references
+C:\Users\<user>\AppData\Local\hermes/.archive/SKILL.md
+C:\Users\<user>\AppData\Local\hermes/.env
+C:\Users\<user>\AppData\Local\hermes/.env.bak-pre-v2-bootstrap
+C:\Users\<user>\AppData\Local\hermes/.env.bak.1781452442
+C:\Users\<user>\AppData\Local\hermes/.env.env.bak_hymem_v2_phase_0_5
+C:\Users\<user>\AppData\Local\hermes/.hermes_history
+C:\Users\<user>\AppData\Local\hermes/.hy_memory_zhvz2kcj.tmp
+C:\Users\<user>\AppData\Local\hermes/.models_dev_cache_f1tf0gog.tmp
+C:\Users\<user>\AppData\Local\hermes/.models_dev_cache_rcf2q0sf.tmp
+C:\Users\<user>\AppData\Local\hermes/.processes_3fozkr_2.tmp
+C:\Users\<user>\AppData\Local\hermes/.processes_8wl3_ich.tmp
+C:\Users\<user>\AppData\Local\hermes/.provider_models_cache_8z9oa3y0.tmp
+C:\Users\<user>\AppData\Local\hermes/.qdrant-initialized
+C:\Users\<user>\AppData\Local\hermes/.restart_last_processed.json
+C:\Users\<user>\AppData\Local\hermes/.skills_prompt_snapshot.json
+C:\Users\<user>\AppData\Local\hermes/.tirith-install-failed
+C:\Users\<user>\AppData\Local\hermes/.update_check
+C:\Users\<user>\AppData\Local\hermes/archive_memories.py
+C:\Users\<user>\AppData\Local\hermes/assets
+C:\Users\<user>\AppData\Local\hermes/assets/apple-touch-icon-152.png
+C:\Users\<user>\AppData\Local\hermes/assets/apple-touch-icon.png
+C:\Users\<user>\AppData\Local\hermes/assets/favicon-16.png
+C:\Users\<user>\AppData\Local\hermes/assets/favicon-32.png
+C:\Users\<user>\AppData\Local\hermes/assets/favicon-48.png
+C:\Users\<user>\AppData\Local\hermes/assets/favicon-comparison.png
+C:\Users\<user>\AppData\Local\hermes/assets/favicon-monogram-16.png
+C:\Users\<user>\AppData\Local\hermes/assets/favicon-monogram-32.png
+C:\Users\<user>\AppData\Local\hermes/assets/favicon-monogram-48.png
+C:\Users\<user>\AppData\Local\hermes/assets/favicon-monogram-64.png
+C:\Users\<user>\AppData\Local\hermes/assets/favicon.ico
+C:\Users\<user>\AppData\Local\hermes/assets/hy-memory-ch-master.png
+C:\Users\<user>\AppData\Local\hermes/assets/hy-memory-icon.png
+C:\Users\<user>\AppData\Local\hermes/assets/hy-memory-winged-tight.png
+C:\Users\<user>\AppData\Local\hermes/assets/hy-memory-winged.png
+C:\Users\<user>\AppData\Local\hermes/assets/icon-192.png
+C:\Users\<user>\AppData\Local\hermes/assets/icon-512.png
+C:\Users\<user>\AppData\Local\hermes/assets/og-image.png
+C:\Users\<user>\AppData\Local\hermes/attachments
+C:\Users\<user>\AppData\Local\hermes/attachments/20260530_050509_42c31f
+C:\Users\<user>\AppData\Local\hermes/audio_cache
+C:\Users\<user>\AppData\Local\hermes/audio_cache/tts_20260626_061558.mp3
+C:\Users\<user>\AppData\Local\hermes/audio_cache/tts_20260626_064030.mp3
+C:\Users\<user>\AppData\Local\hermes/audio_cache/tts_20260626_174011.mp3
+C:\Users\<user>\AppData\Local\hermes/audio_cache/tts_20260626_181551.mp3
+C:\Users\<user>\AppData\Local\hermes/audio_cache/tts_20260626_182529.mp3
+C:\Users\<user>\AppData\Local\hermes/auth.json
+C:\Users\<user>\AppData\Local\hermes/auth.json.corrupt
+C:\Users\<user>\AppData\Local\hermes/auth.lock
+C:\Users\<user>\AppData\Local\hermes/backup_reset_1779225530
+C:\Users\<user>\AppData\Local\hermes/backup_reset_1779225530/.env
+C:\Users\<user>\AppData\Local\hermes/backup_reset_1779225530/auth.json
+C:\Users\<user>\AppData\Local\hermes/backup_reset_1779225530/config.yaml.old
+C:\Users\<user>\AppData\Local\hermes/backup_reset_1779225530/discord_command_sync_state.json
+C:\Users\<user>\AppData\Local\hermes/bench-prompts
+C:\Users\<user>\AppData\Local\hermes/bench-prompts/model_bench_smoke.txt
+C:\Users\<user>\AppData\Local\hermes/benchmarks
+C:\Users\<user>\AppData\Local\hermes/benchmarks/model-fit-2026-07-01
+C:\Users\<user>\AppData\Local\hermes/bin
+C:\Users\<user>\AppData\Local\hermes/bin/hymemory.py
+C:\Users\<user>\AppData\Local\hermes/bin/l5_batch_extract.py
+C:\Users\<user>\AppData\Local\hermes/bin/l5_digest_writer.py
+C:\Users\<user>\AppData\Local\hermes/bin/l5_entity_resolver.py
+C:\Users\<user>\AppData\Local\hermes/bin/l5_export_json.py
+C:\Users\<user>\AppD
 ```
-### `C:\Users\tuanc\.hy_memory`
+### `C:\Users\<user>\.hy_memory`
 Size/status:
 ```text
-1.5G	C:\Users\tuanc\.hy_memory
+1.5G	C:\Users\<user>\.hy_memory
 ```
 Sample contents:
 ```text
-C:\Users\tuanc\.hy_memory
-C:\Users\tuanc\.hy_memory/.dashboard_token
-C:\Users\tuanc\.hy_memory/data
-C:\Users\tuanc\.hy_memory/data/cache.db
-C:\Users\tuanc\.hy_memory/data/cache.db-shm
-C:\Users\tuanc\.hy_memory/data/cache.db-wal
-C:\Users\tuanc\.hy_memory/data/chroma.sqlite3
-C:\Users\tuanc\.hy_memory/data/coding_memory.db
-C:\Users\tuanc\.hy_memory/data/history.db
-C:\Users\tuanc\.hy_memory/data/history.db-shm
-C:\Users\tuanc\.hy_memory/data/history.db-wal
-C:\Users\tuanc\.hy_memory/data/kuzu_db
-C:\Users\tuanc\.hy_memory/data/kuzu_db.bak-pre-v2-reset
-C:\Users\tuanc\.hy_memory/data/kuzu_db.wal
-C:\Users\tuanc\.hy_memory/data/kuzu_db_384_backup
-C:\Users\tuanc\.hy_memory/data/kuzu_db_384_pre_migrate_20260628_153814
-C:\Users\tuanc\.hy_memory/data/kuzu_db_384_pre_migrate_20260628_153814.wal
-C:\Users\tuanc\.hy_memory/data/kuzu_db_test
-C:\Users\tuanc\.hy_memory/data/qdrant
-C:\Users\tuanc\.hy_memory/data/vector_db
-C:\Users\tuanc\.hy_memory/logs
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log.2026-06-19
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log.2026-06-20
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log.2026-06-21
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log.2026-06-22
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log.2026-06-23
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log.2026-06-24
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log.2026-06-25
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log.2026-06-26
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log.2026-06-27
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log.2026-06-28
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log.2026-06-29
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log.2026-06-30
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log.2026-07-01
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log.2026-07-02
-C:\Users\tuanc\.hy_memory/logs/hy_memory.log.2026-07-03
-C:\Users\tuanc\.hy_memory/logs/pipeline
-C:\Users\tuanc\.hy_memory/pkg
-C:\Users\tuanc\.hy_memory/pkg/.env
-C:\Users\tuanc\.hy_memory/_kuzu_test_checkpoint
-C:\Users\tuanc\.hy_memory/_kuzu_test_checkpoint/test.db
-C:\Users\tuanc\.hy_memory/_kuzu_test_checkpoint/test2.db
+C:\Users\<user>\.hy_memory
+C:\Users\<user>\.hy_memory/.dashboard_token
+C:\Users\<user>\.hy_memory/data
+C:\Users\<user>\.hy_memory/data/cache.db
+C:\Users\<user>\.hy_memory/data/cache.db-shm
+C:\Users\<user>\.hy_memory/data/cache.db-wal
+C:\Users\<user>\.hy_memory/data/chroma.sqlite3
+C:\Users\<user>\.hy_memory/data/coding_memory.db
+C:\Users\<user>\.hy_memory/data/history.db
+C:\Users\<user>\.hy_memory/data/history.db-shm
+C:\Users\<user>\.hy_memory/data/history.db-wal
+C:\Users\<user>\.hy_memory/data/kuzu_db
+C:\Users\<user>\.hy_memory/data/kuzu_db.bak-pre-v2-reset
+C:\Users\<user>\.hy_memory/data/kuzu_db.wal
+C:\Users\<user>\.hy_memory/data/kuzu_db_384_backup
+C:\Users\<user>\.hy_memory/data/kuzu_db_384_pre_migrate_20260628_153814
+C:\Users\<user>\.hy_memory/data/kuzu_db_384_pre_migrate_20260628_153814.wal
+C:\Users\<user>\.hy_memory/data/kuzu_db_test
+C:\Users\<user>\.hy_memory/data/qdrant
+C:\Users\<user>\.hy_memory/data/vector_db
+C:\Users\<user>\.hy_memory/logs
+C:\Users\<user>\.hy_memory/logs/hy_memory.log
+C:\Users\<user>\.hy_memory/logs/hy_memory.log.2026-06-19
+C:\Users\<user>\.hy_memory/logs/hy_memory.log.2026-06-20
+C:\Users\<user>\.hy_memory/logs/hy_memory.log.2026-06-21
+C:\Users\<user>\.hy_memory/logs/hy_memory.log.2026-06-22
+C:\Users\<user>\.hy_memory/logs/hy_memory.log.2026-06-23
+C:\Users\<user>\.hy_memory/logs/hy_memory.log.2026-06-24
+C:\Users\<user>\.hy_memory/logs/hy_memory.log.2026-06-25
+C:\Users\<user>\.hy_memory/logs/hy_memory.log.2026-06-26
+C:\Users\<user>\.hy_memory/logs/hy_memory.log.2026-06-27
+C:\Users\<user>\.hy_memory/logs/hy_memory.log.2026-06-28
+C:\Users\<user>\.hy_memory/logs/hy_memory.log.2026-06-29
+C:\Users\<user>\.hy_memory/logs/hy_memory.log.2026-06-30
+C:\Users\<user>\.hy_memory/logs/hy_memory.log.2026-07-01
+C:\Users\<user>\.hy_memory/logs/hy_memory.log.2026-07-02
+C:\Users\<user>\.hy_memory/logs/hy_memory.log.2026-07-03
+C:\Users\<user>\.hy_memory/logs/pipeline
+C:\Users\<user>\.hy_memory/pkg
+C:\Users\<user>\.hy_memory/pkg/.env
+C:\Users\<user>\.hy_memory/_kuzu_test_checkpoint
+C:\Users\<user>\.hy_memory/_kuzu_test_checkpoint/test.db
+C:\Users\<user>\.hy_memory/_kuzu_test_checkpoint/test2.db
 ```
 ### `C:\qdrant`
 Size/status:
@@ -257,95 +257,95 @@ C:\qdrant-data/collections/agent_memories_coding_keys_1024
 C:\qdrant-data/collections/agent_memories_coding_keys_384
 C:\qdrant-data/raft_state.json
 ```
-### `C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg`
+### `C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg`
 Size/status:
 ```text
-2.4M	C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg
+2.4M	C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg
 ```
 Sample contents:
 ```text
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/aiohappyeyeballs
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/aiohappyeyeballs-2.6.2.dist-info
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/aiohappyeyeballs-2.6.2.dist-info/licenses
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/aiohttp
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/aiohttp/.hash
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/aiohttp/_websocket
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/aiohttp-3.13.5.dist-info
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/aiohttp-3.13.5.dist-info/licenses
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/aiosignal
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/aiosignal-1.4.0.dist-info
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/aiosignal-1.4.0.dist-info/licenses
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/annotated_doc
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/annotated_doc-0.0.4.dist-info
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/annotated_doc-0.0.4.dist-info/licenses
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/annotated_types
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/annotated_types-0.7.0.dist-info
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/annotated_types-0.7.0.dist-info/licenses
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/anyio
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/anyio/abc
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/anyio/streams
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/anyio/_backends
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/anyio/_core
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/anyio-4.13.0.dist-info
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/anyio-4.13.0.dist-info/licenses
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/attr
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/attrs
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/attrs-26.1.0.dist-info
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/attrs-26.1.0.dist-info/licenses
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/bcrypt
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/bcrypt-5.0.0.dist-info
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/bin
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/build
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/build/_compat
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/build-1.5.0.dist-info
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/build-1.5.0.dist-info/licenses
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/certifi
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/certifi-2026.5.20.dist-info
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/certifi-2026.5.20.dist-info/licenses
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/charset_normalizer
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/charset_normalizer/cli
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/charset_normalizer-3.4.7.dist-info
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/charset_normalizer-3.4.7.dist-info/licenses
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb/api
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb/auth
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb/cli
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb/db
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb/execution
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb/experimental
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb/ingest
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb/logservice
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb/migrations
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb/proto
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb/quota
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb/rate_limit
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb/segment
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb/server
-C:\Users\tuanc\AppData\Local\Temp\hy-memory-pkg/chromadb/tel
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/aiohappyeyeballs
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/aiohappyeyeballs-2.6.2.dist-info
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/aiohappyeyeballs-2.6.2.dist-info/licenses
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/aiohttp
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/aiohttp/.hash
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/aiohttp/_websocket
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/aiohttp-3.13.5.dist-info
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/aiohttp-3.13.5.dist-info/licenses
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/aiosignal
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/aiosignal-1.4.0.dist-info
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/aiosignal-1.4.0.dist-info/licenses
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/annotated_doc
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/annotated_doc-0.0.4.dist-info
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/annotated_doc-0.0.4.dist-info/licenses
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/annotated_types
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/annotated_types-0.7.0.dist-info
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/annotated_types-0.7.0.dist-info/licenses
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/anyio
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/anyio/abc
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/anyio/streams
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/anyio/_backends
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/anyio/_core
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/anyio-4.13.0.dist-info
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/anyio-4.13.0.dist-info/licenses
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/attr
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/attrs
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/attrs-26.1.0.dist-info
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/attrs-26.1.0.dist-info/licenses
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/bcrypt
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/bcrypt-5.0.0.dist-info
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/bin
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/build
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/build/_compat
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/build-1.5.0.dist-info
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/build-1.5.0.dist-info/licenses
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/certifi
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/certifi-2026.5.20.dist-info
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/certifi-2026.5.20.dist-info/licenses
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/charset_normalizer
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/charset_normalizer/cli
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/charset_normalizer-3.4.7.dist-info
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/charset_normalizer-3.4.7.dist-info/licenses
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb/api
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb/auth
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb/cli
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb/db
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb/execution
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb/experimental
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb/ingest
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb/logservice
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb/migrations
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb/proto
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb/quota
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb/rate_limit
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb/segment
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb/server
+C:\Users\<user>\AppData\Local\Temp\hy-memory-pkg/chromadb/tel
 ```
-### `C:\Users\tuanc\AppData\Local\Temp\hymem_src`
+### `C:\Users\<user>\AppData\Local\Temp\hymem_src`
 Size/status:
 ```text
-44K	C:\Users\tuanc\AppData\Local\Temp\hymem_src
+44K	C:\Users\<user>\AppData\Local\Temp\hymem_src
 ```
 Sample contents:
 ```text
-C:\Users\tuanc\AppData\Local\Temp\hymem_src
-C:\Users\tuanc\AppData\Local\Temp\hymem_src/hy_memory
-C:\Users\tuanc\AppData\Local\Temp\hymem_src/hy_memory/agent
-C:\Users\tuanc\AppData\Local\Temp\hymem_src/hy_memory/coding
-C:\Users\tuanc\AppData\Local\Temp\hymem_src/hy_memory/core
-C:\Users\tuanc\AppData\Local\Temp\hymem_src/hy_memory/data
-C:\Users\tuanc\AppData\Local\Temp\hymem_src/hy_memory/models
-C:\Users\tuanc\AppData\Local\Temp\hymem_src/hy_memory/pipelines
-C:\Users\tuanc\AppData\Local\Temp\hymem_src/hy_memory/utils
-C:\Users\tuanc\AppData\Local\Temp\hymem_src/hy_memory-1.2.18.dist-info
-C:\Users\tuanc\AppData\Local\Temp\hymem_src/hy_memory-1.2.18.dist-info/licenses
-C:\Users\tuanc\AppData\Local\Temp\hymem_src/plugins
-C:\Users\tuanc\AppData\Local\Temp\hymem_src/plugins/hook
-C:\Users\tuanc\AppData\Local\Temp\hymem_src/plugins/mcp
-C:\Users\tuanc\AppData\Local\Temp\hymem_src/plugins/native
+C:\Users\<user>\AppData\Local\Temp\hymem_src
+C:\Users\<user>\AppData\Local\Temp\hymem_src/hy_memory
+C:\Users\<user>\AppData\Local\Temp\hymem_src/hy_memory/agent
+C:\Users\<user>\AppData\Local\Temp\hymem_src/hy_memory/coding
+C:\Users\<user>\AppData\Local\Temp\hymem_src/hy_memory/core
+C:\Users\<user>\AppData\Local\Temp\hymem_src/hy_memory/data
+C:\Users\<user>\AppData\Local\Temp\hymem_src/hy_memory/models
+C:\Users\<user>\AppData\Local\Temp\hymem_src/hy_memory/pipelines
+C:\Users\<user>\AppData\Local\Temp\hymem_src/hy_memory/utils
+C:\Users\<user>\AppData\Local\Temp\hymem_src/hy_memory-1.2.18.dist-info
+C:\Users\<user>\AppData\Local\Temp\hymem_src/hy_memory-1.2.18.dist-info/licenses
+C:\Users\<user>\AppData\Local\Temp\hymem_src/plugins
+C:\Users\<user>\AppData\Local\Temp\hymem_src/plugins/hook
+C:\Users\<user>\AppData\Local\Temp\hymem_src/plugins/mcp
+C:\Users\<user>\AppData\Local\Temp\hymem_src/plugins/native
 ```
 ## Live process snapshot
 ```text
@@ -354,63 +354,120 @@ C:\Users\tuanc\AppData\Local\Temp\hymem_src/plugins/native
 ```
 ## Qdrant collection health
 ```json
-{
-  "status": "green",
-  "optimizer_status": "ok",
-  "indexed_vectors_count": 4112,
-  "points_count": 5556,
-  "segments_count": 2,
-  "config": {
-    "params": {
-      "vectors": {
-        "size": 1024,
-        "distance": "Cosine"
-      },
-      "shard_number": 1,
-      "replication_factor": 1,
-      "write_consistency_factor": 1,
-      "on_disk_payload": true
-    },
-    "hnsw_config": {
-      "m": 16,
-      "ef_construct": 100,
-      "full_scan_threshold": 10000,
-      "max_indexing_threads": 0,
-      "on_disk": false
-    },
-    "optimizer_config": {
-      "deleted_threshold": 0.2,
-      "vacuum_min_vector_number": 1000,
-      "default_segment_number": 2,
-      "max_segment_size": null,
-      "memmap_threshold": null,
-      "indexing_threshold": 10000,
-      "flush_interval_sec": 5,
-      "max_optimization_threads": null,
-      "prevent_unoptimized": null
-    },
-    "wal_config": {
-      "wal_capacity_mb": 32,
-      "wal_segments_ahead": 0,
-      "wal_retain_closed": 1
-    },
-    "quantization_config": null
-  },
-  "payload_schema": {
-    "search_text": {
-      "data_type": "text",
-      "params": {
-        "type": "text",
-        "tokenizer": "whitespace",
-        "min_token_len": 2,
-        "max_token_len": 20
-      },
-      "points": 4690
-    }
-  },
-  "update_queue": {
-    "length": 0
-  }
+{
+
+  "status": "green",
+
+  "optimizer_status": "ok",
+
+  "indexed_vectors_count": 4112,
+
+  "points_count": 5556,
+
+  "segments_count": 2,
+
+  "config": {
+
+    "params": {
+
+      "vectors": {
+
+        "size": 1024,
+
+        "distance": "Cosine"
+
+      },
+
+      "shard_number": 1,
+
+      "replication_factor": 1,
+
+      "write_consistency_factor": 1,
+
+      "on_disk_payload": true
+
+    },
+
+    "hnsw_config": {
+
+      "m": 16,
+
+      "ef_construct": 100,
+
+      "full_scan_threshold": 10000,
+
+      "max_indexing_threads": 0,
+
+      "on_disk": false
+
+    },
+
+    "optimizer_config": {
+
+      "deleted_threshold": 0.2,
+
+      "vacuum_min_vector_number": 1000,
+
+      "default_segment_number": 2,
+
+      "max_segment_size": null,
+
+      "memmap_threshold": null,
+
+      "indexing_threshold": 10000,
+
+      "flush_interval_sec": 5,
+
+      "max_optimization_threads": null,
+
+      "prevent_unoptimized": null
+
+    },
+
+    "wal_config": {
+
+      "wal_capacity_mb": 32,
+
+      "wal_segments_ahead": 0,
+
+      "wal_retain_closed": 1
+
+    },
+
+    "quantization_config": null
+
+  },
+
+  "payload_schema": {
+
+    "search_text": {
+
+      "data_type": "text",
+
+      "params": {
+
+        "type": "text",
+
+        "tokenizer": "whitespace",
+
+        "min_token_len": 2,
+
+        "max_token_len": 20
+
+      },
+
+      "points": 4690
+
+    }
+
+  },
+
+  "update_queue": {
+
+    "length": 0
+
+  }
+
 }
 ```
 ## Dashboard graph counts

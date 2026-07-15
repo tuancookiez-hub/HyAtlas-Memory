@@ -8,7 +8,7 @@ HyAtlas **does not** run Qdrant. Safe cleanup after you have a cold backup.
 ## Optional to delete (after backup exists)
 | Path | Notes |
 |------|--------|
-| `C:\Users\tuanc\.hy_memory\` | Legacy layout (~trivial size if empty); not used when `HYATLAS_HOME=~/.hyatlas` |
+| `C:\Users\<user>\.hy_memory\` | Legacy layout (~trivial size if empty); not used when `HYATLAS_HOME=~/.hyatlas` |
 | `C:\qdrant-data\` | Old sidecar data dir if you ran Qdrant manually |
 | `~/.hyatlas/qdrant/` | Only if present and server uses zvec (check `hyatlas status`) |
 
