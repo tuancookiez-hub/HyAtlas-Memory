@@ -30,6 +30,7 @@ import os
 import re
 import signal
 import sys
+import threading
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -41,6 +42,7 @@ logger = logging.getLogger("hy_memory.server")
 # Lazy-init global client
 _client = None
 _client_lock = None
+_digest_lock = threading.Lock()
 
 _ADMIN_UI_DIR: Path | None = None
 _SERVER_START_TIME = time.time()
@@ -355,7 +357,11 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             checks["embed"] = f"error: {e}"
             has_error = True
 
-        # 3. LLM check — simple completion
+        # 3. LLM check — simple completion.
+        # LLM availability affects new extraction/digest writes, but it does not
+        # make the already persisted memory graph unreadable. Treat provider
+        # throttling as a warning so dashboard health doesn't imply data loss.
+        llm_warning = False
         try:
             from openai import OpenAI
             llm_cfg = client._config.llm
@@ -364,22 +370,34 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                 base_url=llm_cfg.base_url or None,
                 timeout=10,
             )
-            resp = llm_client.chat.completions.create(
-                model=llm_cfg.model,
-                messages=[{"role": "user", "content": "hi"}],
-                max_tokens=1,
-            )
+            kwargs = {
+                "model": llm_cfg.model,
+                "messages": [{"role": "user", "content": "Return OK"}],
+                "max_tokens": 8,
+            }
+            if getattr(llm_cfg, "extra_body", None):
+                kwargs["extra_body"] = llm_cfg.extra_body
+            resp = llm_client.chat.completions.create(**kwargs)
             if resp.choices:
                 checks["llm"] = "ok"
+                checks["write_pipeline"] = "ok"
             else:
-                checks["llm"] = "error: no choices"
-                has_error = True
+                checks["llm"] = "warning: no choices"
+                checks["write_pipeline"] = "warning"
+                llm_warning = True
         except Exception as e:
-            checks["llm"] = f"error: {e}"
-            has_error = True
+            msg = str(e)
+            if "FreeUsageLimitError" in msg or "rate limit" in msg.lower() or "429" in msg:
+                checks["llm"] = f"rate_limited: {e}"
+                checks["write_pipeline"] = "rate_limited"
+                llm_warning = True
+            else:
+                checks["llm"] = f"error: {e}"
+                checks["write_pipeline"] = "error"
+                llm_warning = True
 
-        checks["status"] = "degraded" if has_error else "ok"
-        status_code = 200 if not has_error else 503
+        checks["status"] = "error" if has_error else ("warning" if llm_warning else "ok")
+        status_code = 503 if has_error else 200
         _json_response(self, status_code, checks)
 
     def _handle_add(self, body: dict):
@@ -450,7 +468,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
         """POST /api/v1/list"""
         client = _get_client()
         kwargs = {}
-        for key in ("user_id", "agent_id", "limit", "offset", "order"):
+        for key in ("user_id", "agent_id", "limit", "offset", "order", "include_raw"):
             if key in body:
                 kwargs[key] = body[key]
         result = client.list_memories(**kwargs)
@@ -477,15 +495,23 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             os.getenv("HY_MEMORY_AGENT_ID", "default"),
         )
         client = _get_client()
+        if not _digest_lock.acquire(blocking=False):
+            _json_response(self, 409, {
+                "success": False,
+                "error": "digest_in_progress",
+            })
+            return
         try:
             result = client.digest(user_id=user_id, agent_id=agent_id)
-            _json_response(self, 200, result)
+            _json_response(self, 200 if result.get("success", False) else 502, result)
         except RuntimeError as e:
             # digest() 在非 ultra 模式抛 RuntimeError
             _json_response(self, 400, {
                 "error": str(e),
                 "mode": os.getenv("MEMORY_MODE", "pro"),
             })
+        finally:
+            _digest_lock.release()
 
 
 def run_server(port: int = 19527, host: str = "127.0.0.1"):

@@ -961,6 +961,7 @@ class HyMemoryClient:
         limit: int = 100,
         offset: int = 0,
         order: str = "desc",
+        include_raw: bool = True,
     ) -> dict[str, Any]:
         """
         列出用户的记忆（同步）。
@@ -974,6 +975,7 @@ class HyMemoryClient:
             limit:    每页条数（默认 100）
             offset:   偏移量（默认 0）
             order:    排序方式，"desc"（默认，最新在前）或 "asc"
+            include_raw: 是否包含 L1_RAW（未提取的原始记忆）。默认 True。
 
         Returns:
             {"vdb": {...}, "graph": {...} | 省略, "elapsed_ms": ...}
@@ -982,6 +984,7 @@ class HyMemoryClient:
             self.async_list_memories(
                 user_id=user_id, agent_id=agent_id,
                 limit=limit, offset=offset, order=order,
+                include_raw=include_raw,
             )
         )
 
@@ -2375,10 +2378,14 @@ class HyMemoryClient:
         if _gmt_created is None and isinstance(getattr(node, "valid_from", None), datetime):
             _gmt_created = int(node.valid_from.timestamp())
 
+        from .models.memory import MemoryLayer
+        layer_value = node.layer.value if node.layer else ""
+        extracted = node.layer != MemoryLayer.L1_RAW if node.layer else True
+
         return {
             "memory_id": node.node_id,
             "content": node.content,
-            "layer": node.layer.value if node.layer else "",
+            "layer": layer_value,
             "status": node.status.value if node.status else "active",
             "memory_at": _memory_at,
             "gmt_created": _gmt_created,
@@ -2389,6 +2396,7 @@ class HyMemoryClient:
             "source_raw_memory_id": getattr(node, "source_raw_memory_id", None),
             "tags": node.tags or [],
             "custom": node.custom or {},
+            "extracted": extracted,
         }
 
     @staticmethod
@@ -2416,6 +2424,7 @@ class HyMemoryClient:
         limit: int,
         offset: int,
         order: str,
+        include_raw: bool = True,
     ) -> dict[str, Any]:
         from .models.memory import MemoryLayer, MemoryStatus
 
@@ -2424,7 +2433,8 @@ class HyMemoryClient:
             agent_id=agent_id,
             status_filter=[MemoryStatus.ACTIVE],
         )
-        all_nodes = [n for n in all_nodes if n.layer != MemoryLayer.L1_RAW]
+        if not include_raw:
+            all_nodes = [n for n in all_nodes if n.layer != MemoryLayer.L1_RAW]
         all_nodes = self._sort_memory_nodes(all_nodes, order=order)
         total = len(all_nodes)
         page_nodes = all_nodes[offset: offset + limit]
@@ -2486,11 +2496,16 @@ class HyMemoryClient:
         limit: int = 100,
         offset: int = 0,
         order: str = "desc",
+        include_raw: bool = True,
     ) -> dict[str, Any]:
         """
         列出用户的记忆（异步）。
 
         VDB 与图库分桶返回（图库仅在存在 Kuzu/Neo4j 数据时包含 graph 键）。
+
+        Args:
+            include_raw: 是否包含 L1_RAW（未提取的原始记忆）。默认 True。
+                设为 False 可获得与之前相同的「仅已提取」视图。
 
         Returns:
             {
@@ -2504,6 +2519,7 @@ class HyMemoryClient:
         vdb = await self._list_vdb_bucket(
             user_id=user_id, agent_id=agent_id,
             limit=limit, offset=offset, order=order,
+            include_raw=include_raw,
         )
         graph = await self._list_graph_bucket(
             user_id=user_id, agent_id=agent_id,
