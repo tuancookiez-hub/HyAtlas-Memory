@@ -10,6 +10,11 @@ function tsToDate(ts) {
   return n > 0 ? new Date(n * 1000) : null;
 }
 let currentPage = 'overview';
+const PROFILE_IDS = ['all', 'default', 'research', 'sentinel', 'work-backend', 'work-frontend', 'trading', 'hestia'];
+let currentAgentId = PROFILE_IDS.includes(localStorage.getItem('hyatlas-agent-id'))
+  ? localStorage.getItem('hyatlas-agent-id')
+  : 'all';
+let loadSeq = 0;
 let allMemories = [];
 let layerCountsData = null;  // actual Qdrant counts per layer (used by Memory Composition bar)
 let layerHealthData = null;  // per-user/agent counts from /api/layer-health
@@ -143,23 +148,53 @@ async function fetchJSON(url, options = {}) {
   return resp.json();
 }
 
+function scopedPath(path, agentId = currentAgentId) {
+  if (!agentId || agentId === 'all') return path;
+  const join = path.includes('?') ? '&' : '?';
+  return `${path}${join}agent_id=${encodeURIComponent(agentId)}`;
+}
+
+function setScopeStatus(text) {
+  const el = document.getElementById('scope-status');
+  if (el) el.textContent = text;
+}
+
+function initAgentSelector() {
+  const el = document.getElementById('agent-selector');
+  if (!el) return;
+  el.value = currentAgentId;
+  el.addEventListener('change', async () => {
+    const next = PROFILE_IDS.includes(el.value) ? el.value : 'all';
+    currentAgentId = next;
+    localStorage.setItem('hyatlas-agent-id', next);
+    setScopeStatus('Loading…');
+    await loadAllData();
+  });
+  const label = document.getElementById('scope-label');
+  if (label) label.textContent = currentAgentId === 'all' ? 'All profiles' : currentAgentId;
+}
+
 async function loadAllData() {
+  const seq = ++loadSeq;
+  const agentId = currentAgentId;
+  setScopeStatus(`Loading ${agentId === 'all' ? 'all profiles' : agentId}…`);
   try {
     const [status, info, memories, storage, metrics, codingCount, codingMemories, layerCounts, graphCounts, layerHealth, l6Schemas, l5, quality] = await Promise.all([
       fetchJSON('/api/status'),
       fetchJSON('/api/info'),
-      fetchJSON('/api/memories?limit=500'),
+      fetchJSON(scopedPath('/api/memories?limit=500', agentId)),
       fetchJSON('/api/storage'),
       fetchJSON('/api/metrics?minutes=10080'),
       fetchJSON('/api/coding-count'),
       fetchJSON('/api/coding-memories?limit=500'),
-      fetchJSON('/api/layer-counts'),
-      fetchJSON('/api/graph-counts'),
-      fetchJSON('/api/layer-health').catch(() => null),
-      fetchJSON('/api/l6-schemas?n=6').catch(() => null),
-      fetchJSON('/api/l5/graph').catch(() => null),  // L5 may not exist yet; ignore failure
-      fetchJSON('/api/quality-metrics').catch(() => null),
+      fetchJSON(scopedPath('/api/layer-counts', agentId)),
+      fetchJSON(scopedPath('/api/graph-counts', agentId)),
+      fetchJSON(scopedPath('/api/layer-health', agentId)).catch(() => null),
+      fetchJSON(scopedPath('/api/l6-schemas?n=6', agentId)).catch(() => null),
+      fetchJSON(scopedPath('/api/l5/graph', agentId)).catch(() => null),  // L5 may not exist yet; ignore failure
+      fetchJSON(scopedPath('/api/quality-metrics', agentId)).catch(() => null),
     ]);
+    if (seq !== loadSeq || agentId !== currentAgentId) return false;
     l5Graph = l5;
     layerHealthData = layerHealth;
     l6SchemasData = l6Schemas;
@@ -222,7 +257,7 @@ async function loadAllData() {
       return {
         memory_id:        'l5_' + n.node_id,
         user_id:          'l5_knowledge',
-        agent_id:         'default',
+        agent_id:         n.agent_id || agentId || 'default',
         layer:            layerMap[rawLayer] || 'l5_knowledge',
         content:          n.name,
         gmt_created:      ts,
@@ -250,9 +285,13 @@ async function loadAllData() {
 
     renderAll();
     updateGlobalStatus();
+    const label = document.getElementById('scope-label');
+    if (label) label.textContent = agentId === 'all' ? 'All profiles' : agentId;
+    setScopeStatus(`Updated ${new Date().toLocaleTimeString()}`);
     return true;
   } catch (err) {
     console.error('Failed to load data:', err);
+    if (seq === loadSeq) setScopeStatus('Refresh failed');
     return false;
   }
 }
@@ -269,16 +308,21 @@ function updateGlobalStatus() {
     return;
   }
   
-  const allOk = statusData.vdb === 'ok' && statusData.embed === 'ok' && statusData.llm === 'ok';
-  
+  const coreOk = statusData.vdb === 'ok' && statusData.embed === 'ok';
+  const allOk = coreOk && statusData.llm === 'ok';
+
   if (allOk) {
     dot.className = 'status-dot';
     text.textContent = 'OPERATIONAL';
     text.style.color = 'var(--green)';
-  } else {
+  } else if (coreOk) {
     dot.className = 'status-dot degraded';
-    text.textContent = 'DEGRADED';
+    text.textContent = 'LIMITED';
     text.style.color = 'var(--accent)';
+  } else {
+    dot.className = 'status-dot error';
+    text.textContent = 'BROKEN';
+    text.style.color = 'var(--red)';
   }
   
   const lastMemory = allMemories.length > 0
@@ -367,8 +411,22 @@ function renderOverview() {
 }
 
 function getActiveLayerCount() {
-  const layers = new Set(allMemories.map(m => m.layer));
+  const counts = layerCountsData?.counts;
+  if (counts) return Object.values(counts).filter(c => Number(c) > 0).length;
+  const layers = new Set(allMemories.map(m => m.layer).filter(Boolean));
   return layers.size;
+}
+
+function getLayerTotal() {
+  const total = Number(layerCountsData?.total);
+  if (Number.isFinite(total) && total > 0) return total;
+  return allMemories.length;
+}
+
+function fmtCount(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '—';
+  return n.toLocaleString();
 }
 
 function renderCompositionBar() {
@@ -428,26 +486,29 @@ function renderCompositionBar() {
 }
 
 function renderMemoryStore() {
-  const vdbPoints = statusData?.vdb_points || 0;
-  const codingTotal = codingCountData?.total || 0;
+  const vdbPoints = getLayerTotal();
+  const codingTotal = Number(codingCountData?.total) || 0;
   const total = vdbPoints + codingTotal;
-  
-  const allOk = statusData?.vdb === 'ok' && statusData?.embed === 'ok' && statusData?.llm === 'ok';
-  const statusText = allOk ? 'System ready (all services online)' : 'System degraded';
-  
+  const vdbOk = vdbPoints > 0 || statusData?.vdb === 'ok';
+  const embedOk = statusData?.embed === 'ok';
+  const llmOk = statusData?.llm === 'ok';
+  const statusText = vdbOk
+    ? (embedOk && llmOk ? 'System ready (all services online)' : 'Memory readable; capture/digest limited')
+    : 'Memory store unavailable';
+
   const html = `
     <div class="flex items-center gap-3 mb-3">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2">
         <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
       </svg>
       <div>
-        <div class="text-sm font-mono">${total} memories stored</div>
+        <div class="text-sm font-mono">${fmtCount(total)} memories stored</div>
         <div class="text-xs text-muted">${statusText}</div>
       </div>
     </div>
-    <div class="text-xs text-muted mt-2">VDB: ${vdbPoints} • Coding: ${codingTotal}</div>
+    <div class="text-xs text-muted mt-2">VDB: ${fmtCount(vdbPoints)} • Coding: ${fmtCount(codingTotal)}</div>
   `;
-  
+
   document.getElementById('memory-store').innerHTML = html;
 }
 
@@ -530,14 +591,14 @@ function renderActivityChart() {
 }
 
 function renderOperations() {
-  const vdbPoints = statusData?.vdb_points || 0;
+  const vdbPoints = getLayerTotal();
   const activeLayers = getActiveLayerCount();
-  const codingTotal = codingCountData?.total || 0;
-  
+  const codingTotal = Number(codingCountData?.total) || 0;
+
   const html = `
     <div class="stat-card">
       <div class="stat-label">TOTAL MEMORIES</div>
-      <div class="stat-value">${vdbPoints}</div>
+      <div class="stat-value">${fmtCount(vdbPoints)}</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">LAYERS ACTIVE</div>
@@ -545,10 +606,10 @@ function renderOperations() {
     </div>
     <div class="stat-card">
       <div class="stat-label">CODING MEMORIES</div>
-      <div class="stat-value">${codingTotal}</div>
+      <div class="stat-value">${fmtCount(codingTotal)}</div>
     </div>
   `;
-  
+
   document.getElementById('operations-stats').innerHTML = html;
 }
 
@@ -981,9 +1042,9 @@ function renderLayers() {
   const total = Object.values(layerCounts).reduce((a, b) => a + b, 0);
 
   const rows = Object.entries(LAYERS).map(([key, info]) => {
-    const count = layerCounts[key] || 0;
+    const count = Number(layerCounts[key]) || 0;
     const pct = total > 0 ? (count / total * 100).toFixed(1) : '0.0';
-    const avgTags = count > 0 ? (layerTagCounts[key] / count).toFixed(1) : '0.0';
+    const avgTags = count > 0 ? ((Number(layerTagCounts[key]) || 0) / count).toFixed(1) : '0.0';
 
     return `
       <tr>
@@ -1264,27 +1325,27 @@ function renderSystem() {
   document.getElementById('system-info').innerHTML = infoHtml;
   
   // Storage
-  const vdbPoints = statusData?.vdb_points || 0;
-  const codingTotal = codingCountData?.total || 0;
+  const vdbPoints = getLayerTotal();
+  const codingTotal = Number(codingCountData?.total) || 0;
   const total = vdbPoints + codingTotal;
-  
+
   const storageHtml = `
     <div class="mb-4">
       <div class="flex justify-between mb-2">
         <div class="text-sm">VDB Points</div>
-        <div class="text-sm font-mono">${vdbPoints.toLocaleString()}</div>
+        <div class="text-sm font-mono">${fmtCount(vdbPoints)}</div>
       </div>
     </div>
     <div class="mb-4">
       <div class="flex justify-between mb-2">
         <div class="text-sm">Coding Memories</div>
-        <div class="text-sm font-mono">${codingTotal.toLocaleString()}</div>
+        <div class="text-sm font-mono">${fmtCount(codingTotal)}</div>
       </div>
     </div>
     <div class="mb-4">
       <div class="flex justify-between mb-2">
         <div class="text-sm">Total Memories</div>
-        <div class="text-sm font-mono">${total.toLocaleString()}</div>
+        <div class="text-sm font-mono">${fmtCount(total)}</div>
       </div>
     </div>
     <div>
@@ -1304,28 +1365,37 @@ function renderSystem() {
     { name: 'LLM Service', status: statusData?.llm }
   ];
   
-  const healthHtml = components.map(c => `
-    <div class="health-item">
-      <div class="text-sm">${c.name}</div>
-      <div class="health-status">
-        <div class="status-dot ${c.status === 'ok' ? '' : 'error'}"></div>
-        <span style="color: ${c.status === 'ok' ? 'var(--green)' : 'var(--red)'}">${c.status === 'ok' ? 'Healthy' : 'Error'}</span>
+  const state = c => c.status === 'ok'
+    ? { dot: '', color: 'var(--green)', label: 'Healthy' }
+    : (c.name === 'LLM Service' && String(c.status || '').match(/rate_limited|warning/i))
+      ? { dot: 'degraded', color: 'var(--accent)', label: 'Limited' }
+      : { dot: 'error', color: 'var(--red)', label: 'Error' };
+  const healthHtml = components.map(c => {
+    const s = state(c);
+    return `
+      <div class="health-item">
+        <div class="text-sm">${c.name}</div>
+        <div class="health-status">
+          <div class="status-dot ${s.dot}"></div>
+          <span style="color: ${s.color}">${s.label}</span>
+        </div>
       </div>
-    </div>
-  `).join('');
-  
+    `;
+  }).join('');
+
   document.getElementById('components-health').innerHTML = healthHtml;
-  
+
   // System status
-  const allOk = components.every(c => c.status === 'ok');
+  const coreOk = statusData?.vdb === 'ok' && statusData?.embed === 'ok';
+  const allOk = coreOk && statusData?.llm === 'ok';
   const statusHtml = `
     <div class="flex items-center gap-3 mb-3">
-      <div class="status-dot ${allOk ? '' : 'degraded'}"></div>
-      <div class="text-lg font-semibold" style="color: ${allOk ? 'var(--green)' : 'var(--accent)'}">
-        ${allOk ? 'OPERATIONAL' : 'DEGRADED'}
+      <div class="status-dot ${allOk ? '' : (coreOk ? 'degraded' : 'error')}"></div>
+      <div class="text-lg font-semibold" style="color: ${allOk ? 'var(--green)' : (coreOk ? 'var(--accent)' : 'var(--red)')}">
+        ${allOk ? 'OPERATIONAL' : (coreOk ? 'LIMITED' : 'BROKEN')}
       </div>
     </div>
-    <div class="text-sm text-muted">${allOk ? 'All systems are running normally.' : 'Some components are experiencing issues.'}</div>
+    <div class="text-sm text-muted">${allOk ? 'All systems are running normally.' : (coreOk ? 'Memory is readable; capture/digest may be provider-limited.' : 'Core memory components need attention.')}</div>
   `;
   
   document.getElementById('system-status').innerHTML = statusHtml;
@@ -1353,7 +1423,7 @@ function renderSystem() {
           </div>
           <div class="kv-item">
             <div class="kv-label">Points</div>
-            <div class="kv-value">${statusData?.vdb_points || '—'}</div>
+            <div class="kv-value">${fmtCount(getLayerTotal())}</div>
           </div>
         ` : ''}
         ${c.name === 'Embedding Service' ? `
@@ -1632,11 +1702,7 @@ function updateRightSidebar(page) {
   } else if (page === 'explore') {
     // Memory detail is now a dedicated page; no in-sidebar panel needed.
   } else if (page === 'layers') {
-    const layerCounts = {};
-    allMemories.forEach(m => {
-      layerCounts[m.layer] = (layerCounts[m.layer] || 0) + 1;
-    });
-    renderLayerHierarchy(layerCounts);
+    renderLayerHierarchy(layerCountsData?.counts || {});
   } else if (page === 'today') {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -1731,7 +1797,7 @@ function renderOverviewSidebar() {
       <div class="right-section-title">MEMORY INSIGHT</div>
       <div class="text-sm">
         <div class="mb-2">Most active layer: <span class="font-mono">${getMostActiveLayer()}</span></div>
-        <div class="mb-2">Total memories: <span class="font-mono">${allMemories.length}</span></div>
+        <div class="mb-2">Total memories: <span class="font-mono">${fmtCount(getLayerTotal())}</span></div>
         <div class="mb-2">Active layers: <span class="font-mono">${getActiveLayerCount()}</span></div>
       </div>
     </div>
@@ -1741,11 +1807,8 @@ function renderOverviewSidebar() {
 }
 
 function getMostActiveLayer() {
-  const counts = {};
-  allMemories.forEach(m => {
-    counts[m.layer] = (counts[m.layer] || 0) + 1;
-  });
-  return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] || '—';
+  const counts = layerCountsData?.counts || {};
+  return Object.entries(counts).sort((a, b) => Number(b[1]) - Number(a[1]))[0]?.[0] || '—';
 }
 
 function getMostCommonTag() {
@@ -1768,6 +1831,7 @@ function debounce(fn, delay) {
 }
 
 // Init
+initAgentSelector();
 loadAllData().then(() => {
   updateRightSidebar('overview');
   enterPage('overview');
