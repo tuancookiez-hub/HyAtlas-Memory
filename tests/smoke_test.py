@@ -7,25 +7,29 @@ Tests critical paths of HyAtlas Memory installation:
 2. Config loading
 3. Server health check (if running)
 4. Dashboard health check (if running)
-5. Basic add/search roundtrip (if server is running)
+5. Graph counts (if dashboard is running)
+6. Hardcoded path scan
 
 Usage:
     python tests/smoke_test.py [--skip-server]
+
+Pytest collects the test_* functions; under pytest they assert/skip and
+return None. As a CLI script, main() forces bool aggregation for a summary.
 """
+from __future__ import annotations
+
 import json
 import sys
 import time
 import urllib.request
 from pathlib import Path
 
-# Detect if running under pytest
 _is_pytest = "pytest" in sys.modules
 try:
     import pytest
 except ImportError:
     pytest = None
 
-# Ensure src is on path for dev installs
 repo_root = Path(__file__).parent.parent
 src_path = repo_root / "src"
 if src_path.exists():
@@ -37,10 +41,15 @@ def test_import():
     print("1. Import test...", end=" ")
     try:
         import hyatlas_memory
+
         print(f"✅ v{hyatlas_memory.__version__}")
-        return True
+        if not _is_pytest:
+            return True
+        return None
     except Exception as e:
         print(f"❌ {type(e).__name__}: {e}")
+        if _is_pytest:
+            raise
         return False
 
 
@@ -49,12 +58,17 @@ def test_provider():
     print("2. Provider instantiation...", end=" ")
     try:
         from hyatlas_memory import HyMemoryProvider
+
         provider = HyMemoryProvider()
         available = provider.is_available()
         print(f"✅ available={available}")
-        return True
+        if not _is_pytest:
+            return True
+        return None
     except Exception as e:
         print(f"❌ {type(e).__name__}: {e}")
+        if _is_pytest:
+            raise
         return False
 
 
@@ -65,10 +79,15 @@ def test_server_health():
         with urllib.request.urlopen("http://127.0.0.1:19527/healthz", timeout=5) as r:
             if r.status == 200:
                 print("✅ healthy")
-                return True
-            else:
-                print(f"❌ HTTP {r.status}")
-                return False
+                if not _is_pytest:
+                    return True
+                return None
+            print(f"❌ HTTP {r.status}")
+            if _is_pytest:
+                raise AssertionError(f"HTTP {r.status}")
+            return False
+    except AssertionError:
+        raise
     except Exception:
         print("⚠️ not running (skip with --skip-server)")
         if _is_pytest:
@@ -83,10 +102,15 @@ def test_dashboard_health():
         with urllib.request.urlopen("http://127.0.0.1:8765/api/health", timeout=5) as r:
             if r.status == 200:
                 print("✅ healthy")
-                return True
-            else:
-                print(f"❌ HTTP {r.status}")
-                return False
+                if not _is_pytest:
+                    return True
+                return None
+            print(f"❌ HTTP {r.status}")
+            if _is_pytest:
+                raise AssertionError(f"HTTP {r.status}")
+            return False
+    except AssertionError:
+        raise
     except Exception:
         print("⚠️ not running")
         if _is_pytest:
@@ -105,7 +129,12 @@ def test_graph_counts():
             l7 = data.get("l7_intention", 0)
             total = data.get("total", 0)
             print(f"✅ L5={l5} L6={l6} L7={l7} total={total}")
+            if _is_pytest:
+                assert isinstance(total, (int, float))
+                return None
             return True
+    except AssertionError:
+        raise
     except Exception:
         print("⚠️ endpoint not available")
         if _is_pytest:
@@ -117,38 +146,46 @@ def test_no_hardcoded_paths():
     """Test that no hardcoded author paths exist in the package source."""
     print("6. Hardcoded path scan...", end=" ")
     import hyatlas_memory
-    pkg_dir = Path(hyatlas_memory.__file__).parent
 
+    pkg_dir = Path(hyatlas_memory.__file__).parent
     bad = []
     for py_file in pkg_dir.rglob("*.py"):
         try:
             content = py_file.read_text(encoding="utf-8")
         except Exception:
             continue
-        # Check for hardcoded Windows author paths (not in comments).
-        # Catches both concrete username leaks (e.g. C:\Users\tuanc\)
-        # and unfinished scrub markers (e.g. C:\Users\<user>).
+        # Catches concrete username leaks and unfinished scrub markers.
         for line_num, line in enumerate(content.splitlines(), 1):
             stripped = line.lstrip()
             if stripped.startswith("#") or stripped.startswith('"""') or stripped.startswith("'''"):
                 continue
-            if (r"C:\Users\tuanc" in line or "C:/Users/tuanc" in line
-                    or r"C:\Users\<user>" in line or "C:/Users/<user>" in line):
+            if (
+                r"C:\Users\tuanc" in line
+                or "C:/Users/tuanc" in line
+                or r"C:\Users\<user>" in line
+                or "C:/Users/<user>" in line
+            ):
                 bad.append(f"{py_file.name}:{line_num}")
 
     if bad:
         print(f"❌ Found {len(bad)} hardcoded paths")
         for b in bad[:5]:
             print(f"   - {b}")
+        if _is_pytest:
+            raise AssertionError(f"hardcoded paths: {bad[:5]}")
         return False
-    else:
-        print("✅ clean")
+    print("✅ clean")
+    if not _is_pytest:
         return True
+    return None
 
 
-def main():
-    """Run all smoke tests."""
+def main() -> int:
+    """Run all smoke tests as a CLI (bool aggregation)."""
     skip_server = "--skip-server" in sys.argv
+    global _is_pytest
+    was = _is_pytest
+    _is_pytest = False
 
     print("=" * 60)
     print("HyAtlas Memory — Smoke Test")
@@ -157,37 +194,31 @@ def main():
     print("=" * 60)
     print()
 
-    results = []
+    results: list[tuple[str, bool | None]] = []
+    try:
+        results.append(("Import", test_import()))
+        results.append(("Provider", test_provider()))
+        results.append(("No hardcoded paths", test_no_hardcoded_paths()))
+        if not skip_server:
+            server_ok = test_server_health()
+            if server_ok is not None:
+                results.append(("Server health", server_ok))
+                dash_ok = test_dashboard_health()
+                if dash_ok is not None:
+                    results.append(("Dashboard health", dash_ok))
+                    graph_ok = test_graph_counts()
+                    if graph_ok is not None:
+                        results.append(("Graph counts", graph_ok))
+    finally:
+        _is_pytest = was
 
-    # Core tests (always run)
-    results.append(("Import", test_import()))
-    results.append(("Provider", test_provider()))
-    results.append(("No hardcoded paths", test_no_hardcoded_paths()))
-
-    # Server tests (skip if --skip-server)
-    if not skip_server:
-        server_ok = test_server_health()
-        if server_ok is not None:
-            results.append(("Server health", server_ok))
-
-            dash_ok = test_dashboard_health()
-            if dash_ok is not None:
-                results.append(("Dashboard health", dash_ok))
-
-                graph_ok = test_graph_counts()
-                if graph_ok is not None:
-                    results.append(("Graph counts", graph_ok))
-
-    # Summary
     print()
     print("=" * 60)
     print("SUMMARY")
     print("=" * 60)
-
     passed = sum(1 for _, ok in results if ok is True)
     failed = sum(1 for _, ok in results if ok is False)
     skipped = sum(1 for _, ok in results if ok is None)
-
     for name, ok in results:
         if ok is True:
             print(f"  ✅ {name}")
@@ -195,17 +226,14 @@ def main():
             print(f"  ❌ {name}")
         else:
             print(f"  ⏭️ {name} (skipped)")
-
     print()
     print(f"  {passed} passed · {failed} failed · {skipped} skipped")
     print("=" * 60)
-
     if failed > 0:
         print("❌ SMOKE TEST FAILED")
         return 1
-    else:
-        print("✅ SMOKE TEST PASSED")
-        return 0
+    print("✅ SMOKE TEST PASSED")
+    return 0
 
 
 if __name__ == "__main__":
