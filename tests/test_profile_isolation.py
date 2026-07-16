@@ -4,6 +4,26 @@ from __future__ import annotations
 from hyatlas_memory.client import HyMemoryClient
 
 
+def test_list_memories_forwards_include_raw(monkeypatch):
+    seen = {}
+
+    def fake(method, path, body=None, timeout=None):
+        seen["body"] = body
+        return {"memories": []}
+
+    client = HyMemoryClient()
+    monkeypatch.setattr(client, "_request", fake)
+
+    client.list_memories(user_id="u", include_raw=False)
+    assert seen["body"]["include_raw"] is False
+
+    client.list_memories(user_id="u", include_raw=True)
+    assert seen["body"]["include_raw"] is True
+
+    client.list_memories(user_id="u")
+    assert "include_raw" not in seen["body"]
+
+
 def test_list_memories_forwards_agent_id(monkeypatch):
     seen = {}
 

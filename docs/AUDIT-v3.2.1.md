@@ -1,5 +1,10 @@
 # Release audit — v3.2.1 (2026-07-08)
 
+> **Historical.** This is a frozen pre-push checklist from the v3.2.1 cut.
+> Current product state is **v3.4.0** — see [CHANGELOG.md](../CHANGELOG.md),
+> [release-v3.4.0.md](./release-v3.4.0.md), and [NOW.md](../NOW.md). Do not
+> treat the probe numbers or open checkboxes below as live status.
+
 Pre-push verification for HyAtlas-Memory documentation + dashboard graph counts.
 
 ## Doc sweep (completed)

@@ -75,9 +75,8 @@ AUTH_REQUIRED = BIND_HOST not in ("127.0.0.1", "localhost", "::1")
 if AUTH_REQUIRED:
     DASH_TOKEN = _get_or_create_token()
 
-# Qdrant (used to fetch L1_RAW conversations that Hy-Memory's /api/v1/list
-# filters out by default — see hy-memory-setup skill: "L1_RAW is the raw
-# input layer, hidden from the user-facing list by design")
+# Legacy Qdrant base (optional). Prefer zvec via /api/v1/list with
+# include_raw=True (v3.4.0 default). Kept for migration / fallback paths.
 QDRANT_BASE = os.environ.get("QDRANT_BASE", "http://127.0.0.1:6333").rstrip("/")
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "agent_memories_1024")
 
@@ -318,13 +317,12 @@ def _extract_memories(payload: dict) -> list[dict]:
 
 
 def _fetch_l1_raw_from_qdrant(limit_total: int = 1500, agent_id: str = "") -> list[dict]:
-    """Fetch active L1_RAW memories directly from Qdrant.
+    """Fetch active L1_RAW memories from legacy Qdrant (migration fallback).
 
-    Hy-Memory's /api/v1/list intentionally excludes the l1_raw layer from the
-    user-facing list (it's the raw input layer, hidden once reconciler
-    extracts durable facts). The dashboard wants to show L1_RAW anyway, so
-    we query Qdrant directly and normalize to the same memory-dict shape
-    produced by _extract_memories().
+    Prefer list with ``include_raw=True`` / ``_fetch_l1_raw_from_vdb`` on
+    zvec-only installs (v3.4.0+). This path remains for archives and dual-
+    stack transitions. Normalized to the same memory-dict shape as
+    ``_extract_memories()``.
     """
     # Build a user_id-only filter (drop agent_id constraint, since each user
     # can have memories written by many different agents over time).
@@ -3613,11 +3611,9 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 if mid not in seen:
                     seen.add(mid)
                     deduped.append(m)
-            # Also fetch L1_RAW (raw conversation snippets) directly from
-            # Qdrant — Hy-Memory's /api/v1/list filters them out by
-            # design, but the dashboard wants to show them. Normalized
-            # to the same shape as the items above, so the rest of the
-            # dedupe + sort logic just works.
+            # Also pull L1_RAW via VDB (zvec scroll / include_raw path).
+            # Legacy Qdrant fetch is only a fallback when VDB path is empty
+            # and a Qdrant sidecar still exists.
             l1_raw_items = _fetch_l1_raw_from_vdb(agent_id=agent_id)
             l1_raw_total = len(l1_raw_items)
             for m in l1_raw_items:

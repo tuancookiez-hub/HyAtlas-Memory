@@ -167,13 +167,22 @@ class HyMemoryClient:
             raise
 
     def list_memories(self, *, user_id: str = "", agent_id: str = "",
-                      limit: int = 50, offset: int = 0) -> dict:
-        """POST /api/v1/list — list memories."""
+                      limit: int = 50, offset: int = 0,
+                      include_raw: bool | None = None) -> dict:
+        """POST /api/v1/list — list memories.
+
+        Args:
+            include_raw: When True (server default), include L1_RAW rows.
+                Pass False for extracted-only. None omits the field so the
+                server default applies.
+        """
         body: dict[str, Any] = {"limit": limit, "offset": offset}
         if user_id:
             body["user_id"] = user_id
         if agent_id:
             body["agent_id"] = agent_id
+        if include_raw is not None:
+            body["include_raw"] = include_raw
         return self._request("POST", "/api/v1/list", body, timeout=10)
 
     def update(self, memory_id: str, content: str) -> dict:

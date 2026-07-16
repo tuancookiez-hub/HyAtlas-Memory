@@ -1,9 +1,10 @@
 """Subprocess lifecycle manager for the full HyAtlas-Memory stack.
 
-Spawns Qdrant, the Hy-Memory upstream server, and the dashboard in
-background. Designed to be called from ``HyMemoryProvider.initialize()``
-and ``sync_turn()`` so the stack starts automatically on first use, like
-Hindsight's embedded daemon.
+Spawns the Hy-Memory upstream server and the dashboard in background
+(zvec is in-process — no external vector DB binary). Optional legacy
+Qdrant is started only when configured. Designed to be called from
+``HyMemoryProvider.initialize()`` and ``sync_turn()`` so the stack starts
+automatically on first use, like Hindsight's embedded daemon.
 
 Heavily inspired by ``hindsight_embed.daemon_embed_manager.DaemonEmbedManager``.
 """
@@ -96,8 +97,8 @@ def _detach_kwargs(log_handle: IO[bytes], *, visible: bool = False) -> dict:
     on every plugin load.
 
     ``visible=True`` opens a new console window for the subprocess.
-    Used by ``hyatlas console`` so the user can see Qdrant / upstream
-    / dashboard output in real time. On non-Windows platforms the
+    Used by ``hyatlas console`` so the user can see upstream / dashboard
+    output in real time. On non-Windows platforms the
     ``start_new_session`` flag is the closest equivalent (a new
     session leader) and is preserved either way.
     """
@@ -134,7 +135,7 @@ def _service_env(home: Path) -> dict[str, str]:
 
 
 class StackManager:
-    """Start/stop the Qdrant + upstream + dashboard stack."""
+    """Start/stop the upstream + dashboard stack (optional legacy Qdrant)."""
 
 
     def __init__(self, *, project_root: str | Path, hermes_home: str | Path, log_dir: str | Path):
