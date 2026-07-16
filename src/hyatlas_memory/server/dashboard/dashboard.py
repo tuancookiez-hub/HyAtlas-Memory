@@ -5,7 +5,7 @@
 Talks to the local hyatlas-memory HTTP API (port 19527 by default).
 
 > This dashboard is for the community implementation at
-> github.com/<owner>/HyAtlas-Memory. The canonical 6-layer model
+> github.com/tuancookiez-hub/HyAtlas-Memory. The canonical 6-layer model
 > and three-mode design (Lite/Pro/Ultra) are defined by the official
 > Hy-Memory framework at https://memory.hunyuan.tencent.com.
 

@@ -90,9 +90,9 @@ hy_memory = "hyatlas_memory:HyMemoryProvider"
 hyatlas = "hyatlas_memory.start:main"
 
 [project.urls]
-Homepage = "https://github.com/<owner>/HyAtlas-Memory"
-Issues = "https://github.com/<owner>/HyAtlas-Memory/issues"
-Source = "https://github.com/<owner>/HyAtlas-Memory"
+Homepage = "https://github.com/tuancookiez-hub/HyAtlas-Memory"
+Issues = "https://github.com/tuancookiez-hub/HyAtlas-Memory/issues"
+Source = "https://github.com/tuancookiez-hub/HyAtlas-Memory"
 # Reference to the upstream official framework this package implements.
 # Not affiliated; included for discoverability and source-of-truth accuracy.
 "Upstream Framework" = "https://memory.hunyuan.tencent.com"

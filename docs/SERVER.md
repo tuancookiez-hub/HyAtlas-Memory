@@ -1,10 +1,3 @@
-<!--
-STALE DOC NOTICE (2026-07-16):
-This document may be out of date. For current state, see ../NOW.md
-or https://github.com/<owner>/HyAtlas-Memory/blob/main/NOW.md
-Last meaningful refresh: see the date in this header's filename context.
--->
-
 # HyAtlas-Memory Server Components
 
 > **This is a community implementation of the official [Hy-Memory framework](https://memory.hunyuan.tencent.com) (Tencent Hunyuan) for Hermes Agent.** The 6-layer model, the three operating modes (Lite/Pro/Ultra), and the evolution chain semantics are defined by the official framework; this server is the Hermes-targeted runtime that supports them. See the [official docs](https://memory.hunyuan.tencent.com) for the canonical architecture and the [project README](../README.md) for the local community-implementation notes.

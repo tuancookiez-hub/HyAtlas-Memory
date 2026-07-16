@@ -169,7 +169,6 @@ A few things I noticed during the audit that are tracked but **not** part of v3.
 
 - **Most specialist profiles are empty** (`research`, `sentinel`, `work-backend`, `work-frontend`, `hestia` have 0 memories). The plumbing works; the data isn't there. Future work: route writes from those profiles' agent_ids to populate them.
 - **Zvec list enumeration quirk.** `ZvecVectorStore.list_by_user()` uses a zero-vector ANN query for now, which doesn't return diverse embeddings. Writes persist correctly; the list path is best-effort. Future work: switch to a proper query API when zvec ships it.
-- **Some docs still have `STALE DOC NOTICE` headers** (added during the privacy scrub). They're being rewritten in v3.5.0 docs pass.
 
 ---
 

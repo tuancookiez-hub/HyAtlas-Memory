@@ -1,10 +1,3 @@
-<!--
-STALE DOC NOTICE (2026-07-16):
-This document may be out of date. For current state, see ../NOW.md
-or https://github.com/<owner>/HyAtlas-Memory/blob/main/NOW.md
-Last meaningful refresh: see the date in this header's filename context.
--->
-
 # Memory Layers
 
 > **HyAtlas v3.2.1 (2026-07)** — This doc describes **this repo’s** layer model. Runtime vector store is **Zvec** (in-process). **L4 is retired** for new writes; identity lives in **L2**. Graph layers **L5–L7** live in **Kuzu**.

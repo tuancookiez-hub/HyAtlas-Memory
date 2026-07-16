@@ -1,10 +1,3 @@
-<!--
-STALE DOC NOTICE (2026-07-16):
-This document may be out of date. For current state, see ../NOW.md
-or https://github.com/<owner>/HyAtlas-Memory/blob/main/NOW.md
-Last meaningful refresh: see the date in this header's filename context.
--->
-
 # HyAtlas Dashboard
 
 > The local web UI for inspecting your memory atlas. Runs on `http://127.0.0.1:8765` and talks to the HyAtlas memory server on port 19527.

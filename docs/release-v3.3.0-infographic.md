@@ -111,4 +111,4 @@ Infographic 1672x941, dark navy-black background, matching prior HyAtlas v3.2 re
 
 ## Social
 
-**X:** HyAtlas v3.3.0 — same evolution story as 3.2.1, now with **numbers**: Quality Metrics tab, 7d LLM token rollup on writes, one-click weekly baseline. Ref benchmarks labeled honestly. [PNG] github.com/<owner>/HyAtlas-Memory
+**X:** HyAtlas v3.3.0 — same evolution story as 3.2.1, now with **numbers**: Quality Metrics tab, 7d LLM token rollup on writes, one-click weekly baseline. Ref benchmarks labeled honestly. [PNG] github.com/tuancookiez-hub/HyAtlas-Memory
