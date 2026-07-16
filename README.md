@@ -250,10 +250,6 @@ The upstream `hy-memory` server handles LLM-based fact extraction,
 importance scoring, and vector indexing automatically. ~8s indexing
 delay before the memory shows on the dashboard.
 
-> **v3.0.0:** The upstream SDK is now forked into first-party code.
-> `hyatlas_memory.core.*` contains the full extraction, reconciliation,
-> and graph pipeline. No external `hy-memory` pip dependency required.
-
 For thin-client control (no provider, just the HTTP wrapper):
 
 ```python
