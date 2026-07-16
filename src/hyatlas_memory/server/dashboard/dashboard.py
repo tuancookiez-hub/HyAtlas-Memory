@@ -3992,6 +3992,9 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 upstream_path += "?" + "&".join(upstream_qs)
             status, data = hy("GET", upstream_path, None)
             if status == 200 and isinstance(data, dict):
+                if not data.get("exported_at"):
+                    from datetime import datetime as _dt
+                    data["exported_at"] = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
                 self._json(200, data)
             else:
                 # Fallback to export file if server endpoint unavailable
