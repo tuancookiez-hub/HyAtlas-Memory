@@ -82,7 +82,7 @@ def _add_subcommands(sub: argparse._SubParsersAction) -> None:
 
     p_console = sub.add_parser(
         "console",
-        help="Open the visible status window (Ctrl+C stops the memory system)",
+        help="Show status window (health + live log tail). Safe to close.",
     )
     p_console.add_argument(
         "--no-start",
@@ -462,25 +462,30 @@ def _cmd_reset(args) -> int:
 # Console — visible status window with live activity ticker
 # ---------------------------------------------------------------------------
 
+def _console_already_running() -> bool:
+    """Return True if a hyatlas_memory.console window is already open.
+
+    Prevents the spawn-on-every-start pile-up. Scans wmic for any
+    python.exe whose commandline contains hyatlas_memory.console.
+    """
+    try:
+        out = subprocess.run(
+            ["wmic", "process", "where", "name='python.exe'", "get", "commandline"],
+            capture_output=True, text=True, timeout=4,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+        ).stdout
+    except Exception:
+        return False
+    return "hyatlas_memory.console" in out
+
+
 def _cmd_console(args) -> int:
-    """Open the visible HyAtlas-Memory status window.
+    """Open the HyAtlas status window — health header + live server log tail.
 
-    v1.4.2: by default this also starts the stack with visible
-    console windows attached to Qdrant / upstream / dashboard, so the
-    user can see exactly what every process is doing. ``--no-start``
-    attaches only — useful when the stack was already started by
-    something else (e.g. ``hyatlas start`` or the plugin auto-start)
-    and the user just wants the ticker.
-
-    Spawns a new console window via ``cmd.exe /c start`` and returns
-    immediately. The visible console runs in its own process group;
-    closing it does not affect the parent terminal, and the parent
-    terminal does not block on it. This matches the
-    ``Hermes_Gateway.cmd`` shim pattern.
+    Safe to close: only the window dies, the server keeps running.
+    If the stack isn't running yet, starts it first (detached).
     """
     if not args.no_start:
-        # Start the stack. This is a no-op if already running. Services
-        # run detached — safe to Ctrl+C after this returns.
         from .process import StackManager
         try:
             home = get_hermes_home()
@@ -495,33 +500,40 @@ def _cmd_console(args) -> int:
         )
         manager.start()
 
-    # Resolve the Python interpreter the user is currently running.
-    # In editable mode this is the UV Python; in installed mode it's
-    # whatever ``sys.executable`` points to. Either way, the child
-    # console runs the same code.
-    py = sys.executable
-
-    # Build the inner command. Note: the inner ``python -m
-    # hyatlas_memory.console`` already handles ``--no-start`` being
-    # passed by the parent.
+    py = getattr(sys, "_base_executable", None) or sys.executable
     inner = [py, "-m", "hyatlas_memory.console"]
     if getattr(args, "no_start", False):
         inner.append("--no-start")
 
-    # Spawn detached. ``start`` with a title opens a new console
-    # window; without ``/WAIT`` it returns immediately. This is the
-    # same pattern as ``Hermes_Gateway.cmd``.
-    # CREATE_NEW_CONSOLE = 0x00000010
-    flags = subprocess.CREATE_NEW_CONSOLE
+    flags = subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP
+    if _console_already_running():
+        print(_msg_dim("HyAtlas status window is already open."))
+        return 0
+    # Build PYTHONPATH so the base python finds the venv site-packages.
+    # Spawning the base python directly (vs the venv shim) avoids the
+    # re-exec that causes console-window flicker.
+    spawn_env = os.environ.copy()
+    paths = []
+    sp = os.path.join(sys.prefix, "Lib", "site-packages")
+    if os.path.isdir(sp):
+        paths.append(sp)
+    # Editable install: cli.py lives at <root>/hyatlas_memory/cli.py.
+    # Package root is the PARENT of this file.
+    package_root = Path(__file__).resolve().parent.parent
+    paths.append(str(package_root))
+    # REPLACE inherited PYTHONPATH (hermes-agent shell pollution).
+    spawn_env["PYTHONPATH"] = os.pathsep.join(paths)
     try:
         subprocess.Popen(
             inner,
             creationflags=flags,
             close_fds=True,
             cwd=str(Path(__file__).parent),
+            env=spawn_env,
         )
-        print(_msg_green("HyAtlas-Memory console launched in a new window."))
-        print(_msg_dim("Close the console window to terminate it."))
+        print(_msg_green("HyAtlas status window launched."))
+        print(_msg_dim("Close it anytime — the server keeps running."))
+        print(_msg_dim("Reopen: hyatlas console  or  bin/hyatlas-status.bat"))
     except Exception as e:
         print(_msg_yellow(f"Failed to launch console: {e}"))
         print(_msg_dim("You can run it directly:"))

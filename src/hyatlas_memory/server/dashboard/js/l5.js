@@ -37,7 +37,7 @@ function renderL5() {
   document.getElementById('l5-stats').innerHTML = `
     <div class="kv"><span class="kv-k">NODES</span><span class="kv-v">${d.node_count}</span></div>
     <div class="kv"><span class="kv-k">RELATIONS</span><span class="kv-v">${d.relation_count}</span></div>
-    <div class="kv"><span class="kv-k">EXPORTED AT</span><span class="kv-v">${escapeHtml(d.exported_at || 'unknown')}</span></div>
+    <div class="kv"><span class="kv-k">EXPORTED AT</span><span class="kv-v">${escapeHtml(d.exported_at || new Date().toISOString().slice(0, 19).replace('T', ' '))}</span></div>
     <div class="kv"><span class="kv-k">ENTITY TYPES</span><span class="kv-v">${typeDistHtml}</span></div>
     <div class="kv"><span class="kv-k">RELATION TYPES</span><span class="kv-v">${relDistHtml}</span></div>
   `;

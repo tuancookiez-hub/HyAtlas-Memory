@@ -1022,16 +1022,155 @@ def _do_start(services: list, project_root: str, detached: bool) -> None:
             sys.exit(1)
 
     print()
-    print(f"  {BOLD}{GREEN}All services running (detached).{RESET}")
+    print(f"  {BOLD}{GREEN}All services running.{RESET}")
     print()
     _print_service_urls()
-    print(dim("  Services are detached. Run 'hyatlas stop' to shut down."))
-    print(dim("  They will survive closing this terminal."))
-    print()
-    sys.exit(0)
+    if detached:
+        print(dim("  Services are detached. Run 'hyatlas stop' to shut down."))
+        print(dim("  They will survive closing this terminal."))
+        # Pop a visible status window so the user can see HyAtlas is up.
+        # Idempotent — only opens if no console window is already running.
+        _launch_status_console()
+        sys.exit(0)
+    else:
+        print(dim("  Press Ctrl+C in this terminal to stop the services."))
 
 
 # ── Main ────────────────────────────────────────────────────────────────
+
+def _status_console_already_running() -> bool:
+    """Return True if a hyatlas_memory.console window is already open.
+
+    Prevents the spawn-on-every-start pile-up: each `hyatlas start` would
+    otherwise pop another blank window, leaving 8+ orphans after a few
+    test cycles. We scan wmic for any python.exe whose command line
+    contains `hyatlas_memory.console`. With the direct-Popen spawn path,
+    the python process IS the window: if it dies, the window closes
+    (CREATE_NEW_CONSOLE on a python Popen gives the new console to that
+    python and its children only).
+    """
+    try:
+        out = subprocess.run(
+            ["wmic", "process", "where", "name='python.exe'", "get", "commandline"],
+            capture_output=True, text=True, timeout=4,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+        ).stdout
+    except Exception:
+        return False
+    return "hyatlas_memory.console" in out
+
+
+def _launch_status_console() -> None:
+    """Spawn ONE visible console window showing HyAtlas health.
+
+    Safe to close: only the monitor dies, the server keeps running.
+    Idempotent: if a console is already open, this is a no-op.
+
+    Implementation notes:
+      Windows: Popen python.exe with CREATE_NEW_CONSOLE so a new
+      console window appears directly. Do NOT pipe stdout/stderr
+      (that makes the window look blank because nothing reads the
+      pipe buffer). Do NOT use `cmd /c start ...` from a non-tty
+      parent shell — `start` blocks synchronously when it detects
+      redirected stdio, leaving the outer cmd hung forever.
+    """
+    if _status_console_already_running():
+        return
+
+    if sys.platform != "win32":
+        try:
+            subprocess.Popen(
+                [_base_python(), "-m", "hyatlas_memory.console"],
+                env=_console_spawn_env(),
+            )
+        except Exception as e:
+            print(warn(f"  console spawn failed: {e}"))
+        return
+
+    try:
+        creationflags = (
+            subprocess.CREATE_NEW_CONSOLE
+            | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+        # Direct Popen of python -m hyatlas_memory.console with
+        # CREATE_NEW_CONSOLE. Python's stdout is automatically
+        # attached to the new console. No pipe redirection, no
+        # start builtin — keeps the spawn simple and reliable.
+        #
+        # IMPORTANT: use sys._base_executable (the venv shim's real
+        # python) instead of sys.executable. Spawning the venv shim
+        # makes Python re-exec to the base python on startup, which
+        # causes the console window to flicker (two short-lived
+        # console windows appear in sequence).
+        subprocess.Popen(
+            [_base_python(), "-m", "hyatlas_memory.console"],
+            creationflags=creationflags,
+            close_fds=False,
+            env=_console_spawn_env(),
+        )
+    except Exception as e:
+        # Surface the error so a silent dead console doesn't strand
+        # the user staring at nothing. The base python is the most
+        # common failure point — env var problems, missing module, etc.
+        print(warn(f"  console spawn failed: {e}"))
+def _venv_site_packages() -> str | None:
+    """Path to the hermes-agent venv site-packages, or None if not in a venv.
+
+    The hermes-agent venv is a uv-managed shim: its python.exe detects
+    a venv/home mismatch on startup and re-execs to the base python,
+    spawning a new console window along the way (the source of the
+    flicker). We work around this by spawning the BASE python directly
+    with PYTHONPATH pointing at the venv site-packages and the editable
+    install location.
+    """
+    sp = os.path.join(sys.prefix, "Lib", "site-packages")
+    return sp if os.path.isdir(sp) else None
+
+
+def _base_python() -> str:
+    """Return the path to the real Python binary (the venv shim's target).
+
+    Skipping the venv shim prevents the re-exec that causes the
+    double-console flicker. We use sys._base_executable when available
+    (always present in a venv) and fall back to sys.executable.
+    """
+    return getattr(sys, "_base_executable", None) or sys.executable
+
+
+def _console_spawn_env() -> dict[str, str]:
+    """Environment for the spawned console child.
+
+    Sets PYTHONPATH so the base python (which we spawn to skip the
+    venv shim) finds:
+      1. the venv site-packages (third-party deps like zvec, openai)
+      2. the editable install root — i.e. the *parent* of the
+         hyatlas_memory package directory, since `import hyatlas_memory`
+         resolves to `<root>/hyatlas_memory/__init__.py`.
+
+    We REPLACE any inherited PYTHONPATH rather than appending. The
+    parent shell often carries a duplicated/hermetic PYTHONPATH from
+    the hermes-agent venv that bleeds into the child and produces
+    confusing import errors.
+
+    Also propagates HYATLAS_HOME / HERMES_HOME so the console's
+    log path resolves.
+    """
+    env = os.environ.copy()
+    paths = []
+    sp = _venv_site_packages()
+    if sp:
+        paths.append(sp)
+    # Editable install: console.py lives at <root>/hyatlas_memory/_start.py.
+    # The package root is the PARENT of this file.
+    package_dir = os.path.dirname(os.path.abspath(__file__))
+    package_root = os.path.dirname(package_dir)
+    paths.append(package_root)
+    # REPLACE inherited PYTHONPATH rather than appending. The parent shell
+    # often carries a duplicated/hermetic PYTHONPATH from hermes-agent that
+    # bleeds into the child and produces confusing import errors.
+    env["PYTHONPATH"] = os.pathsep.join(paths)
+    return env
+
 
 def main():
     # Strip --internal (used for console window relaunch on Windows)
@@ -1066,9 +1205,15 @@ def main():
             # "hyatlas memory write|recall|list|reflect" — see _memory_cli.py
             from hyatlas_memory import _memory_cli
             sys.exit(_memory_cli.main(sys.argv[1:]))
+        elif arg == "console":
+            # Pop a fresh status window. Idempotent — no-op if one is
+            # already open. Closing the window does NOT stop the
+            # services; they keep running in the background.
+            _launch_status_console()
+            return
         else:
             print(fail(f"Unknown argument: {sys.argv[1]}"))
-            print("Usage: hyatlas [start|stop|status|memory|help]")
+            print("Usage: hyatlas [start|stop|status|console|memory|help]")
             sys.exit(1)
     else:
         # Bare `hyatlas` (no args) starts the stack in the CURRENT terminal

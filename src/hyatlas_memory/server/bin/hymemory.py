@@ -67,7 +67,8 @@ def _write_pids(pids: dict) -> None:
 def _port_pid(port: int) -> int | None:
     """Find the PID listening on a port using netstat. Returns None if free."""
     try:
-        r = subprocess.run(["netstat", "-ano"], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["netstat", "-ano"], capture_output=True, text=True, timeout=5,
+                        creationflags=0x08000000)
     except Exception:
         return None
     for line in r.stdout.splitlines():
@@ -86,6 +87,7 @@ def _is_alive(pid: int | None) -> bool:
         ["powershell", "-NoProfile", "-Command",
          f"Get-Process -Id {pid} -ErrorAction SilentlyContinue | Select-Object -First 1 | Measure-Object | Select-Object -ExpandProperty Count"],
         capture_output=True, text=True, timeout=5,
+        creationflags=0x08000000,  # CREATE_NO_WINDOW
     )
     try:
         return int(r.stdout.strip()) > 0
@@ -113,8 +115,8 @@ def _launch(script: Path, log_name: str) -> int | None:
     log_path = LOG_DIR / f"hymemory-{log_name}.log"
     log_fh = open(log_path, "ab", buffering=0)
     # CREATE_NEW_PROCESS_GROUP = 0x00000200, DETACHED_PROCESS = 0x00000008
-    # Use 0x00000008 alone to detach (no console window inherited).
-    flags = 0x00000008
+    # CREATE_NO_WINDOW = 0x08000000 — suppress the visible console window.
+    flags = 0x00000008 | 0x08000000
     p = subprocess.Popen(
         [PYTHON, str(script)],
         stdout=log_fh, stderr=log_fh, stdin=subprocess.DEVNULL,
@@ -145,6 +147,7 @@ def _kill_pid(pid: int) -> bool:
         ["powershell", "-NoProfile", "-Command",
          f"Stop-Process -Id {pid} -Force -ErrorAction SilentlyContinue"],
         capture_output=True, timeout=10,
+        creationflags=0x08000000,  # CREATE_NO_WINDOW
     )
     # Wait for OS to release the port
     for _ in range(15):
@@ -167,11 +170,6 @@ def _print_ready_banner() -> None:
 
 
 def cmd_start_server(verbose: bool = True) -> bool:
-    # SAFETY: Take a Qdrant snapshot before starting the stack.
-    # This way, if anything goes wrong, we have a recent restore point.
-    if verbose:
-        print("  pre-flight: creating Qdrant snapshot for safety...")
-    cmd_qdrant_snapshot(verbose=False)
     pids = _read_pids()
     port_pid = _port_pid(SERVER_PORT)
     if _is_alive(pids.get("server")) or (port_pid and _is_alive(port_pid)):
@@ -374,7 +372,8 @@ def cmd_qdrant_stop(verbose: bool = True) -> bool:
     # Find Qdrant binary path
     qdrant_paths = []
     try:
-        r = subprocess.run(["where", "qdrant"], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["where", "qdrant"], capture_output=True, text=True, timeout=5,
+                        creationflags=0x08000000)
         for line in r.stdout.splitlines():
             line = line.strip()
             if line and os.path.exists(line):
@@ -436,7 +435,8 @@ def cmd_qdrant_start(verbose: bool = True) -> bool:
             qdrant_path = p
             break
     try:
-        r = subprocess.run(["where", "qdrant"], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["where", "qdrant"], capture_output=True, text=True, timeout=5,
+                        creationflags=0x08000000)
         for line in r.stdout.splitlines():
             line = line.strip()
             if line and os.path.exists(line):
@@ -469,7 +469,7 @@ def cmd_qdrant_start(verbose: bool = True) -> bool:
         [qdrant_path],
         cwd=qdrant_dir,
         stdout=log_fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-        creationflags=0x00000008,
+        creationflags=0x00000008 | 0x08000000,
         env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
     if verbose:

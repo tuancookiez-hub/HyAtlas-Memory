@@ -183,11 +183,58 @@ h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 600; }
   flex: 1;
   display: flex;
   min-height: 100vh;
+  position: relative;
+}
+
+.scope-bar {
+  position: fixed;
+  top: 0;
+  left: var(--sidebar-w);
+  right: var(--right-sidebar-w);
+  z-index: 50;
+  min-height: 58px;
+  padding: 10px 24px;
+  background: rgba(10, 10, 10, 0.96);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.scope-bar-label {
+  color: var(--accent);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  white-space: nowrap;
+}
+
+.scope-select-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scope-bar .filter-select {
+  min-width: 150px;
+  margin: 0;
+}
+
+.scope-bar-meta {
+  color: var(--muted);
+  font-size: 11px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.scope-separator {
+  margin: 0 6px;
+  color: var(--border-light);
 }
 
 .content-area {
   flex: 1;
-  padding: 24px;
+  padding: 82px 24px 24px;
   overflow-y: auto;
   max-height: 100vh;
   max-width: calc(100vw - var(--sidebar-w) - var(--right-sidebar-w));

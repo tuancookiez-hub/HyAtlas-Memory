@@ -49,6 +49,7 @@ REFRESH_S = int(os.environ.get("HY_DASH_REFRESH_S", "30"))
 # The token is auto-generated on first run and stored in ~/.hy_memory/.
 import pathlib as _pathlib
 import secrets as _secrets
+
 from hyatlas_memory.layout import home as hy_home
 
 _DASH_TOKEN_FILE = _pathlib.Path.home() / ".hy_memory" / ".dashboard_token"
@@ -3242,7 +3243,6 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         }
 
     def _build_quality_metrics(self, requested_agent: str = "") -> dict:
-        import pathlib
         import time as _time
 
         _, m7 = hy("GET", "/api/v1/metrics?minutes=10080", timeout=15)
@@ -3807,6 +3807,11 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 _, graph_api = hy("GET", graph_path, None, timeout=60)
                 graph_layer_counts = (graph_api or {}).get("layer_counts") or {}
                 graph_relations = (graph_api or {}).get("relation_count")
+                # Global (un-scoped) graph counts so the Settings tab can show
+                # the true total in addition to the per-agent count.
+                _, graph_api_global = hy("GET", "/api/v1/graph", None, timeout=60)
+                graph_layer_counts_global = (graph_api_global or {}).get("layer_counts") or {}
+                graph_relations_global = (graph_api_global or {}).get("relation_count")
             except Exception as e:
                 return self._json(500, {"error": str(e)})
             log_path = hy_home() / "logs" / f"digest_run_{agent_id}.log"
@@ -3840,6 +3845,8 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 "vdb_layer_counts": counts,
                 "graph_layer_counts": graph_layer_counts,
                 "graph_relation_count": graph_relations,
+                "graph_layer_counts_global": graph_layer_counts_global,
+                "graph_relation_count_global": graph_relations_global,
                 "fresh_l2_for_digest": fresh_l2,
                 "l6_graph_sample_for_key": l6_for_key,
                 "l4_status": "retired_migrated_to_l2",
@@ -3992,6 +3999,9 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 upstream_path += "?" + "&".join(upstream_qs)
             status, data = hy("GET", upstream_path, None)
             if status == 200 and isinstance(data, dict):
+                if not data.get("exported_at"):
+                    from datetime import datetime as _dt
+                    data["exported_at"] = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
                 self._json(200, data)
             else:
                 # Fallback to export file if server endpoint unavailable

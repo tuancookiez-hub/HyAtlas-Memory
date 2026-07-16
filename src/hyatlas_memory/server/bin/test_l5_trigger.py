@@ -76,7 +76,8 @@ else:
 
 # Check if the L5 pipeline is running
 import subprocess
-result = subprocess.run(["tasklist"], capture_output=True, text=True)
+result = subprocess.run(["tasklist"], capture_output=True, text=True,
+                             creationflags=0x08000000)
 l5_running = "l5_full_pipeline" in result.stdout
 print(f"  L5 pipeline running: {l5_running}")
 

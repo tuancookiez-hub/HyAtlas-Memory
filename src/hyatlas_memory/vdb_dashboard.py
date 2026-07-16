@@ -12,7 +12,7 @@ def _run(client, coro):
     return client._loop_thread.run(coro)
 
 
-async def _layer_count_async(client, layer: str, *, require_is_latest: bool) -> int:
+async def _layer_count_async(client, layer: str, *, require_is_latest: bool, agent_id: str = "") -> int:
     vs = client._vector_store
     name = type(vs).__name__
     if name == "ZvecVectorStore":
@@ -21,6 +21,8 @@ async def _layer_count_async(client, layer: str, *, require_is_latest: bool) -> 
         from .core.data.vector_store_zvec import _quote, _run_in_vdb_pool
 
         parts = [f"layer = {_quote(layer)}"]
+        if agent_id:
+            parts.append(f"agent_id = {_quote(agent_id)}")
         if require_is_latest:
             parts.append(f"is_latest = {_quote('true')}")
         elif layer == "l5_knowledge":
@@ -44,6 +46,8 @@ async def _layer_count_async(client, layer: str, *, require_is_latest: bool) -> 
         from .core.data.vector_store_zvec import _run_in_vdb_pool
 
         must = [FieldCondition(key="layer", match=MatchValue(value=layer))]
+        if agent_id:
+            must.append(FieldCondition(key="agent_id", match=MatchValue(value=agent_id)))
         if require_is_latest:
             must.append(FieldCondition(key="is_latest", match=MatchValue(value=True)))
         elif layer == "l5_knowledge":
@@ -61,15 +65,15 @@ async def _layer_count_async(client, layer: str, *, require_is_latest: bool) -> 
     return 0
 
 
-def layer_count(client, layer: str, *, require_is_latest: bool = True) -> int:
+def layer_count(client, layer: str, *, require_is_latest: bool = True, agent_id: str = "") -> int:
     try:
-        return _run(client, _layer_count_async(client, layer, require_is_latest=require_is_latest))
+        return _run(client, _layer_count_async(client, layer, require_is_latest=require_is_latest, agent_id=agent_id))
     except Exception as e:
         logger.warning("[vdb_dashboard] layer_count failed: %s", e)
         return 0
 
 
-async def _scroll_l1_async(client, user_ids: list[str], limit: int) -> list[dict]:
+async def _scroll_l1_async(client, user_ids: list[str], limit: int, agent_id: str = "") -> list[dict]:
     from .core.models.memory import MemoryLayer
 
     vs = client._vector_store
@@ -77,6 +81,7 @@ async def _scroll_l1_async(client, user_ids: list[str], limit: int) -> list[dict
     for uid in user_ids:
         nodes = await vs.list_by_user(
             user_id=uid,
+            agent_id=agent_id or None,
             layers=[MemoryLayer.L1_RAW],
             limit=min(limit, 500),
         )
@@ -100,9 +105,9 @@ async def _scroll_l1_async(client, user_ids: list[str], limit: int) -> list[dict
     return out
 
 
-def scroll_l1(client, user_ids: list[str], limit: int = 1500) -> list[dict]:
+def scroll_l1(client, user_ids: list[str], limit: int = 1500, agent_id: str = "") -> list[dict]:
     try:
-        return _run(client, _scroll_l1_async(client, user_ids, limit))
+        return _run(client, _scroll_l1_async(client, user_ids, limit, agent_id))
     except Exception as e:
         logger.warning("[vdb_dashboard] scroll_l1 failed: %s", e)
         return []

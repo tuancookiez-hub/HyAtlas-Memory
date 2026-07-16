@@ -50,6 +50,7 @@ def _pid_on_port(port: int) -> int | None:
             r = subprocess.run(
                 ["netstat", "-ano", "-p", "TCP"],
                 capture_output=True, text=True, timeout=5,
+                creationflags=0x08000000,  # CREATE_NO_WINDOW
             )
             for line in r.stdout.splitlines():
                 if f"127.0.0.1:{port}" in line and "LISTENING" in line:
@@ -69,7 +70,8 @@ def _pid_on_port(port: int) -> int | None:
 def _kill_pid(pid: int) -> bool:
     try:
         if sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=10)
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=10,
+                           creationflags=0x08000000)  # CREATE_NO_WINDOW
         else:
             os.kill(pid, 15)
             for _ in range(50):
@@ -220,13 +222,11 @@ class StackManager:
     def start(self) -> bool:
         """Start the full stack. Idempotent."""
         if not self._acquire_lock():
-            # Another process is starting; wait for it to finish.
             for _ in range(30):
                 if self.is_running():
                     return True
                 time.sleep(1)
             return self.is_running()
-
         try:
             if self.is_running():
                 return True
@@ -234,55 +234,18 @@ class StackManager:
         finally:
             self._release_lock()
 
-    def start_visible(self) -> bool:
-        """Start the stack with visible console windows.
-
-        v1.4.2: convenience wrapper for ``hyatlas console``. Spawns
-        Qdrant, upstream, and dashboard with ``CREATE_NEW_CONSOLE``
-        so the user can see their output. Behavior is otherwise
-        identical to :meth:`start`.
-        """
-        if not self._acquire_lock():
-            for _ in range(30):
-                if self.is_running():
-                    return True
-                time.sleep(1)
-            return self.is_running()
-        try:
-            if self.is_running():
-                return True
-            return self._start_locked(visible=True)
-        finally:
-            self._release_lock()
-
-    def _start_locked(self, *, visible: bool = False) -> bool:
+    def _start_locked(self) -> bool:
         self._log_dir.mkdir(parents=True, exist_ok=True)
         log = open(self._log_path, "ab")
 
         cfg = self._read_hy_memory_json()
         ports = {
-            "qdrant": int(cfg.get("qdrant", {}).get("port", _DEFAULT_PORTS["qdrant"])),
             "upstream": int(cfg.get("server_port", _DEFAULT_PORTS["upstream"])),
             "dashboard": int(cfg.get("dashboard", {}).get("port", _DEFAULT_PORTS["dashboard"])),
         }
 
-        # Services ALWAYS use DETACHED_PROCESS so they survive window closure
-        detach = _detach_kwargs(log, visible=False)
-
-        # Qdrant
-        qdrant_bin, qdrant_cfg = self._qdrant_paths()
-        if not _port_open(ports["qdrant"]):
-            if not qdrant_bin:
-                logger.error("[hy-memory] Qdrant binary not found")
-                return False
-            cmd = [qdrant_bin]
-            if qdrant_cfg:
-                cmd += ["--config-path", qdrant_cfg]
-            self._procs.append(subprocess.Popen(cmd, **detach))
-            if not self._wait_health(ports["qdrant"], "/healthz"):
-                logger.error("[hy-memory] Qdrant failed to start")
-                return False
-            logger.info("[hy-memory] Qdrant ready on port %d", ports["qdrant"])
+        # zvec is an in-process vector store — no external Qdrant binary needed.
+        detach = _detach_kwargs(log)
 
         # Upstream server
         if not _port_open(ports["upstream"]):

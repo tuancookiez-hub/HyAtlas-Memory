@@ -224,9 +224,13 @@ class HyMemoryProvider(MemoryProvider):
         self._config = _load_config()
         self._mode = self._config.get("mode", "pro")
 
-        # Identity mapping
+        # Identity mapping — kwarg takes priority, then config file, then "default"
         self._user_id = kwargs.get("user_id", "") or "hermes-user"
-        self._agent_id = kwargs.get("agent_identity", "") or "default"
+        self._agent_id = (
+            kwargs.get("agent_identity", "")
+            or self._config.get("agent_identity", "")
+            or "default"
+        )
 
         # Auto-start the full stack on first use.
         self._ensure_stack_running()
