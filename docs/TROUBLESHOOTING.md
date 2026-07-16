@@ -484,16 +484,32 @@ If the troubleshooting steps don't resolve your issue:
 4. **Join the discussion** (see README for links)
 
 
-## "I wrote something but it doesn't show in list" (added 2026-07-16)
+## "I wrote something but it doesn't show in list" (v3.4.0)
 
 **Symptom:** `c.add(...)` returns `success: True` but `c.list_memories()` doesn't show the new entry.
 
 **Diagnosis:**
-1. List with raw included: `c.list_memories(include_raw=True)` — if you see the entry with `extracted: false`, your LLM extractor rejected the input (often because the input was noisy/marker-laden). The memory IS saved in zvec, just hidden by default.
-2. Check `/api/v1/status` — if `llm: warning` or `rate_limited`, extraction is throttled and your L1_RAW will stay raw until throttling clears.
+1. List with raw included: `c.list_memories(include_raw=True)` (default on the server) — if you see the entry with `extracted: false`, your LLM extractor rejected the input (often because the input was noisy/marker-laden). The memory **is** saved in zvec.
+2. Check `/api/v1/status` — if `llm: warning` or `write_pipeline: rate_limited`, extraction is throttled and L1_RAW stays raw until throttling clears.
+3. Confirm `user_id` / `agent_id` match the scope you are listing (profile isolation).
 
 **Fix:**
-- Pass `include_raw=True` to see all memories including unprocessed raw writes.
+- Prefer `include_raw=True` when debugging writes.
 - For noisy input (probes, UUIDs, debug markers), write a clean factual sentence instead. The LLM extractor skips noisy text by design.
+- Switch dashboard profile to the `agent_id` you wrote under.
 
-This was a known gap before 2026-07-16: L1_RAW writes were silently hidden, making it look like writes "didn't work" when they actually did persist.
+This was a known gap before v3.4.0: L1_RAW writes were silently hidden, making it look like writes "didn't work" when they actually did persist.
+
+## Status window missing after `hyatlas --detach` (Windows / MSYS)
+
+**Symptom:** Services start (ports 19527 / 8765 healthy) but no status console window appears when launched from Git Bash / MSYS.
+
+**Diagnosis:** Console spawn uses `CREATE_NEW_CONSOLE` with the base Python. Some MSYS environments still fail to paint the window; the stack itself is fine.
+
+**Fix:**
+```bash
+hyatlas console          # reopen status window
+# or
+python -m hyatlas_memory.console
+```
+Or double-click `bin/hyatlas-status.bat`. Closing the window never stops the server.

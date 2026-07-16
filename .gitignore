@@ -100,3 +100,6 @@ snapshots/
 # Not part of the public artifact; treated as session-local.
 TUNA_AGENT_OS_TASK_BRIEF.md
 handoff.md
+
+# Scratch release notes
+.tmp-release-notes*

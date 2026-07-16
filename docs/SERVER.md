@@ -69,9 +69,9 @@ The server uses `~/.hyatlas/` as its data directory by default. Override
 with `HERMES_HOME=/path/to/alt/home` if needed.
 
 
-## 3-tier status (added 2026-07-16)
+## 3-tier status (v3.4.0)
 
-`/api/v1/status` now returns 3 levels instead of binary ok/error:
+`/api/v1/status` returns 3 levels instead of binary ok/error:
 
 ```json
 {

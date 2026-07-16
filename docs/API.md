@@ -1,6 +1,6 @@
 # HTTP API Reference
 
-> **HyAtlas v3.2.1** — Two local HTTP servers: memory **19527**, dashboard **8765**. Vector data is **Zvec** (via server `/api/v1/vdb/*`); graph **L5–L7** is **Kuzu** (`GET /api/v1/graph`).
+> **HyAtlas v3.4.0** — Two local HTTP servers: memory **19527**, dashboard **8765**. Vector data is **Zvec** (via server `/api/v1/vdb/*`); graph **L5–L7** is **Kuzu** (`GET /api/v1/graph`). List is L1-transparent (`include_raw`); status is 3-tier (`ok` / `warning` / `error`).
 
 See also: [DASHBOARD.md](./DASHBOARD.md) (UI), [HYATLAS_HERMES.md](./HYATLAS_HERMES.md) (identity + digest).
 
@@ -155,13 +155,40 @@ curl 'http://127.0.0.1:8765/api/layer-health'
 
 Response fields may grow without a major bump. Breaking path/shape changes are noted in [CHANGELOG.md](../CHANGELOG.md).
 
-## `/api/v1/list` — `include_raw` flag (added 2026-07-16)
+## `/api/v1/list` — `include_raw` flag (v3.4.0)
 
-Request body now accepts:
-- `include_raw: bool` (default `True`) — when `True`, L1_RAW (unprocessed user input) is included; when `False`, only extracted memories (L2_FACT, L5_KNOWLEDGE, etc.) are returned.
+Request body accepts:
 
-Response: each memory entry now has an `extracted: bool` field indicating whether the LLM extractor has processed it.
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `user_id` | string | (required for isolation) | Primary isolation key |
+| `agent_id` | string | optional | Profile / specialist scope (`default`, `research`, …) |
+| `limit` | int | 50 | Page size |
+| `offset` | int | 0 | Pagination |
+| `order` | string | optional | Sort order when supported |
+| `include_raw` | bool | **`true`** | When `true`, include L1_RAW; when `false`, extracted-only |
 
-## `/api/v1/status` — 3-tier response (added 2026-07-16)
+Response: each memory entry has an `extracted: bool` field indicating whether the LLM extractor has processed it. L1_RAW rows typically have `extracted: false` until a sibling L2 fact is produced.
 
-See SERVER.md for full schema. Key change: LLM throttling returns `status: warning` instead of `status: error: 503`. Persisted memory remains readable.
+```bash
+curl -X POST http://127.0.0.1:19527/api/v1/list \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"hermes-user","agent_id":"default","limit":20,"include_raw":true}'
+```
+
+## `/api/v1/status` — 3-tier response (v3.4.0)
+
+See [SERVER.md](./SERVER.md#3-tier-status-v340) for full schema. Key change: LLM throttling returns `status: warning` (and `write_pipeline: rate_limited`) instead of marking the whole stack `error: 503`. Persisted memory remains readable.
+
+```bash
+curl http://127.0.0.1:19527/api/v1/status
+# {"status":"ok","vdb":"ok","embed":"ok","llm":"ok","write_pipeline":"ok","vdb_provider":"zvec",...}
+```
+
+## Dashboard profile endpoints (v3.4.0)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `http://127.0.0.1:8765/api/profiles` | Per-`agent_id` VDB + graph counts for the profile dropdown |
+
+Every dashboard data tab accepts `?agent_id=...` so the UI can isolate specialist memory scopes.

@@ -513,6 +513,20 @@ def _cmd_console(args) -> int:
     # Spawning the base python directly (vs the venv shim) avoids the
     # re-exec that causes console-window flicker.
     spawn_env = os.environ.copy()
+    # MSYS/Git Bash env vars confuse CREATE_NEW_CONSOLE children.
+    for key in (
+        "MSYSTEM",
+        "MSYSTEM_CARCH",
+        "MSYSTEM_CHOST",
+        "MSYSTEM_PREFIX",
+        "MINGW_PREFIX",
+        "MINGW_CHOST",
+        "MINGW_PACKAGE_PREFIX",
+        "CYGWIN",
+        "TERM_PROGRAM",
+        "ORIGINAL_PATH",
+    ):
+        spawn_env.pop(key, None)
     paths = []
     sp = os.path.join(sys.prefix, "Lib", "site-packages")
     if os.path.isdir(sp):
@@ -527,7 +541,7 @@ def _cmd_console(args) -> int:
         subprocess.Popen(
             inner,
             creationflags=flags,
-            close_fds=True,
+            close_fds=False,
             cwd=str(Path(__file__).parent),
             env=spawn_env,
         )

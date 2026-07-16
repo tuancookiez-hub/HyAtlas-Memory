@@ -1153,9 +1153,25 @@ def _console_spawn_env() -> dict[str, str]:
     confusing import errors.
 
     Also propagates HYATLAS_HOME / HERMES_HOME so the console's
-    log path resolves.
+    log path resolves, and strips MSYS/Cygwin shell pollution that can
+    make CREATE_NEW_CONSOLE windows fail to paint when launched from
+    Git Bash.
     """
     env = os.environ.copy()
+    # MSYS/Git Bash injects these; a Win32 console child does not want them.
+    for key in (
+        "MSYSTEM",
+        "MSYSTEM_CARCH",
+        "MSYSTEM_CHOST",
+        "MSYSTEM_PREFIX",
+        "MINGW_PREFIX",
+        "MINGW_CHOST",
+        "MINGW_PACKAGE_PREFIX",
+        "CYGWIN",
+        "TERM_PROGRAM",
+        "ORIGINAL_PATH",
+    ):
+        env.pop(key, None)
     paths = []
     sp = _venv_site_packages()
     if sp:

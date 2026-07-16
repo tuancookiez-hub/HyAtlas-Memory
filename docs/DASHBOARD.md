@@ -1,6 +1,6 @@
 # HyAtlas Dashboard
 
-> The local web UI for inspecting your memory atlas. Runs on `http://127.0.0.1:8765` and talks to the HyAtlas memory server on port 19527.
+> **HyAtlas v3.4.0** — Local web UI for inspecting your memory atlas. Runs on `http://127.0.0.1:8765` and talks to the HyAtlas memory server on port 19527. Profile isolation, Quality Metrics, L1_RAW in lists, and 3-tier upstream status are first-class.
 
 The dashboard is a single-page app served by `server/dashboard/dashboard.py` (a `BaseHTTPRequestHandler` with no external web-framework dependencies). The frontend is `server/dashboard/dashboard.html` — one self-contained file with HTML, CSS, and JavaScript that uses Three.js (CDN) for the 3D Observatory view.
 
@@ -10,8 +10,9 @@ The dashboard is a single-page app served by `server/dashboard/dashboard.py` (a 
 # Auto-started by the plugin on first message, or start manually:
 python -m server.dashboard.dashboard
 
-# Or directly:
-python server/dashboard/dashboard.py
+# Or via the stack launcher:
+hyatlas start
+# / hyatlas --detach   (pops status console on Windows)
 
 # Open in browser:
 open http://127.0.0.1:8765   # macOS
@@ -19,20 +20,33 @@ xdg-open http://127.0.0.1:8765 # Linux
 start http://127.0.0.1:8765    # Windows
 ```
 
-The dashboard reads the same config as the plugin (`~/.hyatlas/config/hy_memory.json` for upstream URL, `HERMES_USER_IDS` for which user scopes to query).
+The dashboard reads the same config as the plugin (`~/.hyatlas/config/hy_memory.json` for upstream URL; user scopes from `HYATLAS_DASHBOARD_USER_IDS` / `HERMES_USER_IDS`).
+
+## Profile isolation (v3.4.0)
+
+A **profile dropdown** in the sidebar lists specialist scopes:
+
+`default` · `research` · `sentinel` · `work-backend` · `work-frontend` · `trading` · `hestia`
+
+- Selection is sticky in `localStorage`.
+- Every tab filters via `?agent_id=...` against VDB + graph.
+- `GET /api/profiles` returns per-profile `vdb_count` / `graph_count` / `memory_count` for the dropdown badges.
+- Empty specialist profiles are expected until those agent_ids receive writes; the filter still works.
 
 ## Pages
 
-The left sidebar has 6 pages. The currently active page is highlighted in gold.
+The left sidebar pages (names may vary slightly in the SPA):
 
 | Page | Route | What it shows |
 |---|---|---|
-| **Overview** | `#overview` | KPI cards, memory composition bar chart, recent ingestion feed |
-| **Memory Observatory** | `#observatory` | 3D galaxy visualization of all memory layers |
-| **Explore Memory** | `#explore` | Searchable list of all memories with filters |
-| **Memory Layers** | `#layers` | Table of all 8 layers with counts, percentages, and hierarchy |
-| **Today / Activity** | `#today` | Digest of memories from the last 24 hours |
-| **Settings / System** | `#system` | Storage stats, configuration, system info |
+| **Overview** | `#overview` | KPI cards, memory composition, recent ingestion |
+| **Memory Observatory** | `#observatory` | 3D galaxy visualization of memory layers |
+| **Explore Memory** | `#explore` | Searchable list with filters (includes L1_RAW) |
+| **Memory Layers** | `#layers` | Layer table with counts + hierarchy |
+| **Today / Activity** | `#today` | Last 24h timeline (uses `include_raw` + `extracted`) |
+| **L5 Knowledge Graph** | `#l5` | Live graph; `EXPORTED AT` falls back to server clock when upstream omits it |
+| **Quality Metrics** | `#quality` | Composite / evolution / activity / latency (7-day window) |
+| **Settings / System** | `#system` | Storage, config, layer-health, L6 samples, per-agent + global graph counts |
 
 ---
 
@@ -167,8 +181,11 @@ The dashboard's HTTP server (`server/dashboard/dashboard.py`) exposes these endp
 | `GET` | `/api/graph-counts` | Counts for L5/L6/L7 (from Kuzu graph) |
 | `GET` | `/api/layer-health` | Hermes digest readiness: VDB + graph counts, fresh L2, digest log status |
 | `GET` | `/api/l6-schemas?n=8&q=` | Sample L6 behavioral schemas from graph (`layer=l6_schema`) |
-| `GET` | `/api/l5/graph` | Full L5 knowledge graph (nodes + relations). v2.0.0+ reads live from the server's `/api/v1/graph` (Patch 23); falls back to `l5_kuzu_export.json` only if the upstream is down. |
+| `GET` | `/api/l5/graph` | Full L5 knowledge graph (nodes + relations). Live from `/api/v1/graph`; falls back to export file if upstream is down. Injects `exported_at` when upstream omits it. |
 | `GET` | `/api/l5/context?memory_id=...` | Context for a specific memory. Same live-first / fallback pattern as `/api/l5/graph`. |
+| `GET` | `/api/profiles` | Per-`agent_id` counts for the profile dropdown (**v3.4.0**) |
+| `GET` | `/api/quality-metrics` | 7-day quality scores + history (**v3.3+**) |
+| `POST` | `/api/quality-baseline` | Compatibility shim — appends quality history |
 | `POST` | `/api/search` | Body: `{query, user_id, top_k, ...}` — passthrough to `/api/v1/search` |
 
 ### Query parameters
@@ -177,6 +194,7 @@ The dashboard's HTTP server (`server/dashboard/dashboard.py`) exposes these endp
 - **`limit`** — max items to return (capped at 500 for `/api/memories`, 25 default)
 - **`minutes`** — time window for metrics (default 60)
 - **`memory_id`** — specific memory for L5 context
+- **`agent_id`** — profile isolation filter (v3.4.0; empty = all / default scope behavior)
 
 ### Response shapes
 
@@ -195,11 +213,22 @@ The dashboard's HTTP server (`server/dashboard/dashboard.py`) exposes these endp
 
 ```json
 {
-  "l5_knowledge": 1594,
-  "l6_schema": 568,
+  "l5_knowledge": 1807,
+  "l6_schema": 580,
   "l7_intention": 188,
-  "relation_count": 8128,
-  "total": 2350
+  "relation_count": 8988,
+  "total": 2575
+}
+```
+
+**`/api/profiles`** (v3.4.0):
+
+```json
+{
+  "profiles": [
+    {"agent_id": "default", "vdb_count": 2122, "graph_count": 523, "memory_count": 2645},
+    {"agent_id": "research", "vdb_count": 1, "graph_count": 0, "memory_count": 1}
+  ]
 }
 ```
 

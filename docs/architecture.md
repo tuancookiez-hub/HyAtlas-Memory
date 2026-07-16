@@ -1,10 +1,10 @@
 # HyAtlas-Memory Architecture
 
-> **Scope:** Community implementation of the [official Hy-Memory framework](https://memory.hunyuan.tencent.com) (Tencent Hunyuan), extended with an experimental **L7 intention** layer. This document reflects **HyAtlas v3.2.1** unless a section is marked historical.
+> **Scope:** Personal/local long-term memory stack for Hermes Agent, evolved from the [Hy-Memory](https://memory.hunyuan.tencent.com) (Tencent Hunyuan) framework and extended with an experimental **L7 intention** layer, **profile isolation** (`agent_id`), and L1_RAW transparency. This document reflects **HyAtlas v3.4.0** unless a section is marked historical.
 
 ---
 
-## HyAtlas v3.2 stack (current)
+## HyAtlas v3.4 stack (current)
 
 | Component | Choice |
 |-----------|--------|
@@ -12,17 +12,20 @@
 | **Graph (L5–L7)** | **Kuzu** embedded at `~/.hyatlas/data/kuzu_db` |
 | **Cache** | DisabledCache / minimal SQLite where needed |
 | **Modes** | `lite` · `pro` · `ultra` (default for graph + digest) |
-| **Hermes** | `user_id=hermes-user`, `agent_id=**default**` — [HYATLAS_HERMES.md](./HYATLAS_HERMES.md) |
+| **Hermes** | `user_id=hermes-user`, `agent_id=**default**` (plus specialist profiles) — [HYATLAS_HERMES.md](./HYATLAS_HERMES.md) |
+| **L1 list** | **Transparent** — `include_raw=True` default; each item has `extracted` |
+| **Status** | **3-tier** — `ok` / `warning` / `error` per vdb · embed · llm · write_pipeline |
+| **Profiles** | Dashboard dropdown + `GET /api/profiles`; filter by `agent_id` |
 | **L4** | **Retired** — no writer; identity in **L2**; legacy rows archived |
 | **Evolution** | `client.digest()` / `POST /api/v1/digest` — System 2 agent + sweeper (not batch `l5_full_pipeline` as primary) |
 
-**Start:** `hyatlas start` (server :19527, dashboard :8765). **Cleanup:** [CLEANUP.md](./CLEANUP.md).
+**Start:** `hyatlas start` / `hyatlas --detach` (server :19527, dashboard :8765). **Cleanup:** [CLEANUP.md](./CLEANUP.md).
 
 ---
 
 ## Layer mapping: this impl vs. the official spec
 
-| This impl (v3.2) | Official (memory.hunyuan.tencent.com) | Purpose |
+| This impl (v3.4) | Official (memory.hunyuan.tencent.com) | Purpose |
 |------------------|---------------------------------------|---------|
 | L1 raw | **L1 原始痕迹** | Verbatim / shadow ingest |
 | L2 fact | **L2 原子事实** | Atomic facts (Hermes capture) |
@@ -75,11 +78,15 @@ A user-visible `search()` merges both: fast VDB recall plus graph-backed schema/
 
 ---
 
-## Layer notes (v3.2)
+## Layer notes (v3.4)
+
+### L1 — Raw (list-visible)
+
+Always written on `add()`. Listed by default with `extracted: false` until System 1 extraction produces L2. Pass `include_raw=false` for the old extracted-only view.
 
 ### L2 — Fact
 
-Primary capture layer for Hermes. Namespace must match digest (`default`, not `default_agent`).
+Primary capture layer for Hermes. Namespace must match digest (`default`, not only `default_agent` aliases).
 
 ### L4 — Identity (retired)
 
@@ -97,12 +104,17 @@ Graph entities and extracted knowledge nodes; grows on digest (+ evidence on fac
 
 Experimental proactive layer in Kuzu.
 
+### Profile isolation
+
+`agent_id` scopes VDB + graph. Dashboard profiles: `default`, `research`, `sentinel`, `work-backend`, `work-frontend`, `trading`, `hestia`. Plumbing works even when some specialist profiles still have little/no data.
+
 ---
 
 ## Cognitive mapping (loose)
 
 | Layer | Analog |
 |-------|--------|
+| L1 raw | sensory trace / buffer |
 | L2 fact | working / episodic facts |
 | L3 summary | episodic rollups |
 | L5 knowledge | semantic network |
@@ -111,20 +123,23 @@ Experimental proactive layer in Kuzu.
 
 ---
 
-## Verified status (2026-07-08, v3.2.1)
+## Verified status (2026-07-16, v3.4.0)
 
-Single-user Hermes path on Windows:
+Single-user Hermes path on Windows (live probe):
 
 ```text
-L2 capture:     ✓ hermes-user / default
+L1 list:        ✓ include_raw + extracted field
+L2 capture:     ✓ hermes-user / default (+ other agent_ids)
 Digest:         ✓ POST /api/v1/digest, cron launcher
-L5 graph:       ✓ Kuzu layer_counts (e.g. 1500+ nodes)
-L6 schemas:     ✓ graph + search (500+ typical); digest may add evidence without +count every run
+L5 graph:       ✓ Kuzu layer_counts (1800+ nodes typical)
+L6 schemas:     ✓ graph + /api/l6-schemas; digest may add evidence without +count every run
 L4:             ✓ retired (legacy rows only)
 Vector store:   ✓ Zvec (Qdrant runtime removed)
+Status:         ✓ 3-tier ok/warning/error
+Profiles:       ✓ /api/profiles + dashboard dropdown
 ```
 
-Tested with: Python 3.11, Hermes Agent, Kuzu, **Zvec**, Windows 10/11.
+Tested with: Python 3.10–3.12, Hermes Agent, Kuzu, **Zvec**, Windows 10/11.
 
 ---
 
@@ -136,4 +151,4 @@ HyAtlas-Memory ships as **`hyatlas-memory`** (pip) with a Hermes plugin shim so 
 
 ## Historical sections
 
-Older docs (pre–v3.1) described Qdrant + batch `l5_full_pipeline` as primary; that path is **migration/legacy**. Refer to [CHANGELOG.md](../CHANGELOG.md) for zvec cutover and v3.2 Hermes/digest work.
+Older docs (pre–v3.1) described Qdrant + batch `l5_full_pipeline` as primary; that path is **migration/legacy**. Refer to [CHANGELOG.md](../CHANGELOG.md) for zvec cutover, v3.2 Hermes/digest work, and v3.4 profile isolation.

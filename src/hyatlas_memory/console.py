@@ -16,7 +16,20 @@ from pathlib import Path
 
 SERVER = "http://127.0.0.1:19527"
 DASH = "http://127.0.0.1:8765"
-LOG_PATH = Path(os.environ.get("HYATLAS_HOME", "D:/HyAtlas/.hyatlas")) / "logs" / "hy-memory_server.log"
+
+
+def _log_path() -> Path:
+    """Resolve server log path via layout, not a machine-specific default."""
+    try:
+        from hyatlas_memory import layout
+
+        return layout.logs() / "hy-memory_server.log"
+    except Exception:
+        home = Path(os.environ.get("HYATLAS_HOME", "") or (Path.home() / ".hyatlas"))
+        return home / "logs" / "hy-memory_server.log"
+
+
+LOG_PATH = _log_path()
 TAIL_LINES = 8
 POLL_INTERVAL = 2  # seconds
 

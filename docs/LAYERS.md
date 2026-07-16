@@ -1,6 +1,6 @@
 # Memory Layers
 
-> **HyAtlas v3.2.1 (2026-07)** — This doc describes **this repo’s** layer model. Runtime vector store is **Zvec** (in-process). **L4 is retired** for new writes; identity lives in **L2**. Graph layers **L5–L7** live in **Kuzu**.
+> **HyAtlas v3.4.0 (2026-07)** — Layer model for this repo. Runtime vector store is **Zvec** (in-process). **L4 is retired** for new writes; identity lives in **L2**. Graph layers **L5–L7** live in **Kuzu**. L1_RAW is list-visible by default (`include_raw=True`). Profile isolation is `agent_id`-scoped (dashboard dropdown in v3.4.0).
 
 For Hermes single-user setup (digest, cron, L6 proof), see [HYATLAS_HERMES.md](./HYATLAS_HERMES.md). For disk cleanup after the zvec cutover, see [CLEANUP.md](./CLEANUP.md).
 
@@ -8,12 +8,12 @@ High-level design: [architecture.md](./architecture.md). API: [API.md](./API.md)
 
 ---
 
-## Layer at a glance (HyAtlas v3.2)
+## Layer at a glance (HyAtlas v3.4)
 
 | Layer | Key | Purpose | Canonical store | Hermes / digest notes |
 |-------|-----|---------|-----------------|------------------------|
 | L0 | `l0_basic_info` | Stable profile snippets (name, locale, etc.) | **Zvec** VDB | Small count; recall “profile” channel |
-| L1 | `l1_raw` | Raw message shadow / ingest buffer | **Zvec** VDB | Often **0** under `hermes-user`/`default` — shadowed after L2 extract |
+| L1 | `l1_raw` | Raw message shadow / ingest buffer | **Zvec** VDB | **List-visible** by default (`include_raw=True`); `extracted: false` until System 1 promotes to L2 |
 | L2 | `l2_fact` | Atomic facts from chat (System 1) | **Zvec** VDB | **Primary capture layer** for Hermes; “fresh L2” feeds digest |
 | L3 | `l3_summary` | Session / rollup summaries | **Zvec** VDB | Medium volume |
 | L4 | `l4_identity` | **Retired** | **Zvec** legacy rows only | **No writer**; archived to `~/.hyatlas/archive/l4_identity_pre_migrate_*.jsonl`; identity → **L2** |
@@ -44,7 +44,7 @@ Short-lived or stable profile fields extracted or seeded for recall. Stored in Z
 
 ## L1 — Raw (`l1_raw`)
 
-Upstream “raw trace” layer. Under the Hermes fast path, content is often **promoted/shadowed** into L2; dashboard may show **0** for your isolation key while L2 is healthy. L1 rolling delete/dedup is **provider-aware** (Zvec uses in-process store + filters).
+Upstream “raw trace” layer. Every `add()` persists an L1_RAW row in Zvec first; System 1 may create a sibling L2_FACT when extraction succeeds. From **v3.4.0**, `/api/v1/list` returns L1 by default (`include_raw=True`) with `extracted: false` until processing succeeds — so raw writes are no longer invisible when the LLM skips noisy input. L1 rolling delete/dedup is **provider-aware** (Zvec uses in-process store + filters).
 
 ---
 
@@ -94,7 +94,7 @@ Experimental proactive layer (extension beyond official 6-layer spec). Stored in
 
 ---
 
-## Storage summary (v3.2)
+## Storage summary (v3.4)
 
 | Layer | Store | Location |
 |-------|--------|----------|
@@ -103,16 +103,18 @@ Experimental proactive layer (extension beyond official 6-layer spec). Stored in
 
 Qdrant is **not** used at runtime in v3.1+; see migration archive in [CLEANUP.md](./CLEANUP.md).
 
+**Profile isolation:** VDB and graph rows are keyed by `user_id` + `agent_id`. The dashboard profile dropdown (default, research, sentinel, work-backend, work-frontend, trading, hestia) filters every tab via `?agent_id=...`. See [PROFILE_MEMORY_ARCHITECTURE.md](./PROFILE_MEMORY_ARCHITECTURE.md).
+
 ---
 
 ## Flow (simplified)
 
 ```text
-Chat (Hermes) → L2 facts (Zvec)
-                    ↓ digest (System 2)
-              L5 knowledge + L6 schemas + L7 intentions (Kuzu)
-                    ↓ search / hy_memory_search
-              Injected context on next turn
+Chat (Hermes) → L1 raw (Zvec) → L2 facts (Zvec, when extract succeeds)
+                                      ↓ digest (System 2)
+                                L5 knowledge + L6 schemas + L7 intentions (Kuzu)
+                                      ↓ search / hy_memory_search
+                                Injected context on next turn
 ```
 
 ---
@@ -121,11 +123,11 @@ Chat (Hermes) → L2 facts (Zvec)
 
 Tencent’s [Hy-Memory](https://memory.hunyuan.tencent.com) 6-layer spec is the architectural reference. HyAtlas renumbers/extends for historical fork reasons; see [architecture.md](./architecture.md#layer-mapping-this-impl-vs-the-official-spec) for the mapping table and **L4 retirement** note.
 
-## L1_RAW visibility (added 2026-07-16)
+## L1_RAW visibility (v3.4.0)
 
-L1 (raw user input) is now visible in `/api/v1/list` by default. Each memory entry has an `extracted: true|false` field. Pass `include_raw=False` to revert to extracted-only.
+L1 (raw user input) is visible in `/api/v1/list` by default. Each memory entry has an `extracted: true|false` field. Pass `include_raw=False` to revert to extracted-only.
 
-This fixes the design gap where unprocessed L1 writes were silently hidden from the user-facing list. New behavior:
+Behavior:
 
 - Write → L1_RAW always persisted to zvec
 - LLM extraction → creates sibling L2_FACT memory (when extraction succeeds)
