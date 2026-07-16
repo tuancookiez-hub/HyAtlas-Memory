@@ -1,6 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [3.4.0] — 2026-07-16
+
+> **Headline: Profile isolation in the dashboard + L1_RAW transparency.** Pick a profile (default, research, sentinel, work-backend, work-frontend, trading, hestia) and the entire dashboard filters to that scope. New `include_raw` flag on `/api/v1/list` returns original L1_RAW payloads alongside the processed L2 fact. Plus a long list of dashboard truth fixes (L5 timestamps, 3-tier status, authoritative layer counts, console window, zvec schema).
+
+### Headline
+- **Profile isolation lands in the dashboard.** The `agent_id` data-layer filter has been in place since the v3.0.0 fork, but the UI surface for it lands in v3.4.0. The dashboard now exposes a profile dropdown (default, research, sentinel, work-backend, work-frontend, trading, hestia) and a `/api/profiles` endpoint, and every tab (Overview, Memory Composition, Today, L5, Settings, Quality) filters to the selected scope via `?agent_id=...`. Switching profiles is sticky in `localStorage`. This is the moment "specialist agents have their own memory" becomes a usable feature.
+- **L1_RAW transparency.** `/api/v1/list` accepts `include_raw: true` (default) to return the original raw payload alongside the processed L2 fact, and every memory item now carries an `extracted` boolean so the UI can distinguish "the LLM processed this" from "this is the raw write". Powers the Today / Activity timeline and the VDB scroll path. Previously, raw writes were invisible when LLM extraction failed or skipped noisy input.
 
 ### Dashboard
 - **L5 Knowledge Graph — EXPORTED AT timestamp fallback.** The `EXPORTED AT` field on the L5 tab no longer reads `unknown` when the upstream `/api/v1/graph` endpoint omits the timestamp. The dashboard proxy now injects `exported_at = server clock (UTC)` when upstream omits it, and the JS has a defensive `new Date().toISOString()` fallback for the same case. Verified live: `EXPORTED AT 2026-07-16 11:35:22`.

@@ -4,9 +4,9 @@
 **Status:** ⚠️ HISTORICAL — pre-dates the current `feat/l1-raw-transparency-and-system2-tuning` work (8 commits since, never folded back in).  
 **Owner:** @<maintainer>  
 **Last Updated:** 2026-07-04  
-**Superseded by:** `CHANGELOG.md` `[Unreleased]` section (current state of the world).
+**Superseded by:** `CHANGELOG.md` `[3.4.0] — 2026-07-16` section (current state of the world).
 
-> **Note (2026-07-16):** This roadmap is kept as a historical record of the work required for the v2.0.0 public release effort. The current version is v3.3.2 (with 8 commits on `feat/l1-raw-transparency-and-system2-tuning` not yet merged). The bullet points below describe state as of 2026-07-04 and may no longer be accurate. See `CHANGELOG.md` for what's actually shipping now.
+> **Note (2026-07-16):** This roadmap is kept as a historical record of the work required for the v2.0.0 public release effort. The current version is v3.4.0 (tagged, ready to merge from `feat/l1-raw-transparency-and-system2-tuning`). The bullet points below describe state as of 2026-07-04 and may no longer be accurate. See `CHANGELOG.md` for what's actually shipping now.
 
 ## Overview
 
