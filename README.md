@@ -9,9 +9,9 @@ A personal, local, single-user long-term memory stack for Hermes Agent — built
 </p>
 
 <p align="center">
-  <a href="https://<owner>.github.io/portfolio/"><img src="https://img.shields.io/badge/Built%20by-Maintainer-blueviolet?style=for-the-badge" alt="Built by Maintainer"></a>
+  <a href="https://tuancookiez-hub.github.io/portfolio/"><img src="https://img.shields.io/badge/Built%20by-TunaDev-blueviolet?style=for-the-badge" alt="Built by TunaDev"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge" alt="License: Apache 2.0"></a>
-  <a href="https://github.com/<owner>/HyAtlas-Memory/releases"><img src="https://img.shields.io/github/v/release/<owner>/HyAtlas-Memory?style=for-the-badge" alt="GitHub release"></a>
+  <a href="https://github.com/tuancookiez-hub/HyAtlas-Memory/releases"><img src="https://img.shields.io/github/v/release/tuancookiez-hub/HyAtlas-Memory?style=for-the-badge" alt="GitHub release"></a>
 </p>
 
 <p align="center">
@@ -41,7 +41,7 @@ See it in action — a 19-second walkthrough of the live dashboard:
 ## Quick start
 
 ```bash
-git clone https://github.com/<owner>/HyAtlas-Memory.git
+git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 cd HyAtlas-Memory
 pip install -e .
 hyatlas setup hermes        # installs plugin + config + tests auto-start
@@ -100,7 +100,7 @@ For users who still run the old Qdrant-based compose:
 
 ```bash
 # 1. Get docker-compose.yml (one-time)
-curl -O https://raw.githubusercontent.com/<owner>/HyAtlas-Memory/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/docker-compose.yml
 
 # 2. Configure your LLM key (one-time)
 echo 'HY_MEMORY_LLM_API_KEY=***' > .env
@@ -444,7 +444,7 @@ assets/                    # infographic images
 
 ```bash
 # 1. Clone + editable install
-git clone https://github.com/<owner>/HyAtlas-Memory.git
+git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 cd HyAtlas-Memory
 pip install -e ".[dev,test]"
 
@@ -469,7 +469,7 @@ If you were running the previous in-fork version (`plugins/memory/hy_memory/` in
 mv hermes-agent/plugins/memory/hy_memory ~/hy_memory_archive_$(date +%Y%m%d)
 
 # 2. Install this package
-git clone https://github.com/<owner>/HyAtlas-Memory.git
+git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 cd HyAtlas-Memory
 pip install -e .
 
@@ -488,7 +488,7 @@ Apache 2.0. See `LICENSE`.
 
 ## Credits
 
-Built by [Maintainer](https://<owner>.github.io/portfolio/). Architecture inspired by the [Hy-Memory framework](https://memory.hunyuan.tencent.com) (Tencent Hunyuan) and the cognitive-architecture literature on dual-process theory (Kahneman's System 1 / System 2). The L7 intention layer is an independent extension not part of the official spec.
+Built by [TunaDev](https://tuancookiez-hub.github.io/portfolio/). Architecture inspired by the [Hy-Memory framework](https://memory.hunyuan.tencent.com) (Tencent Hunyuan) and the cognitive-architecture literature on dual-process theory (Kahneman's System 1 / System 2). The L7 intention layer is an independent extension not part of the official spec.
 
 Uses:
 
