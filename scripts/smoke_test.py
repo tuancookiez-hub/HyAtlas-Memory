@@ -510,7 +510,7 @@ def stage_roundtrip(stamp: str) -> StageResult:
     t0 = time.perf_counter()
     unique_query = f"smoketest marker {stamp} unicorn platypus xyzzy"
     payload = {
-        "user_id": "tuanc",
+        "user_id": "test-user",
         "query": unique_query,
         "limit": 5,
     }
@@ -600,7 +600,7 @@ def stage_layer_coverage() -> StageResult:
     ]
     for q in queries:
         payload = {
-            "query": q, "user_id": "tuanc",
+            "query": q, "user_id": "test-user",
             "limit": 30, "profile_limit": 30, "intention_limit": 30,
             "reader": "exhaustive",
         }
@@ -645,10 +645,11 @@ def stage_layer_coverage() -> StageResult:
     # Note about L5: lives in Kuzu (graph), not Qdrant (vector). Exhaustive
     # reader's L5 query goes to Qdrant; Kuzu L5 only surfaces via the
     # export. Mark as "in graph" if missing from search.
-    l5_in_kuzu = Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_kuzu_export.json").exists()
+    l5_export = Path.home() / ".hermes" / "logs" / "l5_kuzu_export.json"
+    l5_in_kuzu = l5_export.exists()
     if "l5_knowledge" in missing and l5_in_kuzu:
         try:
-            data = json.loads(Path(r"C:\Users\tuanc\AppData\Local\hermes\logs\l5_kuzu_export.json").read_text(encoding="utf-8"))
+            data = json.loads(l5_export.read_text(encoding="utf-8"))
             n = data.get("node_count", 0)
             if n > 0:
                 lines.append(f"\nNote: l5_knowledge has {n} entities in Kuzu graph but is not surfaced by search reader (architectural gap).")

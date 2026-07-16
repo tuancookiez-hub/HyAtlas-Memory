@@ -14,17 +14,15 @@ pytestmark = pytest.mark.skipif(not _zvec_available, reason="zvec not installed"
 
 from hyatlas_memory import vdb_dashboard
 from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
-from hyatlas_memory.core.models.memory import MemoryLayer, MemoryNode, MemoryStatus
+from hyatlas_memory.core.models.memory import MemoryNode
 
 
 def test_payload_by_ids_handles_memorynode_fields():
     """payload_by_ids must read importance/access_count from MemoryNode attrs."""
     n = MemoryNode(
         node_id="m1",
-        layer=MemoryLayer.L2_FACT,
-        status=MemoryStatus.ACTIVE,
         content="x",
-        user_id="tuanc",
+        user_id="test-user",
         agent_id="default_agent",
     )
     n.importance = "high"

@@ -7,6 +7,7 @@ On success, prints one Discord-friendly summary line (for no_agent cron deliver)
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -15,7 +16,10 @@ from pathlib import Path
 ROOT = Path(r"F:/HyAtlas-Memory")
 SCRIPT = ROOT / "scripts" / "run_digest_once.py"
 LOG = Path.home() / ".hyatlas" / "logs" / "digest_run_latest.log"
-DEFAULT_PY = Path(r"C:/Users/tuanc/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe")
+# Use the running Python (the venv this script is installed into) by
+# default. Override with HERMES_DIGEST_PY env var if a specific
+# interpreter is needed.
+DEFAULT_PY = Path(os.environ.get("HERMES_DIGEST_PY") or sys.executable)
 
 
 def _discord_summary(log_text: str, exit_code: int) -> str:

@@ -125,12 +125,15 @@ def test_no_hardcoded_paths():
             content = py_file.read_text(encoding="utf-8")
         except Exception:
             continue
-        # Check for hardcoded Windows author paths (not in comments)
+        # Check for hardcoded Windows author paths (not in comments).
+        # Catches both concrete username leaks (e.g. C:\Users\tuanc\)
+        # and unfinished scrub markers (e.g. C:\Users\<user>).
         for line_num, line in enumerate(content.splitlines(), 1):
             stripped = line.lstrip()
             if stripped.startswith("#") or stripped.startswith('"""') or stripped.startswith("'''"):
                 continue
-            if "C:\\Users\\tuanc" in line or "C:/Users/tuanc" in line:
+            if (r"C:\Users\tuanc" in line or "C:/Users/tuanc" in line
+                    or r"C:\Users\<user>" in line or "C:/Users/<user>" in line):
                 bad.append(f"{py_file.name}:{line_num}")
 
     if bad:

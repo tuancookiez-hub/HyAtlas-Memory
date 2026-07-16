@@ -35,7 +35,7 @@ def test_doc_to_node_normalizes_epoch_strings():
         "memory_at": "1782866658",
         "is_latest": "true",
         "status": "active",
-        "user_id": "tuanc",
+        "user_id": "test-user",
         "agent_id": "default_agent",
         "content": "test",
     }

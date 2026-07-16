@@ -162,10 +162,21 @@ except Exception as e:
         site_packages = list(venv_dir.glob("lib/python*/site-packages"))[0]
 
     pkg_dir = site_packages / "hyatlas_memory"
+    # Privacy: catch both leaked literal paths (e.g. C:\Users\<realname>\...)
+    # and unfinished scrub markers (e.g. <user> placeholders that should
+    # have been resolved to a generic value before install).
+    # Hardcoded concrete usernames in package source are a leak; the
+    # test used to be hardcoded to one specific username, but it should
+    # fail for any concrete lowercase username embedded in code.
     bad_patterns = [
-        r"C:\\Users\\tuanc",
-        r"C:/Users/tuanc",
-        r"/Users/tuanc",
+        r"C:\\Users\\<user>",
+        r"C:/Users/<user>",
+        r"/Users/<user>",
+        # Concrete usernames in embedded paths. Real Windows user dirs are
+        # typically lowercase; this won't false-positive on system paths
+        # like C:\Users\Public\ because that doesn't appear in package code.
+        r"C:\\Users\\[a-z][a-z0-9_-]{1,31}\\",
+        r"C:/Users/[a-z][a-z0-9_-]{1,31}/",
     ]
 
     issues = []
