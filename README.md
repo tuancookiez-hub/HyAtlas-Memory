@@ -5,6 +5,10 @@ A personal, local, single-user long-term memory stack for Hermes Agent — built
 > **v3.4.0** — Profile isolation lands in the dashboard: pick a profile (default, research, sentinel, work-backend, work-frontend, trading, hestia) and every tab filters to that scope. Plus L1_RAW transparency (`include_raw` flag on `/api/v1/list`), 3-tier status (vdb/embed/llm), and a long list of dashboard truth fixes. See [CHANGELOG](./CHANGELOG.md).
 
 <p align="center">
+  <img src="./assets/hyatlas-v3.4.0-banner.jpeg" alt="HyAtlas v3.4.0: Profile isolation in the dashboard + L1_RAW transparency — 8 panels covering the headline features" width="100%" />
+</p>
+
+<p align="center">
   <img src="./assets/hyatlas-v3.3.0-quality-metrics.png" alt="HyAtlas v3.3.0: Quality Metrics — 7d token rollup, dashboard scores, weekly baseline" width="720" />
 </p>
 

@@ -183,3 +183,7 @@ A few things I noticed during the audit that are tracked but **not** part of v3.
 ---
 
 **Tagged:** `v3.4.0`  •  **Released:** 2026-07-16  •  **Branch:** `main`
+
+---
+
+![v3.4.0 banner: Profile isolation in the dashboard + L1_RAW transparency](./assets/hyatlas-v3.4.0-banner.jpeg)
