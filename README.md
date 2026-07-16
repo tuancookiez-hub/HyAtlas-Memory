@@ -8,8 +8,6 @@ A personal, local, single-user long-term memory stack for Hermes Agent — built
   <img src="./assets/hyatlas-v3.4.0-banner.jpeg" alt="HyAtlas v3.4.0: Profile isolation in the dashboard + L1_RAW transparency — 8 panels covering the headline features" width="100%" />
 </p>
 
-> **v3.0.0** forked the entire hy-memory 1.2.20 codebase (48,371 lines) into first-party code under `src/hyatlas_memory/core/` — no external `hy-memory` dependency — so it could be shaped for a single local user instead of a multi-tenant service. Includes L5 knowledge graph (upstream stub), emotion-aware memory strength, reasoning model support, and operational hardening.
-
 <p align="center">
   <a href="https://<owner>.github.io/portfolio/"><img src="https://img.shields.io/badge/Built%20by-Maintainer-blueviolet?style=for-the-badge" alt="Built by Maintainer"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge" alt="License: Apache 2.0"></a>
