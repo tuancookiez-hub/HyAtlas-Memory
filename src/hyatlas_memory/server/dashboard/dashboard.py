@@ -3807,6 +3807,11 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 _, graph_api = hy("GET", graph_path, None, timeout=60)
                 graph_layer_counts = (graph_api or {}).get("layer_counts") or {}
                 graph_relations = (graph_api or {}).get("relation_count")
+                # Global (un-scoped) graph counts so the Settings tab can show
+                # the true total in addition to the per-agent count.
+                _, graph_api_global = hy("GET", "/api/v1/graph", None, timeout=60)
+                graph_layer_counts_global = (graph_api_global or {}).get("layer_counts") or {}
+                graph_relations_global = (graph_api_global or {}).get("relation_count")
             except Exception as e:
                 return self._json(500, {"error": str(e)})
             log_path = hy_home() / "logs" / f"digest_run_{agent_id}.log"
@@ -3840,6 +3845,8 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 "vdb_layer_counts": counts,
                 "graph_layer_counts": graph_layer_counts,
                 "graph_relation_count": graph_relations,
+                "graph_layer_counts_global": graph_layer_counts_global,
+                "graph_relation_count_global": graph_relations_global,
                 "fresh_l2_for_digest": fresh_l2,
                 "l6_graph_sample_for_key": l6_for_key,
                 "l4_status": "retired_migrated_to_l2",

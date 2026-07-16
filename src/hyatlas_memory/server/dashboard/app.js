@@ -1300,8 +1300,12 @@ function renderSystem() {
       <div class="kv-value">${layerHealthData.fresh_l2_for_digest ?? '—'}</div>
     </div>
     <div class="kv-item">
-      <div class="kv-label">Graph L5 / L6 / relations</div>
-      <div class="kv-value font-mono text-sm">${layerHealthData.graph_layer_counts ? `${layerHealthData.graph_layer_counts.l5_knowledge ?? '—'} / ${layerHealthData.graph_layer_counts.l6_schema ?? '—'} / ${layerHealthData.graph_relation_count ?? '—'}` : '—'}</div>
+    <div class="kv-label">Graph L5 / L6 / relations (per agent)</div>
+    <div class="kv-value font-mono text-sm">${layerHealthData.graph_layer_counts ? `${layerHealthData.graph_layer_counts.l5_knowledge ?? '—'} / ${layerHealthData.graph_layer_counts.l6_schema ?? '—'} / ${layerHealthData.graph_relation_count ?? '—'}` : '—'}</div>
+    </div>
+    <div class="kv-item">
+    <div class="kv-label">Graph L5 / L6 / relations (global)</div>
+    <div class="kv-value font-mono text-sm">${layerHealthData.graph_layer_counts_global ? `${layerHealthData.graph_layer_counts_global.l5_knowledge ?? '—'} / ${layerHealthData.graph_layer_counts_global.l6_schema ?? '—'} / ${layerHealthData.graph_relation_count_global ?? '—'}` : '—'}</div>
     </div>
     <div class="kv-item">
       <div class="kv-label">Digest log</div>
