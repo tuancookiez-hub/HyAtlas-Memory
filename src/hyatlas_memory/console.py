@@ -5,6 +5,7 @@ Reopen with `hyatlas console` or by double-clicking `bin/hyatlas-status.bat`.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -85,10 +86,8 @@ def _colorize(line: str) -> str:
 
 def main() -> int:
     # Make sure stdout is line-buffered so we don't sit on bytes across polls.
-    try:
+    with contextlib.suppress(Exception):
         sys.stdout.reconfigure(line_buffering=True)
-    except Exception:
-        pass
 
     # Disable cursor so it doesn't blink at the bottom of the screen.
     sys.stdout.write("\033[?25l")

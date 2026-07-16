@@ -49,6 +49,7 @@ REFRESH_S = int(os.environ.get("HY_DASH_REFRESH_S", "30"))
 # The token is auto-generated on first run and stored in ~/.hy_memory/.
 import pathlib as _pathlib
 import secrets as _secrets
+
 from hyatlas_memory.layout import home as hy_home
 
 _DASH_TOKEN_FILE = _pathlib.Path.home() / ".hy_memory" / ".dashboard_token"
@@ -3242,7 +3243,6 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         }
 
     def _build_quality_metrics(self, requested_agent: str = "") -> dict:
-        import pathlib
         import time as _time
 
         _, m7 = hy("GET", "/api/v1/metrics?minutes=10080", timeout=15)
