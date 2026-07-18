@@ -107,7 +107,7 @@ class VectorStoreConfig:
 
     def __post_init__(self):
         if self.provider is None:
-            self.provider = os.getenv("MEMORY_VECTOR_STORE", "chroma")
+            self.provider = os.getenv("MEMORY_VECTOR_STORE", "zvec")
         if self.collection_name is None:
             self.collection_name = os.getenv("MEMORY_COLLECTION_NAME", "agent_memories")
         if self.persist_directory is None:
