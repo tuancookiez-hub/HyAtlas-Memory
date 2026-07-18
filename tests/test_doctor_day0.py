@@ -3,6 +3,7 @@
 Avoids importing hyatlas_memory.cli at collection time so CI without
 hermes_constants (hermes-agent not installed) can still run the suite.
 """
+
 from __future__ import annotations
 
 import json

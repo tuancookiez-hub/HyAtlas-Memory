@@ -39,3 +39,4 @@ jobs:
         run: |
           pip install ruff
           ruff check src/ tests/
+          ruff format --check src/ tests/

@@ -3,6 +3,7 @@
 Regression test for Patch 29: a stale shell env key was silently overriding
 the active JSON config key, causing MiniMax 401 auth failures.
 """
+
 from __future__ import annotations
 
 import os
