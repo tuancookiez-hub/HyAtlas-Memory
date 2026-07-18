@@ -1,11 +1,32 @@
-"""Unit tests for hyatlas doctor Day-0 gates (fail-fast, no live stack required)."""
+"""Unit tests for hyatlas doctor Day-0 gates (fail-fast, no live stack required).
+
+Avoids importing hyatlas_memory.cli at collection time so CI without
+hermes_constants (hermes-agent not installed) can still run the suite.
+"""
 from __future__ import annotations
 
 import json
+import sys
+import types
 from pathlib import Path
 from types import SimpleNamespace
 
-import hyatlas_memory.cli as cli
+
+def _install_hermes_constants_stub() -> None:
+    if "hermes_constants" in sys.modules:
+        return
+    stub = types.ModuleType("hermes_constants")
+
+    def get_hermes_home():
+        return Path.home() / ".hermes"
+
+    stub.get_hermes_home = get_hermes_home  # type: ignore[attr-defined]
+    sys.modules["hermes_constants"] = stub
+
+
+_install_hermes_constants_stub()
+
+import hyatlas_memory.cli as cli  # noqa: E402
 
 
 class _FakeClient:
@@ -73,9 +94,7 @@ def test_doctor_passes_when_stack_healthy(monkeypatch, tmp_path, capsys):
 
     import hyatlas_memory.process as process_mod
 
-    monkeypatch.setattr(
-        process_mod, "StackManager", lambda **kw: _FakeManager(cfg)
-    )
+    monkeypatch.setattr(process_mod, "StackManager", lambda **kw: _FakeManager(cfg))
 
     rc = cli._cmd_doctor(SimpleNamespace())
     out = capsys.readouterr().out
@@ -121,9 +140,7 @@ def test_doctor_flags_wrong_provider(monkeypatch, tmp_path, capsys):
 
     import hyatlas_memory.process as process_mod
 
-    monkeypatch.setattr(
-        process_mod, "StackManager", lambda **kw: _FakeManager(cfg)
-    )
+    monkeypatch.setattr(process_mod, "StackManager", lambda **kw: _FakeManager(cfg))
 
     rc = cli._cmd_doctor(SimpleNamespace())
     out = capsys.readouterr().out
