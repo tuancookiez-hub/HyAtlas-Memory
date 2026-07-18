@@ -186,31 +186,22 @@ def start_l1_raw_sweep(vector_store=None):
 
             from . import layout
 
-            provider = (layout.read_config() or {}).get("vector_store", {}).get("provider", "qdrant")
+            # v3.4+: zvec is the only supported vector store; the legacy
+            # Qdrant path was removed when vector_store_qdrant.py was deleted.
+            # If the user still has a `provider: qdrant` config from a v2.x
+            # install, we log a one-time warning and skip rather than crashing.
+            provider = (layout.read_config() or {}).get("vector_store", {}).get("provider", "local")
             cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).timestamp()
 
-            if provider == "zvec":
-                _sweep_zvec(cutoff, vector_store=vector_store)
+            if provider != "local":
+                logger.warning(
+                    f"[l1-sweep] provider={provider!r} no longer supported (v3.4+ uses zvec). "
+                    "Run `scripts/migrate_qdrant_to_zvec.py` to migrate, then set provider='local'. "
+                    "Skipping sweep until then."
+                )
                 return
 
-            from qdrant_client import QdrantClient
-            from qdrant_client.http import models
-
-            host = os.environ.get("MEMORY_VECTOR_HOST", "127.0.0.1")
-            port = int(os.environ.get("MEMORY_VECTOR_PORT", "6333"))
-            collection = os.environ.get("MEMORY_VECTOR_COLLECTION", "agent_memories_1024")
-            client = QdrantClient(host=host, port=port)
-            client.delete(
-                collection_name=collection,
-                points_selector=models.FilterSelector(
-                    filter=models.Filter(must=[
-                        models.FieldCondition(key="status", match=models.MatchValue(value="shadow")),
-                        models.FieldCondition(key="layer", match=models.MatchValue(value="l1_raw")),
-                        models.FieldCondition(key="gmt_created", range=models.Range(lt=cutoff)),
-                    ])
-                ),
-            )
-            logger.info(f"[l1-sweep] deleted shadowed L1_RAW older than {window_days} days")
+            _sweep_zvec(cutoff, vector_store=vector_store)
         except Exception as e:
             logger.warning(f"[l1-sweep] failed: {e}")
 

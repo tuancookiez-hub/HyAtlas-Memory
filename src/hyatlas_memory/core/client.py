@@ -14,12 +14,10 @@ HY Memory Client - 面向用户的同步客户端（无状态）
     # 自定义配置（类似 mem0 风格）
     client = HyMemoryClient.from_config({
         "embedder": {"provider": "openai", "model": "text-embedding-3-small"},
-        "vector_store": {"provider": "qdrant", "collection_name": "my_memories"},
+        "vector_store": {"provider": "local"},
         "graph_store": {
-            "provider": "neo4j",
-            "url": "bolt://localhost:7687",
-            "username": "neo4j",
-            "password": "password",
+            "provider": "kuzu",
+            "path": "./data/graph",
         },
         "enable_graph": True,
     })
@@ -455,14 +453,12 @@ class HyMemoryClient:
         Usage:
             client = HyMemoryClient.from_config({
                 "vector_store": {
-                    "provider": "qdrant",
+                    "provider": "local",
                     "collection_name": "my_memories",
                 },
                 "graph_store": {
-                    "provider": "neo4j",
-                    "url": "bolt://localhost:7687",
-                    "username": "neo4j",
-                    "password": "password",
+                    "provider": "kuzu",
+                    "path": "./data/graph",
                 },
                 "enable_graph": True,
                 "llm": {

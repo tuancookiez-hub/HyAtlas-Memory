@@ -1061,7 +1061,7 @@ class MemoryWriter(WritePipeline):
             _l1_error: str | None = None
             vector_store = None
             mem_node = None
-            with tracer.span("qdrant_upsert") as s:
+            with tracer.span("vector_upsert") as s:
                 try:
                     vector_store = await self._get_vector_store()
                     layer_enum = MemoryLayer.from_string(suggested_layer)

@@ -2,10 +2,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System deps for Kuzu (graph DB) and Qdrant client
+# System deps for Kuzu (graph DB) and curl for healthchecks
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     wget \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the package

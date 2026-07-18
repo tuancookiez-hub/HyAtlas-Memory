@@ -285,11 +285,13 @@ def _cmd_doctor(args) -> int:
     # 5. Vector store
     vec_provider = (hy_cfg.get("vector_store") or {}).get("provider", "zvec")
     if vec_provider == "qdrant":
-        qdrant_port = int((hy_cfg.get("qdrant") or {}).get("port", 6333))
-        if _port_open("127.0.0.1", qdrant_port):
-            ok(f"Qdrant reachable on port {qdrant_port}")
-        else:
-            bad(f"Qdrant not reachable on port {qdrant_port}")
+        # v3.4+: Qdrant is no longer a supported runtime. Detect the
+        # legacy config and steer the user toward migration.
+        bad(
+            "vector_store.provider='qdrant' is no longer supported in v3.4+ "
+            "(qdrant-client removed). Run `scripts/migrate_qdrant_to_zvec.py` "
+            "to migrate, then set provider='local'."
+        )
     else:
         zvec_path = layout.home() / "zvec"
         if zvec_path.exists():

@@ -694,13 +694,18 @@ async def run_l5_inprocess(
 
 
 def l5_rollback() -> dict[str, Any]:
-    """Rollback: drop all L5 nodes from Kuzu + Qdrant. Leaves L0-L4/L6/L7 intact.
+    """Rollback: drop all L5 nodes from Kuzu. Leaves L0-L4/L6/L7 intact.
+
+    v3.1.0+: L5 knowledge lives in zvec, not Qdrant. The Qdrant HTTP
+    rollback path that previously lived here was removed because there
+    is no Qdrant sidecar in zvec-only installs. To clear L5 nodes on a
+    live zvec store, call ``ZvecVectorStore.delete_by_filter`` directly
+    with ``layer = 'l5_knowledge'`` (or wipe the home directory while
+    the server is stopped).
 
     Requires the upstream to be stopped (for Kuzu) — or run from inside the process.
     """
-    import requests
-
-    results = {"kuzu": "skipped", "qdrant": "skipped", "watermark": "reset"}
+    results = {"kuzu": "skipped", "qdrant": "not_applicable", "watermark": "reset"}
 
     # Reset watermark
     try:
@@ -709,20 +714,9 @@ def l5_rollback() -> dict[str, Any]:
     except Exception as e:
         results["watermark"] = f"error: {e}"
 
-    # Delete L5 points from Qdrant
-    try:
-        resp = requests.post(
-            f"{_L5_QDRANT_URL}/collections/{_L5_COLLECTION}/points/delete",
-            json={
-                "filter": {
-                    "must": [{"key": "layer", "match": {"value": "l5_knowledge"}}]
-                }
-            },
-            timeout=30,
-        )
-        results["qdrant"] = f"deleted (status={resp.status_code})"
-    except Exception as e:
-        results["qdrant"] = f"error: {e}"
+    # v3.1.0+: L5 lives in zvec, no Qdrant sidecar. Result key preserved
+    # for callers that still inspect the legacy "qdrant" field.
+    results["qdrant"] = "no Qdrant in v3.1+; use ZvecVectorStore.delete_by_filter"
 
     # Kuzu deletion needs to be done from inside the server process
     # or with the server stopped. We can't do it from here safely.

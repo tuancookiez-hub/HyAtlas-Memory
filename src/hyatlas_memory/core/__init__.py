@@ -23,12 +23,10 @@ HY Memory - 核心 SDK
 
     # 自定义配置
     client = HyMemoryClient.from_config({
-        "vector_store": {"provider": "qdrant"},
+        "vector_store": {"provider": "local"},
         "graph_store": {
-            "provider": "neo4j",
-            "url": "bolt://localhost:7687",
-            "username": "neo4j",
-            "password": "password",
+            "provider": "kuzu",
+            "path": "./data/graph",
         },
         "enable_graph": True,
     }, user_id="test_user")
@@ -38,10 +36,7 @@ HY Memory - 核心 SDK
     - agent_id: 二级 key — 同一用户下不同 Agent 场景的隔离
 
 安装方式:
-    pip install hy-memory          # 核心依赖 (含 Chroma，开箱即用)
-    pip install hy-memory[qdrant]  # + Qdrant 向量库
-    pip install hy-memory[faiss]   # + FAISS 向量库
-    pip install hy-memory[all]     # 包含所有可选依赖
+    pip install hy-memory          # 核心依赖 (含 zvec，开箱即用)
 """
 
 try:

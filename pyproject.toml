@@ -46,7 +46,7 @@ requires-python = ">=3.10"
 # Runtime deps. The package installs hermes-agent as a peer dep so the
 # plugin can register itself with the running Hermes instance.
 # kuzu = graph store (L1 raw, L2 fact)
-# chromadb / qdrant-client / faiss-cpu = vector store (L4 identity search)
+# zvec = in-process vector store (L4 identity search, default since v3.1)
 # openai = default LLM/embedder client (overridable via hy_memory.json)
 dependencies = [
     # v3.0.0: hy-memory SDK forked into src/hyatlas_memory/core/ — no external dep
@@ -58,11 +58,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# v3.1.0: Zvec is the default vector store (in-process, no sidecar).
-# Qdrant remains available as an optional backend.
-qdrant = ["qdrant-client>=1.7.0"]
+# v3.1.0+: Zvec is the default (and only) vector store backend.
 zvec = ["zvec>=0.5.1"]
-# chroma and faiss backends were stripped in v3.0.0 (only qdrant supported)
+# chroma, faiss, and qdrant backends were stripped in v3.0.0/v3.4.
 # Embedding server (local SentenceTransformers-based; no API key needed)
 local-embed = ["sentence-transformers>=2.0.0", "huggingface-hub>=1.5.0,<2.0", "uvicorn>=0.27.0", "fastapi>=0.100.0"]
 # Dev tooling

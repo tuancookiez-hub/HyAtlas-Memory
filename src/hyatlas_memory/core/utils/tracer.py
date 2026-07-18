@@ -18,7 +18,7 @@ HY Memory - Pipeline Tracer (用户级调试日志)
         embedding = await embed_service.embed(text)
         s.set_output({"dims": len(embedding), "cache_hit": False})
     
-    with tracer.span("qdrant_upsert") as s:
+    with tracer.span("vector_upsert") as s:
         memory_id = await vector_store.upsert(node)
         s.set_output({"memory_id": memory_id})
     
@@ -43,7 +43,7 @@ HY Memory - Pipeline Tracer (用户级调试日志)
     "spans": [
         {"name": "route", "start_ms": 0.1, "end_ms": 0.3, "duration_ms": 0.2, "output": {"layer": "profile"}},
         {"name": "embed", "start_ms": 0.3, "end_ms": 1500.0, "duration_ms": 1499.7, "output": {"dims": 1024}},
-        {"name": "qdrant_upsert", "start_ms": 1500.0, "end_ms": 1700.0, "duration_ms": 200.0, "output": {"memory_id": "xxx"}},
+        {"name": "vector_upsert", "start_ms": 1500.0, "end_ms": 1700.0, "duration_ms": 200.0, "output": {"memory_id": "xxx"}},
     ],
     "input_summary": "用户喜欢科幻电影...",
     "output_summary": {"success": true, "layer": "profile"},

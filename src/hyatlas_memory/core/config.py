@@ -89,7 +89,7 @@ def _default_data_dir() -> str:
 class VectorStoreConfig:
     """向量存储配置"""
 
-    provider: str = None  # qdrant, chroma, faiss, tencent
+    provider: str = None  # local (zvec) — only supported backend as of v3.4+
     collection_name: str = None  # 集合名称
     persist_directory: str = None  # 持久化目录
     embedding_dims: int = None  # 向量维度

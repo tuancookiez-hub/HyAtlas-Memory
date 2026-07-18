@@ -1,4 +1,11 @@
-"""Dashboard-oriented vector DB reads via the live HyMemoryClient (zvec or qdrant)."""
+"""Dashboard-oriented vector DB reads via the live HyMemoryClient.
+
+v3.4+: only the ZvecVectorStore path is supported. The legacy
+``QdrantVectorStore`` branch has been removed alongside
+``vector_store_qdrant.py``. If a downstream caller somehow still has a
+Qdrant client connected, this module returns ``0`` rather than crashing
+the dashboard.
+"""
 
 from __future__ import annotations
 
@@ -41,26 +48,16 @@ async def _layer_count_async(client, layer: str, *, require_is_latest: bool, age
         return int(await _run_in_vdb_pool(_q))
 
     if name == "QdrantVectorStore":
-        from qdrant_client.models import FieldCondition, Filter, MatchValue
-
-        from .core.data.vector_store_zvec import _run_in_vdb_pool
-
-        must = [FieldCondition(key="layer", match=MatchValue(value=layer))]
-        if agent_id:
-            must.append(FieldCondition(key="agent_id", match=MatchValue(value=agent_id)))
-        if require_is_latest:
-            must.append(FieldCondition(key="is_latest", match=MatchValue(value=True)))
-        elif layer == "l5_knowledge":
-            must.append(FieldCondition(key="status", match=MatchValue(value="active")))
-
-        def _count():
-            return vs._client.count(
-                collection_name=vs._collection_name,
-                count_filter=Filter(must=must),
-                exact=True,
-            ).count
-
-        return int(await _run_in_vdb_pool(_count))
+        # Defensive: vector_store_qdrant.py was deleted in v3.4+, so this
+        # branch should be unreachable. Keep the guard so the dashboard
+        # still returns a sane number if someone wires up a Qdrant store
+        # out-of-tree.
+        logger.warning(
+            "[vdb_dashboard] QdrantVectorStore is no longer supported in v3.4+ "
+            "(layer=%s); returning 0 for the dashboard count.",
+            layer,
+        )
+        return 0
 
     return 0
 

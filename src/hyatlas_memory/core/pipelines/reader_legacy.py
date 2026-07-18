@@ -275,7 +275,7 @@ class LegacyReadPipeline(ReadPipeline):
             profile_min_score = request.profile_min_score
             profile_limit = request.profile_limit
 
-            with tracer.span("qdrant_search") as s:
+            with tracer.span("vector_search") as s:
                 try:
                     vector_store = await self._get_vector_store()
 

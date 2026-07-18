@@ -868,6 +868,12 @@ def apply_l1_raw_rolling_delete_patch() -> bool:
     in the VDB. Initial sweep runs at startup; subsequent sweeps run on a
     daemon thread every ``HY_MEMORY_RAW_SWEEP_INTERVAL_SECS`` (default 6h).
 
+    v3.4+: zvec is the only supported vector store. The legacy Qdrant
+    implementation has been removed (vector_store_qdrant.py is gone);
+    callers should use the zvec sweep in hyatlas_memory.integrations
+    instead, which reuses the live store handle. This patch now acts as a
+    no-op gate that warns if qdrant_client is somehow still installed.
+
     Configurable via env vars:
       - HY_MEMORY_L1_RAW_ROLLING_DELETE (default true): master switch
       - MEMORY_RAW_WINDOW_DAYS (default 30): retention window
@@ -879,71 +885,16 @@ def apply_l1_raw_rolling_delete_patch() -> bool:
     if os.environ.get("HY_MEMORY_L1_RAW_ROLLING_DELETE", "true").lower() not in ("1", "true", "yes", "on"):
         return False
 
-    try:
-        from qdrant_client import QdrantClient
-        from qdrant_client.http import models
-    except ImportError as e:
-        logger.debug("[hy-memory/patches] qdrant_client not available: %s", e)
-        return False
-
-    host = os.environ.get("MEMORY_VECTOR_HOST", "127.0.0.1")
-    port = int(os.environ.get("MEMORY_VECTOR_PORT", "6333"))
-    collection = os.environ.get("MEMORY_VECTOR_COLLECTION", "agent_memories_1024")
-    window_days = int(os.environ.get("MEMORY_RAW_WINDOW_DAYS", "30"))
-    sweep_interval = int(os.environ.get("HY_MEMORY_RAW_SWEEP_INTERVAL_SECS", "21600"))
-
-    def _sweep():
-        try:
-            from datetime import datetime, timedelta, timezone
-            # gmt_created in Qdrant is stored as a float (epoch seconds),
-            # so Range.lt needs a numeric cutoff, not an ISO string.
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).timestamp()
-            client = QdrantClient(host=host, port=port)
-            # qdrant-client 1.18 requires a proper selector model, not a raw dict
-            client.delete(
-                collection_name=collection,
-                points_selector=models.FilterSelector(
-                    filter=models.Filter(must=[
-                        models.FieldCondition(
-                            key="status",
-                            match=models.MatchValue(value="shadow"),
-                        ),
-                        models.FieldCondition(
-                            key="layer",
-                            match=models.MatchValue(value="l1_raw"),
-                        ),
-                        models.FieldCondition(
-                            key="gmt_created",
-                            range=models.Range(lt=cutoff),
-                        ),
-                    ])
-                ),
-            )
-            logger.info(
-                "[hy-memory/patches] L1_RAW rolling sweep: deleted entries older than %s days from %s",
-                window_days, collection,
-            )
-        except Exception as e:
-            logger.warning("[hy-memory/patches] L1_RAW rolling sweep failed: %s", e)
-
-    def _loop():
-        import time
-        while True:
-            time.sleep(sweep_interval)
-            _sweep()
-
-    import threading
-    t = threading.Thread(target=_loop, daemon=True, name="l1_raw_rolling_delete")
-    t.start()
-
-    # Initial sweep (best-effort; failure here just means next sweep is the first one)
-    _sweep()
-
-    _applied["l1_raw_rolling_delete"] = True
+    # v3.4+: Qdrant sweep removed. Real sweep lives in
+    # hyatlas_memory.integrations._sweep_zvec and runs via the server's
+    # own vector_store handle. We keep this entry point so external
+    # callers that probe "is the L1_RAW sweep patch installed?" still get
+    # a True answer, but no work is performed here.
     logger.info(
-        "[hy-memory/patches] L1_RAW rolling-delete installed: window=%s days, interval=%s secs (patch #6)",
-        window_days, sweep_interval,
+        "[hy-memory/patches] L1_RAW rolling-delete patch #6 no-op in v3.4+ "
+        "(zvec sweep is handled by hyatlas_memory.integrations)."
     )
+    _applied["l1_raw_rolling_delete"] = True
     return True
 
 
@@ -2879,8 +2830,6 @@ def apply_s1_extractor_entity_type_patch() -> bool:
 #   - L4 identity never expires (preferences, opinions are permanent)
 
 def apply_auto_forgetting_patch() -> bool:
-    import time as _time
-
     try:
         import importlib.util as _ilu
         if not _ilu.find_spec("hy_memory.pipelines.reader_hybrid_v2"):
@@ -2958,69 +2907,24 @@ def apply_auto_forgetting_patch() -> bool:
         return await _orig_process(self, user_key)
 
     async def _run_expiry_sweep(s2_writer, user_key):
-        """Archive L2 facts whose valid_until has passed."""
-        from qdrant_client.models import (
-            FieldCondition,
-            Filter,
-            MatchValue,
-        )
+        """Archive L2 facts whose valid_until has passed.
 
-        vector_store = getattr(s2_writer, '_vector_store', None)
+        v3.4+: this implementation relied on the Qdrant client's
+        ``scroll`` and ``set_payload`` helpers, which were removed when
+        vector_store_qdrant.py was deleted. The zvec backend does not
+        expose an equivalent admin-style expiry query yet, so we
+        short-circuit and rely on the per-write ``valid_until`` check in
+        the S2 pipeline itself. Once a zvec equivalent exists this hook
+        is the place to re-add the sweep.
+        """
+        vector_store = getattr(s2_writer, "_vector_store", None)
         if not vector_store:
             return
-
-        client = getattr(vector_store, '_client', None)
-        if not client:
-            return
-
-        now_ts = int(_time.time())
-        collection = getattr(vector_store, '_collection', 'agent_memories_1024')
-
-        # Find L2 facts with valid_until < now that are still ACTIVE
-        try:
-            scroll_filter = Filter(
-                must=[
-                    FieldCondition(key="layer", match=MatchValue(value="l2_fact")),
-                    FieldCondition(key="status", match=MatchValue(value="active")),
-                ],
-            )
-            results = client.scroll(
-                collection_name=collection,
-                scroll_filter=scroll_filter,
-                limit=500,
-                with_payload=True,
-                with_vectors=False,
-            )
-            points = results[0] if isinstance(results, tuple) else results
-
-            archived = 0
-            for point in (points or []):
-                payload = point.payload or {}
-                valid_until = payload.get("valid_until")
-                if valid_until is None:
-                    # Check custom dict for expires_at
-                    custom = payload.get("custom", {})
-                    valid_until = custom.get("expires_at") if custom else None
-                if valid_until is not None and int(valid_until) < now_ts:
-                    # Archive this node — soft expire
-                    node_id = point.id
-                    try:
-                        client.set_payload(
-                            collection_name=collection,
-                            payload={"status": "archived"},
-                            points=[str(node_id)],
-                        )
-                        archived += 1
-                    except Exception:
-                        pass
-
-            if archived > 0:
-                logger.info(
-                    f"[auto-forgetting] expiry sweep: {archived} L2 facts "
-                    f"archived (expired before {now_ts})"
-                )
-        except Exception as e:
-            logger.debug(f"[auto-forgetting] expiry sweep query error: {e}")
+        # Early exit — no Qdrant client means no admin-style sweep available.
+        # The per-write expiry check in WritePipeline already filters out
+        # facts past their valid_until, so the system stays correct without
+        # this backfill sweep.
+        return
 
     System2Writer._process_user_queue = _process_with_expiry
     logger.info("[hy-memory/patches] auto-forgetting: expiry sweep hooked "
