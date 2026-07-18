@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.4.1] — 2026-07-18
+
+> **Patch: Day-0 first-proof path + fail-fast doctor.** Same product as 3.4.0 (profile isolation, L1_RAW transparency). This release makes install and health checks safer for new users and post-reboot ops.
+
+### Docs
+- **`docs/DAY0.md`** — 15-minute checklist: install → `hyatlas start` → `hyatlas doctor` → `add`/`search` → Hermes recall → dashboard.
+- **README Quick start** — prove memory with doctor + manual add/search before the dashboard tour; reboot habit (stack is local processes, not a service).
+
+### CLI / reliability
+- **`hyatlas doctor`** — exit code `1` on failures; fail-fast port checks; short deep-status timeouts; LLM key presence warning for pro/ultra; multi-profile `agent_identity` / `memory.provider` scan; clearer next steps.
+- **Status timeouts** — `/api/v1/status` client timeout 5s; `hyatlas status` zvec status fetch 3s (avoid hung shells).
+- **Thin client** — `list_memories(..., include_raw=…)` forwards the flag (from post-3.4.0 main).
+- **Console spawn** — strip MSYS/Git Bash env keys; layout-based log path; CLI `close_fds=False` (from post-3.4.0 main).
+- **Privacy** — remaining `tuanc` path/fixture scrub + detector generalization (from post-3.4.0 main).
+
+### Tests
+- `tests/test_doctor_day0.py` — doctor gate unit tests.
+- Smoke tests return `None` under pytest (no ReturnNotNone warnings).
+
+Upgrade from 3.4.0: `pip install -U -e .` (or reinstall wheel) and restart the stack / Hermes. No data migration.
+
 ## [3.4.0] — 2026-07-16
 
 > **Headline: Profile isolation in the dashboard + L1_RAW transparency.** Pick a profile (default, research, sentinel, work-backend, work-frontend, trading, hestia) and the entire dashboard filters to that scope. New `include_raw` flag on `/api/v1/list` returns original L1_RAW payloads alongside the processed L2 fact. Plus a long list of dashboard truth fixes (L5 timestamps, 3-tier status, authoritative layer counts, console window, zvec schema).

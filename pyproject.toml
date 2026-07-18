@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyatlas-memory"
-version = "3.4.0"
+version = "3.4.1"
 description = "Personal local single-user long-term memory stack for Hermes Agent, forked from Hy-Memory 7-layer cognitive framework (Tencent Hunyuan). Includes experimental L7 intention layer. Apache 2.0 licensed."
 readme = "README.md"
 license = {file = "LICENSE"}

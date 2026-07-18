@@ -49,7 +49,7 @@ def _write_hermes_home(tmp: Path, *, provider: str = "hy_memory") -> Path:
     plug = home / "plugins" / "hy_memory"
     plug.mkdir(parents=True)
     (plug / "__init__.py").write_text("# shim\n", encoding="utf-8")
-    (plug / "plugin.yaml").write_text("name: hy_memory\nversion: 3.4.0\n", encoding="utf-8")
+    (plug / "plugin.yaml").write_text("name: hy_memory\nversion: 3.4.1\n", encoding="utf-8")
     return home
 
 

@@ -2,7 +2,7 @@
 
 A personal, local, single-user long-term memory stack for Hermes Agent — built by forking the Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan) and refining it into something tuned for one person's daily, multi-session use. Includes the experimental L7 intention layer. Apache 2.0 licensed.
 
-> **v3.4.0** — Profile isolation lands in the dashboard: pick a profile (default, research, sentinel, work-backend, work-frontend, trading, hestia) and every tab filters to that scope. Plus L1_RAW transparency (`include_raw` flag on `/api/v1/list`), 3-tier status (vdb/embed/llm), and a long list of dashboard truth fixes. See [CHANGELOG](./CHANGELOG.md).
+> **v3.4.1** — Day-0 first-proof path (`docs/DAY0.md`) + fail-fast `hyatlas doctor`. Product surface remains 3.4.0 (profile isolation, L1_RAW transparency, 3-tier status). See [CHANGELOG](./CHANGELOG.md).
 
 <p align="center">
   <img src="./assets/hyatlas-v3.4.0-banner.jpeg" alt="HyAtlas v3.4.0: Profile isolation in the dashboard + L1_RAW transparency — 8 panels covering the headline features" width="100%" />
