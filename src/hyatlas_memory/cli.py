@@ -186,113 +186,243 @@ def _get_agent_id(args, env_var: str = "HY_MEMORY_AGENT_ID", default: str = "def
 # Subcommand handlers
 # ---------------------------------------------------------------------------
 
+def _port_open(host: str, port: int, timeout: float = 0.5) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        return sock.connect_ex((host, port)) == 0
+
+
+def _has_llm_key(hy_cfg: dict) -> bool:
+    """True if an LLM key is configured (env or hy_memory.json). Never prints it."""
+    for key in ("HY_MEMORY_LLM_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"):
+        if (os.environ.get(key) or "").strip():
+            return True
+    llm = hy_cfg.get("llm") or {}
+    if (llm.get("api_key") or "").strip():
+        return True
+    keys = llm.get("api_keys") or []
+    return any(str(k).strip() for k in keys)
+
+
 def _cmd_doctor(args) -> int:
-    """Run comprehensive health checks for the v1.4 embedded stack."""
+    """Run comprehensive health checks for the embedded stack (fail-fast)."""
     print("[hy-memory] doctor — running health checks\n")
+    fails = 0
+    warns = 0
+
+    def ok(msg: str) -> None:
+        print(f"  ✓ {msg}")
+
+    def bad(msg: str) -> None:
+        nonlocal fails
+        fails += 1
+        print(f"  ✗ {msg}")
+
+    def warn(msg: str) -> None:
+        nonlocal warns
+        warns += 1
+        print(f"  ! {msg}")
+
+    def info(msg: str) -> None:
+        print(f"  • {msg}")
 
     try:
         home = get_hermes_home()
     except Exception as e:
-        print(f"  ✗ Cannot determine Hermes home: {e}")
+        bad(f"Cannot determine Hermes home: {e}")
+        print("\n[hy-memory] doctor — failed")
         return 1
 
     # 1. Package version
     from hyatlas_memory._version import __version__
-    print(f"  • hyatlas-memory version: {__version__}")
+    info(f"hyatlas-memory version: {__version__}")
+    info(f"Hermes home: {home}")
+    info(f"HYATLAS_HOME: {layout.home()}")
 
-    # 2. Hermes config.yaml
-    cfg = home / "config.yaml"
-    if cfg.exists():
+    # 2. Hermes config.yaml (default profile)
+    cfg_path = home / "config.yaml"
+    if cfg_path.exists():
         try:
             import yaml
-            data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
             mem = data.get("memory", {}) or {}
             provider = mem.get("provider", "(not set)")
             enabled = mem.get("memory_enabled", "(not set)")
-            print(f"  • Hermes config: memory.provider={provider}, memory_enabled={enabled}")
+            info(f"Hermes config: memory.provider={provider}, memory_enabled={enabled}")
             if provider != "hy_memory":
-                print("  ✗ memory.provider is not set to hy_memory — run `hyatlas setup hermes`")
+                bad("memory.provider is not hy_memory — run `hyatlas setup hermes -y`")
         except Exception as e:
-            print(f"  ! Could not parse config.yaml: {e}")
+            warn(f"Could not parse config.yaml: {e}")
     else:
-        print(f"  ! No config.yaml at {cfg}")
+        warn(f"No config.yaml at {cfg_path}")
 
     # 3. Plugin directory
     plugin_dir = home / "plugins" / "hy_memory"
     if (plugin_dir / "__init__.py").exists() and (plugin_dir / "plugin.yaml").exists():
-        print(f"  ✓ Plugin shim installed at {plugin_dir}")
+        ok(f"Plugin shim installed at {plugin_dir}")
     else:
-        print(f"  ✗ Plugin shim missing at {plugin_dir} — run `hyatlas setup hermes`")
+        bad(f"Plugin shim missing at {plugin_dir} — run `hyatlas setup hermes -y`")
 
-    # 4. Vector store
+    # 4. Runtime config + LLM key (Day-0 gate)
     from .process import StackManager
-    manager = StackManager(project_root=Path(__file__).parent, hermes_home=home, log_dir=layout.logs())
-    cfg = manager._read_hy_memory_json()
-    vec_provider = (cfg.get("vector_store") or {}).get("provider", "zvec")
+    manager = StackManager(
+        project_root=Path(__file__).parent, hermes_home=home, log_dir=layout.logs()
+    )
+    hy_cfg = manager._read_hy_memory_json()
+    mode = hy_cfg.get("mode", "ultra")
+    info(f"hy_memory mode: {mode}")
+    if _has_llm_key(hy_cfg):
+        ok("LLM API key present (env or hy_memory.json)")
+    elif str(mode).lower() in ("pro", "ultra", ""):
+        warn(
+            "No LLM API key found — fact extraction needs one for pro/ultra. "
+            "Set llm.api_key in ~/.hyatlas/config/hy_memory.json or HY_MEMORY_LLM_API_KEY. "
+            "Use mode=lite for embed-only."
+        )
+    else:
+        info("mode=lite — LLM key not required")
+
+    # 5. Vector store
+    vec_provider = (hy_cfg.get("vector_store") or {}).get("provider", "zvec")
     if vec_provider == "qdrant":
-        qdrant_port = int(cfg.get("qdrant", {}).get("port", 6333))
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(1)
-            if sock.connect_ex(("127.0.0.1", qdrant_port)) == 0:
-                print(f"  ✓ Qdrant reachable on port {qdrant_port}")
-            else:
-                print(f"  ✗ Qdrant not reachable on port {qdrant_port}")
+        qdrant_port = int((hy_cfg.get("qdrant") or {}).get("port", 6333))
+        if _port_open("127.0.0.1", qdrant_port):
+            ok(f"Qdrant reachable on port {qdrant_port}")
+        else:
+            bad(f"Qdrant not reachable on port {qdrant_port}")
     else:
         zvec_path = layout.home() / "zvec"
         if zvec_path.exists():
-            print(f"  ✓ Zvec store present at {zvec_path}")
+            ok(f"Zvec store present at {zvec_path}")
         else:
-            print(f"  ✗ Zvec store missing at {zvec_path}")
+            warn(
+                f"Zvec store not created yet at {zvec_path} "
+                "(normal before first `hyatlas start`)"
+            )
 
-    # 5. Upstream server
+    # 6. Upstream + deep health (short timeouts — never hang the shell)
     client = _get_client()
-    if client.is_reachable():
-        print(f"  ✓ Upstream server reachable at {client.base_url}")
-    else:
-        print(f"  ✗ Upstream server not reachable at {client.base_url}")
-
-    # 6. Deep health
-    if client.is_reachable():
+    upstream_up = False
+    if _port_open("127.0.0.1", 19527) and client.is_reachable():
+        ok(f"Upstream server reachable at {client.base_url}")
+        upstream_up = True
         try:
             status = client.status()
             s = status.get("status", "unknown")
             vdb = status.get("vdb", "unknown")
             emb = status.get("embed", status.get("embedder", "unknown"))
             llm = status.get("llm", "unknown")
-            cnt = status.get("vdb_points", status.get("points_count", status.get("vdb_count", "?")))
-            print(f"  ✓ Deep health: {s} (vdb={vdb}, embed={emb}, llm={llm}, points={cnt})")
+            wp = status.get("write_pipeline", "?")
+            cnt = status.get(
+                "vdb_points", status.get("points_count", status.get("vdb_count", "?"))
+            )
+            line = f"Deep health: {s} (vdb={vdb}, embed={emb}, llm={llm}, write={wp}, points={cnt})"
+            if str(s) == "error" or str(vdb) != "ok":
+                bad(line)
+            elif str(s) == "warning" or str(llm).startswith(("warning", "rate_limited", "error")):
+                warn(line + " — reads may work; extraction/writes can be degraded")
+            else:
+                ok(line)
         except Exception as e:
-            print(f"  ✗ Deep status failed: {e}")
+            bad(f"Deep status failed: {e}")
+    else:
+        bad(
+            f"Upstream not reachable at {client.base_url} — run `hyatlas start` "
+            "(or `hyatlas start --detach`)"
+        )
 
     # 7. Dashboard
-    dash_port = int(cfg.get("dashboard", {}).get("port", 8765))
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(1)
-        if sock.connect_ex(("127.0.0.1", dash_port)) == 0:
-            print(f"  ✓ Dashboard reachable on port {dash_port}")
-        else:
-            print(f"  ✗ Dashboard not reachable on port {dash_port}")
+    dash_port = int((hy_cfg.get("dashboard") or {}).get("port", 8765))
+    if _port_open("127.0.0.1", dash_port):
+        ok(f"Dashboard reachable on port {dash_port} → http://127.0.0.1:{dash_port}")
+    else:
+        bad(f"Dashboard not reachable on port {dash_port} — run `hyatlas start`")
 
-    # 8. Stale tui_gateway processes
+    # 8. Specialist profiles (optional Day-0 note — not a hard fail)
+    profiles_dir = home / "profiles"
+    if profiles_dir.is_dir():
+        missing_provider = []
+        missing_identity = []
+        try:
+            import yaml
+        except Exception:
+            yaml = None  # type: ignore
+        for pdir in sorted(profiles_dir.iterdir()):
+            if not pdir.is_dir():
+                continue
+            name = pdir.name
+            hy_p = pdir / "hy_memory.json"
+            if hy_p.exists():
+                try:
+                    import json as _json
+                    aid = (_json.loads(hy_p.read_text(encoding="utf-8")) or {}).get(
+                        "agent_identity"
+                    )
+                    if aid != name:
+                        missing_identity.append(name)
+                except Exception:
+                    missing_identity.append(name)
+            else:
+                missing_identity.append(name)
+            cfg_p = pdir / "config.yaml"
+            if cfg_p.exists() and yaml is not None:
+                try:
+                    pdata = yaml.safe_load(cfg_p.read_text(encoding="utf-8")) or {}
+                    prov = ((pdata.get("memory") or {}).get("provider") or "").strip()
+                    if prov != "hy_memory":
+                        missing_provider.append(name)
+                except Exception:
+                    missing_provider.append(name)
+        if missing_provider or missing_identity:
+            warn(
+                "Some Hermes specialist profiles are not wired for HyAtlas "
+                f"(provider gaps: {missing_provider or '—'}; "
+                f"agent_identity gaps: {missing_identity or '—'}). "
+                "Default profile still works. See docs/DAY0.md § multi-profile."
+            )
+        else:
+            ok("Specialist profiles have hy_memory provider + matching agent_identity")
+    else:
+        info("No Hermes profiles/ dir — single-profile install (fine for Day 0)")
+
+    # 9. Stale tui_gateway processes
     stale = 0
     try:
         if sys.platform == "win32":
             r = subprocess.run(
                 ["tasklist", "/FI", "IMAGENAME eq tui_gateway.exe", "/FO", "CSV"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=5,
             )
             stale = r.stdout.count("tui_gateway")
         else:
-            r = subprocess.run(["pgrep", "-c", "tui_gateway"], capture_output=True, text=True, timeout=10)
+            r = subprocess.run(
+                ["pgrep", "-c", "tui_gateway"],
+                capture_output=True, text=True, timeout=5,
+            )
             stale = int(r.stdout.strip()) if r.returncode == 0 else 0
     except Exception:
         pass
     if stale:
-        print(f"  ⚠ {stale} stale tui_gateway process(es) detected — restart Hermes TUI")
+        warn(f"{stale} stale tui_gateway process(es) — restart Hermes TUI if UI is stuck")
     else:
-        print("  ✓ No stale tui_gateway processes")
+        ok("No stale tui_gateway processes")
 
-    print("\n[hy-memory] doctor — done")
+    # Day-0 next steps
+    print()
+    if fails:
+        print(f"[hy-memory] doctor — {fails} failure(s), {warns} warning(s)")
+        if not upstream_up:
+            print("  Next: hyatlas start")
+            print("        hyatlas doctor")
+            print("        See docs/DAY0.md for first-proof steps")
+        else:
+            print("  Next: fix ✗ items above, then see docs/DAY0.md")
+        return 1
+    if warns:
+        print(f"[hy-memory] doctor — ok with {warns} warning(s)")
+    else:
+        print("[hy-memory] doctor — all checks passed")
+    print("  First proof: docs/DAY0.md  |  Dashboard: http://127.0.0.1:8765")
     return 0
 
 
@@ -602,7 +732,7 @@ def _cmd_setup_hermes(args) -> int:
     if manager.ensure_running():
         print("✓ Stack auto-started successfully")
     else:
-        print("! Stack auto-start failed — check logs and Qdrant availability")
+        print("! Stack auto-start failed — run `hyatlas start` and check logs under HYATLAS_HOME/logs")
         return 1
 
     print("\n[hy-memory] Setup complete. Restart Hermes TUI/CLI to load the new plugin.")

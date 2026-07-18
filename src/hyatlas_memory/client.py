@@ -86,8 +86,12 @@ class HyMemoryClient:
         return self._request("GET", "/info", timeout=3)
 
     def status(self) -> dict:
-        """GET /api/v1/status — deep health (VDB + embed + LLM)."""
-        return self._request("GET", "/api/v1/status", timeout=30)
+        """GET /api/v1/status — deep health (VDB + embed + LLM).
+
+        Short timeout on purpose: doctor/status CLIs must fail fast when the
+        stack is wedged, not hang a shell for 30s.
+        """
+        return self._request("GET", "/api/v1/status", timeout=5)
 
     def metrics(self, minutes: int = 5) -> dict:
         """GET /api/v1/metrics?minutes=N."""

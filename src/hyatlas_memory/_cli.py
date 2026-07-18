@@ -112,7 +112,7 @@ def _run_setup_hermes(args) -> int:
     if manager.ensure_running():
         print("✓ Stack auto-started successfully")
     else:
-        print("! Stack auto-start failed — check logs and Qdrant availability")
+        print("! Stack auto-start failed — run `hyatlas start` and check logs under HYATLAS_HOME/logs")
         return 1
 
     print("\n[hyatlas] Setup complete. Restart Hermes to load the new plugin.")

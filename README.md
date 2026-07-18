@@ -44,30 +44,46 @@ See it in action — a 19-second walkthrough of the live dashboard:
 git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 cd HyAtlas-Memory
 pip install -e .
-hyatlas setup hermes        # installs plugin + config + tests auto-start
+hyatlas setup hermes -y   # plugin shim + memory.provider=hy_memory + stack check
 ```
 
-That's it. The first time you run Hermes after setup, the provider automatically starts the **memory server** and **dashboard** in the background ( **Zvec** in-process — no Qdrant sidecar by default).
-
-**Hermes + evolution:** see [docs/HYATLAS_HERMES.md](docs/HYATLAS_HERMES.md) (identity `hermes-user` / `default`, weekly digest, L6 in graph).
-
-**If you want to see what's happening:**
+Restart Hermes so it loads the provider. Then **prove memory works** before exploring every dashboard tab:
 
 ```bash
-hyatlas start           # start the stack (safe to Ctrl+C after "ready")
-hyatlas console         # open the live status window (Ctrl+C to close)
-hyatlas stop            # shut down the stack
+hyatlas start             # server :19527 + dashboard :8765 (use --detach to survive shell close)
+hyatlas doctor            # fail-fast health; fix any ✗ before chatting
+hyatlas add "Day0 proof: I prefer dark themes and use Bun."
+hyatlas search "dark themes" --limit 5
 ```
 
-> **`hyatlas start` is safe to close.** Once you see "ready", Ctrl+C or close the terminal — the services keep running detached. Use `hyatlas stop` when you actually want to shut them down.
->
-> **`hyatlas console`** is read-only. Shows live service health and recent memory activity (writes, recalls, errors). Closing it does NOT stop the stack.
+Open http://127.0.0.1:8765 — you should see the write under **default**. Full checklist: **[docs/DAY0.md](docs/DAY0.md)** (15‑minute first proof).
 
-**Vector store:** **Zvec** is the default (v3.1+). No separate binary or port. Qdrant is **migration/archive only** — see [docs/CLEANUP.md](docs/CLEANUP.md) and `hyatlas archive qdrant`.
+The first Hermes session after setup also auto-starts the stack when the provider loads (**Zvec** in-process — no Qdrant sidecar by default).
+
+**Hermes identity:** `user_id=hermes-user`, `agent_id=default` — [docs/HYATLAS_HERMES.md](docs/HYATLAS_HERMES.md). Weekly digest + L6 graph notes live there too.
+
+**Stack helpers:**
+
+```bash
+hyatlas start           # start (safe to Ctrl+C after "ready" if detached/auto-detach)
+hyatlas start --detach  # always detach
+hyatlas doctor          # health (must return in seconds, not hang)
+hyatlas console         # live status window (Ctrl+C closes window only)
+hyatlas stop            # shut down the stack
+hyatlas status          # port health table (short timeouts)
+```
+
+> **`hyatlas start` is safe to close** once services report ready (detached mode). Use `hyatlas stop` to shut down.
+>
+> **`hyatlas console`** is read-only. Closing it does **not** stop the stack.
+>
+> **After reboot:** `hyatlas start` then `hyatlas doctor` — the stack is local processes, not a Windows service.
+
+**Vector store:** **Zvec** is the default (v3.1+). Qdrant is **migration/archive only** — see [docs/CLEANUP.md](docs/CLEANUP.md).
 
 **Want Docker instead?** See [Path A — Docker (legacy)](#path-a--docker-legacy-qdrant-compose) below.
 
-**Configure (optional):** edit `~/.hyatlas/config/hy_memory.json` to add your LLM key:
+**Configure LLM (needed for pro/ultra fact extraction):** edit `~/.hyatlas/config/hy_memory.json` (or set `HY_MEMORY_LLM_API_KEY`):
 
 ```json
 {
@@ -82,13 +98,13 @@ hyatlas stop            # shut down the stack
       "provider": "local"
     },
   "mode": "ultra",
-  "vector_store": {"provider": "zvec", "host": "127.0.0.1", "port": 6333}
+  "vector_store": {"provider": "zvec"}
 }
 ```
 
-> **Three modes:** `lite` (no LLM, embedding-only) · `pro` (LLM extraction per `add`) · `ultra` (pro + System 2 cognitive layer with Kuzu graph — default).
+> **Three modes:** `lite` (no LLM, embedding-only) · `pro` (LLM extraction per `add`) · `ultra` (pro + System 2 graph — default). Without an LLM key, doctor warns and extraction quality drops.
 
-> **New in 3.0:** Full SDK fork (no external `hy-memory` dependency), reasoning model compatibility (think-block parsing for MiniMax-M3/DeepSeek-R1), emotion-aware memory strength, Kuzu WAL checkpoint fix, 23 patches → 13 first-class integrations. See [CHANGELOG.md](CHANGELOG.md) for the full diff vs 2.1.0.
+> **New in 3.0+:** Full SDK fork, reasoning-model compatibility, Kuzu graph, zvec runtime. See [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -144,15 +160,14 @@ The dashboard is the main thing you'll interact with. The other two are infrastr
 
 ### Next: see your memories
 
-Once running, your conversations automatically start filling the system with memories. To explore what's been captured:
+Once the first proof works ([docs/DAY0.md](docs/DAY0.md)):
 
-1. Open the dashboard at `http://127.0.0.1:8765`
+1. Open the dashboard at `http://127.0.0.1:8765` (profile: **default**)
 2. **Overview** — KPIs (total memories, by-layer breakdown, recent activity)
-3. **Memory Observatory** — visual 3D graph of your memory corpus
-4. **Explore Memory** — semantic search across all 7 layers
-5. **Layers / Today / Settings / L5 Knowledge Graph** — deeper views
+3. **Today / Explore** — recent writes and search
+4. **Memory Observatory / L5 / Quality** — deeper views after you have more data
 
-Logs go to `logs/` in the project root (local) or `docker-compose logs -f` (Docker).
+Logs: `$HYATLAS_HOME/logs/` (or `~/.hyatlas/logs/`). If memory “vanishes” after reboot, start the stack again — it is not a system service.
 
 ### Memory recall is transparent
 
@@ -430,13 +445,15 @@ assets/                    # infographic images
 
 ## Documentation
 
+- **[docs/DAY0.md](docs/DAY0.md)** — **Start here:** 15‑minute first proof (install → doctor → add → Hermes recall)
 - **[docs/HYATLAS_HERMES.md](docs/HYATLAS_HERMES.md)** — Hermes identity, digest cron, L6 proof
 - **[docs/CLEANUP.md](docs/CLEANUP.md)** — Post-zvec disk/repo cleanup
-- **[docs/DASHBOARD.md](docs/DASHBOARD.md)** — Web UI reference (all 6 pages, Observatory controls, animations)
-- **[docs/API.md](docs/API.md)** — HTTP API reference (every endpoint, request/response shapes)
-- **[docs/LAYERS.md](docs/LAYERS.md)** — Per-layer deep-dive (L0–L7: what, where, when)
-- **[docs/architecture.md](docs/architecture.md)** — System design + layer mapping vs official spec
+- **[docs/DASHBOARD.md](docs/DASHBOARD.md)** — Web UI reference (profiles, Quality Metrics, Observatory)
+- **[docs/API.md](docs/API.md)** — HTTP API reference (`include_raw`, 3-tier status)
+- **[docs/LAYERS.md](docs/LAYERS.md)** — Per-layer deep-dive (L0–L7)
+- **[docs/architecture.md](docs/architecture.md)** — System design + layer mapping
 - **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — Common issues + fixes
+- **[docs/PROFILE_MEMORY_ARCHITECTURE.md](docs/PROFILE_MEMORY_ARCHITECTURE.md)** — Multi-profile `agent_id` isolation
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — How to contribute, dev setup, PR process
 - **[CHANGELOG.md](CHANGELOG.md)** — Version history
 

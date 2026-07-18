@@ -832,7 +832,7 @@ def show_status() -> None:
         ):
             try:
                 with urllib.request.urlopen(
-                    f"http://127.0.0.1:{UPSTREAM_PORT}/api/v1/status", timeout=15
+                    f"http://127.0.0.1:{UPSTREAM_PORT}/api/v1/status", timeout=3
                 ) as resp:
                     st = json.loads(resp.read().decode("utf-8", errors="replace"))
                 detail = (
