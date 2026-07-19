@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.4.5] — 2026-07-19
+
+### Bug fixes (log noise)
+
+- **`DisabledCache.cleanup_old_metrics`**: MetricsCollector hourly cleanup called a method that only existed on `SqliteCache`. Added no-op on `DisabledCache` + tolerance lists in `integrations` / `patches` so the hourly loop no longer logs `cleanup error: 'DisabledCache' object has no attribute 'cleanup_old_metrics'`.
+- **`vector_store_zvec._safe_topk`**: clamp all `query(..., topk=...)` values to live `coll.stats.doc_count`. Stops zvec 0.5.1 C++ spam `ID is out or range: id[N] count[N]` from `doc_filter.cc` when callers used `topk=100000` on smaller collections.
+
+### Docker
+
+- Image tag in compose bumped to `3.4.5` (same zvec-native stack as 3.4.4 Docker rewrite).
+
+Upgrade: `pip install --upgrade --force-reinstall git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git` then restart.
+
 ## [3.4.4] — 2026-07-19
 
 > **Schema fix: `update_payload` was passing `"embedding"` (a VECTOR field) as a scalar field, triggering `schema validate failed: embedding not found in collection schema` on every reconciler UPDATE operation.** v3.4.3 tried to fix this with a fields-only update path, but the real root cause was upstream — the reconciler in `writer.py:586` was passing `"embedding": new_emb` in the `update_payload` dict, and `update_payload` was putting it in the scalar `clean` dict. zvec's `convert_to_cpp_doc` then tried to validate `"embedding"` as a scalar field, which failed because `embedding` is a VECTOR field.

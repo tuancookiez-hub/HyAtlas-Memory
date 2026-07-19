@@ -148,3 +148,7 @@ class DisabledCache(CacheBase):
 
     async def flush_metrics(self, *args, **kwargs) -> None:
         pass
+
+    async def cleanup_old_metrics(self, *args, **kwargs) -> None:
+        # MetricsCollector._cleanup_loop calls this hourly. No-op when cache is disabled.
+        pass

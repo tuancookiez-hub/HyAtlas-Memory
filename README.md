@@ -2,7 +2,7 @@
 
 A personal, local, single-user long-term memory stack for Hermes Agent — built by forking the Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan) and refining it into something tuned for one person's daily, multi-session use. Includes the experimental L7 intention layer. Apache 2.0 licensed.
 
-> **v3.4.4** — Schema fix: `update_payload` was passing `"embedding"` (a vector field) as a scalar field, triggering `schema validate failed: embedding not found in collection schema` on every reconciler UPDATE op. Fixed by routing embedding updates to `update_embedding` separately. Also makes `_json_response` resilient to client-disconnects (no more `ConnectionAbortedError` noise in logs). Upgrade: `pip install --upgrade --force-reinstall git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git`. See [CHANGELOG](./CHANGELOG.md).
+> **v3.4.5** — Log noise fix: `DisabledCache.cleanup_old_metrics` no-op + zvec `topk` clamped to `doc_count` (kills `ID is out or range` spam). Docker path remains zvec-native. Upgrade: `pip install --upgrade --force-reinstall git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git`. See [CHANGELOG](./CHANGELOG.md).
 
 <p align="center">
   <img src="./assets/hyatlas-v3.4.0-banner.jpeg" alt="HyAtlas v3.4.0: Profile isolation in the dashboard + L1_RAW transparency — 8 panels covering the headline features" width="100%" />

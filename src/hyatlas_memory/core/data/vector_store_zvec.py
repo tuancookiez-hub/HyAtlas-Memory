@@ -70,6 +70,30 @@ def _run_in_vdb_pool(func, *args, **kwargs):
     return loop.run_in_executor(_get_executor(), func)
 
 
+def _safe_topk(coll: Any, requested: int) -> int:
+    """Clamp query topk to the collection's live doc count.
+
+    zvec 0.5.1 logs ``ID is out or range: id[N] count[N]`` from
+    ``doc_filter.cc`` when topk overshoots the live collection size.
+    Cap requested topk at ``doc_count`` when known.
+    """
+    try:
+        n = int(requested)
+    except (TypeError, ValueError):
+        n = 10
+    if n < 1:
+        n = 1
+    try:
+        count = int(getattr(getattr(coll, "stats", None), "doc_count", 0) or 0)
+    except Exception:
+        return n
+    if count <= 0:
+        return n
+    if n > count:
+        return count
+    return n
+
+
 def _quote(val: str) -> str:
     """SQL-escape a string value for zvec filter."""
     return '"' + val.replace('"', '\\"') + '"'
@@ -535,7 +559,7 @@ class ZvecVectorStore(VectorStoreBase):
         def _search():
             return self._coll.query(
                 queries=zvec.Query(field_name="embedding", vector=query_embedding),
-                topk=limit,
+                topk=_safe_topk(self._coll, limit),
                 filter=filt,
             )
 
@@ -642,7 +666,7 @@ class ZvecVectorStore(VectorStoreBase):
             def _count():
                 rows = self._coll.query(
                     queries=zvec.Query(field_name="embedding", vector=[0.0] * dims),
-                    topk=100_000, filter=filt,
+                    topk=_safe_topk(self._coll, 100_000), filter=filt,
                 )
                 return len(rows)
             n = await _run_in_vdb_pool(_count)
@@ -664,7 +688,7 @@ class ZvecVectorStore(VectorStoreBase):
             def _count():
                 rows = self._coll.query(
                     queries=zvec.Query(field_name="embedding", vector=[0.0] * dims),
-                    topk=100_000, filter=filt,
+                    topk=_safe_topk(self._coll, 100_000), filter=filt,
                 )
                 return len(rows)
             n = await _run_in_vdb_pool(_count)
@@ -697,7 +721,7 @@ class ZvecVectorStore(VectorStoreBase):
             def _count():
                 rows = self._coll.query(
                     queries=zvec.Query(field_name="embedding", vector=[0.0] * dims),
-                    topk=100_000, filter=filt,
+                    topk=_safe_topk(self._coll, 100_000), filter=filt,
                 )
                 return len(rows)
             n = await _run_in_vdb_pool(_count)
@@ -747,7 +771,7 @@ class ZvecVectorStore(VectorStoreBase):
                     field_name="embedding",
                     vector=[0.0] * dims,
                 ),
-                topk=limit,
+                topk=_safe_topk(self._coll, limit),
                 filter=filt,
                 include_vector=True,
             )
@@ -789,7 +813,7 @@ class ZvecVectorStore(VectorStoreBase):
                         field_name="embedding",
                         vector=[0.0] * dims,
                     ),
-                    topk=100000,
+                    topk=_safe_topk(self._coll, 100000),
                     filter=f'isolation_key = {_quote(isolation_key)}',
                 )
                 return len(result)
@@ -842,7 +866,7 @@ class ZvecVectorStore(VectorStoreBase):
                     field_name="content",
                     fts=zvec.Fts(match_string=query),
                 ),
-                topk=top_k,
+                topk=_safe_topk(self._coll, top_k),
                 filter=filt,
             )
 
@@ -896,7 +920,7 @@ class ZvecVectorStore(VectorStoreBase):
                     zvec.Query(field_name="embedding", vector=query_embedding),
                     zvec.Query(field_name="content", fts=zvec.Fts(match_string=query_text)),
                 ],
-                topk=top_k,
+                topk=_safe_topk(self._coll, top_k),
                 filter=filt,
                 reranker=zvec.WeightedReRanker(
                     weights=[vector_weight, bm25_weight]

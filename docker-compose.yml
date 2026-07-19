@@ -19,7 +19,7 @@ services:
       dockerfile: Dockerfile
       args:
         INSTALL_LOCAL_EMBED: "0"
-    image: hyatlas-memory:3.4.4
+    image: hyatlas-memory:3.4.5
     container_name: hyatlas-memory
     ports:
       - "19527:19527"
@@ -58,7 +58,7 @@ services:
       dockerfile: Dockerfile
       args:
         INSTALL_LOCAL_EMBED: "1"
-    image: hyatlas-memory:3.4.4-local-embed
+    image: hyatlas-memory:3.4.5-local-embed
     container_name: hyatlas-memory-local-embed
     ports:
       - "19527:19527"

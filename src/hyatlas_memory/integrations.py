@@ -933,14 +933,17 @@ def wire_disabled_cache_tolerance(cache_cls):
     methods = (
         "update_task_status", "store_pipeline_log", "store_write_record",
         "store_memory_operation", "enqueue_system2_task", "update_profile_cache",
-        "store_metrics_minute", "store_metrics", "flush_metrics",
+        "store_metrics_minute", "store_metrics", "flush_metrics", "cleanup_old_metrics",
     )
 
     for name in methods:
         orig = getattr(cache_cls, name, None)
         if orig is None:
-            if name in ("store_metrics_minute", "store_metrics", "flush_metrics"):
-                async def shim(self, *a, **kw): return None
+            if name in (
+                "store_metrics_minute", "store_metrics", "flush_metrics", "cleanup_old_metrics",
+            ):
+                async def shim(self, *a, **kw):
+                    return None
                 shim.__name__ = name
                 setattr(cache_cls, name, shim)
                 orig = shim
@@ -957,8 +960,10 @@ def wire_disabled_cache_tolerance(cache_cls):
             if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.POSITIONAL_ONLY)
             and p.default is inspect.Parameter.empty and p.name != "self"
         ]
-        accepted = {p.name for p in sig.parameters.values()
-                    if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)}
+        accepted = {
+            p.name for p in sig.parameters.values()
+            if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        }
 
         def _default(p):
             ann = str(p.annotation).lower() if p.annotation is not inspect.Parameter.empty else ""

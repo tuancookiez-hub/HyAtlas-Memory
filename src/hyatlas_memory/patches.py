@@ -1878,6 +1878,7 @@ def apply_disabled_cache_timing_patch() -> bool:
         "store_metrics_minute",
         "store_metrics",
         "flush_metrics",
+        "cleanup_old_metrics",
     )
 
     def make_kwargs_tolerant(name, original):
@@ -1985,8 +1986,11 @@ def apply_disabled_cache_timing_patch() -> bool:
         if orig is None:
             # Method doesn't exist on DisabledCache at all — install a no-op shim.
             # This prevents AttributeError when background tasks call it.
-            if method_name == "store_metrics_minute" or method_name == "store_metrics" or method_name == "flush_metrics":
-                async def shim(self, *args, **kwargs): return None
+            if method_name in (
+                "store_metrics_minute", "store_metrics", "flush_metrics", "cleanup_old_metrics",
+            ):
+                async def shim(self, *args, **kwargs):
+                    return None
             else:
                 continue
             shim.__name__ = method_name

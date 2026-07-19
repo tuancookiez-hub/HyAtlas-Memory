@@ -1,7 +1,7 @@
 ---
 name: hyatlas-memory
 description: "Long-term memory stack for Hermes Agent — install, use, and troubleshoot HyAtlas-Memory (7-layer cognitive memory with System1/System2 dual processing, profile isolation, local in-process embedder)."
-version: 3.4.4
+version: 3.4.5
 author: Tuna Dev <tuancookiez@gmail.com>
 license: Apache-2.0
 platforms: [linux, macos, windows]
@@ -35,7 +35,7 @@ HyAtlas-Memory is a personal, local, single-user long-term memory stack for Herm
 
 ## Install
 
-Single command. No PyPI involvement as of v3.4.4 — install is GitHub-direct.
+Single command. No PyPI involvement as of v3.4.5 — install is GitHub-direct.
 
 ```bash
 pip install git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git
@@ -136,9 +136,9 @@ print('wired:', getattr(EmbedService, '_inprocess_embed_wired', False))
 "
 ```
 
-Version matrix that works (as of v3.4.4):
+Version matrix that works (as of v3.4.5):
 - `transformers==4.46.3`
-- `huggingface-hub<1.0,>=0.23.2` (not 1.x — that's the bug v3.4.2 fixed, v3.4.4 enforces)
+- `huggingface-hub<1.0,>=0.23.2` (not 1.x — that's the bug v3.4.2 fixed, v3.4.5 enforces)
 - `tokenizers<0.21,>=0.20`
 - `sentence-transformers==3.0.1`
 - `numpy<3`
@@ -190,7 +190,7 @@ Do NOT run the digest from git-bash in background — MSYS path mangling breaks 
 
 **`embed: error` on /api/v1/status**
 - sentence-transformers import chain failed.
-- Check version matrix above. v3.4.4+ should have correct pins.
+- Check version matrix above. v3.4.5+ should have correct pins.
 - Restart: `hyatlas stop && hyatlas start`.
 
 **`vdb: error`**
@@ -215,7 +215,7 @@ Do NOT run the digest from git-bash in background — MSYS path mangling breaks 
 
 ## Versioning and releases
 
-Releases are GitHub-only. No PyPI. Install is `pip install git+https://...` (no version pin → gets latest). To pin a specific version: `pip install git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git@v3.4.4`.
+Releases are GitHub-only. No PyPI. Install is `pip install git+https://...` (no version pin → gets latest). To pin a specific version: `pip install git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git@v3.4.5`.
 
 Release flow:
 1. Bump version in `pyproject.toml`, `_version.py`, both `plugin.yaml` files
