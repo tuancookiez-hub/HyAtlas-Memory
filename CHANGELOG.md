@@ -1,5 +1,22 @@
 # Changelog
 
+## [3.4.2] — 2026-07-19
+
+> **Patch: broken `local-embed` extras pin (`huggingface-hub>=1.5.0,<2.0` was incompatible with the `transformers==4.46.x` runtime).** Anyone who ran `pip install hyatlas-memory[local-embed]` from 3.4.0 / 3.4.1 got a silently broken in-process embedder — `wire_inprocess_embed` would skip via its `except ImportError: return`, and `_embed_openai` would fall through to a default OpenAI HTTP call with `BAAI/bge-large-en-v1.5` as model name and no API key, surfacing as `embed: error` on `/api/v1/status`.
+
+### Bug fix
+- **`pyproject.toml` — `local-embed` extras**: `huggingface-hub>=1.5.0,<2.0` → `huggingface-hub<1.0,>=0.23.2`. Matches the `transformers==4.46.x` dependency that ships with the package. With this pin in place, `pip install hyatlas-memory[local-embed]` resolves a consistent version set and `wire_inprocess_embed` loads `BAAI/bge-large-en-v1.5` (1024 dims, 3.1s on CPU) in-process — no API key, no provider.
+- **`sentence-transformers` extras upper bound**: `>=2.0.0` → `>=2.0.0,<4.0` so we don't accidentally pull a future major that changes the `SentenceTransformer(...)` constructor signature.
+
+### Verified
+- Fresh venv: `pip install hyatlas-memory[local-embed]==3.4.2` → `SentenceTransformer("BAAI/bge-large-en-v1.5", device="cpu")` loads, `embed("test")` returns 1024-dim float32 vector.
+- Server status after restart: `status=ok / vdb=ok / embed=ok / llm=ok / write_pipeline=ok` — `embed_dims: 1024` matches the existing `agent_memories_1024` zvec collection, so no re-ingest is needed for existing graphs.
+
+### Why this slipped through
+The `local-embed` extras were declared but never exercised in CI (CI only runs `pip install -e .` with the default deps). The conflict between `huggingface-hub 1.x` and `transformers 4.46.x` only shows up when the user installs the optional extras, so the default install path looked healthy. Test added (3.4.2 follow-up): CI now installs `[local-embed]` on one job and imports `SentenceTransformer` to catch the version drift.
+
+Upgrade from 3.4.0 / 3.4.1: `pip install -U -e ".[local-embed]"` (or reinstall the wheel) and restart the stack. No data migration.
+
 ## [3.4.1] — 2026-07-18
 
 > **Patch: Day-0 first-proof path + fail-fast doctor.** Same product as 3.4.0 (profile isolation, L1_RAW transparency). This release makes install and health checks safer for new users and post-reboot ops.

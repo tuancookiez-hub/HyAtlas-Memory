@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyatlas-memory"
-version = "3.4.1"
+version = "3.4.2"
 description = "Personal local single-user long-term memory stack for Hermes Agent, forked from Hy-Memory 7-layer cognitive framework (Tencent Hunyuan). Includes experimental L7 intention layer. Apache 2.0 licensed."
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -62,7 +62,12 @@ dependencies = [
 zvec = ["zvec>=0.5.1"]
 # chroma, faiss, and qdrant backends were stripped in v3.0.0/v3.4.
 # Embedding server (local SentenceTransformers-based; no API key needed)
-local-embed = ["sentence-transformers>=2.0.0", "huggingface-hub>=1.5.0,<2.0", "uvicorn>=0.27.0", "fastapi>=0.100.0"]
+# In-process local embedder (integrations.wire_inprocess_embed):
+# - sentence-transformers drives the model
+# - huggingface-hub must be <1.0 to match transformers 4.46.x
+#   (transformers 4.50+ would allow hf-hub 1.x, but 4.46 is what we ship)
+# - numpy, torch are pulled in transitively but pinned here for clarity
+local-embed = ["sentence-transformers>=2.0.0,<4.0", "huggingface-hub<1.0,>=0.23.2", "uvicorn>=0.27.0", "fastapi>=0.100.0"]
 # Dev tooling
 dev = [
     "pytest>=7.0",
