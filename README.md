@@ -60,14 +60,23 @@ The first Hermes session after setup also auto-starts the stack when the provide
 
 **Hermes identity:** `user_id=hermes-user`, `agent_id=default` — [docs/HYATLAS_HERMES.md](docs/HYATLAS_HERMES.md). Weekly digest + L6 graph notes live there too.
 
-**Make Hermes aware of HyAtlas-Memory:** if you want your Hermes Agent to know how to install, use, and troubleshoot this stack, copy the skill into your Hermes skills directory:
+**Make Hermes aware of HyAtlas-Memory:** if you want your Hermes Agent to know how to install, use, and troubleshoot this stack, install the SKILL.md. Three ways, pick whichever fits:
 
 ```bash
+# Option 1 — slash command from inside any Hermes chat (recommended)
+/skills install https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/docs/SKILL.md --name hyatlas-memory
+
+# Option 2 — curl straight into your Hermes skills dir
+curl -fsSL https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/docs/SKILL.md \
+  -o ~/.hermes/skills/hyatlas-memory/SKILL.md
+
+# Option 3 — clone the repo and copy locally
+git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 mkdir -p ~/.hermes/skills/hyatlas-memory
-cp docs/SKILL.md ~/.hermes/skills/hyatlas-memory/SKILL.md
+cp HyAtlas-Memory/docs/SKILL.md ~/.hermes/skills/hyatlas-memory/SKILL.md
 ```
 
-Restart Hermes so it picks up the new skill. See [docs/SKILL.md](docs/SKILL.md) for the full content.
+Restart Hermes so it picks up the new skill. The skill is one file — `docs/SKILL.md` in this repo — and is also written into your local `~/.hermes/skills/hyatlas-memory/SKILL.md` automatically if you install from this checkout via `pip install`.
 
 **Stack helpers:**
 

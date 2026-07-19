@@ -253,3 +253,20 @@ Latest release: see https://github.com/tuancookiez-hub/HyAtlas-Memory/releases
 - Don't `rm -rf ~/.hyatlas` without explicit confirmation
 - Don't upload to PyPI (the project does not publish there)
 - Don't switch embedder to a different model without user confirmation (changes 1024-dim vector compatibility)
+
+## How to install this skill
+
+If you found this file on GitHub and want your Hermes to load it:
+
+```bash
+# In any Hermes chat:
+/skills install https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/docs/SKILL.md --name hyatlas-memory
+
+# Or manually:
+mkdir -p ~/.hermes/skills/hyatlas-memory
+curl -fsSL https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/docs/SKILL.md \
+  -o ~/.hermes/skills/hyatlas-memory/SKILL.md
+# restart Hermes
+```
+
+After install, this skill loads whenever Hermes sees a question about HyAtlas, hy-memory, memory issues, dashboard, or this stack in general. Hermes reads the `description:` field from YAML frontmatter to decide when to load it.
