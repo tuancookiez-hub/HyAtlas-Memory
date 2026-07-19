@@ -36,13 +36,11 @@ import random
 import string
 import sys
 import time
-import urllib.request
 import urllib.error
-from dataclasses import dataclass, field, asdict
+import urllib.request
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
-
 
 # ---------- config ----------
 
@@ -70,7 +68,7 @@ class StageResult:
     passed: bool
     detail: str
     duration_ms: int
-    error: Optional[str] = None
+    error: str | None = None
     extras: dict = field(default_factory=dict)
 
 
@@ -139,11 +137,12 @@ def stage_install() -> StageResult:
     """1. Is the package importable from a fresh cwd?"""
     t0 = time.perf_counter()
     try:
+        # also confirm we can import the upstream SDK
+        import hy_memory  # noqa: F401
+
         import hyatlas_memory  # noqa: F401
         from hyatlas_memory import HyMemoryProvider  # noqa: F401
         from hyatlas_memory._version import __version__  # noqa: F401
-        # also confirm we can import the upstream SDK
-        import hy_memory  # noqa: F401
         duration = int((time.perf_counter() - t0) * 1000)
         return StageResult(
             name="install",
@@ -306,10 +305,10 @@ def stage_qdrant_health() -> StageResult:
     qdrant_storage = Path(os.environ.get("HYATLAS_QDRANT_STORAGE", "C:/qdrant/storage/collections"))
     qdrant_snapshots = Path(os.environ.get("HYATLAS_QDRANT_SNAPSHOTS", "C:/qdrant/snapshots"))
 
-    EXPECTED = {HYATLAS_QDRANT_COLLECTION, "agent_memories_384_tag_index"}
-    SIZE_WARN_MB = 1500      # absolute per-collection size; catches real bloat
-    BLOAT_KB_PER_PT = 1024   # > 1 MB per point = real bloat (normal is 50-400 KB)
-    SNAPSHOT_WARN_PER_COLL = 4
+    expected = {HYATLAS_QDRANT_COLLECTION, "agent_memories_384_tag_index"}
+    size_warn_mb = 1500      # absolute per-collection size; catches real bloat
+    bloat_kb_per_pt = 1024   # > 1 MB per point = real bloat (normal is 50-400 KB)
+    snapshot_warn_per_coll = 4
 
     rows: list[dict] = []
     warnings: list[str] = []
@@ -333,29 +332,29 @@ def stage_qdrant_health() -> StageResult:
         rows.append({
             "name": name, "points": points, "indexed": vecs,
             "size_mb": size_mb, "snapshots": snap_count,
-            "expected": name in EXPECTED,
+            "expected": name in expected,
         })
-        if name not in EXPECTED:
+        if name not in expected:
             warnings.append(f"unexpected collection '{name}' ({size_mb} MB, {points} pts)")
-        if size_mb > SIZE_WARN_MB:
-            warnings.append(f"'{name}' is large: {size_mb} MB (> {SIZE_WARN_MB} MB threshold)")
-        if points > 0 and size_mb > SIZE_WARN_MB * 0.1:
+        if size_mb > size_warn_mb:
+            warnings.append(f"'{name}' is large: {size_mb} MB (> {size_warn_mb} MB threshold)")
+        if points > 0 and size_mb > size_warn_mb * 0.1:
             kb_per_pt = (size_mb * 1024) / points
-            if kb_per_pt > BLOAT_KB_PER_PT:
+            if kb_per_pt > bloat_kb_per_pt:
                 warnings.append(
                     f"'{name}' is bloated: {size_mb:.0f} MB for {points} pts "
                     f"({kb_per_pt:.0f} KB/pt, normal is 50-400 KB/pt)"
                 )
-        if size_mb > SIZE_WARN_MB and points == 0:
+        if size_mb > size_warn_mb and points == 0:
             warnings.append(f"'{name}' is empty but uses {size_mb} MB (orphan)")
-        if snap_count > SNAPSHOT_WARN_PER_COLL:
-            warnings.append(f"'{name}' has {snap_count} snapshots (> {SNAPSHOT_WARN_PER_COLL})")
+        if snap_count > snapshot_warn_per_coll:
+            warnings.append(f"'{name}' has {snap_count} snapshots (> {snapshot_warn_per_coll})")
 
     if HYATLAS_QDRANT_COLLECTION not in {r["name"] for r in rows}:
         fatal.append(f"production collection '{HYATLAS_QDRANT_COLLECTION}' missing")
 
     total_mb = round(sum(r["size_mb"] for r in rows), 1)
-    total_snaps = sum(r["snapshots"] for r in rows)
+    sum(r["snapshots"] for r in rows)
     snap_total_mb = 0.0
     if qdrant_snapshots.exists():
         for f in qdrant_snapshots.rglob("*.snapshot"):
@@ -364,7 +363,7 @@ def stage_qdrant_health() -> StageResult:
 
     detail_lines = [f"total={total_mb} MB live, {snap_total_mb} MB snapshots across {len(rows)} collection(s)"]
     for r in sorted(rows, key=lambda x: -x["size_mb"]):
-        marker = "✅" if r["expected"] and (r["size_mb"] < SIZE_WARN_MB or r["points"] > 0) else "⚠️ "
+        marker = "✅" if r["expected"] and (r["size_mb"] < size_warn_mb or r["points"] > 0) else "⚠️ "
         detail_lines.append(
             f"  {marker} {r['name']:36s}  pts={r['points']:6d}  size={r['size_mb']:7.1f} MB  snaps={r['snapshots']}"
         )
@@ -467,7 +466,7 @@ def stage_plugin_prefetch() -> StageResult:
         )
     # parse our markers
     reachable = "CLIENT_REACHABLE=True" in out
-    chars_match = [l for l in out.splitlines() if l.startswith("CHARS=")]
+    chars_match = [line for line in out.splitlines() if line.startswith("CHARS=")]
     chars = int(chars_match[0].split("=")[1]) if chars_match else 0
     if not reachable:
         return StageResult(
@@ -538,7 +537,7 @@ def stage_roundtrip(stamp: str) -> StageResult:
                 error="malformed response",
             )
         all_hits = []
-        for ch, items in d["memories"].items():
+        for _ch, items in d["memories"].items():
             if isinstance(items, list):
                 all_hits.extend(items)
         # We don't assert the unique-query returns anything (the
@@ -613,7 +612,7 @@ def stage_layer_coverage() -> StageResult:
             d = json.loads(body)
         except Exception:
             continue
-        for ch, items in (d.get("memories") or {}).items():
+        for _ch, items in (d.get("memories") or {}).items():
             if not isinstance(items, list):
                 continue
             for m in items:
@@ -623,8 +622,8 @@ def stage_layer_coverage() -> StageResult:
     code, body, _ = _http_get(f"http://{HYATLAS_HOST}:{HYATLAS_QDRANT_PORT}/collections/{HYATLAS_QDRANT_COLLECTION}")
     if code == 200:
         try:
-            info = json.loads(body)["result"]
-            for layer_key in ("l0_basic_info", "l1_raw", "l2_fact", "l3_summary", "l4_identity", "l5_knowledge", "l6_schema", "l7_intention"):
+            json.loads(body)["result"]
+            for _layer_key in ("l0_basic_info", "l1_raw", "l2_fact", "l3_summary", "l4_identity", "l5_knowledge", "l6_schema", "l7_intention"):
                 # Qdrant doesn't filter by layer in /collections/{name}, but
                 # the layer_coverage search above already enumerated them.
                 # We don't need a separate count here.
@@ -635,8 +634,8 @@ def stage_layer_coverage() -> StageResult:
         "l0_basic_info", "l1_raw", "l2_fact", "l3_summary",
         "l4_identity", "l5_knowledge", "l6_schema", "l7_intention",
     ]
-    missing = [l for l in all_layers if per_layer.get(l, 0) == 0]
-    present = [l for l in all_layers if per_layer.get(l, 0) > 0]
+    missing = [name for name in all_layers if per_layer.get(name, 0) == 0]
+    present = [name for name in all_layers if per_layer.get(name, 0) > 0]
     lines = ["layer counts across 4 exhaustive queries (search-visible):"]
     for layer in all_layers:
         n = per_layer.get(layer, 0)
@@ -653,7 +652,7 @@ def stage_layer_coverage() -> StageResult:
             n = data.get("node_count", 0)
             if n > 0:
                 lines.append(f"\nNote: l5_knowledge has {n} entities in Kuzu graph but is not surfaced by search reader (architectural gap).")
-                missing = [l for l in missing if l != "l5_knowledge"]
+                missing = [name for name in missing if name != "l5_knowledge"]
         except Exception:
             pass
     if missing:
@@ -864,8 +863,9 @@ def _print_human(report: SmokeReport, as_json: bool = False) -> None:
         print(json.dumps(report.to_dict(), indent=2))
         return
     # human-readable: one block per stage
-    icon = lambda ok: "✅" if ok else "❌"
-    print(f"\nHyAtlas-Memory smoke test")
+    def icon(ok):
+        return "✅" if ok else "❌"
+    print("\nHyAtlas-Memory smoke test")
     print(f"  started:  {report.started_at}")
     print(f"  finished: {report.finished_at}")
     print(f"  total:    {report.total_duration_ms}ms")

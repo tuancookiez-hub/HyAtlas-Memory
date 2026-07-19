@@ -6,6 +6,7 @@ On success, prints one Discord-friendly summary line (for no_agent cron deliver)
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -32,15 +33,11 @@ def _discord_summary(log_text: str, exit_code: int) -> str:
     before = after = None
     for line in log_text.splitlines():
         if line.startswith("BEFORE "):
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 before = json.loads(line[7:])
-            except json.JSONDecodeError:
-                pass
         if line.startswith("AFTER "):
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 after = json.loads(line[6:])
-            except json.JSONDecodeError:
-                pass
     if before and after:
         b = before.get("layer_counts") or {}
         a = after.get("layer_counts") or {}
