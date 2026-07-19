@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.4.4] — 2026-07-19
+
+> **Schema fix: `update_payload` was passing `"embedding"` (a VECTOR field) as a scalar field, triggering `schema validate failed: embedding not found in collection schema` on every reconciler UPDATE operation.** v3.4.3 tried to fix this with a fields-only update path, but the real root cause was upstream — the reconciler in `writer.py:586` was passing `"embedding": new_emb` in the `update_payload` dict, and `update_payload` was putting it in the scalar `clean` dict. zvec's `convert_to_cpp_doc` then tried to validate `"embedding"` as a scalar field, which failed because `embedding` is a VECTOR field.
+
+### Bug fixes
+
+- **`vector_store_zvec.py` — `update_payload()`**: detect `"embedding"` in the updates dict and route it to `update_embedding()` (the dedicated vector update method) instead of trying to pass it as a scalar field. Scalar updates are applied via the fields-only path. This fixes the root cause that v3.4.3's fields-only path was trying to work around.
+- **`core/server.py` — `_json_response()`**: wrap the response write in a try/except for `ConnectionResetError` / `ConnectionAbortedError` / `BrokenPipeError`. The dashboard polls `/api/v1/status` every 5s with a short timeout; when it abandons a request, the server threw `ConnectionAbortedError` and logged a full stack trace. Now it silently drops the response and exits cleanly.
+
+### Verified
+
+- After restart: 7+ minutes with zero `schema validate failed` errors (was ~10 errors per minute before the fix).
+- Health check: `status=ok / vdb=ok / embed=ok / llm=ok / write_pipeline=ok`.
+- Unit tests: 62 passed, 0 failed. ruff: clean.
+
+### Why v3.4.3 didn't fix this
+
+v3.4.3 changed `update_payload` to try a fields-only update first (no vectors passed to zvec.Doc). But the error wasn't coming from the vectors loop — it was coming from the **scalar fields loop** in `convert_to_cpp_doc`. The writer was passing `"embedding"` as a key in the `updates` dict, `update_payload` was putting it in the `clean` (scalar fields) dict, and zvec was trying to find a scalar field named `embedding` — which doesn't exist because `embedding` is a VECTOR field. The fix is to split vector updates from scalar updates at the `update_payload` entry point, not to change how vectors are passed to zvec.Doc.
+
+Upgrade from 3.4.3: `pip install --upgrade --force-reinstall git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git` and restart. No data migration.
+
 ## [3.4.3] — 2026-07-19
 
 > **Stability fix: server crashed via `forrtl: error (200)` (Intel Fortran runtime abort on console-close) when the launcher exited.** `hyatlas start` printed "ready on port 19527" and exited 0, but the server died within seconds because the Intel Fortran runtime (loaded transitively via `libiomp5md.dll` from ctranslate2 / onnxruntime) received a `CTRL_CLOSE_EVENT` when the parent console window closed and aborted the process. v3.4.2 was marked "Latest" on GitHub Releases but did not stay running unattended.

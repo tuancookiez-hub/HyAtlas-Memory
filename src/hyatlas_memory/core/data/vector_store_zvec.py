@@ -415,11 +415,30 @@ class ZvecVectorStore(VectorStoreBase):
             return False
 
     async def update_payload(self, node_id: str, updates: dict[str, Any]) -> bool:
-        """Update only payload fields (vector unchanged)."""
+        """Update only payload fields (vector unchanged).
+
+        If the caller passes ``"embedding"`` in updates (as the reconciler
+        does for in-place UPDATE ops), route it to ``update_embedding``
+        separately — zvec treats ``embedding`` as a VECTOR field, so passing
+        it as a scalar field triggers
+        ``schema validate failed: embedding not found in collection schema``.
+        """
         import json
         import zvec
+
+        # Split vector updates from scalar updates.
+        embedding_update = updates.get("embedding")
+        scalar_updates = {k: v for k, v in updates.items() if k != "embedding"}
+
+        # Apply the embedding update first (if any) via the dedicated path.
+        if embedding_update is not None and isinstance(embedding_update, list):
+            await self.update_embedding(node_id, embedding_update)
+
+        if not scalar_updates:
+            return True
+
         clean = {}
-        for name, val in updates.items():
+        for name, val in scalar_updates.items():
             if val is None:
                 continue
             if name in ("custom", "meta_info") and isinstance(val, (dict, list)):
@@ -440,9 +459,6 @@ class ZvecVectorStore(VectorStoreBase):
             # Payload-only update: pass only scalar fields, omit vectors
             # entirely. zvec's update() touches only the fields you specify,
             # so the existing embedding is preserved untouched on disk.
-            # This avoids the `embedding not found in collection schema`
-            # error that fires when the vector schema lookup fails inside
-            # convert_to_cpp_doc's vectors loop.
             self._coll.update(zvec.DocList([
                 zvec.Doc(id=point_id, fields=clean, vectors=None)
             ]))
@@ -454,7 +470,6 @@ class ZvecVectorStore(VectorStoreBase):
             # schema actually declares a vector named "embedding".
             schema = self._coll.schema
             if schema.vector("embedding") is None:
-                # No vector in schema — fall back to simple update.
                 _update_simple()
                 return
             existing = self._coll.fetch([point_id], include_vector=True)
@@ -473,7 +488,6 @@ class ZvecVectorStore(VectorStoreBase):
             await _run_in_vdb_pool(_update_simple)
             return True
         except Exception as e:
-            # Simple path failed — try the vector-preserving fallback.
             logger.debug(f"[zvec] simple update_payload failed for {node_id}: {e}; trying vector-preserving path")
             try:
                 await _run_in_vdb_pool(_update_with_vector)

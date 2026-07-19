@@ -121,14 +121,20 @@ def _get_client():
 
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, data: Any):
-    """Send a JSON response."""
+    """Send a JSON response. Silently drops the response if the client
+    has already closed the connection (common when the dashboard polls
+    /api/v1/status with a short timeout and abandons the request)."""
     body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Access-Control-Allow-Origin", "*")
-    handler.end_headers()
-    handler.wfile.write(body)
+    try:
+        handler.send_response(status)
+        handler.send_header("Content-Type", "application/json; charset=utf-8")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.send_header("Access-Control-Allow-Origin", "*")
+        handler.end_headers()
+        handler.wfile.write(body)
+    except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+        # Client gone — nothing we can do, just exit cleanly.
+        pass
 
 
 def _read_json_body(handler: BaseHTTPRequestHandler) -> dict | None:
