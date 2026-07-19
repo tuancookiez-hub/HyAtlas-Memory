@@ -1,5 +1,35 @@
 # Changelog
 
+## [3.4.3] — 2026-07-19
+
+> **Stability fix: server crashed via `forrtl: error (200)` (Intel Fortran runtime abort on console-close) when the launcher exited.** `hyatlas start` printed "ready on port 19527" and exited 0, but the server died within seconds because the Intel Fortran runtime (loaded transitively via `libiomp5md.dll` from ctranslate2 / onnxruntime) received a `CTRL_CLOSE_EVENT` when the parent console window closed and aborted the process. v3.4.2 was marked "Latest" on GitHub Releases but did not stay running unattended.
+
+### Bug fixes
+
+- **`_start.py` — `_child_env()`**: set `FOR_DISABLE_CONSOLE_CLOSE_HANDLER=1` in the env passed to all spawned services. This tells the Intel Fortran runtime to ignore `CTRL_CLOSE_EVENT` instead of aborting. Without this, `hyatlas start` reports "ready" but the server dies the moment the launcher exits and its console handle becomes invalid. Verified: server stays up for >2 minutes after launcher exit (was ~15 seconds before the fix).
+- **`vector_store_zvec.py` — `update_payload()`**: try a fields-only update first (no vectors passed). The previous implementation always fetched the existing embedding and re-passed it on every payload update, which triggered `schema validate failed: embedding not found in collection schema` errors inside `convert_to_cpp_doc`'s vectors loop. The fields-only path lets zvec preserve the existing vector on disk untouched. Falls back to the vector-preserving path only if the simple path fails, and only if the schema actually declares a vector named `embedding`.
+- **`integrations.py` — `wire_circuit_breaker()`**: detect `ConnectionResetError` / `ConnectionAbortedError` / `BrokenPipeError` specifically. When the client closes the connection mid-write (e.g. Hermes plugin timed out), the handler now logs at DEBUG and exits cleanly — no longer counts the failure against the circuit breaker, and no longer tries to send a 503 response on the dead socket (which produced a second noisy error log).
+
+### Environment fix (not a code change)
+
+- **`huggingface-hub` version in the user's venv**: v3.4.2 relaxed the `pyproject.toml` pin to `huggingface-hub<1.0,>=0.23.2`, but existing installs still had `huggingface-hub==1.2.3` from before the fix. `transformers==4.46.3` requires `huggingface-hub>=0.23.2,<1.0`, so `import sentence_transformers` failed, `wire_inprocess_embed` bailed out, and the embedder fell back to the OpenAI HTTP API with `BAAI/bge-large-en-v1.5` as the model name — surfacing as `embed: error` with `invalid model ID`. Fix: `pip install 'huggingface-hub>=0.23.2,<1.0' --force-reinstall` (→ 0.36.2). New installs via `pip install git+...` get the correct version from the relaxed pin.
+
+### Verified
+
+- Fresh restart: `hyatlas start` → server ready in 4s, dashboard ready in 1s.
+- Health check at T+0, T+60s, T+120s: `status=ok / vdb=ok / embed=ok / llm=ok / write_pipeline=ok` — stable.
+- Write test: `POST /api/v1/add {"text": "test"}` → `success: true`, `memory_id` returned, `elapsed_ms: 9883` (includes LLM extraction).
+- List test: `POST /api/v1/list` → graph nodes returned from L5 knowledge layer.
+- Dashboard: `GET /api/layer-counts` → L1=933, L2=1892, L3=309, L4=657, L5=1807, L6=580, L7=295, total=6483.
+- Unit tests: `pytest -v -m "not integration"` → 62 passed, 3 skipped, 0 failed.
+- Lint: `ruff check src/ tests/` → all checks passed.
+
+### Why this slipped through
+
+The `forrtl: error (200)` crash only manifests when (a) the launcher process exits and (b) a Fortran-linked library is loaded in the child. CI runs the server in foreground mode (no launcher exit) and the CI environment doesn't have ctranslate2 / onnxruntime installed, so the Fortran runtime is never loaded. The bug only appeared in production on the user's Windows machine where the full embedder + LLM stack pulls in `libiomp5md.dll`.
+
+Upgrade from 3.4.2: `pip install --upgrade --force-reinstall git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git` and restart the stack. If `embed: error` persists after upgrade, run `pip install 'huggingface-hub>=0.23.2,<1.0' --force-reinstall` to fix the version in your existing venv. No data migration.
+
 ## [3.4.2] — 2026-07-19
 
 > **Patch: broken `local-embed` extras pin (`huggingface-hub>=1.5.0,<2.0` was incompatible with the `transformers==4.46.x` runtime).** Anyone who ran `pip install hyatlas-memory[local-embed]` from 3.4.0 / 3.4.1 got a silently broken in-process embedder — `wire_inprocess_embed` would skip via its `except ImportError: return`, and `_embed_openai` would fall through to a default OpenAI HTTP call with `BAAI/bge-large-en-v1.5` as model name and no API key, surfacing as `embed: error` on `/api/v1/status`.

@@ -102,19 +102,33 @@ def wire_circuit_breaker(handler_cls, json_resp_fn):
     """Wrap _handle_add and _handle_search with circuit breaker protection."""
     orig_add = handler_cls._handle_add
 
+    # Errors that mean the client has already closed the connection — the
+    # response write will fail no matter what we do, so don't try to send
+    # a 503 on a dead socket (that just produces a second noisy error log).
+    client_gone = (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)
+
     def patched_add(self, body):
         if not breaker.allow():
             snap = breaker.snapshot()
-            json_resp_fn(self, 503, {
-                "error": "vdb_unavailable",
-                "detail": "circuit breaker OPEN — Qdrant has been failing",
-                "retry_after_s": int(snap["reset_in_s"]) + 1,
-                "breaker": snap,
-            })
+            try:
+                json_resp_fn(self, 503, {
+                    "error": "vdb_unavailable",
+                    "detail": "circuit breaker OPEN — Qdrant has been failing",
+                    "retry_after_s": int(snap["reset_in_s"]) + 1,
+                    "breaker": snap,
+                })
+            except client_gone:
+                logger.debug("[breaker] client gone before 503 could be sent")
             return
         try:
             orig_add(self, body)
             breaker.record_success()
+        except client_gone as e:
+            # Client closed the connection mid-write. Not a server fault —
+            # don't count it against the breaker, don't try to respond on
+            # the dead socket, just log at debug and move on.
+            breaker.record_success()
+            logger.debug("[breaker] _handle_add client gone: %s", e)
         except Exception as e:
             breaker.record_failure()
             logger.exception("[breaker] _handle_add failed: %s", e)
@@ -124,6 +138,8 @@ def wire_circuit_breaker(handler_cls, json_resp_fn):
                     "detail": str(e)[:200],
                     "breaker": breaker.snapshot(),
                 })
+            except client_gone:
+                logger.debug("[breaker] client gone before 503 could be sent")
             except Exception:
                 logger.error("[breaker] failed to send 503; thread continuing")
 

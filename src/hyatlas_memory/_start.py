@@ -209,6 +209,13 @@ def _child_env() -> dict[str, str]:
     # already runs L5 inside digest, so spawning the batch pipeline is redundant
     # and always fails to stop the server.
     env["MEMORY_L5_AUTO"] = "false"
+    # Intel Fortran runtime (loaded via libiomp5md.dll from ctranslate2 /
+    # onnxruntime) aborts the process with `forrtl: error (200)` when the
+    # parent console window closes. Setting FOR_DISABLE_CONSOLE_CLOSE_HANDLER=1
+    # tells the runtime to ignore CTRL_CLOSE_EVENT instead of crashing.
+    # Without this, `hyatlas start` prints "ready" but the server dies the
+    # moment the launcher exits and its console handle becomes invalid.
+    env["FOR_DISABLE_CONSOLE_CLOSE_HANDLER"] = "1"
     return env
 
 

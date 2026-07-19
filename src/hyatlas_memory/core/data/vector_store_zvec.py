@@ -435,24 +435,52 @@ class ZvecVectorStore(VectorStoreBase):
                 clean[name] = str(val) if val != "" else None
 
         point_id = self._node_id_to_point_id(node_id)
+
+        def _update_simple():
+            # Payload-only update: pass only scalar fields, omit vectors
+            # entirely. zvec's update() touches only the fields you specify,
+            # so the existing embedding is preserved untouched on disk.
+            # This avoids the `embedding not found in collection schema`
+            # error that fires when the vector schema lookup fails inside
+            # convert_to_cpp_doc's vectors loop.
+            self._coll.update(zvec.DocList([
+                zvec.Doc(id=point_id, fields=clean, vectors=None)
+            ]))
+            self._coll.flush()
+
+        def _update_with_vector():
+            # Fallback: some zvec versions require the vector on update.
+            # Fetch the existing embedding and re-pass it, but only if the
+            # schema actually declares a vector named "embedding".
+            schema = self._coll.schema
+            if schema.vector("embedding") is None:
+                # No vector in schema — fall back to simple update.
+                _update_simple()
+                return
+            existing = self._coll.fetch([point_id], include_vector=True)
+            vectors = None
+            doc = existing.get(point_id) if existing else None
+            if doc is not None and getattr(doc, "vectors", None):
+                vec = doc.vectors.get("embedding")
+                if vec is not None:
+                    vectors = {"embedding": vec}
+            self._coll.update(zvec.DocList([
+                zvec.Doc(id=point_id, fields=clean, vectors=vectors)
+            ]))
+            self._coll.flush()
+
         try:
-            def _update():
-                # zvec requires the full doc shape on update — fetch the existing
-                # embedding so a payload-only update doesn't trip schema validation.
-                existing = self._coll.fetch([point_id], include_vector=True)
-                vectors = None
-                doc = existing.get(point_id) if existing else None
-                if doc is not None and getattr(doc, "vectors", None):
-                    vectors = {"embedding": doc.vectors.get("embedding")}
-                self._coll.update(zvec.DocList([
-                    zvec.Doc(id=point_id, fields=clean, vectors=vectors)
-                ]))
-                self._coll.flush()
-            await _run_in_vdb_pool(_update)
+            await _run_in_vdb_pool(_update_simple)
             return True
         except Exception as e:
-            logger.warning(f"[zvec] Failed to update payload for {node_id}: {e}")
-            return False
+            # Simple path failed — try the vector-preserving fallback.
+            logger.debug(f"[zvec] simple update_payload failed for {node_id}: {e}; trying vector-preserving path")
+            try:
+                await _run_in_vdb_pool(_update_with_vector)
+                return True
+            except Exception as e2:
+                logger.warning(f"[zvec] Failed to update payload for {node_id}: {e2}")
+                return False
 
     # ================================================================
     # Search
