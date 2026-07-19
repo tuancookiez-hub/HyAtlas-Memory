@@ -2,7 +2,7 @@
 
 A personal, local, single-user long-term memory stack for Hermes Agent — built by forking the Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan) and refining it into something tuned for one person's daily, multi-session use. Includes the experimental L7 intention layer. Apache 2.0 licensed.
 
-> **v3.4.2** — Patch: broken `local-embed` extras pin (`huggingface-hub>=1.5.0,<2.0` was incompatible with `transformers==4.46.x`, so the in-process embedder silently fell back to HTTP and surfaced as `embed: error`). Fixed by pinning `huggingface-hub<1.0,>=0.23.2` to match the runtime. Upgrade: `pip install -U -e ".[local-embed]"`. See [CHANGELOG](./CHANGELOG.md).
+> **v3.4.2** — Patch: broken `local-embed` extras pin (`huggingface-hub>=1.5.0,<2.0` was incompatible with `transformers==4.46.x`, so the in-process embedder silently fell back to HTTP and surfaced as `embed: error`). Fixed by pinning `huggingface-hub<1.0,>=0.23.2` to match the runtime. Upgrade: `pip install --upgrade --force-reinstall git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git`. See [CHANGELOG](./CHANGELOG.md).
 
 <p align="center">
   <img src="./assets/hyatlas-v3.4.0-banner.jpeg" alt="HyAtlas v3.4.0: Profile isolation in the dashboard + L1_RAW transparency — 8 panels covering the headline features" width="100%" />
@@ -41,9 +41,7 @@ See it in action — a 19-second walkthrough of the live dashboard:
 ## Quick start
 
 ```bash
-git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
-cd HyAtlas-Memory
-pip install -e .
+pip install git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 hyatlas setup hermes -y   # plugin shim + memory.provider=hy_memory + stack check
 ```
 
@@ -460,7 +458,7 @@ assets/                    # infographic images
 ## Development
 
 ```bash
-# 1. Clone + editable install
+# 1. Clone for editable development
 git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 cd HyAtlas-Memory
 pip install -e ".[dev,test]"
@@ -477,6 +475,8 @@ mypy src/
 pip install -e . --force-reinstall
 ```
 
+End users who just want to run it should follow [Quick start](#quick-start) — one command, no clone.
+
 ## Migration from in-fork plugin
 
 If you were running the previous in-fork version (`plugins/memory/hy_memory/` inside the hermes-agent fork):
@@ -485,10 +485,8 @@ If you were running the previous in-fork version (`plugins/memory/hy_memory/` in
 # 1. Backup the old plugin dir
 mv hermes-agent/plugins/memory/hy_memory ~/hy_memory_archive_$(date +%Y%m%d)
 
-# 2. Install this package
-git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
-cd HyAtlas-Memory
-pip install -e .
+# 2. Install this package (same one-command install as Quick start)
+pip install --force-reinstall git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 
 # 3. Your config and data stay where they were
 #    ~/.hyatlas/        (config, data, logs, Kuzu DB, Zvec store)
