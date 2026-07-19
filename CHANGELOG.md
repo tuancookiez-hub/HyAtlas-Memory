@@ -9,6 +9,12 @@
 - **`vector_store_zvec.py` — `update_payload()`**: detect `"embedding"` in the updates dict and route it to `update_embedding()` (the dedicated vector update method) instead of trying to pass it as a scalar field. Scalar updates are applied via the fields-only path. This fixes the root cause that v3.4.3's fields-only path was trying to work around.
 - **`core/server.py` — `_json_response()`**: wrap the response write in a try/except for `ConnectionResetError` / `ConnectionAbortedError` / `BrokenPipeError`. The dashboard polls `/api/v1/status` every 5s with a short timeout; when it abandons a request, the server threw `ConnectionAbortedError` and logged a full stack trace. Now it silently drops the response and exits cleanly.
 
+### Docker (zvec-native)
+
+- **`Dockerfile` / `docker-compose.yml` / `docker/entrypoint.sh`**: replace legacy Qdrant multi-service compose with a single **zvec** stack (API + dashboard). Binds `0.0.0.0` inside the container; data in volume `hyatlas_data` → `/data/hyatlas` (`HYATLAS_HOME`). Optional `--profile local-embed` builds with `[local-embed]`. Default image uses remote OpenAI-compatible embeddings (small).
+- **`.env.example` / `hy_memory.json.example`**: aligned to zvec (no Qdrant host/port).
+- **README Path A**: Docker docs updated; Qdrant compose path removed.
+
 ### Verified
 
 - After restart: 7+ minutes with zero `schema validate failed` errors (was ~10 errors per minute before the fix).

@@ -1,48 +1,92 @@
-# LEGACY: Qdrant-based compose for migration reference only.
-# Default local stack: `hyatlas start` (zvec in-process, no Qdrant sidecar).
-services:
-  qdrant:
-    image: qdrant/qdrant:latest
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:6333/healthz"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
+# HyAtlas Memory — Docker (zvec-native, v3.4+)
+#
+# No Qdrant sidecar. Vector store is in-process zvec; graph is Kuzu on the
+# HYATLAS_HOME volume. Native path remains: `hyatlas start` on the host.
+#
+# Usage:
+#   cp .env.example .env   # set HY_MEMORY_LLM_API_KEY
+#   docker compose up -d --build
+#   curl http://127.0.0.1:19527/api/v1/status
+#   open http://127.0.0.1:8765
+#
+# Optional local embeddings (large image):
+#   docker compose --profile local-embed up -d --build
 
-  server:
-    build: .
+services:
+  hyatlas:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_LOCAL_EMBED: "0"
+    image: hyatlas-memory:3.4.4
+    container_name: hyatlas-memory
     ports:
       - "19527:19527"
-    depends_on:
-      qdrant:
-        condition: service_healthy
-    environment:
-      - QDRANT_URL=http://qdrant:6333
-      - MEMORY_VECTOR_HOST=qdrant
-      - MEMORY_VECTOR_PORT=6333
-    volumes:
-      - hy_memory_data:/root/.hy_memory
-      - hermes_config:/root/.hermes
-    restart: unless-stopped
-
-  dashboard:
-    build: .
-    command: ["python", "-m", "hyatlas_memory.server.dashboard.dashboard"]
-    ports:
       - "8765:8765"
-    depends_on:
-      - server
     environment:
-      - HY_MEMORY_BASE=http://server:19527
+      HYATLAS_HOME: /data/hyatlas
+      HY_MEMORY_HOST: "0.0.0.0"
+      HY_MEMORY_PORT: "19527"
+      HY_DASH_BIND: "0.0.0.0"
+      HY_DASH_PORT: "8765"
+      HY_MEMORY_BASE: "http://127.0.0.1:19527"
+      HY_MEMORY_LLM_API_KEY: ${HY_MEMORY_LLM_API_KEY:-}
+      HY_MEMORY_LLM_MODEL: ${HY_MEMORY_LLM_MODEL:-gpt-4o-mini}
+      HY_MEMORY_LLM_BASE_URL: ${HY_MEMORY_LLM_BASE_URL:-https://api.openai.com/v1}
+      HY_MEMORY_EMBEDDER_PROVIDER: ${HY_MEMORY_EMBEDDER_PROVIDER:-remote}
+      HY_MEMORY_EMBEDDER_MODEL: ${HY_MEMORY_EMBEDDER_MODEL:-text-embedding-3-small}
+      HY_MEMORY_EMBEDDER_DIMS: ${HY_MEMORY_EMBEDDER_DIMS:-1536}
+      HY_MEMORY_EMBEDDER_API_KEY: ${HY_MEMORY_EMBEDDER_API_KEY:-${HY_MEMORY_LLM_API_KEY:-}}
+      MEMORY_MODE: ${MEMORY_MODE:-ultra}
+      FOR_DISABLE_CONSOLE_CLOSE_HANDLER: "1"
+    volumes:
+      - hyatlas_data:/data/hyatlas
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:19527/api/v1/status"]
+      interval: 15s
+      timeout: 5s
+      start_period: 45s
+      retries: 8
+
+  # Same stack with sentence-transformers baked in (slower build / larger image).
+  hyatlas-local-embed:
+    profiles: ["local-embed"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_LOCAL_EMBED: "1"
+    image: hyatlas-memory:3.4.4-local-embed
+    container_name: hyatlas-memory-local-embed
+    ports:
+      - "19527:19527"
+      - "8765:8765"
+    environment:
+      HYATLAS_HOME: /data/hyatlas
+      HY_MEMORY_HOST: "0.0.0.0"
+      HY_MEMORY_PORT: "19527"
+      HY_DASH_BIND: "0.0.0.0"
+      HY_DASH_PORT: "8765"
+      HY_MEMORY_BASE: "http://127.0.0.1:19527"
+      HY_MEMORY_LLM_API_KEY: ${HY_MEMORY_LLM_API_KEY:-}
+      HY_MEMORY_LLM_MODEL: ${HY_MEMORY_LLM_MODEL:-gpt-4o-mini}
+      HY_MEMORY_LLM_BASE_URL: ${HY_MEMORY_LLM_BASE_URL:-https://api.openai.com/v1}
+      HY_MEMORY_EMBEDDER_PROVIDER: local
+      HY_MEMORY_EMBEDDER_MODEL: ${HY_MEMORY_EMBEDDER_MODEL:-BAAI/bge-large-en-v1.5}
+      HY_MEMORY_EMBEDDER_DIMS: ${HY_MEMORY_EMBEDDER_DIMS:-1024}
+      MEMORY_MODE: ${MEMORY_MODE:-ultra}
+      FOR_DISABLE_CONSOLE_CLOSE_HANDLER: "1"
+    volumes:
+      - hyatlas_data:/data/hyatlas
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:19527/api/v1/status"]
+      interval: 15s
+      timeout: 5s
+      start_period: 90s
+      retries: 10
 
 volumes:
-  qdrant_data:
-  hy_memory_data:
-  hermes_config:
+  hyatlas_data:

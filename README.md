@@ -97,7 +97,7 @@ hyatlas status          # port health table (short timeouts)
 
 **Vector store:** **Zvec** is the default (v3.1+). Qdrant is **migration/archive only** — see [docs/CLEANUP.md](docs/CLEANUP.md).
 
-**Want Docker instead?** See [Path A — Docker (legacy)](#path-a--docker-legacy-qdrant-compose) below.
+**Want Docker instead?** See [Path A — Docker (zvec)](#path-a--docker-zvec) below.
 
 **Configure LLM (needed for pro/ultra fact extraction):** edit `~/.hyatlas/config/hy_memory.json` (or set `HY_MEMORY_LLM_API_KEY`):
 
@@ -124,53 +124,60 @@ hyatlas status          # port health table (short timeouts)
 
 ---
 
-### Path A — Docker (legacy Qdrant compose)
+### Path A — Docker (zvec)
 
-> **Prefer native:** `hyatlas start` (Zvec). The compose file is kept for **migration reference** only — see header in `docker-compose.yml`.
-
-For users who still run the old Qdrant-based compose:
+> **Native is still preferred on Windows/dev:** `hyatlas start` (Zvec in-process).  
+> Docker is for clean isolation / Linux hosts. **No Qdrant sidecar** (v3.4+).
 
 ```bash
-# 1. Get docker-compose.yml (one-time)
-curl -O https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/docker-compose.yml
+# 1. Clone (or copy Dockerfile + docker-compose.yml + docker/)
+git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
+cd HyAtlas-Memory
 
-# 2. Configure your LLM key (one-time)
-echo 'HY_MEMORY_LLM_API_KEY=***' > .env
+# 2. Configure LLM key (one-time)
+cp .env.example .env
+# edit .env → set HY_MEMORY_LLM_API_KEY=...
 
-# 3. Start the stack (legacy: Qdrant + server + dashboard)
-docker-compose up -d
+# 3. Build + start (API :19527 + dashboard :8765)
+docker compose up -d --build
 
-# 4. Wait ~15s, then verify
+# 4. Verify
+curl http://127.0.0.1:19527/api/v1/status
 curl http://127.0.0.1:8765/api/health
-curl http://127.0.0.1:19527/info
 
 # 5. Open the dashboard
 open http://127.0.0.1:8765
 ```
 
+**Default image** uses **remote OpenAI-compatible embeddings** (small).  
+For **local BGE** (larger image, needs `[local-embed]`):
+
+```bash
+docker compose --profile local-embed up -d --build
+```
+
 **Common commands:**
 
 ```bash
-docker-compose ps           # what's running
-docker-compose logs -f      # follow all logs (Ctrl+C to exit)
-docker-compose restart      # restart everything
-docker-compose down         # stop (keeps data)
-docker-compose down -v      # stop AND wipe all data
+docker compose ps
+docker compose logs -f
+docker compose restart
+docker compose down          # stop (keeps volume)
+docker compose down -v       # stop AND wipe hyatlas_data
 ```
 
-Data lives in `./qdrant_storage` and `~/.hyatlas` (mounted to the host), so it survives `docker-compose down`. To fully reset, use `down -v`.
+Data lives in the Docker volume `hyatlas_data` → `/data/hyatlas` (`HYATLAS_HOME`):
+config, zvec collection, Kuzu graph, logs. Survives `down`; wiped only with `-v`.
 
 ### What's running where
 
 | Service | Port | URL | Purpose |
 |---|---|---|---|
 | Zvec (in-process) | — | (no HTTP) | Default vector store (v3.1+) |
-| Upstream hy-memory | 19527 | `http://127.0.0.1:19527/info` | Embedding + LLM extraction + search + graph |
+| Upstream hy-memory | 19527 | `http://127.0.0.1:19527/api/v1/status` | Embedding + LLM extraction + search + graph |
 | HyAtlas dashboard | 8765 | `http://127.0.0.1:8765` | Web UI: explore, observe, manage |
 
-Legacy Qdrant sidecar (compose / migration only): port **6333**.
-
-The dashboard is the main thing you'll interact with. The other two are infrastructure.
+The dashboard is the main thing you'll interact with. Zvec has no separate port.
 
 ---
 

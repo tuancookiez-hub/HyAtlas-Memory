@@ -21,4 +21,4 @@ hyatlas status
 
 ## Repo hygiene
 - Superseded planning docs live under `docs/archive/` (not deleted — historical).
-- `docker-compose.yml` is **legacy Qdrant compose**; local dev uses `hyatlas start` (zvec).
+- **`docker-compose.yml` (v3.4.4+)** is **zvec-native** (no Qdrant service). Prefer native `hyatlas start` on Windows/dev; use Compose for Linux isolation.
