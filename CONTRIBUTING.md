@@ -321,7 +321,9 @@ The maintainer (currently [@TunaDev](https://github.com/tuancookiez-hub)) cuts r
 2. Update `CHANGELOG.md` with the release notes
 3. Tag the commit: `git tag -a v0.X.0 -m "Release 0.X.0"`
 4. Push the tag: `git push origin v0.X.0`
-5. Build and publish to PyPI: `uv build && uv publish`
+5. Create the GitHub Release page from the tag (the maintainer runs `gh release create v0.X.0 --notes-file CHANGELOG-snippet.md --target <sha>`)
+
+Note: This project does not publish to PyPI. The only install path is `pip install git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git`, so releases are distributed via Git tags + the GitHub Releases page.
 
 ## License
 

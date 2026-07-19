@@ -1,8 +1,9 @@
 """Self-contained startup script for the HyAtlas-Memory stack.
 
 Bundled inside the package so `hyatlas start` works from any directory
-after `pip install hyatlas-memory`. The project root (containing the
-``server/`` directory) is resolved via, in order:
+after `pip install git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git`.
+The project root (containing the ``server/`` directory) is resolved via,
+in order:
 
   1. ``HYATLAS_PROJECT_ROOT`` env var (explicit)
   2. Current working directory (works when run from a cloned repo)
@@ -42,9 +43,9 @@ def _resolve_project_root() -> str | None:
 
     1. ``HYATLAS_PROJECT_ROOT`` env var (explicit override, legacy)
     2. The package install directory itself — where ``server/`` is bundled.
-       Works for both ``pip install hyatlas-memory`` (PyPI wheel) and
-       ``pip install -e .`` (editable), because in both cases
-       ``server/`` sits next to ``_start.py`` inside the package.
+           Works for both ``pip install git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git``
+           and ``pip install -e .`` (editable), because in both cases
+           ``server/`` sits next to ``_start.py`` inside the package.
     3. Legacy: walk up from CWD looking for a ``server/`` dir, for
        old repo layouts where ``server/`` was at the project root.
     """
@@ -53,7 +54,7 @@ def _resolve_project_root() -> str | None:
     if env_root and os.path.isdir(os.path.join(env_root, "server")):
         return os.path.abspath(env_root)
 
-    # 2. Package install dir (works for both PyPI and editable installs).
+    # 2. Package install dir (works for both git+https install and editable).
     #    __file__ = <pkg_root>/hyatlas_memory/_start.py
     #    dirname(__file__) = <pkg_root>/hyatlas_memory/  ← this is the dir
     #                                                 with server/ bundled inside

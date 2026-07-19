@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """HyAtlas-Memory — thin wrapper around the installed ``hyatlas_memory._start``.
 
-Usage (after ``pip install hyatlas-memory`` or ``pip install -e .``):
+Usage (after ``pip install git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git``
+or ``pip install -e .``):
     python start.py            # start everything
     python start.py --stop     # stop everything
     python start.py --status   # check what's running
@@ -19,7 +20,7 @@ except ImportError:
     sys.stderr.write(
         "Error: hyatlas-memory is not installed in this Python environment.\n"
         "  Install with: pip install -e .   (from the repo root)\n"
-        "            or: pip install hyatlas-memory\n"
+        "            or: pip install git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git\n"
     )
     sys.exit(1)
 
