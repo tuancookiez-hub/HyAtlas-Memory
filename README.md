@@ -60,6 +60,15 @@ The first Hermes session after setup also auto-starts the stack when the provide
 
 **Hermes identity:** `user_id=hermes-user`, `agent_id=default` — [docs/HYATLAS_HERMES.md](docs/HYATLAS_HERMES.md). Weekly digest + L6 graph notes live there too.
 
+**Make Hermes aware of HyAtlas-Memory:** if you want your Hermes Agent to know how to install, use, and troubleshoot this stack, copy the skill into your Hermes skills directory:
+
+```bash
+mkdir -p ~/.hermes/skills/hyatlas-memory
+cp docs/SKILL.md ~/.hermes/skills/hyatlas-memory/SKILL.md
+```
+
+Restart Hermes so it picks up the new skill. See [docs/SKILL.md](docs/SKILL.md) for the full content.
+
 **Stack helpers:**
 
 ```bash
