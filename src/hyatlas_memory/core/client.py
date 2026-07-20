@@ -116,10 +116,10 @@ class _LoopThread:
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
 
-    def run(self, coro):
+    def run(self, coro, timeout: float = 300):
         """在后台 loop 中运行协程，同步等待结果"""
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result()
+        return future.result(timeout=timeout)
 
     async def run_async(self, coro):
         """

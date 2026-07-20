@@ -332,6 +332,8 @@ class LLMProvider:
             client = AsyncOpenAI(
                 api_key=self._llm_config.api_key,
                 base_url=self._llm_config.base_url or None,
+                timeout=self._llm_config.timeout,
+                max_retries=0,
             )
 
             # 构建请求参数，确保有 system 消息（部分内部平台要求）
@@ -421,6 +423,8 @@ class LLMProvider:
         client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url if base_url.endswith("/v1") else f"{base_url}/v1",
+            timeout=self._llm_config.timeout,
+            max_retries=0,
         )
 
         messages = [
@@ -567,6 +571,8 @@ class LLMProvider:
         client = AsyncOpenAI(
             api_key=self._llm_config.api_key,
             base_url=self._llm_config.base_url or None,
+            timeout=self._llm_config.timeout,
+            max_retries=0,
         )
 
         # 确保有 system 消息
@@ -641,6 +647,8 @@ class LLMProvider:
         client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url if base_url.endswith("/v1") else f"{base_url}/v1",
+            timeout=self._llm_config.timeout,
+            max_retries=0,
         )
 
         # 确保有 system 消息

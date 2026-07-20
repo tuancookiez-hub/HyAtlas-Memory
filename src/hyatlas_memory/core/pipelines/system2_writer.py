@@ -658,6 +658,16 @@ class System2Writer(WritePipeline):
                 "results": results,
             }
 
+        # Skip sweeper when agent was skipped (no clusters to sweep)
+        if isinstance(agent, dict) and agent.get("skipped"):
+            return {
+                "success": True,
+                "request_id": request_id,
+                "tasks_processed": 0,
+                "results": results,
+                "cross_domain_sweeper": {"skipped": True, "reason": agent.get("reason", "agent_skipped")},
+            }
+
         # Cross-domain sweeper（在 System2 之后执行一次）
         sweeper_result = await self._run_cross_domain_sweeper(
             user_id=user_id,

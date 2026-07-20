@@ -342,7 +342,9 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             checks["vdb"] = "ok"
             checks["vdb_provider"] = client._config.vector_store.provider
             checks["vdb_collection"] = client._vector_store._collection_name
-            checks["vdb_points"] = stats.get("points_count", stats.get("vectors_count", "?"))
+            checks["vdb_points"] = stats.get(
+                "points_count", stats.get("vectors_count", stats.get("doc_count", "?"))
+            )
         except Exception as e:
             checks["vdb"] = f"error: {e}"
             checks["vdb_provider"] = client._config.vector_store.provider
