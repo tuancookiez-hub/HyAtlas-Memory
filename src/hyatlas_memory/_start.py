@@ -82,7 +82,7 @@ UPSTREAM_PORT = int(os.environ.get("UPSTREAM_PORT", 19527))
 DASHBOARD_PORT = int(os.environ.get("DASHBOARD_PORT", 8765))
 
 HEALTH_TIMEOUT = 2          # seconds per health-check attempt
-HEALTH_RETRIES = 20         # max attempts per service (upstream needs ~15s)
+HEALTH_RETRIES = 45         # max attempts per service (BGE cold load needs ~60-90s)
 HEALTH_DELAY = 1            # seconds between retries
 
 

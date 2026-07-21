@@ -2,6 +2,16 @@
 """Start hy_memory.server with the correct config from hy_memory.json."""
 import json
 import os
+import sys
+
+# pythonw.exe has no console — sys.stdout/stderr are None.
+# Redirect to a log file so print() calls don't crash.
+if sys.stdout is None:
+    _log_dir = os.path.join(os.environ.get("HYATLAS_HOME", os.path.expanduser("~/.hyatlas")), "logs")
+    os.makedirs(_log_dir, exist_ok=True)
+    _f = open(os.path.join(_log_dir, "server_stdout.log"), "a", encoding="utf-8")
+    sys.stdout = _f
+    sys.stderr = _f
 
 from hyatlas_memory import layout
 
