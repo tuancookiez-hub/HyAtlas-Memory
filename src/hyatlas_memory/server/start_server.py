@@ -9,7 +9,7 @@ import sys
 if sys.stdout is None:
     _log_dir = os.path.join(os.environ.get("HYATLAS_HOME", os.path.expanduser("~/.hyatlas")), "logs")
     os.makedirs(_log_dir, exist_ok=True)
-    _f = open(os.path.join(_log_dir, "server_stdout.log"), "a", encoding="utf-8")
+    _f = open(os.path.join(_log_dir, "server_stdout.log"), "a", encoding="utf-8")  # noqa: SIM115
     sys.stdout = _f
     sys.stderr = _f
 
