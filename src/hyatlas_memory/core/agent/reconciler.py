@@ -1044,8 +1044,14 @@ class MemoryReconciler:
 
     @staticmethod
     def _strip_code_fence(text: str) -> str:
-        """剥掉 ```json ... ``` / ``` ... ``` markdown 围栏，返回内层内容。"""
+        """剥掉 ```json ... ``` / ``` ... ``` markdown 围栏，返回内层内容。
+
+        同时剥掉推理模型（如 MiniMax-M3）可能混入 content 的  块，
+        避免思考过程污染 JSON 解析。
+        """
         text = (text or "").strip()
+        # 先剥掉  推理块（reasoning models 可能把它塞进 content）
+        text = re.sub(r"", "", text, flags=re.DOTALL).strip()
         if "```json" in text:
             return text.split("```json")[1].split("```")[0].strip()
         elif "```" in text:
