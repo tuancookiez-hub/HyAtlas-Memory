@@ -222,6 +222,14 @@ def main(argv: list[str] | None = None) -> int:
     p_console = sub.add_parser("console", help="Show live status console (Ctrl+C to exit)")
     p_console.set_defaults(func=lambda _: _memory_cli._cmd_console(argparse.Namespace(no_start=False)))
 
+    p_venv = sub.add_parser("venv", help="Manage the dedicated HyAtlas venv (dependency isolation)")
+    venv_sub = p_venv.add_subparsers(dest="venv_cmd", required=True)
+    p_venv_setup = venv_sub.add_parser(
+        "setup",
+        help="Create $HYATLAS_HOME/venv with isolated deps (fixes embedder conflicts + orphan windows)",
+    )
+    p_venv_setup.set_defaults(func=lambda _: _start._venv_cli(["setup"]))
+
     args = parser.parse_args(filtered)
     if getattr(args, "func", None) is _run_start:
         if not getattr(args, "detach", False):

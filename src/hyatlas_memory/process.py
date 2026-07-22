@@ -131,25 +131,21 @@ def _service_env(home: Path) -> dict[str, str]:
     env["HERMES_HOME"] = str(home)
     env.setdefault("HYATLAS_HOME", str(layout.home()))
     env.pop("PYTHONHOME", None)
-    # When services are spawned via the base pythonw.exe (see _python),
-    # that interpreter does not know about the venv's site-packages.
-    # Prepend the current venv's site-packages AND the editable-install
-    # source dir to PYTHONPATH so every dependency (zvec, transformers,
-    # kuzu, ...) and hyatlas_memory itself still resolves. (.pth files
-    # in site-packages are NOT processed for PYTHONPATH entries, so the
-    # editable source dir must be added explicitly.)
-    if sys.platform == "win32" and getattr(sys, "_base_executable", None):
-        paths = []
-        sp = os.path.join(sys.prefix, "Lib", "site-packages")
-        if os.path.isdir(sp):
-            paths.append(sp)
-        # __file__ is .../src/hyatlas_memory/process.py → parent.parent = src/
-        src = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        if os.path.isdir(src):
-            paths.append(src)
-        if paths:
-            existing = env.get("PYTHONPATH", "")
-            env["PYTHONPATH"] = os.pathsep.join(paths) + (os.pathsep + existing if existing else "")
+    # Intel Fortran runtime (via ctranslate2/onnxruntime) aborts on console
+    # close; tell it to ignore CTRL_CLOSE_EVENT so detached services survive.
+    env["FOR_DISABLE_CONSOLE_CLOSE_HANDLER"] = "1"
+    # Set PYTHONPATH for the dedicated venv's base pythonw interpreter, which
+    # cannot read pyvenv.cfg to find the venv's site-packages. We REPLACE any
+    # inherited PYTHONPATH: the Hermes shell exports one pointing at the Hermes
+    # venv's site-packages, which would re-introduce the very dependency
+    # conflict (huggingface-hub 1.x from faster-whisper) the dedicated venv
+    # exists to avoid. When no dedicated venv exists, scrub PYTHONPATH so the
+    # current interpreter's own resolution is used cleanly.
+    venv_paths = layout.venv_pythonpath()
+    if venv_paths:
+        env["PYTHONPATH"] = os.pathsep.join(venv_paths)
+    else:
+        env.pop("PYTHONPATH", None)
     return env
 
 
@@ -174,12 +170,17 @@ class StackManager:
         return layout.read_config()
 
     def _python(self) -> str:
-        # On Windows the venv shim (python.exe) re-execs to a console-
-        # subsystem base python, which makes Windows allocate a COM console
-        # (the blank window the user sees on plugin auto-start). Spawn the
-        # base pythonw.exe instead — it is GUI-subsystem, so no console is
-        # ever allocated. _service_env puts the venv site-packages on
-        # PYTHONPATH so the base interpreter still finds every dependency.
+        # Prefer the dedicated HyAtlas venv's interpreter. Its deps are
+        # isolated from the host app (no huggingface-hub conflict), and on
+        # Windows we want its pythonw.exe (GUI subsystem — never allocates the
+        # blank orphan console window the user used to see on auto-start).
+        venv_py = layout.venv_python(gui=True)
+        if venv_py:
+            return venv_py
+        # Fallback: no dedicated venv. On Windows the venv shim (python.exe)
+        # re-execs to a console-subsystem base python, which makes Windows
+        # allocate a COM console. Spawn the base pythonw.exe instead so no
+        # console is ever allocated.
         if sys.platform == "win32":
             base = getattr(sys, "_base_executable", None)
             if base and base != sys.executable:

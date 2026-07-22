@@ -1058,6 +1058,26 @@ class MemoryReconciler:
             return text.split("```")[1].split("```")[0].strip()
         return text
 
+    @staticmethod
+    def _loads(text: str):
+        """json.loads with a repair fallback for common LLM output artifacts.
+
+        LLMs frequently emit trailing commas (``[{"op": "ADD",},]``) or a
+        stray comma before a closing bracket. Strict ``json.loads`` rejects
+        these and the reconcile op is silently dropped (data loss). We try
+        strict parse first, then strip trailing commas and retry. Returns the
+        parsed object or raises ``json.JSONDecodeError`` if unrecoverable.
+        """
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            # Drop commas that sit directly before a closing ] or } (with
+            # optional whitespace/newlines between). This is the single most
+            # common LLM JSON defect and is safe: a trailing comma is never
+            # valid JSON, so removing it cannot corrupt well-formed input.
+            repaired = re.sub(r",\s*([}\]])", r"\1", text)
+            return json.loads(repaired)
+
     def _parse_ops(self, text: str) -> list[ReconcileOp]:
         """
         解析 LLM 返回的 RECONCILE 输出。
@@ -1071,12 +1091,12 @@ class MemoryReconciler:
         text = self._strip_code_fence(text)
 
         try:
-            data = json.loads(text)
+            data = self._loads(text)
         except json.JSONDecodeError:
             match = re.search(r"\[.*\]", text, re.DOTALL)
             if match:
                 try:
-                    data = json.loads(match.group())
+                    data = self._loads(match.group())
                 except json.JSONDecodeError:
                     logger.warning(
                         f"[reconciler] failed to parse ops JSON: {text[:200]}"

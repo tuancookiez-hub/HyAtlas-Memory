@@ -23,6 +23,93 @@ def home() -> Path:
     return Path.home() / ".hyatlas"
 
 
+def venv_python(*, gui: bool = True) -> str | None:
+    """Return the dedicated HyAtlas venv interpreter, or None if absent.
+
+    HyAtlas ships its own venv at ``$HYATLAS_HOME/venv`` so its heavy
+    dependencies (sentence-transformers, torch, transformers, zvec) never
+    fight the host application's packages in a shared environment — e.g.
+    Hermes's ``faster-whisper`` pins ``huggingface-hub>=1.0`` while the local
+    BGE embedder needs ``<1.0``; the two cannot coexist in one venv. Running
+    the stack from its own venv removes that conflict entirely and also gives
+    a clean GUI-subsystem ``pythonw.exe`` (no orphan console windows).
+
+    ``gui=True`` prefers the base ``pythonw.exe`` on Windows (GUI subsystem —
+    never allocates a console). The venv's own ``Scripts/pythonw.exe`` is a
+    small uv shim that re-execs to the base ``python.exe`` (console subsystem),
+    which would allocate a COM console and leave a blank orphan window. So we
+    read ``pyvenv.cfg`` to find the base interpreter dir and use its real
+    ``pythonw.exe`` directly. Callers must put the venv's site-packages on
+    ``PYTHONPATH`` (see ``venv_site_packages``) so the base interpreter finds
+    every dependency.
+
+    Returns None when no dedicated venv exists, letting callers fall back to
+    the current interpreter.
+    """
+    venv_dir = home() / "venv"
+    scripts = venv_dir / "Scripts"
+    if not scripts.is_dir():
+        return None
+    if gui and sys.platform == "win32":
+        # Read pyvenv.cfg to find the base interpreter dir, then use its real
+        # pythonw.exe (GUI subsystem). The venv shim re-execs to python.exe
+        # (console) which allocates a COM console → blank orphan window.
+        cfg = venv_dir / "pyvenv.cfg"
+        if cfg.is_file():
+            for line in cfg.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("home"):
+                    base_dir = Path(line.split("=", 1)[1].strip())
+                    base_pythonw = base_dir / "pythonw.exe"
+                    if base_pythonw.is_file():
+                        return str(base_pythonw)
+        # Fallback: venv shim pythonw (better than python.exe)
+        shim = scripts / "pythonw.exe"
+        if shim.is_file():
+            return str(shim)
+    # Console python for foreground/status use
+    console = scripts / "python.exe"
+    if console.is_file():
+        return str(console)
+    return None
+
+
+def venv_site_packages() -> str | None:
+    """Return the dedicated venv's site-packages dir, or None if absent.
+
+    Needed on PYTHONPATH when the editable-install source dir is added
+    explicitly (.pth files are not processed for PYTHONPATH entries).
+    """
+    sp = home() / "venv" / "Lib" / "site-packages"
+    return str(sp) if sp.is_dir() else None
+
+
+def venv_pythonpath() -> list[str]:
+    """PYTHONPATH entries needed when spawning services via the base pythonw.
+
+    The base interpreter (see ``venv_python(gui=True)``) does not read the
+    venv's ``pyvenv.cfg``, so it cannot discover the venv's site-packages on
+    its own. We must hand it both:
+
+      1. the venv's ``site-packages`` (third-party deps: zvec, transformers,
+         torch, sentence-transformers, ...), and
+      2. the editable-install source dir (``hyatlas_memory`` itself), because
+         the editable ``.pth``/finder in site-packages is NOT processed for
+         PYTHONPATH entries — the source dir must be added explicitly.
+
+    Returns an empty list when no dedicated venv exists (callers should then
+    leave PYTHONPATH untouched / scrubbed as appropriate).
+    """
+    paths: list[str] = []
+    sp = venv_site_packages()
+    if sp:
+        paths.append(sp)
+    # __file__ is .../src/hyatlas_memory/layout.py → parent.parent = src/
+    src = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if os.path.isdir(src):
+        paths.append(src)
+    return paths
+
+
 def cfgdir(root: str | Path | None = None) -> Path:
     return Path(root) / "config" if root is not None else home() / "config"
 

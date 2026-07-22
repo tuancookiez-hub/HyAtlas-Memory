@@ -172,15 +172,27 @@ def _qdrant_service() -> dict:
     }
 
 
+def _service_python() -> str:
+    """Interpreter for spawned services.
+
+    Prefer the dedicated HyAtlas venv ($HYATLAS_HOME/venv) so the stack's heavy
+    deps stay isolated from the host app and, on Windows, services launch via
+    the GUI-subsystem pythonw.exe (no orphan console window). Fall back to the
+    current interpreter when no dedicated venv exists.
+    """
+    return layout.venv_python(gui=True) or sys.executable
+
+
 def _services(project_root: str) -> list[dict]:
     services: list[dict] = []
+    py = _service_python()
     services.extend([
         {
             "name": "Hy-Memory Server",
             "port": UPSTREAM_PORT,
             "url": f"http://127.0.0.1:{UPSTREAM_PORT}/info",
             "expect": "hy-memory-server",
-            "cmd": [sys.executable, "-m", "server.start_server"],
+            "cmd": [py, "-m", "hyatlas_memory.server.start_server"],
             "cwd": project_root,
             "external": False,
         },
@@ -189,7 +201,7 @@ def _services(project_root: str) -> list[dict]:
             "port": DASHBOARD_PORT,
             "url": f"http://127.0.0.1:{DASHBOARD_PORT}/api/health",
             "expect": "ok",
-            "cmd": [sys.executable, "server/dashboard/dashboard.py"],
+            "cmd": [py, os.path.join(project_root, "server", "dashboard", "dashboard.py")],
             "cwd": project_root,
             "external": False,
         },
@@ -200,6 +212,18 @@ def _services(project_root: str) -> list[dict]:
 def _child_env() -> dict[str, str]:
     env = os.environ.copy()
     env.pop("PYTHONHOME", None)
+    # Set PYTHONPATH for the dedicated venv's base pythonw interpreter, which
+    # cannot read pyvenv.cfg to find the venv's site-packages. We REPLACE any
+    # inherited PYTHONPATH: the Hermes shell exports one pointing at the Hermes
+    # venv's site-packages, which would re-introduce the very dependency
+    # conflict (huggingface-hub 1.x from faster-whisper) the dedicated venv
+    # exists to avoid. When no dedicated venv exists, scrub PYTHONPATH so the
+    # current interpreter's own resolution is used cleanly.
+    venv_paths = layout.venv_pythonpath()
+    if venv_paths:
+        env["PYTHONPATH"] = os.pathsep.join(venv_paths)
+    else:
+        env.pop("PYTHONPATH", None)
     # Enable the in-process L5 knowledge-graph extraction (reads L2 facts from
     # the live zvec store and writes entities/relations to Kuzu during digest).
     # This replaces the legacy stop-server batch pipeline (MEMORY_L5_VERSION=1),
@@ -1222,6 +1246,85 @@ def _console_spawn_env() -> dict[str, str]:
     return env
 
 
+def _venv_cli(args: list[str]) -> int:
+    """`hyatlas venv setup` — create the dedicated HyAtlas venv.
+
+    The stack's heavy dependencies (sentence-transformers, torch,
+    transformers, zvec) can conflict with a host application's packages when
+    they share one environment — e.g. Hermes's faster-whisper pins
+    huggingface-hub>=1.0 while the local BGE embedder needs <1.0. A dedicated
+    venv at $HYATLAS_HOME/venv isolates HyAtlas's deps permanently and also
+    provides a clean GUI-subsystem pythonw.exe (no orphan console windows).
+
+    Requires `uv` on PATH. After setup, `hyatlas start` automatically uses the
+    dedicated venv (see layout.venv_python).
+    """
+    import shutil
+
+    if not args or args[0] not in ("setup", "create", "install"):
+        print("Usage: hyatlas venv setup [--clear]")
+        print("  Creates a dedicated venv at $HYATLAS_HOME/venv with isolated deps.")
+        print("  --clear  Recreate the venv from scratch (destroys the existing one).")
+        return 1
+
+    clear = "--clear" in args or "--force" in args
+
+    uv = shutil.which("uv")
+    if not uv:
+        print(fail("  `uv` not found on PATH. Install it from https://docs.astral.sh/uv/"))
+        return 1
+
+    venv_dir = layout.home() / "venv"
+    pkg_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../src
+    repo_root = os.path.dirname(pkg_root)  # repo root (has pyproject.toml)
+
+    print(dim(f"  venv target: {venv_dir}"))
+    print(dim(f"  install from: {repo_root}"))
+
+    # 1. Create the venv (skip if it already exists and --clear not given)
+    py = str(venv_dir / "Scripts" / "python.exe")
+    if (venv_dir / "Scripts").is_dir() and not clear:
+        print(ok(f"\n  venv already exists at {venv_dir} (use --clear to recreate)"))
+    else:
+        print("\n→ Creating venv (Python 3.11)...")
+        cmd = [uv, "venv", str(venv_dir), "--python", "3.11"]
+        if clear:
+            cmd.append("--clear")
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            print(fail(f"  venv creation failed: {r.stderr.strip()}"))
+            return 1
+        print(ok("  venv created"))
+
+    # 2. Install HyAtlas with the zvec + local-embed extras (editable)
+    print("\n→ Installing HyAtlas [zvec,local-embed] (this pulls torch + sentence-transformers, may take a few minutes)...")
+    r = subprocess.run(
+        [uv, "pip", "install", "--python", py, "-e", f"{repo_root}[zvec,local-embed]"],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        print(fail(f"  install failed: {r.stderr.strip()[-500:]}"))
+        return 1
+    print(ok("  HyAtlas installed into dedicated venv"))
+
+    # 3. Verify the embedder imports cleanly (the whole point of isolation)
+    print("\n→ Verifying local embedder...")
+    check = subprocess.run(
+        [py, "-c",
+         "from sentence_transformers import SentenceTransformer; "
+         "m = SentenceTransformer('BAAI/bge-large-en-v1.5', device='cpu'); "
+         "print('dims', len(m.encode(['x'])[0]))"],
+        capture_output=True, text=True, env={**os.environ, "PYTHONPATH": ""},
+    )
+    if check.returncode != 0:
+        print(fail(f"  embedder verification failed: {check.stderr.strip()[-500:]}"))
+        return 1
+    print(ok(f"  embedder OK ({check.stdout.strip()})"))
+
+    print(ok("\n  Dedicated venv ready. Run `hyatlas start` to use it."))
+    return 0
+
+
 def main():
     # Strip --internal (used for console window relaunch on Windows)
     # and --detach (start services as truly detached children) and
@@ -1238,34 +1341,51 @@ def main():
     # On Windows the venv shim (python.exe) re-execs to the base
     # console-subsystem python, which makes Windows allocate a COM
     # console (Windows Terminal tab). The launcher exits but that tab
-    # lingers as a blank orphan. Fix: when detached, re-exec into the
-    # base pythonw.exe (GUI subsystem — no console is ever allocated)
-    # and exit immediately, so the shim's console auto-closes.
+    # lingers as a blank orphan. Fix: when detached, re-exec into a
+    # GUI-subsystem pythonw.exe (no console is ever allocated) and exit
+    # immediately, so the shim's console auto-closes.
     # Guarded by _HYATLAS_REEXEC to prevent infinite re-exec loops.
+    #
+    # When a dedicated HyAtlas venv exists, re-exec into ITS base pythonw.exe
+    # (with the venv's site-packages on PYTHONPATH) so the re-exec'd launcher
+    # resolves hyatlas_memory from the isolated venv and spawns services from
+    # it too. Otherwise fall back to the current interpreter's base pythonw.
     if (
         detach
         and sys.platform == "win32"
         and os.environ.get("_HYATLAS_REEXEC") != "1"
     ):
-        base = getattr(sys, "_base_executable", None)
-        if base and base != sys.executable:
-            pythonw = os.path.join(os.path.dirname(base), "pythonw.exe")
-            if os.path.isfile(pythonw):
-                env = dict(os.environ, _HYATLAS_REEXEC="1")
-                sp = _venv_site_packages()
-                pkg_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                paths = [p for p in [sp, pkg_root] if p]
-                if paths:
-                    env["PYTHONPATH"] = os.pathsep.join(paths)
-                subprocess.Popen(
-                    [pythonw, "-m", "hyatlas_memory", "start", "--detach"],
-                    env=env,
-                    creationflags=0x08000000 | 0x08,  # CREATE_NO_WINDOW | DETACHED
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                _free_console()
-                sys.exit(0)
+        target = layout.venv_python(gui=True)
+        env = dict(os.environ, _HYATLAS_REEXEC="1")
+        if target:
+            # Dedicated venv: hand the base pythonw the venv's site-packages +
+            # editable source dir so it resolves hyatlas_memory and all deps
+            # from the isolated venv (not the host app's).
+            venv_paths = layout.venv_pythonpath()
+            if venv_paths:
+                env["PYTHONPATH"] = os.pathsep.join(venv_paths)
+        else:
+            # No dedicated venv: use the current interpreter's base pythonw.
+            base = getattr(sys, "_base_executable", None)
+            if base and base != sys.executable:
+                cand = os.path.join(os.path.dirname(base), "pythonw.exe")
+                if os.path.isfile(cand):
+                    target = cand
+                    sp = _venv_site_packages()
+                    pkg_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                    paths = [p for p in [sp, pkg_root] if p]
+                    if paths:
+                        env["PYTHONPATH"] = os.pathsep.join(paths)
+        if target and os.path.isfile(target):
+            subprocess.Popen(
+                [target, "-m", "hyatlas_memory", "start", "--detach"],
+                env=env,
+                creationflags=0x08000000 | 0x08,  # CREATE_NO_WINDOW | DETACHED
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            _free_console()
+            sys.exit(0)
     # `--internal` is preserved as a flag if present (callers may inspect
     # it for backwards-compat reasons) but no longer drives any behavior
     # in main() — the previous "spawn a new console" path was removed.
@@ -1293,9 +1413,13 @@ def main():
             # services; they keep running in the background.
             _launch_status_console()
             return
+        elif arg == "venv":
+            # "hyatlas venv setup" — create the dedicated venv so the stack's
+            # heavy deps stay isolated from the host app. See _setup_venv.
+            sys.exit(_venv_cli(sys.argv[2:]))
         else:
             print(fail(f"Unknown argument: {sys.argv[1]}"))
-            print("Usage: hyatlas [start|stop|status|console|memory|help]")
+            print("Usage: hyatlas [start|stop|status|console|memory|venv|help]")
             sys.exit(1)
     else:
         # Bare `hyatlas` (no args) starts the stack in the CURRENT terminal

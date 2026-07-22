@@ -1,5 +1,42 @@
 # Changelog
 
+## [3.5.0] — 2026-07-23
+
+### Added — dedicated venv for dependency isolation
+
+- **`hyatlas venv setup`** command: creates an isolated venv at `$HYATLAS_HOME/venv` and installs HyAtlas with `[zvec,local-embed]`. Idempotent (skips creation if the venv exists; `--clear` forces recreation). Verifies the local BGE embedder loads before reporting success.
+- **`layout.venv_python()` / `venv_pythonpath()`**: resolve the dedicated venv's base `pythonw.exe` (GUI subsystem) and the PYTHONPATH entries it needs. Both the CLI launcher (`_start.py`) and the plugin auto-start (`process.py`) now prefer the dedicated venv when present, falling back to the current interpreter otherwise.
+
+### Why this matters
+
+HyAtlas's heavy deps (sentence-transformers, torch, transformers, zvec) conflict with host-app packages in a shared venv. Concretely: Hermes's `faster-whisper` pins `huggingface-hub>=1.0` while the local BGE embedder needs `<1.0` — the two cannot coexist, so the embedder silently broke (`embed: error: invalid model ID`) whenever the shared venv resolved to 1.x. A dedicated venv removes the conflict permanently. This matches how Hindsight (the flagship Hermes memory provider) runs: a separate daemon with isolated deps via `uv`.
+
+### Fixed — orphan console windows (Windows), for real this time
+
+The v3.4.6 fix (spawn via base `pythonw.exe`) was incomplete: the venv shim's `pythonw.exe` re-execs to the base `python.exe` (console subsystem), and the launcher's own re-exec bypassed the dedicated-venv selection. v3.5.0 resolves the venv's **base** `pythonw.exe` via `pyvenv.cfg` and re-execs the launcher into it with the venv's site-packages on PYTHONPATH. Verified: server + dashboard run as `pythonw.exe`, orphan console count stays at the Windows Terminal host baseline (no HyAtlas-attributable orphans).
+
+### Fixed — reconciler trailing-comma JSON repair (from 3.4.7)
+
+LLMs (incl. MiniMax-M3) emit JSON with trailing commas (`[{"op":"ADD",...},]`), which strict `json.loads` rejects — silently dropping the reconcile op (memory data loss). `MemoryReconciler._loads` now strips trailing commas before `]`/`}` and retries. Plus 9 tests pinning the parse contract.
+
+### Verified
+
+- `embed: ok` from the dedicated venv (was `embed: error` in the shared venv)
+- Server + dashboard run as base `pythonw.exe` (GUI subsystem)
+- End-to-end write: `success: True`, memory stored
+- 74 tests pass, ruff clean
+
+Upgrade: `pip install -U git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git`, then `hyatlas venv setup`, then restart the stack.
+
+## [3.4.7] — 2026-07-22
+
+### Bug fixes
+
+- **Reconciler trailing-comma repair**: LLMs (incl. MiniMax-M3) frequently emit JSON with trailing commas (`[{"op":"ADD",...},]`), which strict `json.loads` rejects — silently dropping the reconcile op (memory data loss). New `MemoryReconciler._loads` tries strict parse first, then strips trailing commas before a closing `]`/`}` and retries. Safe: a trailing comma is never valid JSON, so removal cannot corrupt well-formed input.
+- Added `tests/test_reconciler_parse.py` (9 tests) pinning the parse contract: clean arrays, code fences, trailing commas (flat + nested), `\<think\>` stripping, group format, empty/prose/garbage inputs. No mocks — exercises the real `_parse_ops`.
+
+Upgrade: `pip install --upgrade --force-reinstall git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git` then restart.
+
 ## [3.4.6] — 2026-07-22
 
 ### Bug fixes
