@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.4.6] — 2026-07-22
+
+### Bug fixes
+
+- **Reconciler `\<think\>` strip**: MiniMax-M3 (and other reasoning models) can emit `\<think\>...\</think\>` blocks into the `content` field, which broke JSON parsing in the reconcile pipeline (3 failed attempts → dropped write). Now stripped in `_strip_code_fence` before parsing. Pairs with `reasoning_split=true` in config, which routes thinking to a separate `reasoning_details` field so content stays clean.
+- **`huggingface-hub` pin moved to core dependencies**: was only in the `local-embed` optional extra, so a shared venv could float it to 1.x and silently break the local embedder (transformers 4.46.x requires `<1.0`). Now `huggingface-hub>=0.23.2,<1.0` is a core dep — pip's resolver enforces it on every install.
+- **Blank orphan console windows on Windows**: the plugin auto-start (`StackManager`) and CLI launcher spawned services via the venv shim (`python.exe`), which re-execs to a console-subsystem base python. Windows then allocated a COM console (Windows Terminal tab) that lingered as a blank orphan after the launcher exited. Now both paths spawn the base `pythonw.exe` (GUI subsystem — no console is ever allocated) with the venv site-packages + editable source dir on `PYTHONPATH`. The deliberate `hyatlas console` status window is unaffected.
+
+Upgrade: `pip install --upgrade --force-reinstall git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git` then restart.
+
 ## [3.4.5] — 2026-07-19
 
 ### Bug fixes (log noise)

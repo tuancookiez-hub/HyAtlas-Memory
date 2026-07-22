@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyatlas-memory"
-version = "3.4.5"
+version = "3.4.6"
 description = "Personal local single-user long-term memory stack for Hermes Agent, forked from Hy-Memory 7-layer cognitive framework (Tencent Hunyuan). Includes experimental L7 intention layer. Apache 2.0 licensed."
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -55,6 +55,13 @@ dependencies = [
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "requests>=2.31",
+    # The local embedder (default mode, provider="local") needs transformers,
+    # which requires huggingface-hub<1.0. Pinning here (not just in the
+    # local-embed extra) ensures pip's resolver enforces <1.0 even when other
+    # packages in a shared venv (e.g. faster-whisper>=0.21, no upper bound)
+    # would otherwise float it to 1.x and silently break the embedder.
+    # huggingface-hub is a small pure-python package — cheap to always require.
+    "huggingface-hub>=0.23.2,<1.0",
 ]
 
 [project.optional-dependencies]

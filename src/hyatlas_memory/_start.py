@@ -1014,6 +1014,27 @@ def _start_detached_and_exit() -> None:
         detach = was_detach
 
 
+def _free_console() -> None:
+    """Detach this process from its console so the shell can close.
+
+    When the launcher runs in a no-console context (autostart, detached
+    spawn), Windows allocates it a console via COM (Windows Terminal).
+    The launcher exits, but that COM-activated shell lingers as a blank
+    orphan tab. Calling FreeConsole() releases our attachment; once
+    nothing is attached, Windows Terminal closes the tab automatically.
+
+    Only meaningful on Windows, and only in detached mode — in foreground
+    mode the user IS using the console, so we leave it attached.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.FreeConsole()
+    except Exception:
+        pass  # best-effort; never block startup on a console cleanup failure
+
+
 def _do_start(services: list, project_root: str, detached: bool) -> None:
     """Shared start path used by both foreground and detached modes."""
     banner()
@@ -1039,6 +1060,11 @@ def _do_start(services: list, project_root: str, detached: bool) -> None:
         # Pop a visible status window so the user can see HyAtlas is up.
         # Idempotent — only opens if no console window is already running.
         _launch_status_console()
+        # Release the launcher's own console (COM-allocated by Windows
+        # Terminal in no-console contexts) so it auto-closes instead of
+        # lingering as a blank orphan tab. The status console above is a
+        # separate, deliberately-created window and is unaffected.
+        _free_console()
         sys.exit(0)
     else:
         print(dim("  Press Ctrl+C in this terminal to stop the services."))
@@ -1208,6 +1234,38 @@ def main():
     global force_restart
     force_restart = "--restart" in sys.argv
     sys.argv = [a for a in sys.argv if a != "--restart"]
+
+    # On Windows the venv shim (python.exe) re-execs to the base
+    # console-subsystem python, which makes Windows allocate a COM
+    # console (Windows Terminal tab). The launcher exits but that tab
+    # lingers as a blank orphan. Fix: when detached, re-exec into the
+    # base pythonw.exe (GUI subsystem — no console is ever allocated)
+    # and exit immediately, so the shim's console auto-closes.
+    # Guarded by _HYATLAS_REEXEC to prevent infinite re-exec loops.
+    if (
+        detach
+        and sys.platform == "win32"
+        and os.environ.get("_HYATLAS_REEXEC") != "1"
+    ):
+        base = getattr(sys, "_base_executable", None)
+        if base and base != sys.executable:
+            pythonw = os.path.join(os.path.dirname(base), "pythonw.exe")
+            if os.path.isfile(pythonw):
+                env = dict(os.environ, _HYATLAS_REEXEC="1")
+                sp = _venv_site_packages()
+                pkg_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                paths = [p for p in [sp, pkg_root] if p]
+                if paths:
+                    env["PYTHONPATH"] = os.pathsep.join(paths)
+                subprocess.Popen(
+                    [pythonw, "-m", "hyatlas_memory", "start", "--detach"],
+                    env=env,
+                    creationflags=0x08000000 | 0x08,  # CREATE_NO_WINDOW | DETACHED
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                _free_console()
+                sys.exit(0)
     # `--internal` is preserved as a flag if present (callers may inspect
     # it for backwards-compat reasons) but no longer drives any behavior
     # in main() — the previous "spawn a new console" path was removed.

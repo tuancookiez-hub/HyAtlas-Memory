@@ -131,6 +131,25 @@ def _service_env(home: Path) -> dict[str, str]:
     env["HERMES_HOME"] = str(home)
     env.setdefault("HYATLAS_HOME", str(layout.home()))
     env.pop("PYTHONHOME", None)
+    # When services are spawned via the base pythonw.exe (see _python),
+    # that interpreter does not know about the venv's site-packages.
+    # Prepend the current venv's site-packages AND the editable-install
+    # source dir to PYTHONPATH so every dependency (zvec, transformers,
+    # kuzu, ...) and hyatlas_memory itself still resolves. (.pth files
+    # in site-packages are NOT processed for PYTHONPATH entries, so the
+    # editable source dir must be added explicitly.)
+    if sys.platform == "win32" and getattr(sys, "_base_executable", None):
+        paths = []
+        sp = os.path.join(sys.prefix, "Lib", "site-packages")
+        if os.path.isdir(sp):
+            paths.append(sp)
+        # __file__ is .../src/hyatlas_memory/process.py → parent.parent = src/
+        src = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if os.path.isdir(src):
+            paths.append(src)
+        if paths:
+            existing = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = os.pathsep.join(paths) + (os.pathsep + existing if existing else "")
     return env
 
 
@@ -155,6 +174,18 @@ class StackManager:
         return layout.read_config()
 
     def _python(self) -> str:
+        # On Windows the venv shim (python.exe) re-execs to a console-
+        # subsystem base python, which makes Windows allocate a COM console
+        # (the blank window the user sees on plugin auto-start). Spawn the
+        # base pythonw.exe instead — it is GUI-subsystem, so no console is
+        # ever allocated. _service_env puts the venv site-packages on
+        # PYTHONPATH so the base interpreter still finds every dependency.
+        if sys.platform == "win32":
+            base = getattr(sys, "_base_executable", None)
+            if base and base != sys.executable:
+                pythonw = os.path.join(os.path.dirname(base), "pythonw.exe")
+                if os.path.isfile(pythonw):
+                    return pythonw
         return sys.executable
 
     def _qdrant_paths(self) -> tuple[str | None, str | None]:
