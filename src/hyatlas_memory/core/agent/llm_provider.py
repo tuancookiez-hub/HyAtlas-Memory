@@ -366,6 +366,18 @@ class LLMProvider:
             p_tokens = usage.prompt_tokens if usage else 0
             c_tokens = usage.completion_tokens if usage else 0
 
+            # 诊断：content 为空时记录 finish_reason 和 reasoning token 消耗，
+            # 帮助定位推理模型 token 预算耗尽等问题。
+            if not content.strip():
+                _rt = 0
+                if usage and hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
+                    _rt = getattr(usage.completion_tokens_details, "reasoning_tokens", 0) or 0
+                logger.warning(
+                    f"[llm] empty content: finish_reason={_finish!r} "
+                    f"completion_tokens={c_tokens} reasoning_tokens={_rt} "
+                    f"model={self._llm_config.model}"
+                )
+
             # tool_calls 反序列化为纯 dict 列表（方便后续传递 / 记录）
             tool_calls_raw = getattr(msg, "tool_calls", None) or []
             tool_calls: list[dict[str, Any]] | None = None

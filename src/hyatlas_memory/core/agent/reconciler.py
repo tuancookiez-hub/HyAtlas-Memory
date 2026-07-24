@@ -390,11 +390,13 @@ class MemoryReconciler:
     FINAL_TOPK = 10
     # max_tokens for reconcile LLM call（基础值 + 动态扩展）
     # 每条 ADD 输出大约 200-300 tokens（content + supersedes + reason）
-    # 总上限 8000 tokens，防止单次调用失控
-    MAX_TOKENS = 2000
-    PER_OP_TOKENS = 300
-    BASE_OVERHEAD_TOKENS = 500
-    MAX_TOKENS_UPPER_BOUND = 8000
+    # 推理模型（MiniMax-M3 等）的 reasoning tokens 也计入 max_tokens 预算，
+    # 基础值必须留足推理开销，否则 reasoning 耗尽预算后 content 为空。
+    # 总上限 16000 tokens，防止单次调用失控
+    MAX_TOKENS = 4096
+    PER_OP_TOKENS = 400
+    BASE_OVERHEAD_TOKENS = 2048  # reasoning model thinking budget
+    MAX_TOKENS_UPPER_BOUND = 16000
 
     def __init__(self, config: MemoryConfig):
         self.config = config
@@ -914,12 +916,15 @@ class MemoryReconciler:
             ops = []
             _parse_ok = False
             _base_temp = self.config.llm.temperature
-            _temperatures = [_base_temp, _base_temp, _base_temp]
+            # 逐次升温 + 逐次加宽 token 预算（推理模型可能在低温下过度思考）
+            _temperatures = [_base_temp, max(_base_temp, 0.3), 0.7]
+            _token_scales = [1.0, 1.5, 2.0]
 
-            for _attempt, _temp in enumerate(_temperatures):
+            for _attempt, (_temp, _tscale) in enumerate(zip(_temperatures, _token_scales)):
+                _attempt_tokens = min(self.MAX_TOKENS_UPPER_BOUND, int(dyn_max_tokens * _tscale))
                 response = await llm.complete(
                     prompt=prompt,
-                    max_tokens=dyn_max_tokens,
+                    max_tokens=_attempt_tokens,
                     temperature=_temp,
                 )
                 # 每次 reconcile LLM 调用（含重试）都计入 token 消耗
@@ -1046,12 +1051,12 @@ class MemoryReconciler:
     def _strip_code_fence(text: str) -> str:
         """剥掉 ```json ... ``` / ``` ... ``` markdown 围栏，返回内层内容。
 
-        同时剥掉推理模型（如 MiniMax-M3）可能混入 content 的  块，
+        同时剥掉推理模型（如 MiniMax-M3）可能混入 content 的 think 块，
         避免思考过程污染 JSON 解析。
         """
         text = (text or "").strip()
-        # 先剥掉  推理块（reasoning models 可能把它塞进 content）
-        text = re.sub(r"", "", text, flags=re.DOTALL).strip()
+        # 先剥掉 think 推理块（reasoning models 可能把它塞进 content）
+        text = re.sub(r"\<think\>.*?\</think\>", "", text, flags=re.DOTALL).strip()
         if "```json" in text:
             return text.split("```json")[1].split("```")[0].strip()
         elif "```" in text:

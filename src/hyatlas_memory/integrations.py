@@ -206,13 +206,13 @@ def start_l1_raw_sweep(vector_store=None):
             # Qdrant path was removed when vector_store_qdrant.py was deleted.
             # If the user still has a `provider: qdrant` config from a v2.x
             # install, we log a one-time warning and skip rather than crashing.
-            provider = (layout.read_config() or {}).get("vector_store", {}).get("provider", "local")
+            provider = (layout.read_config() or {}).get("vector_store", {}).get("provider", "zvec")
             cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).timestamp()
 
-            if provider != "local":
+            if provider != "zvec":
                 logger.warning(
                     f"[l1-sweep] provider={provider!r} no longer supported (v3.4+ uses zvec). "
-                    "Run `scripts/migrate_qdrant_to_zvec.py` to migrate, then set provider='local'. "
+                    "Run `scripts/migrate_qdrant_to_zvec.py` to migrate, then set provider='zvec'. "
                     "Skipping sweep until then."
                 )
                 return
