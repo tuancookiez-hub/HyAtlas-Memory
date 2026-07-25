@@ -1,6 +1,10 @@
 # Changelog
 
-## [3.5.0] — 2026-07-23
+## [3.5.0] — 2026-07-25
+
+### Dependencies
+
+- **`zvec>=0.6.0`** (was `>=0.5.1`) in the `[zvec]` extra. zvec 0.6.0 fixes the Windows collection LOCK open bug that left `agent_memories_1024` unopenable after crash / `taskkill` under 0.5.1. Live verified 2026-07-25: reindex from Kuzu (2682/2682, 0 errors), write + search green, dedicated venv embedder OK. Install/upgrade: `pip install -U "hyatlas-memory[zvec,local-embed]"` (or `pip install -U "zvec>=0.6.0"` into the HyAtlas venv), then `hyatlas stop && hyatlas start --detach`.
 
 ### Added — dedicated venv for dependency isolation
 
@@ -24,9 +28,10 @@ LLMs (incl. MiniMax-M3) emit JSON with trailing commas (`[{"op":"ADD",...},]`), 
 - `embed: ok` from the dedicated venv (was `embed: error` in the shared venv)
 - Server + dashboard run as base `pythonw.exe` (GUI subsystem)
 - End-to-end write: `success: True`, memory stored
+- zvec **0.6.0** floor: LOCK reopen works; VDB reindex from Kuzu succeeded (2682/2682)
 - 74 tests pass, ruff clean
 
-Upgrade: `pip install -U git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git`, then `hyatlas venv setup`, then restart the stack.
+Upgrade: `pip install -U git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git`, then `hyatlas venv setup`, then restart the stack. Ensure `zvec>=0.6.0` is installed (`pip install -U "zvec>=0.6.0"` if the resolver did not pull it).
 
 ## [3.4.7] — 2026-07-22
 
@@ -266,7 +271,7 @@ un_hyatlas_digest.py`; weekly Hermes cron (`no_agent`, script-only); Discord sum
 
 ### Upgrade notes
 
-- Set `vector_store.provider` to `zvec` and install `pip install hyatlas-memory[zvec]` (or `zvec>=0.5.1`).
+- Set `vector_store.provider` to `zvec` and install `pip install hyatlas-memory[zvec]` (or `zvec>=0.6.0`).
 - Run migration from Qdrant while server is stopped, then `hyatlas zvec doctor`, then `hyatlas start`.
 - Archive Qdrant with `hyatlas archive qdrant` before decommissioning the sidecar.
 

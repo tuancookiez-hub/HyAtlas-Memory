@@ -66,7 +66,9 @@ dependencies = [
 
 [project.optional-dependencies]
 # v3.1.0+: Zvec is the default (and only) vector store backend.
-zvec = ["zvec>=0.5.1"]
+# 0.6.0+ required: Windows LOCK open bug fixed (0.5.1 could not reopen
+# existing collections after crash / force-kill). Verified live 2026-07-25.
+zvec = ["zvec>=0.6.0"]
 # chroma, faiss, and qdrant backends were stripped in v3.0.0/v3.4.
 # Embedding server (local SentenceTransformers-based; no API key needed)
 # In-process local embedder (integrations.wire_inprocess_embed):
