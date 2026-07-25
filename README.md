@@ -5,7 +5,7 @@ A personal, local, single-user long-term memory stack for Hermes Agent — built
 > **v3.5.0** — Dedicated venv for dependency isolation (fixes the embedder `huggingface-hub` conflict with host apps like Hermes, and orphan console windows on Windows). New `hyatlas venv setup` command. Plus: reconciler trailing-comma JSON repair (no more silently dropped memories), `\<think\>` strip for reasoning models, `huggingface-hub<1.0` in core deps, and **`zvec>=0.6.0`** (Windows LOCK open fix; 0.5.1 could not reopen existing collections after crash). Upgrade: `pip install -U git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git` then `hyatlas venv setup` (pulls zvec 0.6+). See [CHANGELOG](./CHANGELOG.md).
 
 <p align="center">
-  <img src="./assets/hyatlas-v3.4.0-banner.jpeg" alt="HyAtlas v3.4.0: Profile isolation in the dashboard + L1_RAW transparency — 8 panels covering the headline features" width="100%" />
+  <img src="./assets/hyatlas-v3.5.0-banner.jpeg" alt="HyAtlas v3.5.0: dedicated venv isolation, durable write path, server stay-up fixes, and zvec≥0.6 Windows LOCK floor — stable local memory install" width="100%" />
 </p>
 
 <p align="center">
