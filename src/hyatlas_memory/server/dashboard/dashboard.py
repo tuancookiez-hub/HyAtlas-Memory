@@ -104,13 +104,14 @@ def _qdrant_layer_count(layer: str, *, require_is_latest: bool = True, agent_id:
         return 0
 
 
-def _vdb_layer_count(layer: str, *, require_is_latest: bool = True, agent_id: str = "") -> int:
+def _vdb_layer_count(layer: str, *, require_is_latest: bool = True, agent_id: str = "") -> int | None:
     """Layer count via memory server (works with zvec; falls back to Qdrant HTTP)."""
     latest = "true" if require_is_latest else "false"
     suffix = f"&agent_id={agent_id}" if agent_id else ""
     code, body = hy(
         "GET",
         f"/api/v1/vdb/layer_count?layer={layer}&require_is_latest={latest}{suffix}",
+        timeout=30,
     )
     if code == 200 and isinstance(body, dict) and "count" in body:
         return int(body["count"])
@@ -3902,37 +3903,53 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 "l0_basic_info", "l1_raw", "l2_fact", "l3_summary", "l4_identity",
                 "l5_knowledge", "l6_schema", "l7_intention",
             ]
-            counts = {}
-            total = 0
             graph_layers = ("l5_knowledge", "l6_schema", "l7_intention")
+            # Keep VDB and Kuzu counts separate. Display prefers graph for L5-L7
+            # (canonical) and VDB for L0-L4. Never max-merge into one silent total.
+            vdb_counts = {}
             for layer in layer_keys:
                 require_latest = layer not in graph_layers
-                n = _vdb_layer_count(layer, require_is_latest=require_latest, agent_id=agent_id)
-                counts[layer] = n
-                total += n
-            # L5/L6/L7 live in Kuzu; use the fast /api/v1/graph endpoint
-            # (one call, no per-user loop) instead of the slow /api/v1/list.
+                vdb_counts[layer] = int(
+                    _vdb_layer_count(layer, require_is_latest=require_latest, agent_id=agent_id) or 0
+                )
+            graph_counts = dict.fromkeys(graph_layers, 0)
+            relation_count = None
             try:
                 graph_path = "/api/v1/graph" + (f"?agent_id={agent_id}" if agent_id else "")
-                _, graph_data = hy("GET", graph_path, None)
+                _, graph_data = hy("GET", graph_path, None, timeout=30)
                 if isinstance(graph_data, dict):
                     lc = graph_data.get("layer_counts") or {}
-                    counts["l5_knowledge"] = max(
-                        counts.get("l5_knowledge", 0),
-                        lc.get("l5_knowledge", graph_data.get("node_count", 0)),
+                    graph_counts["l5_knowledge"] = int(
+                        lc.get("l5_knowledge") or graph_data.get("node_count") or 0
                     )
-                    counts["l6_schema"] = max(counts.get("l6_schema", 0), lc.get("l6_schema", 0))
-                    counts["l7_intention"] = max(
-                        counts.get("l7_intention", 0), lc.get("l7_intention", 0)
-                    )
+                    graph_counts["l6_schema"] = int(lc.get("l6_schema") or 0)
+                    graph_counts["l7_intention"] = int(lc.get("l7_intention") or 0)
+                    relation_count = graph_data.get("relation_count")
             except Exception:
                 pass
-            total = sum(counts.values())
+
+            display_counts = dict(vdb_counts)
+            for layer in graph_layers:
+                display_counts[layer] = graph_counts.get(layer, 0)
+            display_total = sum(int(v or 0) for v in display_counts.values())
+            vdb_total = sum(int(v or 0) for v in vdb_counts.values())
+            graph_total = sum(int(v or 0) for v in graph_counts.values())
             return self._json(200, {
-                "counts": counts,
-                "total": total,
-                "vdb_total": total,
+                # Back-compat: counts/total are the display view.
+                "counts": display_counts,
+                "total": display_total,
+                "vdb_counts": vdb_counts,
+                "vdb_total": vdb_total,
+                "graph_counts": graph_counts,
+                "graph_total": graph_total,
+                "relation_count": relation_count,
+                "display_counts": display_counts,
+                "display_total": display_total,
                 "is_active_filtered": True,
+                "sources": {
+                    "l0_l4": "vdb",
+                    "l5_l7": "graph",
+                },
             })
 
         if path == "/api/graph-counts":

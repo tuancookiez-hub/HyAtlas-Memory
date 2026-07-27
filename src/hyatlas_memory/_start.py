@@ -212,6 +212,7 @@ def _services(project_root: str) -> list[dict]:
 def _child_env() -> dict[str, str]:
     env = os.environ.copy()
     env.pop("PYTHONHOME", None)
+    env.pop("VIRTUAL_ENV", None)  # prevent Hermes venv from shadowing HyAtlas venv
     # Set PYTHONPATH for the dedicated venv's base pythonw interpreter, which
     # cannot read pyvenv.cfg to find the venv's site-packages. We REPLACE any
     # inherited PYTHONPATH: the Hermes shell exports one pointing at the Hermes
@@ -886,10 +887,17 @@ def _watcher_env() -> dict:
 
     Inherits the current environment so the watcher sees
     HYATLAS_PROJECT_ROOT and other vars the user has set, but strips
-    any in-process state that doesn't belong in the watcher's
-    environment (none today, but the helper is here for future use).
+    any venv state that would pull the watcher into the wrong Python
+    environment.
     """
-    return os.environ.copy()
+    env = os.environ.copy()
+    env.pop("VIRTUAL_ENV", None)
+    env.pop("PYTHONHOME", None)
+    # Keep the user's HYATLAS_HOME; PYTHONPATH is deliberately scrubbed
+    # so the watcher runs from the same interpreter that started it and
+    # does not accidentally load site-packages from another venv.
+    env.pop("PYTHONPATH", None)
+    return env
 
 
 def _wait_for_kuzu_lock_free(timeout: float = 30.0) -> bool:

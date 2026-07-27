@@ -110,12 +110,19 @@ def wait_and_relaunch(
 
     # Re-launch the stack detached. The user already has control of their
     # terminal back; the new children live independently.
+    # Preserve a clean environment: drop any parent venv state that could
+    # force the wrong Python / site-packages into the new process.
+    env = os.environ.copy()
+    env.pop("VIRTUAL_ENV", None)
+    env.pop("PYTHONHOME", None)
+    env.pop("PYTHONPATH", None)
     try:
         subprocess.Popen(
             list(relaunch_argv),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
+            env=env,
             **_detach_kwargs(),
         )
     except Exception as e:

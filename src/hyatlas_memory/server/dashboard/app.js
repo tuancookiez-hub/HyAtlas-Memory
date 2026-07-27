@@ -16,7 +16,7 @@ let currentAgentId = PROFILE_IDS.includes(localStorage.getItem('hyatlas-agent-id
   : 'all';
 let loadSeq = 0;
 let allMemories = [];
-let layerCountsData = null;  // actual Qdrant counts per layer (used by Memory Composition bar)
+let layerCountsData = null;  // display counts: VDB L0-L4 + graph L5-L7 (Memory Composition bar)
 let layerHealthData = null;  // per-user/agent counts from /api/layer-health
 let l6SchemasData = null;    // sample L6 schemas from /api/l6-schemas
 let statusData = null;
@@ -38,7 +38,7 @@ const LAYERS = {
   'l4_identity': { name: 'Identity (retired)', desc: 'Legacy layer — migrated to L2 facts; archive only', color: '#888888' },
   'l5_knowledge': { name: 'Knowledge', desc: 'Consolidated understanding and expertise', color: '#3d8b8b' },
   'l6_schema': { name: 'Schemas', desc: 'Structural patterns and organizational frameworks', color: '#6b4c9a' },
-  'l7_intention': { name: 'Meta Principles', desc: 'Core values, timeless truths, and highest-order principles', color: '#d4af37' }
+  'l7_intention': { name: 'Intentions', desc: 'Forward-looking goals and commitments (L7)', color: '#d4af37' }
 };
 
 // Navigation
@@ -201,20 +201,55 @@ async function loadAllData() {
 
     statusData = status;
     infoData = info;
-    // Merge Qdrant L0-L4 + Kuzu L5/L6/L7 into one layer-counts view
-    // (don't reassign const layerCounts; build a new mergedCounts object)
-    if (graphCounts && typeof graphCounts === 'object') {
-      const mergedCounts = (layerCounts && layerCounts.counts) ? {...layerCounts.counts} : {};
-      if (graphCounts.l5_knowledge) mergedCounts.l5_knowledge = graphCounts.l5_knowledge;
-      if (graphCounts.l6_schema)   mergedCounts.l6_schema   = graphCounts.l6_schema;
-      if (graphCounts.l7_intention) mergedCounts.l7_intention = graphCounts.l7_intention;
+    // Prefer the split payload from /api/layer-counts (vdb/graph/display).
+    // Fall back to graph-counts only if the new fields are missing.
+    if (layerCounts && typeof layerCounts === 'object') {
+      const displayCounts = layerCounts.display_counts || layerCounts.counts || {};
+      const graphFromLayer = layerCounts.graph_counts || {};
+      const graphFallback = (graphCounts && typeof graphCounts === 'object') ? {
+        l5_knowledge: graphCounts.l5_knowledge || 0,
+        l6_schema: graphCounts.l6_schema || 0,
+        l7_intention: graphCounts.l7_intention || 0,
+      } : {};
+      const graph = Object.keys(graphFromLayer).length ? graphFromLayer : graphFallback;
+      const counts = {...displayCounts};
+      // Ensure L5-L7 display uses graph canonical values.
+      ['l5_knowledge', 'l6_schema', 'l7_intention'].forEach(k => {
+        if (graph[k] != null) counts[k] = graph[k];
+      });
+      const displayTotal = Object.values(counts).reduce((a, b) => a + (Number(b) || 0), 0);
       layerCountsData = {
-        ...(layerCounts || {}),
-        counts: mergedCounts,
-        graph_total: graphCounts.total || 0,
+        ...layerCounts,
+        counts,
+        display_counts: counts,
+        display_total: displayTotal,
+        total: displayTotal,
+        vdb_counts: layerCounts.vdb_counts || null,
+        vdb_total: layerCounts.vdb_total != null ? layerCounts.vdb_total : null,
+        graph_counts: graph,
+        graph_total: Object.values(graph).reduce((a, b) => a + (Number(b) || 0), 0),
+        relation_count: layerCounts.relation_count != null
+          ? layerCounts.relation_count
+          : (graphCounts && graphCounts.relation_count),
+      };
+    } else if (graphCounts && typeof graphCounts === 'object') {
+      const counts = {
+        l5_knowledge: graphCounts.l5_knowledge || 0,
+        l6_schema: graphCounts.l6_schema || 0,
+        l7_intention: graphCounts.l7_intention || 0,
+      };
+      const total = Object.values(counts).reduce((a, b) => a + (Number(b) || 0), 0);
+      layerCountsData = {
+        counts,
+        display_counts: counts,
+        display_total: total,
+        total,
+        graph_counts: counts,
+        graph_total: total,
+        relation_count: graphCounts.relation_count,
       };
     } else {
-      layerCountsData = layerCounts || null;
+      layerCountsData = null;
     }
 
     // Normalize coding memories to the VDB memory shape so the existing
@@ -365,34 +400,39 @@ function renderAll() {
 
 // Overview Page
 function renderOverview() {
-  // Compute total memories from layer-counts (authoritative, includes all layers)
-  const layerTotal = (layerCountsData && layerCountsData.total) ? layerCountsData.total : 0;
-  const codingTotal = codingCountData?.total || 0;
-  const totalMemories = layerTotal + codingTotal;
-
-  // Compute total L5 graph links (edges + relationships)
-  const totalLinks = (l5Graph && l5Graph.relations) ? l5Graph.relations.length
-                    : (l5Graph && l5Graph.edges) ? l5Graph.edges.length
-                    : 0;
-
-  // Compute active layers from layer-counts (includes Kuzu L5/L6/L7, not just VDB)
-  const lc = (layerCountsData && layerCountsData.counts) ? layerCountsData.counts : {};
-  const activeLayers = Object.values(lc).filter(c => c > 0).length;
-  const totalLayers = 8;
+  // Named metrics — never mix VDB points, display total, and graph nodes silently.
+  const vdbPoints = getVdbPoints();
+  const displayTotal = getLayerTotal();
+  const totalLinks = getGraphRelationCount();
+  const lc = (layerCountsData && (layerCountsData.display_counts || layerCountsData.counts))
+    ? (layerCountsData.display_counts || layerCountsData.counts)
+    : {};
+  // L4 is retired; don't count it as healthy coverage.
+  const coverageKeys = Object.keys(lc).filter(k => k !== 'l4_identity');
+  const activeLayers = coverageKeys.filter(k => Number(lc[k]) > 0).length;
+  const totalLayers = 7;
 
   // Stat cards
   const statsHtml = `
     <div class="stat-card">
-      <div class="stat-label">MEMORIES STORED</div>
-      <div class="stat-value">${totalMemories}</div>
+      <div class="stat-label">VDB POINTS</div>
+      <div class="stat-value">${fmtCount(vdbPoints)}</div>
+      <div class="text-xs text-muted mt-1">zvec raw points</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">LINKS</div>
-      <div class="stat-value">${totalLinks}</div>
+      <div class="stat-label">GRAPH RELATIONS</div>
+      <div class="stat-value">${fmtCount(totalLinks)}</div>
+      <div class="text-xs text-muted mt-1">Kuzu edges</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">DISPLAY TOTAL</div>
+      <div class="stat-value">${fmtCount(displayTotal)}</div>
+      <div class="text-xs text-muted mt-1">L0-L4 VDB + L5-L7 graph</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">LAYER COVERAGE</div>
       <div class="stat-value">${activeLayers}<span style="color: var(--muted); font-size: 20px;">/${totalLayers}</span></div>
+      <div class="text-xs text-muted mt-1">L4 retired</div>
     </div>
   `;
   document.getElementById('overview-stats').innerHTML = statsHtml;
@@ -418,9 +458,27 @@ function getActiveLayerCount() {
 }
 
 function getLayerTotal() {
-  const total = Number(layerCountsData?.total);
+  const total = Number(layerCountsData?.display_total ?? layerCountsData?.total);
   if (Number.isFinite(total) && total > 0) return total;
   return allMemories.length;
+}
+
+function getVdbPoints() {
+  const fromStatus = Number(statusData?.vdb_points);
+  if (Number.isFinite(fromStatus) && fromStatus > 0) return fromStatus;
+  const fromStorage = Number(storageData?.vdb?.points);
+  if (Number.isFinite(fromStorage) && fromStorage > 0) return fromStorage;
+  const fromLayer = Number(layerCountsData?.vdb_total);
+  if (Number.isFinite(fromLayer) && fromLayer > 0) return fromLayer;
+  return 0;
+}
+
+function getGraphRelationCount() {
+  const fromLayer = Number(layerCountsData?.relation_count);
+  if (Number.isFinite(fromLayer) && fromLayer > 0) return fromLayer;
+  if (l5Graph && Array.isArray(l5Graph.relations)) return l5Graph.relations.length;
+  if (l5Graph && Array.isArray(l5Graph.edges)) return l5Graph.edges.length;
+  return 0;
 }
 
 function fmtCount(value) {
@@ -430,16 +488,14 @@ function fmtCount(value) {
 }
 
 function renderCompositionBar() {
-  // The bar uses ACTUAL Qdrant counts (queried via /api/layer-counts),
-  // NOT the allMemories sample — the sample is biased by recent
-  // gmt_created activity (e.g., a backfill of L1_RAW + L4_identity would
-  // make L2 look much smaller than it really is).
+  // Prefer split display counts from /api/layer-counts (VDB L0-L4 + graph L5-L7).
+  // Always recompute total from the counts object so percentages cannot drift.
   const lc = (typeof layerCountsData === 'object' && layerCountsData) ? layerCountsData : null;
 
   let layerCounts, total;
-  if (lc && lc.counts && typeof lc.total === 'number' && lc.total > 0) {
-    layerCounts = lc.counts;
-    total = lc.total;
+  if (lc && (lc.display_counts || lc.counts)) {
+    layerCounts = lc.display_counts || lc.counts;
+    total = Object.values(layerCounts).reduce((a, b) => a + (Number(b) || 0), 0);
   } else {
     // Fallback to the sample if the endpoint failed for any reason.
     layerCounts = {};
@@ -449,9 +505,7 @@ function renderCompositionBar() {
 
   let html = '<div class="tag-bar">';
 
-  // L5 is now implemented (66 entities / 120 relations in Kuzu, surfaced
-  // through /api/layer-counts overlay). L6/L7 are populated by the
-  // System2 digest (live in Kuzu, not Qdrant).
+  // L5-L7 are graph-canonical (Kuzu). L0-L4 are VDB-canonical (zvec).
   const layerOrder = ['l0_basic_info', 'l1_raw', 'l2_fact', 'l3_summary', 'l4_identity', 'l5_knowledge', 'l6_schema', 'l7_intention'];
   layerOrder.forEach(layer => {
     const count = layerCounts[layer] || 0;
@@ -486,9 +540,9 @@ function renderCompositionBar() {
 }
 
 function renderMemoryStore() {
-  const vdbPoints = getLayerTotal();
+  const vdbPoints = getVdbPoints();
+  const displayTotal = getLayerTotal();
   const codingTotal = Number(codingCountData?.total) || 0;
-  const total = vdbPoints + codingTotal;
   const vdbOk = vdbPoints > 0 || statusData?.vdb === 'ok';
   const embedOk = statusData?.embed === 'ok';
   const llmOk = statusData?.llm === 'ok';
@@ -502,7 +556,7 @@ function renderMemoryStore() {
         <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
       </svg>
       <div>
-        <div class="text-sm font-mono">${fmtCount(total)} memories stored</div>
+        <div class="text-sm font-mono">${fmtCount(vdbPoints)} VDB · ${fmtCount(displayTotal)} display</div>
         <div class="text-xs text-muted">${statusText}</div>
       </div>
     </div>
@@ -591,14 +645,19 @@ function renderActivityChart() {
 }
 
 function renderOperations() {
-  const vdbPoints = getLayerTotal();
+  const vdbPoints = getVdbPoints();
+  const displayTotal = getLayerTotal();
   const activeLayers = getActiveLayerCount();
   const codingTotal = Number(codingCountData?.total) || 0;
 
   const html = `
     <div class="stat-card">
-      <div class="stat-label">TOTAL MEMORIES</div>
+      <div class="stat-label">VDB POINTS</div>
       <div class="stat-value">${fmtCount(vdbPoints)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">DISPLAY TOTAL</div>
+      <div class="stat-value">${fmtCount(displayTotal)}</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">LAYERS ACTIVE</div>
@@ -1013,23 +1072,18 @@ function restoreMemoryDetailFromUrl() {
 
 // Memory Layers
 function renderLayers() {
-  // v1.5.0: prefer the merged layerCountsData (from /api/layer-counts,
-  // which now includes L5/L6/L7 from Kuzu) for the count column.
-  // Fall back to counting from allMemories (Qdrant sample) if the
-  // endpoint isn't loaded yet. Tag statistics still come from
-  // allMemories because that data isn't in layerCountsData.
+  // Display counts: VDB L0-L4 + graph L5-L7. Also show dual VDB|Graph for L5-L7.
   const layerCounts = {};
   const layerTagCounts = {};
-
-  const liveCounts = (typeof layerCountsData === 'object' && layerCountsData && layerCountsData.counts) || null;
+  const vdbCounts = (layerCountsData && layerCountsData.vdb_counts) || {};
+  const graphCountsLocal = (layerCountsData && layerCountsData.graph_counts) || {};
+  const liveCounts = (layerCountsData && (layerCountsData.display_counts || layerCountsData.counts)) || null;
   if (liveCounts) {
     Object.entries(liveCounts).forEach(([k, v]) => {
       if (typeof v === 'number') layerCounts[k] = v;
     });
   }
   allMemories.forEach(m => {
-    // If liveCounts didn't have this layer, fall back to the
-    // Qdrant sample so older data isn't lost.
     if (!(m.layer in layerCounts)) {
       layerCounts[m.layer] = (layerCounts[m.layer] || 0) + 1;
     }
@@ -1037,14 +1091,17 @@ function renderLayers() {
     layerTagCounts[m.layer] = (layerTagCounts[m.layer] || 0) + tagCount;
   });
 
-  // Total = sum of all layer counts (now includes L5/L6/L7 from
-  // Kuzu, not just L0-L4 from the Qdrant sample).
-  const total = Object.values(layerCounts).reduce((a, b) => a + b, 0);
+  const total = Object.values(layerCounts).reduce((a, b) => a + (Number(b) || 0), 0);
+  const graphLayerKeys = new Set(['l5_knowledge', 'l6_schema', 'l7_intention']);
 
   const rows = Object.entries(LAYERS).map(([key, info]) => {
     const count = Number(layerCounts[key]) || 0;
     const pct = total > 0 ? (count / total * 100).toFixed(1) : '0.0';
     const avgTags = count > 0 ? ((Number(layerTagCounts[key]) || 0) / count).toFixed(1) : '0.0';
+    const dual = graphLayerKeys.has(key)
+      ? `<div class="text-xs text-muted">VDB ${fmtCount(vdbCounts[key] || 0)} · Graph ${fmtCount(graphCountsLocal[key] || count)}</div>`
+      : (key === 'l4_identity' ? `<div class="text-xs text-muted">retired · archive only</div>` : '');
+    const source = graphLayerKeys.has(key) ? 'graph' : 'vdb';
 
     return `
       <tr>
@@ -1053,11 +1110,12 @@ function renderLayers() {
             <div class="layer-indicator layer-${key}" style="background: ${info.color}">${key.split('_')[0].toUpperCase()}</div>
             <div>
               <div class="font-semibold">${info.name}</div>
-              <div class="text-xs text-muted">${info.desc}</div>
+              <div class="text-xs text-muted">${info.desc} · ${source}</div>
+              ${dual}
             </div>
           </div>
         </td>
-        <td class="font-mono">${count}</td>
+        <td class="font-mono">${fmtCount(count)}</td>
         <td class="font-mono">${pct}%</td>
         <td class="font-mono">${avgTags}</td>
       </tr>
@@ -1065,7 +1123,7 @@ function renderLayers() {
   }).join('');
 
   document.getElementById('layers-tbody').innerHTML = rows;
-  document.getElementById('layers-total').textContent = `Total: ${total}`;
+  document.getElementById('layers-total').textContent = `Display total: ${fmtCount(total)} (L0-L4 VDB + L5-L7 graph)`;
   document.getElementById('layers-active').textContent = `Layers Active: ${getActiveLayerCount()}`;
 
   // Right sidebar - layer hierarchy
@@ -1328,28 +1386,35 @@ function renderSystem() {
   
   document.getElementById('system-info').innerHTML = infoHtml;
   
-  // Storage
-  const vdbPoints = getLayerTotal();
+  // Storage — named metrics only
+  const vdbPoints = getVdbPoints();
+  const displayTotal = getLayerTotal();
   const codingTotal = Number(codingCountData?.total) || 0;
-  const total = vdbPoints + codingTotal;
+  const graphTotal = Number(layerCountsData?.graph_total) || 0;
 
   const storageHtml = `
     <div class="mb-4">
       <div class="flex justify-between mb-2">
-        <div class="text-sm">VDB Points</div>
+        <div class="text-sm">VDB Points (zvec raw)</div>
         <div class="text-sm font-mono">${fmtCount(vdbPoints)}</div>
+      </div>
+    </div>
+    <div class="mb-4">
+      <div class="flex justify-between mb-2">
+        <div class="text-sm">Display total (L0-L4 VDB + L5-L7 graph)</div>
+        <div class="text-sm font-mono">${fmtCount(displayTotal)}</div>
+      </div>
+    </div>
+    <div class="mb-4">
+      <div class="flex justify-between mb-2">
+        <div class="text-sm">Graph nodes (L5-L7)</div>
+        <div class="text-sm font-mono">${fmtCount(graphTotal)}</div>
       </div>
     </div>
     <div class="mb-4">
       <div class="flex justify-between mb-2">
         <div class="text-sm">Coding Memories</div>
         <div class="text-sm font-mono">${fmtCount(codingTotal)}</div>
-      </div>
-    </div>
-    <div class="mb-4">
-      <div class="flex justify-between mb-2">
-        <div class="text-sm">Total Memories</div>
-        <div class="text-sm font-mono">${fmtCount(total)}</div>
       </div>
     </div>
     <div>
@@ -1427,7 +1492,7 @@ function renderSystem() {
           </div>
           <div class="kv-item">
             <div class="kv-label">Points</div>
-            <div class="kv-value">${fmtCount(getLayerTotal())}</div>
+            <div class="kv-value">${fmtCount(getVdbPoints())}</div>
           </div>
         ` : ''}
         ${c.name === 'Embedding Service' ? `
@@ -1801,7 +1866,7 @@ function renderOverviewSidebar() {
       <div class="right-section-title">MEMORY INSIGHT</div>
       <div class="text-sm">
         <div class="mb-2">Most active layer: <span class="font-mono">${getMostActiveLayer()}</span></div>
-        <div class="mb-2">Total memories: <span class="font-mono">${fmtCount(getLayerTotal())}</span></div>
+        <div class="mb-2">VDB points: <span class="font-mono">${fmtCount(getVdbPoints())}</span> · display: <span class="font-mono">${fmtCount(getLayerTotal())}</span></div>
         <div class="mb-2">Active layers: <span class="font-mono">${getActiveLayerCount()}</span></div>
       </div>
     </div>

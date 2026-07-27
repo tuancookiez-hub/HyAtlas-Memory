@@ -28,7 +28,11 @@ import os
 import sys
 from pathlib import Path
 
-from hermes_constants import get_hermes_home
+try:
+    from hermes_constants import get_hermes_home
+except Exception:
+    def get_hermes_home():
+        return Path.home() / "AppData" / "Local" / "hermes"
 
 from . import _start, archive_cli, config_cli, layout, migrate_cli, zvec_cli
 from . import cli as _memory_cli
