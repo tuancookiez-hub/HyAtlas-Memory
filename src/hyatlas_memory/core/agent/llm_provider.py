@@ -89,6 +89,9 @@ class LLMResponse:
     #   [{"id": "...", "type": "function", "function": {"name": "...", "arguments": "<json str>"}}]
     # 调用方应使用 tools.base.parse_tool_calls_from_json 解析
     tool_calls: list[dict[str, Any]] | None = None
+    # 推理模型（DeepSeek-R1, MiniMax-M3 等）可能把思考过程放在 reasoning_content
+    # 而非 content 中。保留此字段供诊断和 _strip_code_fence 回退使用。
+    reasoning_content: str = ""
 
 
 @dataclass
@@ -362,6 +365,9 @@ class LLMProvider:
 
             msg, usage, _finish = self._extract_response(response)
             content = msg.content or ""
+            # 推理模型（DeepSeek-R1, MiniMax-M3 等）可能把输出放在
+            # reasoning_content 而非 content；用 getattr 安全提取。
+            reasoning_content = getattr(msg, "reasoning_content", "") or ""
             tokens = usage.total_tokens if usage else 0
             p_tokens = usage.prompt_tokens if usage else 0
             c_tokens = usage.completion_tokens if usage else 0
@@ -375,8 +381,14 @@ class LLMProvider:
                 logger.warning(
                     f"[llm] empty content: finish_reason={_finish!r} "
                     f"completion_tokens={c_tokens} reasoning_tokens={_rt} "
+                    f"reasoning_content_len={len(reasoning_content)} "
                     f"model={self._llm_config.model}"
                 )
+                # 回退：content 为空但 reasoning_content 有内容时，
+                # 用 reasoning_content 作为 content（推理模型兼容）。
+                if reasoning_content.strip():
+                    content = reasoning_content
+                    reasoning_content = ""
 
             # tool_calls 反序列化为纯 dict 列表（方便后续传递 / 记录）
             tool_calls_raw = getattr(msg, "tool_calls", None) or []
@@ -406,6 +418,7 @@ class LLMProvider:
                 model=self._llm_config.model,
                 finish_reason=_finish,
                 tool_calls=tool_calls,
+                reasoning_content=reasoning_content,
             )
 
         except ImportError:
@@ -493,6 +506,7 @@ class LLMProvider:
             model=self._llm_config.model,
             finish_reason=_finish,
             tool_calls=tool_calls,
+            reasoning_content=getattr(msg, "reasoning_content", "") or "",
         )
 
     async def complete_messages(
@@ -640,6 +654,7 @@ class LLMProvider:
             model=self._llm_config.model,
             finish_reason=_finish,
             tool_calls=tool_calls,
+            reasoning_content=getattr(msg, "reasoning_content", "") or "",
         )
 
     async def _call_eval_platform_messages(
@@ -716,6 +731,7 @@ class LLMProvider:
             model=self._llm_config.model,
             finish_reason=_finish,
             tool_calls=tool_calls,
+            reasoning_content=getattr(msg, "reasoning_content", "") or "",
         )
 
     async def chat(
