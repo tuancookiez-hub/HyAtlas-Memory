@@ -18,7 +18,11 @@ import shutil
 import sys
 from pathlib import Path
 
-from hermes_constants import get_hermes_home
+try:
+    from hermes_constants import get_hermes_home
+except ImportError:
+    def get_hermes_home() -> Path:
+        return Path(os.environ.get("HERMES_HOME", Path.home() / "AppData" / "Local" / "hermes"))
 
 
 def _detect_hermes_python() -> str | None:

@@ -5,11 +5,11 @@ This ensures the schema matches exactly what the server expects.
 Usage:
     D:/HyAtlas/.hyatlas/venv/Scripts/python.exe scripts/reindex_zvec.py
 """
+import asyncio
+import json
 import os
 import sys
 import time
-import asyncio
-import json
 
 os.environ["HYATLAS_HOME"] = "D:/HyAtlas/.hyatlas"
 os.environ["MEMORY_DATA_DIR"] = "D:/HyAtlas/.hyatlas"
@@ -18,9 +18,10 @@ sys.path.insert(0, "f:/HyAtlas-Memory/src")
 
 import kuzu
 import numpy as np
+
 from hyatlas_memory.core.config import MemoryConfig
-from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore, _FIELD_SCHEMA
-from hyatlas_memory.core.models.memory import MemoryNode, MemoryLayer, MemoryStatus, SourceType
+from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
+from hyatlas_memory.core.models.memory import MemoryLayer, MemoryNode, MemoryStatus, SourceType
 
 KUZU_PATH = r"D:/HyAtlas/.hyatlas/data/kuzu_db"
 ZVEC_PATH = r"D:/HyAtlas/.hyatlas/zvec/agent_memories_1024"
@@ -69,12 +70,10 @@ def embed_batch(model, texts, batch_size=16):
 
 async def rebuild_collection(nodes, model):
     """Use HyAtlas ZvecVectorStore to create collection and insert."""
-    import json
-    import datetime
-
     print("[3/4] Initializing HyAtlas ZvecVectorStore...")
 
-    cfg_dict = json.load(open("D:/HyAtlas/.hyatlas/config/hy_memory.json"))
+    with open("D:/HyAtlas/.hyatlas/config/hy_memory.json", encoding="utf-8") as f:
+        cfg_dict = json.load(f)
     config = MemoryConfig.from_dict(cfg_dict)
     config.vector_store.persist_directory = os.path.join(
         os.environ["MEMORY_DATA_DIR"], "data", "vector_db"
@@ -113,9 +112,7 @@ async def rebuild_collection(nodes, model):
             user_id = str(node.get("user_id", "default") or "default")
             agent_id = str(node.get("agent_id", "default") or "default")
             session_id = str(node.get("source_session_id", "") or "")
-            isolation_key = str(node.get("isolation_key", "") or "")
             owner = str(node.get("owner", "") or "")
-            search_text = content
             confidence = str(node.get("confidence", "") or "")
             source_type = str(node.get("source_type", "") or "")
             emotional_valence = str(node.get("emotional_valence", "") or "")
@@ -123,15 +120,8 @@ async def rebuild_collection(nodes, model):
             specificity_score = str(node.get("specificity_score", "") or "")
             rarity_score = str(node.get("rarity_score", "") or "")
             longtail_flag = str(node.get("longtail_flag", "") or "")
-            meta_tags = str(node.get("meta_tags", "") or "")
-            memory_at = str(node.get("created_at", "") or "")
             temporal_anchor = str(node.get("temporal_anchor", "") or "")
-            gmt_created = str(node.get("created_at", "") or "")
-            gmt_modified = str(node.get("last_accessed_at", "") or "")
-            valid_from = str(node.get("valid_from", "") or "")
-            valid_until = str(node.get("valid_until", "") or "")
             access_count = str(node.get("access_count", "") or "")
-            last_accessed_at = str(node.get("last_accessed_at", "") or "")
             supersedes = str(node.get("previous_version_id", "") or "")
             superseded_by = str(node.get("superseded_by_id", "") or "")
             custom_json = node.get("custom_json", "") or ""
@@ -141,7 +131,6 @@ async def rebuild_collection(nodes, model):
                     custom_dict = json.loads(custom_json) if isinstance(custom_json, str) else custom_json
                 except (json.JSONDecodeError, TypeError):
                     custom_dict = {}
-            content_type = str(node.get("content_type", "") or "")
             tags_raw = node.get("tags", "") or ""
             if isinstance(tags_raw, str):
                 try:

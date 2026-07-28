@@ -17,10 +17,15 @@ For our local fork:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
-from hermes_constants import get_hermes_home
+try:
+    from hermes_constants import get_hermes_home
+except ImportError:
+    def get_hermes_home() -> Path:
+        return Path(os.environ.get("HERMES_HOME", Path.home() / "AppData" / "Local" / "hermes"))
 
 from . import layout
 

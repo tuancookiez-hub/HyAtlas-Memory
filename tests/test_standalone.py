@@ -1,8 +1,12 @@
 """Standalone tests — no hermes-agent dependency required.
 
-These run on CI even without a live Hermes installation."""
+These run on CI even without a live Hermes installation.
+"""
 
 import importlib.util
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -63,6 +67,34 @@ def test_plugin_yaml_version():
     assert data["version"] == __version__, (
         f"plugin.yaml={data['version']} != _version.py={__version__}"
     )
+
+
+def test_cli_importable_without_hermes_constants():
+    """CLI modules fall back cleanly when hermes-agent is absent."""
+    src = Path(__file__).parent.parent / "src"
+    code = """
+import builtins
+real_import = builtins.__import__
+def blocked(name, *args, **kwargs):
+    if name == "hermes_constants":
+        raise ModuleNotFoundError(name)
+    return real_import(name, *args, **kwargs)
+builtins.__import__ = blocked
+import hyatlas_memory._cli
+import hyatlas_memory.init_wizard
+"""
+    env = os.environ.copy()
+    env.pop("VIRTUAL_ENV", None)
+    env.pop("PYTHONPATH", None)
+    env["PYTHONPATH"] = str(src)
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_package_importable():
