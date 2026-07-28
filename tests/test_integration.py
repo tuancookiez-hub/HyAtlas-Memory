@@ -137,10 +137,15 @@ class TestMemoryLifecycle:
         assert self.provider._client.is_reachable()
 
     def teardown_method(self):
-        # Cleanup runs only when the qdrant sidecar is reachable; otherwise
-        # the user/agent_id points would never have been persisted there.
         if _is_port_open("127.0.0.1", _QDRANT_PORT):
             _cleanup_user(self.user_id)
+            return
+        # zvec is in-process; clean through the HyAtlas client instead of
+        # probing the removed Qdrant sidecar.
+        self.provider._client.delete_all(
+            user_id=self.user_id,
+            agent_ids=["integration-test-agent"],
+        )
 
     def test_sync_turn_writes_searchable_memory(self):
         """End-to-end: write a turn, wait for indexing, then recall it."""
@@ -163,6 +168,7 @@ class TestMemoryLifecycle:
         contents = " ".join(str(m.get("content", "")).lower() for m in memories)
         assert "teal" in contents, f"'teal' not found in recalled memories: {contents}"
 
+    @requires_qdrant
     def test_importance_and_access_count_are_populated(self):
         """The 4-factor scorer fields should be present on new memories.
 
