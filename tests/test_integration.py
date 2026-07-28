@@ -275,3 +275,88 @@ class TestMemoryLifecycle:
         for m in parsed["memories"]:
             assert "content" in m
             assert "layer" in m
+
+
+@integration
+@requires_stack
+class TestExtractionResilience:
+    """Tests for extraction visibility and the reprocess recovery endpoint."""
+
+    def setup_method(self):
+        self.user_id = f"extract-test-{uuid.uuid4().hex[:8]}"
+        self.agent_id = "extract-test-agent"
+
+    def teardown_method(self):
+        client = HyMemoryProvider()
+        client.initialize(
+            session_id="teardown",
+            user_id=self.user_id,
+            agent_identity=self.agent_id,
+        )
+        client._client.delete_all(
+            user_id=self.user_id,
+            agent_ids=[self.agent_id],
+        )
+
+    def _post(self, path: str, body: dict) -> dict:
+        data = json.dumps(body).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:19527{path}",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read().decode())
+
+    def test_add_response_includes_extraction_status(self):
+        """Add response must surface extraction_status so callers know
+        whether the memory was fully processed or left as l1_raw."""
+        resp = self._post("/api/v1/add", {
+            "data": "I always take notes during meetings.",
+            "user_id": self.user_id,
+            "agent_id": self.agent_id,
+        })
+        assert resp["success"] is True
+        assert "extraction_status" in resp, (
+            "add response missing extraction_status field"
+        )
+        assert resp["extraction_status"] == "success", (
+            f"expected extraction_status=success, got {resp['extraction_status']!r}"
+        )
+
+    def test_reprocess_endpoint_works(self):
+        """Reprocess endpoint returns a well-formed response and doesn't error.
+
+        Note: after a successful add, the l1_raw node may still be 'active' in
+        zvec (the writer sets SHADOW in-memory but zvec persistence is eventual).
+        Reprocess may legitimately re-extract it — that's harmless. We verify
+        the endpoint contract, not internal shadow timing.
+        """
+        self._post("/api/v1/add", {
+            "data": "Clean memory for reprocess test.",
+            "user_id": self.user_id,
+            "agent_id": self.agent_id,
+        })
+        resp = self._post("/api/v1/reprocess", {
+            "user_id": self.user_id,
+            "agent_id": self.agent_id,
+        })
+        assert resp["success"] is True
+        assert "reprocessed" in resp
+        assert "failed" in resp
+        assert "total" in resp
+        assert isinstance(resp["details"], list)
+
+    def test_reprocess_requires_user_id(self):
+        """Reprocess without user_id returns 400."""
+        data = json.dumps({"agent_id": "x"}).encode()
+        req = urllib.request.Request(
+            "http://127.0.0.1:19527/api/v1/reprocess",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(req, timeout=10)
+        assert exc_info.value.code == 400

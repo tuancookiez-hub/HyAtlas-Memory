@@ -29,7 +29,15 @@ LLMs (incl. MiniMax-M3) emit JSON with trailing commas (`[{"op":"ADD",...},]`), 
 - Server + dashboard run as base `pythonw.exe` (GUI subsystem)
 - End-to-end write: `success: True`, memory stored
 - zvec **0.6.0** floor: LOCK reopen works; VDB reindex from Kuzu succeeded (2682/2682)
-- 74 tests pass, ruff clean
+- 78 tests pass, ruff clean
+
+### Added — extraction resilience (stable floor)
+
+- **`extraction_status` in add response**: the `/api/v1/add` response now includes `extraction_status` (`"success"` / `"failed"`) with `extraction_error` and `extraction_error_code` when LLM extraction fails. Callers can immediately detect orphaned `l1_raw` instead of discovering it via empty search results.
+- **`POST /api/v1/reprocess`**: recovery endpoint that finds orphaned `l1_raw` memories (active, unextracted) for a user, re-submits them through the normal add pipeline, and cleans up the orphans on success. Body: `{"user_id": "...", "agent_id": "...", "limit": 20}`.
+- **`reasoning_content` capture**: `LLMResponse` now captures the `reasoning_content` field from reasoning models (DeepSeek-R1, MiniMax-M3). When `content` is empty but `reasoning_content` has text, the provider falls back to `reasoning_content` as content. All four call paths populate the field.
+- **PII scrub**: `smoke_test.py` hardcoded-path detector no longer embeds the author's username — uses a regex pattern instead. Zero username leaks in `tests/` or `src/`.
+- **Integration tests**: `TestExtractionResilience` — 3 tests covering `extraction_status` in add response, reprocess with no orphans, and reprocess input validation.
 
 Upgrade: `pip install -U git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git`, then `hyatlas venv setup`, then restart the stack. Ensure `zvec>=0.6.0` is installed (`pip install -U "zvec>=0.6.0"` if the resolver did not pull it).
 
