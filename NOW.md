@@ -1,50 +1,35 @@
 # HyAtlas-Memory — NOW.md
 
-## Current state (2026-07-25, stability freeze)
+## Current state (2026-07-28 19:55 +08, stability review)
 
-**Version truth:** hyatlas-memory **3.5.0** (pip + source + live server).  
-**Decision:** keep 3.5.0 **stable** — no further dependency upgrades for now.  
-**3.5.0 floor:** `[zvec]` extra is **`zvec>=0.6.0`** (LOCK fix). Local stack is the reference stable install.
+**Version truth:** hyatlas-memory **3.5.0**. Local HEAD is **4eb0990** on `main`; the local commits are not pushed.
+**Verdict:** the process/HTTP/dashboard layer is stable; full memory-pipeline stability is **not signed off** until durable fact extraction and recall are proven.
 
-### Live stack (probed 2026-07-25)
-- `/api/v1/status` → ok / vdb ok / embed ok / llm ok / write_pipeline ok
-- Server `:19527` + Dashboard `:8765` healthy
-- VDB: zvec **0.6.0**, collection `agent_memories_1024`, 1024d, ~2732 points
-- Graph: Kuzu intact (reindex source of truth for VDB rebuild)
+### Live stack (probed 2026-07-28)
+- `hyatlas start --detach` brought up server `:19527` and dashboard `:8765`; both remained listening during the review.
+- `/api/v1/status` → HTTP 200: `status=ok`, `vdb=ok`, `embed=ok`, `llm=ok`, `write_pipeline=ok`, zvec `1024d`.
+- Dashboard `/api/health`, `/api/layer-counts`, and `/api/graph-counts` → HTTP 200.
+- Display counts: VDB L0–L4 = **3** global rows; Kuzu L5–L7 = **2682**; display total = **2685**. Under `hermes-user/default`, VDB rows are currently 0 and the graph is the populated store.
 
-### Venv pins (freeze baseline)
-| Package | Hermes venv | HyAtlas dedicated venv |
-|---|---|---|
-| hyatlas-memory | 3.5.0 | 3.5.0 |
-| zvec | 0.6.0 | 0.6.0 |
-| openai | **2.24.0** (hermes-agent pin) | **2.48.0** |
-| aiohttp | 3.14.3 | 3.14.3 |
-| numpy | 2.4.6 | 2.4.6 |
+### Verification results
+- Full suite: **63 passed, 14 skipped**.
+- Ruff, Python compilation, and dashboard JavaScript syntax checks: pass.
+- `hyatlas doctor` and `hyatlas status`: pass.
+- One tagged `add` returned a memory ID and exit 0; exact `delete` returned exit 0 and restored the VDB count.
+- Static standalone fallback fix is committed in `4eb0990`; no push performed.
 
-### Do not touch while freeze holds
-- sentence-transformers / transformers / torch major bumps
-- openai in Hermes venv (breaks `hermes-agent` pin)
-- aggressive ST/transformers rewrites that float `huggingface-hub` to 1.x
+## Known blockers / caveats
+- A new write is persisted as `l1_raw`, but the legacy reader deliberately excludes `l1_raw` from semantic recall. The live default profile has no L2 facts, so `write_pipeline=ok` does not prove durable extraction or recall. An exact L1 probe was not returned by search; this is a functional gap to resolve or explicitly document.
+- The current digest log is historical (last recorded run July 14); `digest_log_status=ok` is not evidence of a current digest run. `fresh_l2_for_digest=0`.
+- README documents `hyatlas memory ...` aliases, but the installed CLI exposes top-level `add/search/list/delete`; documentation drift remains.
 
-### Recovery notes (this session)
-- zvec 0.5.1→0.6.0 fixed LOCK open bug
-- VDB rebuilt from Kuzu via `scripts/reindex_zvec.py` (2682/2682, 0 errors)
-- Stale zvec probe collections archived under `D:/HyAtlas/.hyatlas/archive/zvec-cleanup-20260725/`
-- Legacy Qdrant paths renamed to `*.legacy-20260725` (not deleted)
-- pip metadata reconciled to 3.5.0 in both venvs; `hyatlas venv setup` embedder OK
+## Solid
+- Dedicated HyAtlas venv and local BGE embedder (1024d).
+- Zvec 0.6+ runtime opens and stays alive after detached launch.
+- Kuzu graph/dashboard split count path is responding and internally consistent.
+- Launcher import fallback works without `hermes_constants` (covered by a standalone test).
 
-## What is solid
-- Zvec-only runtime
-- Local BGE embedder (1024d) via dedicated venv / in-process wiring
-- Write + search proven after reindex
-- Canonical ops: `hyatlas start|stop|status|doctor|venv setup`
-
-## Manual ops
-- Digest: `python %LOCALAPPDATA%\hermes\scripts\run_hyatlas_digest.py`
-- Status: `curl http://127.0.0.1:19527/api/v1/status`
-- Restart: `hyatlas stop && hyatlas start --detach`
-
-## Next (optional, non-dep)
-- hybrid_v2 live E2E against running server
-- Populate empty specialist profiles with real writes
-- fastapi bump only if dashboard needs it (not part of freeze)
+## Next
+- Decide whether L1 fallback recall is intentional; if not, fix reader routing or prove L2 extraction with a real fact and a read-back test.
+- Run a current digest only after the extraction path is fixed/confirmed.
+- Re-run the exact add → durable layer → search → delete probe before any stable-release claim.
