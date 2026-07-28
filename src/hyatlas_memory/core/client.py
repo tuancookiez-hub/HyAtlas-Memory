@@ -1528,6 +1528,15 @@ class HyMemoryClient:
         if result.extra.get("agent_stored_ids"):
             resp["memory_ids"] = result.extra["agent_stored_ids"]
 
+        # Extraction visibility: surface agent outcome so callers know whether
+        # the memory was fully processed or left as unextracted l1_raw.
+        _agent_status = result.extra.get("agent_status", "")
+        if _agent_status:
+            resp["extraction_status"] = _agent_status
+            if _agent_status == "failed":
+                resp["extraction_error"] = result.extra.get("agent_error", "")
+                resp["extraction_error_code"] = result.extra.get("agent_error_code", "")
+
         # token usage：纯 input（tiktoken）+ extract / reconcile 两条 LLM 链路的
         # prompt/completion 消耗（lite 模式无 LLM，extract/reconcile 为 0）。
         resp["input_tokens"] = input_tokens

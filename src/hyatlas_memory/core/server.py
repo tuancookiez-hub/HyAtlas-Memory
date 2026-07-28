@@ -12,12 +12,13 @@ Usage:
 API Endpoints:
     POST /api/v1/add          — Write memory
     POST /api/v1/search       — Search memories
-    GET  /api/v1/memories/:id — Get single memory
+    GET  /api/v1/memories/:id — Get single memory by ID
     POST /api/v1/list         — List memories
     PUT  /api/v1/memories/:id — Update memory
     DELETE /api/v1/memories/:id — Delete memory
     POST /api/v1/delete_all   — Delete all user memories
     POST /api/v1/digest       — Trigger System 2 digest (ultra mode)
+    POST /api/v1/reprocess    — Retry extraction for orphaned l1_raw memories
     GET  /healthz             — Health check
     GET  /info                — Server info
 """
@@ -267,6 +268,10 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
 
             if path == "/api/v1/digest":
                 self._handle_digest(body)
+                return
+
+            if path == "/api/v1/reprocess":
+                self._handle_reprocess(body)
                 return
 
             _json_response(self, 404, {"error": "not_found", "path": path})
@@ -520,6 +525,88 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             })
         finally:
             _digest_lock.release()
+
+    def _handle_reprocess(self, body: dict):
+        """POST /api/v1/reprocess — retry extraction for orphaned l1_raw memories.
+
+        When the LLM was unavailable during a write, the memory persists as
+        l1_raw (active) but never gets extracted into l2_fact, making it
+        invisible to search. This endpoint re-submits those memories through
+        the normal add pipeline and cleans up the orphans on success.
+
+        Body: {"user_id": "...", "agent_id": "...", "limit": 20}
+        """
+        user_id = body.get("user_id", "")
+        if not user_id:
+            _json_response(self, 400, {"error": "user_id is required"})
+            return
+        agent_id = body.get("agent_id", "")
+        limit = min(int(body.get("limit", 20)), 100)
+
+        client = _get_client()
+
+        # Find orphaned l1_raw: active, unextracted
+        listing = client.list_memories(
+            user_id=user_id, agent_id=agent_id,
+            limit=limit * 2, include_raw=True,
+        )
+        orphans = [
+            m for m in (listing.get("vdb", {}).get("memories") or [])
+            if m.get("layer") == "l1_raw"
+            and m.get("status") == "active"
+            and not m.get("extracted", True)
+        ][:limit]
+
+        if not orphans:
+            _json_response(self, 200, {
+                "success": True, "reprocessed": 0, "failed": 0,
+                "message": "no orphaned l1_raw memories found",
+            })
+            return
+
+        results = []
+        ok_count = 0
+        fail_count = 0
+        for orphan in orphans:
+            mid = orphan.get("memory_id", "")
+            content = orphan.get("content", "")
+            if not content:
+                fail_count += 1
+                results.append({"memory_id": mid, "status": "skipped", "reason": "empty content"})
+                continue
+            try:
+                add_resp = client.add(
+                    content,
+                    user_id=orphan.get("user_id", user_id),
+                    agent_id=orphan.get("agent_id", agent_id) or "default_agent",
+                    session_id=orphan.get("session_id", "reprocess"),
+                )
+                extraction = add_resp.get("extraction_status", "")
+                if extraction == "success":
+                    # Clean up the orphaned l1_raw
+                    try:
+                        client.delete(mid)
+                    except Exception:
+                        pass  # non-fatal: old row is harmless
+                    ok_count += 1
+                    results.append({"memory_id": mid, "status": "reprocessed",
+                                    "new_memory_id": add_resp.get("memory_id", "")})
+                else:
+                    fail_count += 1
+                    results.append({"memory_id": mid, "status": "failed",
+                                    "extraction_status": extraction,
+                                    "error": add_resp.get("extraction_error", "")})
+            except Exception as e:
+                fail_count += 1
+                results.append({"memory_id": mid, "status": "error", "error": str(e)})
+
+        _json_response(self, 200, {
+            "success": fail_count == 0,
+            "reprocessed": ok_count,
+            "failed": fail_count,
+            "total": len(orphans),
+            "details": results,
+        })
 
 
 def run_server(port: int = 19527, host: str = "127.0.0.1"):
