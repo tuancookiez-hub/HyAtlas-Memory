@@ -494,10 +494,11 @@ def health_check(url: str, expect: str, timeout: float = HEALTH_TIMEOUT) -> bool
 # ── Startup ─────────────────────────────────────────────────────────────
 
 def banner():
+    from ._version import __version__
     print()
     print(f"  {BOLD}╔══════════════════════════════════════╗{RESET}")
     print(f"  {BOLD}║{RESET}          {BOLD}HyAtlas Memory{RESET}            {BOLD}║{RESET}")
-    print(f"  {BOLD}║{RESET}       AI Memory Atlas v1.0         {BOLD}║{RESET}")
+    print(f"  {BOLD}║{RESET}       AI Memory Atlas v{__version__:<12}{BOLD}║{RESET}")
     print(f"  {BOLD}╚══════════════════════════════════════╝{RESET}")
     print()
 
@@ -515,7 +516,7 @@ def _print_service_urls():
         except Exception:
             pass
     print(f"  {BOLD}Dashboard:{RESET}  {dash_url}")
-    print(f"  {BOLD}Upstream:{RESET}   http://127.0.0.1:{UPSTREAM_PORT}")
+    print(f"  {BOLD}API:{RESET}        http://127.0.0.1:{UPSTREAM_PORT}")
     if _vector_provider() != "zvec":
         print(f"  {BOLD}Qdrant:{RESET}     http://127.0.0.1:{QDRANT_PORT}")
     else:
@@ -727,6 +728,7 @@ def start_all(detach_requested: bool = False) -> None:
             print(f"  {BOLD}{GREEN}All services already running.{RESET}")
             print()
             _print_service_urls()
+            _print_config_summary()
             print(dim("  Run 'hyatlas stop' to shut down, or re-run with restart confirmation."))
             print()
             # Exit cleanly (no health check loop since we're not managing services)
