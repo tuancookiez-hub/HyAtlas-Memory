@@ -169,6 +169,13 @@ HERMES_USER_IDS_JS = json.dumps(HERMES_USER_IDS)  # inject into JS
 PROFILE_AGENT_IDS = ["default", "research", "sentinel", "work-backend", "work-frontend", "trading", "hestia"]
 
 
+def _vdb_user_ids() -> list[str]:
+    """Return an explicit scope, or empty for the local dashboard's all-scope view."""
+    if os.environ.get("HYATLAS_DASHBOARD_USER_IDS", "").strip():
+        return HERMES_USER_IDS
+    return []
+
+
 def _agent_param(qs: dict) -> str:
     """Return a validated dashboard agent filter; empty means all agents."""
     value = (qs.get("agent_id") or [""])[0].strip()
@@ -384,7 +391,7 @@ def _fetch_l1_raw_from_vdb(limit_total: int = 1500, agent_id: str = "") -> list[
     code, body = hy(
         "POST",
         "/api/v1/vdb/scroll",
-        {"mode": "l1_raw", "user_ids": HERMES_USER_IDS, "limit": limit_total, "agent_id": agent_id},
+        {"mode": "l1_raw", "user_ids": _vdb_user_ids(), "limit": limit_total, "agent_id": agent_id},
     )
     if code == 200 and isinstance(body, dict):
         items = body.get("items") or []
@@ -463,6 +470,20 @@ def _enrich_with_vdb_payload(memories: list[dict]) -> list[dict]:
                         m[k] = v
         return memories
     return _enrich_with_qdrant_payload(memories)
+
+
+def _upstream_status() -> tuple[int, object]:
+    """Return the live backend status without manufacturing a green result."""
+    code, payload = hy("GET", "/api/v1/status", timeout=10)
+    if code:
+        return code, payload
+    error = (payload or {}).get("error", "upstream unavailable")
+    return 502, {
+        "status": "error",
+        "llm": "unknown",
+        "write_pipeline": "error",
+        "error": error,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -3661,8 +3682,8 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             return self._json(200, self._build_quality_metrics(agent_id))
 
         if path == "/api/status":
-            code, payload = hy("GET", "/api/v1/status", timeout=10)
-            return self._json(code or 502, payload)
+            code, payload = _upstream_status()
+            return self._json(code, payload)
 
         if path == "/api/info":
             code, payload = hy("GET", "/info", timeout=5)

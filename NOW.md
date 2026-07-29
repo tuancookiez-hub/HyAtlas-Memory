@@ -1,6 +1,24 @@
 # HyAtlas-Memory — NOW.md
 
-## Current state (2026-07-28 19:55 +08, stability review)
+## Current state (2026-07-29, clean-floor verification)
+- Clean-floor fix is committed locally in the current HEAD; it is not pushed.
+- Dashboard L1_RAW reads use a complete zvec filter, newest-first sorting, and all-user localhost scope unless `HYATLAS_DASHBOARD_USER_IDS` is explicitly set.
+- Dashboard `/api/status` now preserves the backend's live warning/error state instead of presenting stale green health.
+- Runtime LLM moved from capacity-limited `poolside/laguna-s-2.1:free` to local AI2API `alibaba-token:qwen3.8-max-preview`; the previous config was backed up under `D:\HyAtlas\.hyatlas\config`.
+- Live add → L2 fact → semantic read-back succeeded at score **0.9176**; all temporary verification records were deleted and the VDB returned to **64** points.
+- Backend and dashboard both report `status=ok`, `llm=ok`, `write_pipeline=ok`; browser shows `OPERATIONAL`, `L1_RAW 19`, no error overlay, and no JavaScript errors.
+- Verification: **78 passed, 19 deselected**; `ruff check src/ tests/` passes. Repository-wide `ruff format --check` remains pre-existing baseline debt affecting 115 files and is intentionally not swept into this fix.
+
+## Previous state (2026-07-29, dashboard L1 freshness)
+- HEAD is `02971b3`; dashboard fix remains local and uncommitted.
+- L1_RAW dashboard reads now use a complete zvec filter and newest-first sorting; default localhost view no longer hides legacy user scopes.
+- Regression gate: **76 passed, 19 deselected** under Python 3.11 + zvec 0.6.0; Ruff and AST checks pass.
+- User-approved restart succeeded: backend PID 33048 on `:19527`, dashboard PID 45116 on `:8765`.
+- Live API shows **19 L1_RAW** rows, newest `2026-07-29T12:47:46Z`; dashboard `/api/memories` includes the same 19 rows.
+- Browser shows `OPERATIONAL`, composition `L1 19`, `L1_RAW 19`, and populated recent ingestion with no JavaScript errors.
+- Newest L2 fact is `2026-07-29T08:41:18Z`; provider health recovered after restart, but repeated historical 503/429 reliability remains a separate pending task.
+
+## Previous state (2026-07-28 19:55 +08, stability review)
 
 **Version truth:** hyatlas-memory **3.5.0**. Local HEAD is **4eb0990** on `main`; the local commits are not pushed.
 **Verdict:** the process/HTTP/dashboard layer is stable; full memory-pipeline stability is **not signed off** until durable fact extraction and recall are proven.
