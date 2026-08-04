@@ -185,6 +185,56 @@ def _agent_param(qs: dict) -> str:
         raise ValueError("invalid agent_id")
     return value
 
+
+def _layer_counts(agent_id: str = "") -> dict:
+    """Build the canonical VDB + Kuzu layer-count contract for one scope."""
+    layers = [
+        "l0_basic_info", "l1_raw", "l2_fact", "l3_summary", "l4_identity",
+        "l5_knowledge", "l6_schema", "l7_intention",
+    ]
+    graph_layers = ("l5_knowledge", "l6_schema", "l7_intention")
+    vdb = {
+        layer: int(
+            _vdb_layer_count(
+                layer,
+                require_is_latest=layer not in graph_layers,
+                agent_id=agent_id,
+            ) or 0
+        )
+        for layer in layers
+    }
+    graph = dict.fromkeys(graph_layers, 0)
+    relations = None
+    try:
+        path = "/api/v1/graph" + (f"?agent_id={agent_id}" if agent_id else "")
+        _, data = hy("GET", path, None, timeout=30)
+        if isinstance(data, dict):
+            counts = data.get("layer_counts") or {}
+            graph["l5_knowledge"] = int(
+                counts.get("l5_knowledge") or data.get("node_count") or 0
+            )
+            graph["l6_schema"] = int(counts.get("l6_schema") or 0)
+            graph["l7_intention"] = int(counts.get("l7_intention") or 0)
+            relations = data.get("relation_count")
+    except Exception:
+        pass
+
+    display = dict(vdb)
+    display.update(graph)
+    return {
+        "counts": display,
+        "total": sum(display.values()),
+        "vdb_counts": vdb,
+        "vdb_total": sum(vdb.values()),
+        "graph_counts": graph,
+        "graph_total": sum(graph.values()),
+        "relation_count": relations,
+        "display_counts": display,
+        "display_total": sum(display.values()),
+        "is_active_filtered": True,
+        "sources": {"l0_l4": "vdb", "l5_l7": "graph"},
+    }
+
 # Layer colors (matches CSS .layer-l0..l7)
 LAYER_COLORS = {
     "L0_BASIC_INFO": "#4a6fa5",
@@ -243,14 +293,11 @@ def _to_unix_ts(value):
 
 
 def _extract_memories(payload: dict) -> list[dict]:
-    """Normalize the three response shapes into a flat list of memory dicts.
+    """Normalize VDB response shapes into persisted memory records.
 
-    v1.5.0: also include L5/L6/L7 graph nodes from the ``graph`` key
-    so the dashboard's Memory Layers and Recent Ingestions pages
-    actually surface the L5/L6/L7 data the upstream's
-    ``/api/v1/list`` returns. Without this, the graph items were
-    silently dropped and the dashboard always showed L5/L6/L7 as
-    0/0/0 even when hundreds of nodes existed in Kuzu.
+    Graph nodes are a separate Kuzu data class. Mixing them into this list
+    makes derivations appear as memory writes and corrupts pagination, recent
+    activity, and profile totals.
     """
     raw = (payload or {}).get("vdb") or {}
     items: list[dict] = []
@@ -263,45 +310,6 @@ def _extract_memories(payload: dict) -> list[dict]:
                 items.append(mem)
     elif isinstance(raw, list):
         items = [m for m in raw if isinstance(m, dict)]
-
-    # Pull L5/L6/L7 nodes from the graph key. The upstream's
-    # /api/v1/list response includes them under "graph.nodes".
-    # Each graph node has shape:
-    #   { node_id, layer, content, isolation_key, user_id, agent_id,
-    #     status, gmt_created, content_type, ... }
-    graph = (payload or {}).get("graph") or {}
-    graph_nodes = graph.get("nodes") or []
-    if isinstance(graph_nodes, list):
-        for n in graph_nodes:
-            if not isinstance(n, dict):
-                continue
-            nmid = n.get("node_id") or n.get("_id") or ""
-            if not nmid:
-                continue
-            items.append({
-                "memory_id": nmid,
-                "layer": n.get("layer") or "",
-                "content": n.get("content") or "",
-                "status": n.get("status") or "active",
-                "memory_at": None,
-                # Graph nodes use created_at/valid_from, not gmt_created.
-                # Convert to Unix timestamp (seconds) so the
-                # dashboard's JS can do `m.gmt_created * 1000`
-                # without hitting NaN from a string.
-                "gmt_created": _to_unix_ts(
-                    n.get("created_at") or n.get("valid_from")
-                ),
-                "score": None,
-                "metadata": {
-                    "isolation_key": n.get("isolation_key"),
-                    "user_id": n.get("user_id"),
-                    "agent_id": n.get("agent_id"),
-                    "content_type": n.get("content_type"),
-                    "tags": n.get("tags") or [],
-                    "node_type": n.get("node_type"),
-                    "evidence": n.get("evidence") or [],
-                },
-            })
 
     normalized = []
     for m in items:
@@ -322,6 +330,27 @@ def _extract_memories(payload: dict) -> list[dict]:
             "tags": m.get("tags") or meta.get("tags") or [],
         })
     return normalized
+
+
+def _memory_page(items: list[dict], offset: int, limit: int) -> tuple[list[dict], int]:
+    """Deduplicate and sort the merged memory set before slicing one page."""
+    seen = set()
+    deduped = []
+    for item in items:
+        mid = item.get("memory_id") or item.get("id") or ""
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        deduped.append(item)
+
+    def timestamp(item):
+        value = item.get("gmt_created")
+        if isinstance(value, (int, float)):
+            return value
+        return _to_unix_ts(value) or 0
+
+    deduped.sort(key=timestamp, reverse=True)
+    return deduped[offset : offset + limit], len(deduped)
 
 
 def _fetch_l1_raw_from_qdrant(limit_total: int = 1500, agent_id: str = "") -> list[dict]:
@@ -387,7 +416,7 @@ def _fetch_l1_raw_from_qdrant(limit_total: int = 1500, agent_id: str = "") -> li
     return items
 
 
-def _fetch_l1_raw_from_vdb(limit_total: int = 1500, agent_id: str = "") -> list[dict]:
+def _fetch_l1_raw_from_vdb(limit_total: int = 500, agent_id: str = "") -> list[dict]:
     code, body = hy(
         "POST",
         "/api/v1/vdb/scroll",
@@ -403,6 +432,25 @@ def _fetch_l1_raw_from_vdb(limit_total: int = 1500, agent_id: str = "") -> list[
         if isinstance(m, dict):
             m["gmt_created"] = _to_unix_ts(m.get("gmt_created"))
     return items
+
+
+def _count_l1_raw(agent_id: str = "", user_ids: list[str] | None = None) -> int:
+    """Exact active-L1 count without transferring full record content.
+
+    zvec cannot project fields from a filtered query, but a count-only scan
+    stays in-process (no multi-MB JSON serialization of raw turns).
+    ``user_ids`` defaults to the dashboard's all-scope view.
+    """
+    uids = user_ids if user_ids is not None else _vdb_user_ids()
+    code, body = hy(
+        "POST",
+        "/api/v1/vdb/scroll",
+        {"mode": "l1_raw", "user_ids": uids, "count_only": True, "agent_id": agent_id},
+        timeout=30,
+    )
+    if code == 200 and isinstance(body, dict):
+        return int(body.get("count") or 0)
+    return 0
 
 
 def _enrich_with_qdrant_payload(memories: list[dict]) -> list[dict]:
@@ -483,6 +531,87 @@ def _upstream_status() -> tuple[int, object]:
         "llm": "unknown",
         "write_pipeline": "error",
         "error": error,
+    }
+
+
+def _upstream_health() -> tuple[int, object]:
+    """Return dashboard readiness, including the required memory backend."""
+    code, payload = _upstream_status()
+    if not code or code >= 500:
+        error = (payload or {}).get("error", "upstream unavailable")
+        return 503, {"status": "error", "upstream": HY_MEMORY_BASE, "error": error}
+    status = (payload or {}).get("status")
+    if status not in ("ok", "warning"):
+        return 503, {"status": "error", "upstream": HY_MEMORY_BASE, "backend": payload}
+    broken = [key for key in ("vdb", "embed", "kuzu") if (payload or {}).get(key) != "ok"]
+    if broken:
+        return 503, {
+            "status": "error",
+            "upstream": HY_MEMORY_BASE,
+            "components": broken,
+            "backend": payload,
+        }
+    return 200, {"status": status, "upstream": HY_MEMORY_BASE, "backend": payload}
+
+
+def _dashboard_live() -> tuple[int, object]:
+    """Report only that the dashboard HTTP process can answer requests."""
+    return 200, {"status": "ok", "service": "dashboard"}
+
+
+def _dir_size(path: _pathlib.Path) -> int:
+    if path.is_file():
+        return path.stat().st_size
+    if not path.is_dir():
+        return 0
+    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+
+
+def _coding_db() -> _pathlib.Path | None:
+    raw = os.environ.get("HYATLAS_CODING_DB", "").strip()
+    candidates = [
+        _pathlib.Path(raw).expanduser() if raw else None,
+        hy_home() / "data" / "coding_memory.db",
+        hy_home() / "coding_memory.db",
+    ]
+    return next((path for path in candidates if path and path.is_file()), None)
+
+
+def _storage_status() -> dict:
+    """Describe storage under the active HyAtlas runtime home."""
+    _, status = hy("GET", "/api/v1/status", timeout=10)
+    root = hy_home()
+    files = {}
+    for name in ("data", "vector", "zvec", "logs", "cache", "snapshots"):
+        path = root / name
+        size = _dir_size(path)
+        files[name] = {
+            "available": path.exists(),
+            "bytes": size,
+            "size": f"{size / 1024 / 1024:.2f} MB",
+            "path": str(path),
+        }
+    db = _coding_db()
+    return {
+        "home": str(root),
+        "runtime": {
+            "backend": HY_MEMORY_BASE,
+            "bind_host": BIND_HOST,
+            "bind_port": BIND_PORT,
+            "refresh_seconds": REFRESH_S,
+            "platform": sys.platform,
+        },
+        "vdb": {
+            "provider": (status or {}).get("vdb_provider", "?"),
+            "collection": (status or {}).get("vdb_collection", "?"),
+            "points": (status or {}).get("vdb_points", "?"),
+            "dims": (status or {}).get("embed_dims", "?"),
+        },
+        "files": files,
+        "coding": {
+            "status": "configured" if db else "not_configured",
+            "path": str(db) if db else None,
+        },
     }
 
 
@@ -3126,13 +3255,16 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         scores = snap.get("scores") or {}
         composite = int(scores.get("composite") or 0)
         digest_status = snap.get("digest_log_status") or "missing"
+        coverage = (snap.get("score_coverage") or {}).get("available") or []
         graph = snap.get("graph") or {}
         l6 = int(graph.get("l6") or 0)
         rel = int(graph.get("relations") or 0)
         fresh = int(snap.get("fresh_l2_for_digest") or 0)
         sys1 = int(snap.get("sys1_writes_7d") or 0)
 
-        if composite >= 80:
+        if digest_status in ("missing", "stale", "unreadable") or len(coverage) < 2:
+            grade, label, tone = "N/A", "Insufficient fresh evidence", "caution"
+        elif composite >= 80:
             grade, label, tone = "A", "Excellent", "positive"
         elif composite >= 65:
             grade, label, tone = "B", "Strong", "positive"
@@ -3141,7 +3273,11 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         else:
             grade, label, tone = "D", "Needs attention", "caution"
 
-        if digest_status == "ok" and composite >= 70:
+        if digest_status == "stale":
+            headline = "Digest evidence is stale; refresh it before trusting this quality score."
+        elif digest_status in ("missing", "unreadable") or len(coverage) < 2:
+            headline = "Quality evidence is incomplete; unavailable dimensions are excluded from scoring."
+        elif digest_status == "ok" and composite >= 70:
             headline = "Your memory stack is in great shape — digest is healthy and scores look strong."
         elif digest_status == "ok":
             headline = "Digest is running; keep chatting and let patterns compound in the graph."
@@ -3220,7 +3356,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         ]
 
         highlights = []
-        if digest_status == "ok":
+        if digest_status == "ok" and len(coverage) >= 2:
             highlights.append({"icon": "✓", "text": "Last digest run looks healthy"})
         if l6 >= 50:
             highlights.append({"icon": "✓", "text": f"{l6} learned patterns (L6) in your graph"})
@@ -3234,13 +3370,15 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             highlights.append({"icon": "→", "text": "Holding steady at a strong level"})
         if fresh < 40 and digest_status == "ok":
             highlights.append({"icon": "✓", "text": "Digest queue under control"})
-        if not highlights:
+        if not highlights and grade != "N/A":
             highlights.append(
                 {
                     "icon": "◎",
                     "text": "Use Hermes — this page updates automatically as you go",
                 }
             )
+        if grade == "N/A":
+            highlights = [{"icon": "!", "text": "Fresh evidence is required before coaching is available"}]
 
         since_visit = None
         if prev:
@@ -3265,8 +3403,8 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
     def _build_quality_metrics(self, requested_agent: str = "") -> dict:
         import time as _time
 
-        _, m7 = hy("GET", "/api/v1/metrics?minutes=10080", timeout=15)
-        _, m1 = hy("GET", "/api/v1/metrics?minutes=60", timeout=10)
+        m7_code, m7 = hy("GET", "/api/v1/metrics?minutes=10080", timeout=15)
+        m1_code, m1 = hy("GET", "/api/v1/metrics?minutes=60", timeout=10)
         _, status = hy("GET", "/api/v1/status", timeout=10)
         graph_path = "/api/v1/graph" + (f"?agent_id={requested_agent}" if requested_agent else "")
         _, graph = hy("GET", graph_path, None, timeout=60)
@@ -3280,14 +3418,20 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         agent_id = requested_agent or os.environ.get("HY_MEMORY_AGENT_ID", "default")
         fresh_l2 = 0
         l2_total = 0
+        writes_7d = 0
+        list_available = False
         try:
-            _, listed = hy(
+            list_code, listed = hy(
                 "POST",
                 "/api/v1/list",
                 {"user_id": user_id, "agent_id": agent_id, "limit": 5000},
                 timeout=120,
             )
+            list_available = list_code == 200 and isinstance(listed, dict)
             for m in ((listed or {}).get("vdb") or {}).get("memories") or []:
+                created = _to_unix_ts(m.get("gmt_created")) or 0
+                if created >= _time.time() - 7 * 86400:
+                    writes_7d += 1
                 if m.get("layer") == "l2_fact":
                     l2_total += 1
                     if (m.get("custom") or {}).get("s2_evidence_count", 0) < 1:
@@ -3297,14 +3441,18 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
 
         log_path = hy_home() / "logs" / "digest_run_latest.log"
         digest_status = "missing"
+        digest_age = None
         if log_path.is_file():
             try:
+                digest_age = max(0, (_time.time() - log_path.stat().st_mtime) / 3600)
                 tail = log_path.read_text(encoding="utf-8", errors="replace")[-12000:]
                 if "AFTER " in tail and "no_clusters" not in tail:
                     digest_status = "ok"
                 elif "HTTP 200" in tail:
                     digest_status = "partial"
                 else:
+                    digest_status = "stale"
+                if digest_age > 7 * 24:
                     digest_status = "stale"
             except OSError:
                 digest_status = "unreadable"
@@ -3318,8 +3466,14 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         llm7 = (m7.get("llm_tokens") or {})
         llm_total = num(llm7.get("total"))
         vdb_pts = num(status.get("vdb_points"))
-        sys1_done = num((m7.get("requests") or {}).get("completed"))
-        sys2_done = num((m7.get("sys2_requests") or {}).get("completed"))
+        sys1_done = writes_7d if list_available else None
+        digest_runs = {
+            round(path.stat().st_mtime)
+            for path in (hy_home() / "logs").glob("digest_run_*.log")
+            if path.name != "digest_run_latest.log"
+            and path.stat().st_mtime >= _time.time() - 7 * 86400
+        }
+        sys2_done = len(digest_runs)
         lat = (m7.get("avg_latency_ms") or {}).get("sys1_total")
         relations = int(graph.get("relation_count") or 0)
 
@@ -3334,14 +3488,48 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             + min(35, fresh_l2 // 3)
             + min(25, (gcounts.get("l6_schema") or 0) // 25),
         )
-        latency_score = 100
-        if lat is not None and lat > 0:
+        latency_available = lat is not None and lat > 0
+        latency_score = None
+        if latency_available:
             latency_score = max(0, min(100, int(100 - (lat - 200) / 20)))
 
         digest_component = digest_pts.get(digest_status, 5)
         fresh_component = min(35, fresh_l2 // 3)
         l6_component = min(25, (gcounts.get("l6_schema") or 0) // 25)
-        activity_score = min(100, sys1_done * 2 + sys2_done * 5)
+        metrics_available = m7_code == 200 and isinstance(m7, dict)
+        activity_available = list_available
+        activity_score = min(100, sys1_done * 2 + sys2_done * 5) if activity_available else None
+        weighted = [(evolution_score, 0.5)]
+        if activity_score is not None:
+            weighted.append((activity_score, 0.3))
+        if latency_score is not None:
+            weighted.append((latency_score, 0.2))
+        composite = round(
+            sum(score * weight for score, weight in weighted)
+            / sum(weight for _, weight in weighted)
+        )
+
+        activity_items = [
+            {
+                "label": "System1 memory writes (7d)",
+                "points": min(100, sys1_done * 2),
+                "max": 100,
+                "detail": f"{sys1_done} completed requests",
+            },
+            {
+                "label": "System2 digest runs (7d)",
+                "points": min(100, sys2_done * 5),
+                "max": 100,
+                "detail": f"{sys2_done} completed digests",
+            },
+        ] if activity_available else [
+            {
+                "label": "Activity metrics (7d)",
+                "points": None,
+                "max": 100,
+                "detail": "metrics unavailable",
+            },
+        ]
 
         snapshot = {
             "captured_at": _time.time(),
@@ -3355,6 +3543,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 "relations": relations,
             },
             "digest_log_status": digest_status,
+            "digest_log_age_hours": round(digest_age, 1) if digest_age is not None else None,
             "llm_tokens_7d": llm7,
             "sys1_writes_7d": sys1_done,
             "sys2_digests_7d": sys2_done,
@@ -3363,7 +3552,43 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 "evolution": evolution_score,
                 "activity": activity_score,
                 "latency": latency_score,
-                "composite": round(evolution_score * 0.5 + activity_score * 0.3 + latency_score * 0.2),
+                "composite": composite,
+            },
+            "score_coverage": {
+                "available": [
+                    name
+                    for name, value in (
+                        ("evolution", evolution_score),
+                        ("activity", activity_score),
+                        ("latency", latency_score),
+                    )
+                    if value is not None
+                ],
+                "total": 3,
+            },
+            "evidence": {
+                "captured_at": _time.time(),
+                "scope": {
+                    "infrastructure": "global",
+                    "memory": agent_id,
+                },
+                "metrics_7d": {
+                    "available": metrics_available,
+                    "source": "/api/v1/metrics?minutes=10080",
+                },
+                "metrics_1h": {
+                    "available": m1_code == 200 and isinstance(m1, dict),
+                    "source": "/api/v1/metrics?minutes=60",
+                },
+                "activity_7d": {
+                    "available": activity_available,
+                    "source": "/api/v1/list timestamps + digest_run_*.log mtimes",
+                },
+                "digest_log": {
+                    "available": log_path.is_file(),
+                    "source": str(log_path),
+                    "age_hours": round(digest_age, 1) if digest_age is not None else None,
+                },
             },
             "score_breakdown": {
                 "evolution": [
@@ -3386,35 +3611,22 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                         "detail": f"{gcounts.get('l6_schema') or 0} patterns",
                     },
                 ],
-                "activity": [
-                    {
-                        "label": "System1 memory writes (7d)",
-                        "points": min(100, sys1_done * 2),
-                        "max": 100,
-                        "detail": f"{sys1_done} completed requests",
-                    },
-                    {
-                        "label": "System2 digest runs (7d)",
-                        "points": min(100, sys2_done * 5),
-                        "max": 100,
-                        "detail": f"{sys2_done} completed digests",
-                    },
-                ],
+                "activity": activity_items,
                 "latency": [
                     {
                         "label": "Avg System1 write latency",
                         "points": latency_score,
                         "max": 100,
-                        "detail": f"{lat} ms" if lat is not None else "no samples",
+                        "detail": f"{lat} ms" if latency_available else "no samples",
                     },
                 ],
-                "composite_weights": "50% evolution + 30% activity + 20% latency",
+                "composite_weights": "Available evidence only: evolution 50%, activity 30%, latency 20%.",
             },
             "tokens_per_memory_index": tokens_per_memory,
         }
 
         guides = {
-            "composite": "Weighted blend: 50% evolution, 30% activity, 20% latency.",
+            "composite": "Available-evidence blend: evolution 50%, activity 30%, latency 20%.",
             "evolution": "Digest health, fresh L2 queue, and L6 patterns in the graph.",
             "activity": "Memory writes and digest runs in the last 7 days.",
             "latency": "Average System1 write speed — lower feels snappier.",
@@ -3457,8 +3669,8 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
 
-        # Auth gate — /api/health is exempt (for start.py health checks)
-        if AUTH_REQUIRED and path != "/api/health":
+        # Process liveness is exempt so launchers can verify the dashboard itself.
+        if AUTH_REQUIRED and path != "/api/live":
             if not self._check_auth():
                 # If token is in query string, set cookie and redirect to /
                 if "?" in self.path:
@@ -3576,25 +3788,13 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         if path == "/api/profiles":
             profiles = []
             for agent_id in PROFILE_AGENT_IDS:
-                vdb_count = 0
-                graph_count = 0
-                for uid in HERMES_USER_IDS:
-                    code, payload = hy(
-                        "POST",
-                        "/api/v1/list",
-                        {"user_id": uid, "agent_id": agent_id, "offset": 0, "limit": 1},
-                        timeout=15,
-                    )
-                    if code == 200:
-                        raw = (payload or {}).get("vdb") or {}
-                        vdb_count += int(raw.get("total") or 0)
-                        graph = (payload or {}).get("graph") or {}
-                        graph_count += int(graph.get("total") or len(graph.get("nodes") or []))
+                counts = _layer_counts(agent_id)
                 profiles.append({
                     "agent_id": agent_id,
-                    "vdb_count": vdb_count,
-                    "graph_count": graph_count,
-                    "memory_count": vdb_count + graph_count,
+                    "vdb_count": counts["vdb_total"],
+                    "graph_count": counts["graph_total"],
+                    "display_total": counts["display_total"],
+                    "relation_count": counts["relation_count"],
                 })
             return self._json(200, {"profiles": profiles})
 
@@ -3613,57 +3813,55 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             for uid in HERMES_USER_IDS:
                 body = {
                     "user_id": uid,
-                    "offset": offset,
-                    "limit": max(limit * 2, 100),
+                    "offset": 0,
+                    # The dashboard renders only the newest ~15 ingestion
+                    # items; the exact total comes from a count scan below.
+                    # Fetching 500 full-content rows per user (L1 turns can
+                    # be ~300KB each) made this endpoint multi-second and
+                    # multi-megabyte per page load for no visible benefit.
+                    "limit": 100,
+                    # The dashboard has dedicated /api/l5/graph and
+                    # /api/graph-counts endpoints; skip the Kuzu bucket here
+                    # (it's ~11MB and seconds at current graph scale).
+                    "include_graph": False,
                 }
                 if agent_id:
                     body["agent_id"] = agent_id
-                code, payload = hy("POST", "/api/v1/list", body, timeout=15)
+                # zvec listing is a full scan at current collection scale;
+                # let it outlive the browser's page-load window instead of
+                # returning a false 502 that blanks the dashboard.
+                code, payload = hy("POST", "/api/v1/list", body, timeout=120)
                 if code == 200:
                     items = _extract_memories(payload)
                     raw = (payload or {}).get("vdb") or {}
                     raw_total = raw.get("total") if isinstance(raw, dict) else len(items)
                     all_items.extend(items)
                     total += raw_total if isinstance(raw_total, int) else 0
-            # Deduplicate by memory_id across user scopes
-            seen = set()
-            deduped = []
-            for m in all_items:
-                mid = m.get("memory_id") or m.get("id") or ""
-                if mid not in seen:
-                    seen.add(mid)
-                    deduped.append(m)
             # Also pull L1_RAW via VDB (zvec scroll / include_raw path).
             # Legacy Qdrant fetch is only a fallback when VDB path is empty
             # and a Qdrant sidecar still exists.
-            l1_raw_items = _fetch_l1_raw_from_vdb(agent_id=agent_id)
-            l1_raw_total = len(l1_raw_items)
-            for m in l1_raw_items:
-                mid = m.get("memory_id") or ""
-                if mid and mid not in seen:
-                    seen.add(mid)
-                    deduped.append(m)
-            # Sort merged result by gmt_created descending so the "most recent"
-            # at index 0 reflects actual time, not user_id iteration order.
-            # Memories without gmt_created go to the end.
-            def _ts(m):
-                v = m.get("gmt_created")
-                if isinstance(v, (int, float)):
-                    return v
-                if isinstance(v, str) and v:
-                    try:
-                        from datetime import datetime
-                        return datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
-                    except Exception:
-                        return 0.0
-                return 0.0
-            deduped.sort(key=_ts, reverse=True)
-            # Enrich with importance + access_count from qdrant payload
-            # (upstream's /api/v1/list doesn't surface these fields)
-            deduped = _enrich_with_vdb_payload(deduped)
+            # Bounded scroll: only fetch what the page window can display
+            # (full raw turns can be ~300KB each; transferring all of them
+            # just to count was a multi-MB per-page-load cost). The exact
+            # total comes from a separate in-process count scan.
+            l1_raw_items = _fetch_l1_raw_from_vdb(
+                limit_total=min(max(offset + limit, 50), 500),
+                agent_id=agent_id,
+            )
+            all_items.extend(l1_raw_items)
+            page, merged_total = _memory_page(all_items, offset, limit)
+            # Exact L1 total from an in-process count scan. The per-user
+            # list bucket already includes that user's L1, so subtract the
+            # overlap (hermes-user L1) to avoid double-counting.
+            l1_count = _count_l1_raw(agent_id=agent_id)
+            overlap = _count_l1_raw(agent_id=agent_id, user_ids=HERMES_USER_IDS)
+            merged_total = max(merged_total, total + l1_count - overlap)
+            # Enrich with importance + access_count (vdb scroll payload;
+            # upstream's /api/v1/list doesn't surface these fields)
+            page = _enrich_with_vdb_payload(page)
             return self._json(200, {
-                "memories": deduped[:limit],
-                "total": total + l1_raw_total,
+                "memories": page,
+                "total": merged_total,
                 "offset": offset,
                 "limit": limit,
                 "agent_id": agent_id or "all",
@@ -3690,35 +3888,15 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             return self._json(code or 502, payload)
 
         if path == "/api/storage":
-            _, status = hy("GET", "/api/v1/status", timeout=10)
-            points = (status or {}).get("vdb_points", "?")
-            provider = (status or {}).get("vdb_provider", "?")
-            collection = (status or {}).get("vdb_collection", "?")
-            dims = (status or {}).get("embed_dims", "?")
-            home = os.path.expanduser("~/.hy_memory/data")
-            files = {}
-            try:
-                if os.path.isdir(home):
-                    for name in ("vector_db", "cache.db", "history.db", "kuzu_db"):
-                        p = os.path.join(home, name)
-                        if os.path.isfile(p):
-                            files[name] = f"{os.path.getsize(p)/1024/1024:.2f} MB"
-                        elif os.path.isdir(p):
-                            total = sum(
-                                os.path.getsize(os.path.join(dp, f))
-                                for dp, _, fn in os.walk(p) for f in fn
-                            )
-                            files[name] = f"{total/1024/1024:.2f} MB"
-            except Exception as e:
-                files["error"] = str(e)
-            return self._json(200, {
-                "vdb": {"provider": provider, "collection": collection,
-                        "points": points, "dims": dims},
-                "files": files,
-            })
+            return self._json(200, _storage_status())
+
+        if path == "/api/live":
+            code, payload = _dashboard_live()
+            return self._json(code, payload)
 
         if path == "/api/health":
-            return self._json(200, {"status": "ok", "upstream": HY_MEMORY_BASE})
+            code, payload = _upstream_health()
+            return self._json(code, payload)
 
         if path == "/api/coding-memories":
             qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
@@ -3727,11 +3905,11 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             except ValueError:
                 limit = 25
             import sqlite3
-            db_path = os.path.join(os.path.expanduser("~/.hy_memory/data"), "coding_memory.db")
-            if not os.path.isfile(db_path):
-                return self._json(200, {"memories": [], "total": 0})
+            db_path = _coding_db()
+            if not db_path:
+                return self._json(200, {"memories": [], "total": 0, "status": "not_configured"})
             try:
-                conn = sqlite3.connect(db_path)
+                conn = sqlite3.connect(str(db_path))
                 conn.row_factory = sqlite3.Row
                 total_row = conn.execute("SELECT COUNT(*) FROM coding_memory_meta").fetchone()
                 total = total_row[0] if total_row else 0
@@ -3766,11 +3944,11 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
 
         if path == "/api/coding-count":
             import sqlite3
-            db_path = os.path.join(os.path.expanduser("~/.hy_memory/data"), "coding_memory.db")
-            if not os.path.isfile(db_path):
-                return self._json(200, {"total": 0, "today": 0})
+            db_path = _coding_db()
+            if not db_path:
+                return self._json(200, {"total": 0, "today": 0, "status": "not_configured"})
             try:
-                conn = sqlite3.connect(db_path)
+                conn = sqlite3.connect(str(db_path))
                 row = conn.execute("SELECT COUNT(*) FROM coding_memory_meta").fetchone()
                 total = row[0] if row else 0
                 from datetime import datetime, timezone
@@ -3920,58 +4098,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 agent_id = _agent_param(qs)
             except ValueError:
                 return self._json(400, {"error": "invalid agent_id"})
-            layer_keys = [
-                "l0_basic_info", "l1_raw", "l2_fact", "l3_summary", "l4_identity",
-                "l5_knowledge", "l6_schema", "l7_intention",
-            ]
-            graph_layers = ("l5_knowledge", "l6_schema", "l7_intention")
-            # Keep VDB and Kuzu counts separate. Display prefers graph for L5-L7
-            # (canonical) and VDB for L0-L4. Never max-merge into one silent total.
-            vdb_counts = {}
-            for layer in layer_keys:
-                require_latest = layer not in graph_layers
-                vdb_counts[layer] = int(
-                    _vdb_layer_count(layer, require_is_latest=require_latest, agent_id=agent_id) or 0
-                )
-            graph_counts = dict.fromkeys(graph_layers, 0)
-            relation_count = None
-            try:
-                graph_path = "/api/v1/graph" + (f"?agent_id={agent_id}" if agent_id else "")
-                _, graph_data = hy("GET", graph_path, None, timeout=30)
-                if isinstance(graph_data, dict):
-                    lc = graph_data.get("layer_counts") or {}
-                    graph_counts["l5_knowledge"] = int(
-                        lc.get("l5_knowledge") or graph_data.get("node_count") or 0
-                    )
-                    graph_counts["l6_schema"] = int(lc.get("l6_schema") or 0)
-                    graph_counts["l7_intention"] = int(lc.get("l7_intention") or 0)
-                    relation_count = graph_data.get("relation_count")
-            except Exception:
-                pass
-
-            display_counts = dict(vdb_counts)
-            for layer in graph_layers:
-                display_counts[layer] = graph_counts.get(layer, 0)
-            display_total = sum(int(v or 0) for v in display_counts.values())
-            vdb_total = sum(int(v or 0) for v in vdb_counts.values())
-            graph_total = sum(int(v or 0) for v in graph_counts.values())
-            return self._json(200, {
-                # Back-compat: counts/total are the display view.
-                "counts": display_counts,
-                "total": display_total,
-                "vdb_counts": vdb_counts,
-                "vdb_total": vdb_total,
-                "graph_counts": graph_counts,
-                "graph_total": graph_total,
-                "relation_count": relation_count,
-                "display_counts": display_counts,
-                "display_total": display_total,
-                "is_active_filtered": True,
-                "sources": {
-                    "l0_l4": "vdb",
-                    "l5_l7": "graph",
-                },
-            })
+            return self._json(200, _layer_counts(agent_id))
 
         if path == "/api/graph-counts":
             qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
@@ -4017,6 +4144,9 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
             qs = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
             etype = qs.get("type", [None])[0]
             search = qs.get("q", [None])[0]
+            layer = qs.get("layer", [None])[0]
+            limit = qs.get("n", [None])[0]
+            rels = qs.get("rels", [None])[0]
             try:
                 agent_id = _agent_param(qs)
             except ValueError:
@@ -4026,6 +4156,12 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 upstream_qs.append(f"type={etype}")
             if search:
                 upstream_qs.append(f"q={search}")
+            if layer:
+                upstream_qs.append(f"layer={layer}")
+            if limit:
+                upstream_qs.append(f"n={limit}")
+            if rels:
+                upstream_qs.append(f"rels={rels}")
             if agent_id:
                 upstream_qs.append(f"agent_id={agent_id}")
             upstream_path = "/api/v1/graph"

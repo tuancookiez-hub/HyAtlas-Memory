@@ -328,9 +328,9 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
     # ================================================================
 
     def _handle_healthz(self):
-        """Deep health check: verify VDB, embed, and LLM connectivity."""
+        """Deep health check: verify VDB, embed, Kuzu graph, and LLM connectivity."""
 
-        checks = {"status": "ok", "vdb": "ok", "embed": "ok", "llm": "ok"}
+        checks = {"status": "ok", "vdb": "ok", "embed": "ok", "kuzu": "ok", "llm": "ok"}
         has_error = False
 
         try:
@@ -370,7 +370,23 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             checks["embed"] = f"error: {e}"
             has_error = True
 
-        # 3. LLM check — simple completion.
+        # 3. Kuzu graph check — get stats (truthful: unavailable is an error)
+        try:
+            loop = asyncio.new_event_loop()
+            gstats = loop.run_until_complete(client._graph_store.get_stats())
+            loop.close()
+            if gstats.get("available", True):
+                checks["kuzu"] = "ok"
+                checks["kuzu_memory_nodes"] = gstats.get("memory_nodes", 0)
+            else:
+                reason = gstats.get("reason", "graph store unavailable")
+                checks["kuzu"] = f"error: {reason}"
+                has_error = True
+        except Exception as e:
+            checks["kuzu"] = f"error: {e}"
+            has_error = True
+
+        # 4. LLM check — simple completion.
         # LLM availability affects new extraction/digest writes, but it does not
         # make the already persisted memory graph unreadable. Treat provider
         # throttling as a warning so dashboard health doesn't imply data loss.
@@ -470,7 +486,10 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             if key in body:
                 kwargs[key] = body[key]
 
-        for key in ("limit", "min_score", "profile_min_score", "profile_limit", "reader"):
+        for key in (
+            "limit", "min_score", "profile_min_score", "profile_limit",
+            "reader", "created_after",
+        ):
             if key in body:
                 kwargs[key] = body[key]
 
@@ -481,7 +500,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
         """POST /api/v1/list"""
         client = _get_client()
         kwargs = {}
-        for key in ("user_id", "agent_id", "limit", "offset", "order", "include_raw"):
+        for key in ("user_id", "agent_id", "limit", "offset", "order", "include_raw", "include_graph"):
             if key in body:
                 kwargs[key] = body[key]
         result = client.list_memories(**kwargs)
