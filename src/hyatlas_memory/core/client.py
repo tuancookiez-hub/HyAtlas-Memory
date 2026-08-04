@@ -958,6 +958,7 @@ class HyMemoryClient:
         offset: int = 0,
         order: str = "desc",
         include_raw: bool = True,
+        include_graph: bool = True,
     ) -> dict[str, Any]:
         """
         列出用户的记忆（同步）。
@@ -980,7 +981,7 @@ class HyMemoryClient:
             self.async_list_memories(
                 user_id=user_id, agent_id=agent_id,
                 limit=limit, offset=offset, order=order,
-                include_raw=include_raw,
+                include_raw=include_raw, include_graph=include_graph,
             )
         )
 
@@ -2502,6 +2503,7 @@ class HyMemoryClient:
         offset: int = 0,
         order: str = "desc",
         include_raw: bool = True,
+        include_graph: bool = True,
     ) -> dict[str, Any]:
         """
         列出用户的记忆（异步）。
@@ -2511,6 +2513,9 @@ class HyMemoryClient:
         Args:
             include_raw: 是否包含 L1_RAW（未提取的原始记忆）。默认 True。
                 设为 False 可获得与之前相同的「仅已提取」视图。
+            include_graph: 是否同时返回图库节点桶。默认 True 保持兼容；
+                调用方已有独立 graph 端点时传 False 可省去整个 Kuzu 桶的
+                读取与序列化（当前图规模下约 11MB / 数秒）。
 
         Returns:
             {
@@ -2526,10 +2531,12 @@ class HyMemoryClient:
             limit=limit, offset=offset, order=order,
             include_raw=include_raw,
         )
-        graph = await self._list_graph_bucket(
-            user_id=user_id, agent_id=agent_id,
-            limit=limit, offset=offset, order=order,
-        )
+        graph = None
+        if include_graph:
+            graph = await self._list_graph_bucket(
+                user_id=user_id, agent_id=agent_id,
+                limit=limit, offset=offset, order=order,
+            )
 
         elapsed = round((time.perf_counter() - t0) * 1000, 2)
         logger.info(

@@ -20,16 +20,18 @@ def _run(client, coro):
 
 
 async def _layer_count_async(
-    client, layer: str, *, require_is_latest: bool, agent_id: str = ""
+    client, layer: str, *, require_is_latest: bool, agent_id: str = "", user_ids: list[str] | None = None
 ) -> int:
     vs = client._vector_store
     name = type(vs).__name__
     if name == "ZvecVectorStore":
         import zvec
 
-        from .core.data.vector_store_zvec import _quote, _run_in_vdb_pool
+        from .core.data.vector_store_zvec import _list_to_in, _quote, _run_in_vdb_pool
 
         parts = [f"layer = {_quote(layer)}"]
+        if user_ids:
+            parts.append(f"user_id {_list_to_in(user_ids)}")
         if agent_id:
             parts.append(f"agent_id = {_quote(agent_id)}")
         if require_is_latest:
@@ -64,12 +66,16 @@ async def _layer_count_async(
     return 0
 
 
-def layer_count(client, layer: str, *, require_is_latest: bool = True, agent_id: str = "") -> int:
+def layer_count(
+    client, layer: str, *, require_is_latest: bool = True, agent_id: str = "",
+    user_ids: list[str] | None = None,
+) -> int:
     try:
         return _run(
             client,
             _layer_count_async(
-                client, layer, require_is_latest=require_is_latest, agent_id=agent_id
+                client, layer, require_is_latest=require_is_latest,
+                agent_id=agent_id, user_ids=user_ids,
             ),
         )
     except Exception as e:

@@ -672,6 +672,14 @@ def wire_vdb_dashboard(handler_cls, json_resp_fn, get_client_fn):
                 if mode == "l1_raw":
                     uids = body.get("user_ids") or []
                     limit = int(body.get("limit") or 1500)
+                    count_only = bool(body.get("count_only"))
+                    if count_only:
+                        n = vdb_dashboard.layer_count(
+                            client, "l1_raw", require_is_latest=True,
+                            agent_id=body.get("agent_id", ""),
+                        )
+                        json_resp_fn(self, 200, {"items": [], "count": n})
+                        return
                     items = vdb_dashboard.scroll_l1(client, uids, limit=limit, agent_id=body.get("agent_id", ""))
                     json_resp_fn(self, 200, {"items": items})
                     return
