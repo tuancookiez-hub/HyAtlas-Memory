@@ -1267,7 +1267,7 @@ def apply_l5_auto_trigger_patch() -> bool:
     # Read env vars at patch time (so MEMORY_L5_AUTO can be toggled via .env)
     l5_auto = os.getenv("MEMORY_L5_AUTO", "true").lower() == "true"
     l5_min_interval_hours = float(os.getenv("MEMORY_L5_MIN_INTERVAL_HOURS", "12"))
-    _home = _os.environ.get("HERMES_HOME", str(_P.home() / "AppData" / "Local" / "hermes"))
+    _home = os.environ.get("HERMES_HOME", str(Path.home() / "AppData" / "Local" / "hermes"))
     script_path = Path(_home) / "bin" / "l5_full_pipeline.py"
     state_path = Path(_home) / "logs" / "l5_pipeline_state.json"
 
@@ -1373,17 +1373,20 @@ def apply_l5_auto_trigger_patch() -> bool:
     # Save originals (in case hot-reload double-wraps)
     if not hasattr(System2Writer, "_original_digest"):
         System2Writer._original_digest = System2Writer.digest
-    if not hasattr(System2Writer, "_original_process_user_queue"):
-        System2Writer._original_process_user_queue = System2Writer._process_user_queue
 
     System2Writer.digest = _digest_with_l5_trigger
-    System2Writer._process_user_queue = _process_queue_with_l5_trigger
+    wrapped_methods = "digest()"
+    if hasattr(System2Writer, "_process_user_queue"):
+        if not hasattr(System2Writer, "_original_process_user_queue"):
+            System2Writer._original_process_user_queue = System2Writer._process_user_queue
+        System2Writer._process_user_queue = _process_queue_with_l5_trigger
+        wrapped_methods = "digest() and _process_user_queue()"
     System2Writer._l5_auto_trigger_wrapped = True
     _applied["l5_auto_trigger"] = True
     logger.info(
         f"[hy-memory/patches] L5 auto-trigger patch installed (patch #9). "
         f"AUTO={l5_auto}, MIN_INTERVAL={l5_min_interval_hours}h, "
-        f"wrapped: digest() and _process_user_queue()"
+        f"wrapped: {wrapped_methods}"
     )
     return True
 
@@ -2900,39 +2903,43 @@ def apply_auto_forgetting_patch() -> bool:
         _applied["auto_forgetting"] = True
         return True
 
-    _orig_process = System2Writer._process_user_queue
+    if hasattr(System2Writer, "_process_user_queue"):
+        _orig_process = System2Writer._process_user_queue
 
-    async def _process_with_expiry(self, user_key):
-        """Wrap _process_user_queue with an expiry sweep before S2 runs."""
-        try:
-            await _run_expiry_sweep(self, user_key)
-        except Exception as e:
-            logger.debug(f"[auto-forgetting] expiry sweep error: {e}")
-        return await _orig_process(self, user_key)
+        async def _process_with_expiry(self, user_key):
+            """Wrap _process_user_queue with an expiry sweep before S2 runs."""
+            try:
+                await _run_expiry_sweep(self, user_key)
+            except Exception as e:
+                logger.debug(f"[auto-forgetting] expiry sweep error: {e}")
+            return await _orig_process(self, user_key)
 
-    async def _run_expiry_sweep(s2_writer, user_key):
-        """Archive L2 facts whose valid_until has passed.
+        async def _run_expiry_sweep(s2_writer, user_key):
+            """Archive L2 facts whose valid_until has passed.
 
-        v3.4+: this implementation relied on the Qdrant client's
-        ``scroll`` and ``set_payload`` helpers, which were removed when
-        vector_store_qdrant.py was deleted. The zvec backend does not
-        expose an equivalent admin-style expiry query yet, so we
-        short-circuit and rely on the per-write ``valid_until`` check in
-        the S2 pipeline itself. Once a zvec equivalent exists this hook
-        is the place to re-add the sweep.
-        """
-        vector_store = getattr(s2_writer, "_vector_store", None)
-        if not vector_store:
+            v3.4+: this implementation relied on the Qdrant client's
+            ``scroll`` and ``set_payload`` helpers, which were removed when
+            vector_store_qdrant.py was deleted. The zvec backend does not
+            expose an equivalent admin-style expiry query yet, so we
+            short-circuit and rely on the per-write ``valid_until`` check in
+            the S2 pipeline itself. Once a zvec equivalent exists this hook
+            is the place to re-add the sweep.
+            """
+            vector_store = getattr(s2_writer, "_vector_store", None)
+            if not vector_store:
+                return
+            # Early exit — no Qdrant client means no admin-style sweep available.
+            # The per-write expiry check in WritePipeline already filters out
+            # facts past their valid_until, so the system stays correct without
+            # this backfill sweep.
             return
-        # Early exit — no Qdrant client means no admin-style sweep available.
-        # The per-write expiry check in WritePipeline already filters out
-        # facts past their valid_until, so the system stays correct without
-        # this backfill sweep.
-        return
 
-    System2Writer._process_user_queue = _process_with_expiry
-    logger.info("[hy-memory/patches] auto-forgetting: expiry sweep hooked "
-                "into S2 digest cycle")
+        System2Writer._process_user_queue = _process_with_expiry
+        logger.info("[hy-memory/patches] auto-forgetting: expiry sweep hooked "
+                    "into S2 cycle")
+    else:
+        logger.info("[hy-memory/patches] auto-forgetting: _process_user_queue not present; "
+                    "expiry hook skipped (per-write expiry filter active)")
 
     _applied["auto_forgetting"] = True
     logger.info(

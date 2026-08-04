@@ -41,8 +41,8 @@ def _http_get(base: str, path: str, timeout: float = 5.0) -> tuple[int, object]:
 
 def _stack_up(base: str) -> bool:
     try:
-        # Server has /healthz, dashboard has /api/health. Try both.
-        for path in ("/healthz", "/api/health"):
+        # Server has /healthz; dashboard process liveness is /api/live.
+        for path in ("/healthz", "/api/live"):
             try:
                 s, _ = _http_get(base, path)
                 if s == 200:

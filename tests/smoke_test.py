@@ -99,7 +99,7 @@ def test_dashboard_health():
     """Test that the dashboard is healthy (if running)."""
     print("4. Dashboard health check...", end=" ")
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8765/api/health", timeout=5) as r:
+        with urllib.request.urlopen("http://127.0.0.1:8765/api/live", timeout=5) as r:
             if r.status == 200:
                 print("✅ healthy")
                 if not _is_pytest:

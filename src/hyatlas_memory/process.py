@@ -134,6 +134,12 @@ def _service_env(home: Path) -> dict[str, str]:
     # Intel Fortran runtime (via ctranslate2/onnxruntime) aborts on console
     # close; tell it to ignore CTRL_CLOSE_EVENT so detached services survive.
     env["FOR_DISABLE_CONSOLE_CLOSE_HANDLER"] = "1"
+    # The BGE embedder is loaded from the local HF cache (never re-downloaded
+    # at runtime). Force offline so sentence-transformers skips the network
+    # freshness check — the spawned process may have no working HF route even
+    # when the user shell does.
+    env["HF_HUB_OFFLINE"] = "1"
+    env["TRANSFORMERS_OFFLINE"] = "1"
     # Set PYTHONPATH for the dedicated venv's base pythonw interpreter, which
     # cannot read pyvenv.cfg to find the venv's site-packages. We REPLACE any
     # inherited PYTHONPATH: the Hermes shell exports one pointing at the Hermes

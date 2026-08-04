@@ -199,7 +199,7 @@ def _services(project_root: str) -> list[dict]:
         {
             "name": "Dashboard",
             "port": DASHBOARD_PORT,
-            "url": f"http://127.0.0.1:{DASHBOARD_PORT}/api/health",
+            "url": f"http://127.0.0.1:{DASHBOARD_PORT}/api/live",
             "expect": "ok",
             "cmd": [py, os.path.join(project_root, "server", "dashboard", "dashboard.py")],
             "cwd": project_root,
@@ -241,6 +241,12 @@ def _child_env() -> dict[str, str]:
     # Without this, `hyatlas start` prints "ready" but the server dies the
     # moment the launcher exits and its console handle becomes invalid.
     env["FOR_DISABLE_CONSOLE_CLOSE_HANDLER"] = "1"
+    # The BGE embedder is loaded from the local HF cache (never re-downloaded
+    # at runtime). Force offline so sentence-transformers skips the network
+    # freshness check — the spawned process may have no working HF route even
+    # when the user shell does (Windows firewall/AV can block the child).
+    env["HF_HUB_OFFLINE"] = "1"
+    env["TRANSFORMERS_OFFLINE"] = "1"
     return env
 
 
