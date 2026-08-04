@@ -347,22 +347,26 @@ If the writer isn't running, the database won't populate. See `server/bin/l5_dig
 
 ---
 
-## Patches not applying
+## Integrations not applying
 
-**Symptom:** Upstream SDK issues that the patches should fix are still present.
+> **Note:** `patches.py` was replaced by `integrations.py` in v3.0.0. If you see references to a patches module in old docs or logs, that path is legacy — the active wiring lives in `integrations.py`.
+
+**Symptom:** Upstream behaviors that the integrations should enable (graph endpoint, L1 sweep, L5 in-process extraction, circuit breaker) are missing.
 
 **Diagnosis:**
 ```bash
-python -c "import hyatlas_memory.patches; print('patches module loaded')"
+python -c "import hyatlas_memory.integrations; print('integrations module loaded')"
 ```
+
+The active integration set is logged at startup. Each integration is idempotent and documented inline.
 
 **Fix:**
 
-### Patches module not found
+### Integrations module not found
 
-Ensure `patches.py` is in the `src/hyatlas_memory/` directory:
+Ensure `integrations.py` is in the `src/hyatlas_memory/` directory:
 ```bash
-ls src/hyatlas_memory/patches.py
+ls src/hyatlas_memory/integrations.py
 ```
 
 If missing, reinstall the package:
@@ -370,7 +374,7 @@ If missing, reinstall the package:
 pip install -e . --force-reinstall
 ```
 
-### A specific patch is failing
+### A specific integration is failing
 
 Run with verbose logging:
 ```python
@@ -379,7 +383,7 @@ logging.basicConfig(level=logging.DEBUG)
 import hyatlas_memory
 ```
 
-The patches log warnings to `logging.getLogger("hyatlas_memory.patches")`. Look for exceptions there.
+Look for exceptions during the import-time wiring. Integrations are applied at import time and the active set is logged at startup.
 
 ---
 
@@ -389,8 +393,10 @@ The patches log warnings to `logging.getLogger("hyatlas_memory.patches")`. Look 
 
 **Diagnosis:**
 ```bash
-# Check Qdrant collection sizes
-curl http://127.0.0.1:6333/collections | jq '.result.collections[] | {name, points: .points_count}'
+# Check VDB layer sizes (Zvec is the default store)
+curl 'http://127.0.0.1:19527/api/v1/vdb/layer_count?layer=l1_raw'
+curl 'http://127.0.0.1:19527/api/v1/vdb/layer_count?layer=l2_fact'
+hyatlas status
 ```
 
 **Common causes:**
@@ -398,9 +404,9 @@ curl http://127.0.0.1:6333/collections | jq '.result.collections[] | {name, poin
 ### L1 raw collection is huge (>10K points)
 
 Recall queries slow down with collection size. Solutions:
-- Increase Qdrant's HNSW `ef` parameter (trade accuracy for speed)
-- Prune old L1 facts (move to L2 rollups and delete from L1)
-- Switch from CPU to GPU Qdrant
+- Let the L1_RAW rolling delete/dedup integration prune old raw rows (it is provider-aware for Zvec).
+- Prune old L1 facts (move to L2 rollups and delete from L1).
+- Use a smaller Observatory scope (Last 25 instead of Last 500).
 
 ### Observatory is slow to render
 
@@ -423,24 +429,25 @@ If everything is broken and you want to start over:
 ### Soft reset (keeps config, clears data)
 
 ```bash
-# Stop upstream server
-pkill -f "server.start_server"
+# Stop the stack
+hyatlas stop
 
-# Clear VDB data (Qdrant)
-curl -X DELETE http://127.0.0.1:6333/collections/l1_raw
-# Repeat for l0_basic_info, l2_fact, l3_summary, l4_identity
+# Clear the Zvec vector store (default since v3.1)
+rm -rf ~/.hyatlas/zvec
+# (legacy installs may use ~/.hyatlas/data/zvec — check which exists)
 
 # Clear Kuzu graph
 rm -rf ~/.hyatlas/data/kuzu_db
-rm ~/.hyatlas/data/l5_kuzu_export.json
+rm -f ~/.hyatlas/data/l5_kuzu_export.json
 
 # Clear raw JSONL
-rm ~/.hyatlas/data/l1_raw.jsonl
+rm -f ~/.hyatlas/data/l1_raw.jsonl
 
 # Restart everything
-python -m server.start_server
-python server/dashboard/dashboard.py
+hyatlas start
 ```
+
+> If you still run a legacy Qdrant stack (migration/archive only), clear collections via the Qdrant API instead — see the "Qdrant issues (legacy / migration only)" section above.
 
 ### Hard reset (wipes everything)
 
@@ -472,12 +479,12 @@ If the troubleshooting steps don't resolve your issue:
 
 2. **Run the doctor command:**
    ```bash
-   hermes hy-memory doctor
+   hyatlas doctor
    ```
-   This runs a read-only health check across all components.
+   This runs a read-only fail-fast health check across all components.
 
 3. **Open an issue** at https://github.com/tuancookiez-hub/HyAtlas-Memory/issues with:
-   - Output of `hermes hy-memory doctor`
+   - Output of `hyatlas doctor`
    - Relevant log lines
    - Steps to reproduce
 

@@ -1,8 +1,8 @@
 # HyAtlas Dashboard
 
-> **HyAtlas v3.4.0** — Local web UI for inspecting your memory atlas. Runs on `http://127.0.0.1:8765` and talks to the HyAtlas memory server on port 19527. Profile isolation, Quality Metrics, L1_RAW in lists, and 3-tier upstream status are first-class.
+> **HyAtlas v3.5.0** — Local web UI for inspecting your memory atlas. Runs on `http://127.0.0.1:8765` and talks to the HyAtlas memory server on port 19527. Profile isolation, Quality Metrics, L1_RAW in lists, 3-tier upstream status, and live/stale failure handling are first-class.
 
-The dashboard is a single-page app served by `server/dashboard/dashboard.py` (a `BaseHTTPRequestHandler` with no external web-framework dependencies). The frontend is `server/dashboard/dashboard.html` — one self-contained file with HTML, CSS, and JavaScript that uses Three.js (CDN) for the 3D Observatory view.
+The dashboard is a single-page app served by `server/dashboard/dashboard.py` (a `BaseHTTPRequestHandler` with no external web-framework dependencies). The frontend is split across `dashboard.html` (shell + templates), `app.js` (shared state + most pages), `js/l5.js` (L5 Knowledge Graph page), and `js/observatory.js` (Three.js Observatory). Three.js loads from CDN for the 3D Observatory view.
 
 ## Quick start
 
@@ -59,7 +59,7 @@ The landing page after data loads. Shows at a glance:
 - **Recent Ingestion** — live feed of the last 10 ingested memories, tagged by layer and timestamp
 - **Memory Insight** — a one-line summary of the most active layer and total counts
 
-**Auto-refresh:** every 5 seconds (configurable via `REFRESH_S` in `dashboard.py`). The page fades smoothly between refreshes.
+**Auto-refresh:** every 30 seconds (`REFRESH_S` in `app.js`, surfaced in Settings → System). Refreshes are completion-scheduled — the next poll is queued only after the current `loadAllData()` resolves, so a slow scoped load cannot overlap the next one or leave the header stuck in a false "Loading…" state. The page fades smoothly between refreshes.
 
 ---
 
@@ -108,6 +108,8 @@ L2  FACTS              (densest layer)
 L1  RAW
 L0  BASIC INFO         (innermost ring, smallest radius)
 ```
+
+L4 (identity) is **retired** — no writer since v3.x; its band renders empty. Identity lives in L2 + L6.
 
 Layer Y-spacing is 95px, centered around y=0.
 
@@ -175,9 +177,10 @@ The dashboard's HTTP server (`server/dashboard/dashboard.py`) exposes these endp
 | `GET` | `/api/info` | Hy-Memory upstream server info |
 | `GET` | `/api/storage` | VDB stats + on-disk file sizes (`vector_db/`, `cache.db`, `kuzu_db/`) |
 | `GET` | `/api/health` | Dashboard health check (returns `{status: "ok", upstream: "..."}`) |
+| `GET` | `/api/live` | Dashboard-process liveness (responds even when upstream :19527 is down) |
 | `GET` | `/api/coding-memories?limit=25` | Coding-session memories (from `server/bin/l5_*` pipeline output) |
 | `GET` | `/api/coding-count` | Total coding memory count |
-| `GET` | `/api/layer-counts` | Counts per layer (L0–L4 from VDB) |
+| `GET` | `/api/layer-counts` | Counts per layer — L0–L4 from VDB, merged with L5–L7 from the Kuzu graph |
 | `GET` | `/api/graph-counts` | Counts for L5/L6/L7 (from Kuzu graph) |
 | `GET` | `/api/layer-health` | Hermes digest readiness: VDB + graph counts, fresh L2, digest log status |
 | `GET` | `/api/l6-schemas?n=8&q=` | Sample L6 behavioral schemas from graph (`layer=l6_schema`) |
@@ -197,6 +200,8 @@ The dashboard's HTTP server (`server/dashboard/dashboard.py`) exposes these endp
 - **`agent_id`** — profile isolation filter (v3.4.0; empty = all / default scope behavior)
 
 ### Response shapes
+
+> Counts below are **snapshots** from one atlas (2026-07-29) shown as examples. Your numbers will differ and grow over time — treat them as illustrative, not as expected values.
 
 **`/api/memories`** (paginated list):
 
@@ -233,6 +238,13 @@ The dashboard's HTTP server (`server/dashboard/dashboard.py`) exposes these endp
 ```
 
 Graph layer totals come from `layer_counts` on `GET /api/v1/graph` (not VDB scroll).
+
+### Failure & staleness semantics (v3.5.0)
+
+The frontend groups fetches into domains (core, operations, graph, quality). A non-2xx response throws a structured error; **optional** domain failures (e.g. Quality Metrics) preserve the last-known data and surface a visible stale banner instead of blanking the page. Core failures show an error state.
+
+- `/api/live` answers whenever the dashboard process is up, even if the backend on :19527 is down — use it to distinguish "dashboard dead" from "backend dead". `/api/health` verifies backend readiness and reports degraded components.
+- When an optional domain is stale, the scope header reads `Updated with stale quality data` and the affected page shows `Live quality data is unavailable. Showing the last known values.`
 
 For full schemas, see the `if path ==` branches in `server/dashboard/dashboard.py` (`do_GET` method).
 
@@ -281,7 +293,7 @@ The `boot-screen` element is removed by `hideBootScreen()` after `loadAllData()`
 
 ### Editing the frontend
 
-The frontend is a single file: `server/dashboard/dashboard.html`. After editing, **hard-refresh** your browser (Ctrl+Shift+R) — the server serves with `Cache-Control: no-store` but the browser may cache aggressively.
+The frontend shell is `server/dashboard/dashboard.html`; page logic lives in `app.js`, `js/l5.js`, and `js/observatory.js`. After editing, **hard-refresh** your browser (Ctrl+Shift+R) — the server serves with `Cache-Control: no-store` but the browser may cache aggressively.
 
 ### Adding a new API endpoint
 
@@ -311,8 +323,12 @@ tail -f server/dashboard/logs/dashboard.log
 
 ```
 server/dashboard/
-  dashboard.py          # HTTP server, all API endpoints (~3200 lines)
-  dashboard.html        # Single-page app: HTML + CSS + JS + Three.js
+  dashboard.py          # HTTP server, all API endpoints
+  dashboard.html        # SPA shell: HTML + page templates (Three.js via CDN)
+  app.js                # shared state, navigation, overview, explore, layers, today, system
+  styles.css            # all CSS
+  js/l5.js              # L5 Knowledge Graph page
+  js/observatory.js     # Three.js memory observatory
   assets/               # Icons, favicons
   logs/                 # Request logs
 ```

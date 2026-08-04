@@ -1,7 +1,7 @@
 ---
 name: hyatlas-memory
 description: "Long-term memory stack for Hermes Agent — install, use, and troubleshoot HyAtlas-Memory (7-layer cognitive memory with System1/System2 dual processing, profile isolation, local in-process embedder)."
-version: 3.4.5
+version: 3.5.0
 author: Tuna Dev <tuancookiez@gmail.com>
 license: Apache-2.0
 platforms: [linux, macos, windows]
@@ -35,13 +35,16 @@ HyAtlas-Memory is a personal, local, single-user long-term memory stack for Herm
 
 ## Install
 
-Single command. No PyPI involvement as of v3.4.5 — install is GitHub-direct.
+Single command. No PyPI involvement as of v3.5.0 — install is GitHub-direct.
 
 ```bash
 pip install git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 hyatlas setup hermes -y
+hyatlas venv setup      # recommended: isolated venv so heavy deps don't fight the host app
 hyatlas start           # server :19527 + dashboard :8765
 ```
+
+`hyatlas venv setup` requires [`uv`](https://docs.astral.sh/uv/) on PATH and creates `$HYATLAS_HOME/venv` with `[zvec,local-embed]`. After setup, `hyatlas start` uses it automatically and falls back to the current interpreter if no dedicated venv exists.
 
 Verify:
 
@@ -66,8 +69,9 @@ hyatlas stop && hyatlas start
 | `hyatlas status` | One-line health: ports, status, embed, llm |
 | `hyatlas doctor` | Fail-fast health check; exit 1 on issues |
 | `hyatlas add "..."` | Write a memory fact |
-| `hyatlas search "..."` | Search memories, returns L4 identity layer hits |
+| `hyatlas search "..."` | Search memories (normal channel: L2 facts + L3 summaries + L5 knowledge; legacy L4 rows may surface) |
 | `hyatlas list --layer L5` | List memories from a specific layer |
+| `hyatlas venv setup` | Create the isolated dedicated venv (`[zvec,local-embed]`) |
 | `hyatlas setup hermes -y` | Wire the plugin into Hermes (`memory.provider=hy_memory`) |
 | `hyatlas --help` | Full command list |
 
@@ -80,7 +84,7 @@ Server listens on `127.0.0.1:19527`. Useful endpoints (all `GET` unless noted):
 | Endpoint | Purpose |
 |---|---|
 | `/api/v1/status` | Health: `status`, `vdb`, `embed`, `llm`, `embed_dims`, `write_pipeline` |
-| `/api/v1/search?q=<text>&agent_id=<id>` | Semantic search, returns L4 hits |
+| `/api/v1/search?q=<text>&agent_id=<id>` | Semantic search across the normal channel (L2/L3/L5 + legacy L4) |
 | `/api/v1/list?agent_id=<id>&limit=N` | List recent memories, with optional `include_raw=true` to see the original L1_RAW payload |
 | `/api/v1/vdb/layer_count?agent_id=<id>` | Per-layer VDB counts (l1..l7) |
 | `/api/v1/profiles` | List known agent profiles and their counts |
@@ -109,17 +113,20 @@ To check what's in each profile: `GET /api/v1/profiles` returns counts per agent
 
 Memories are stored across 7 layers. Knowing what each is for helps debugging:
 
-| Layer | Name | What lives here | When populated |
-|---|---|---|---|
-| L1 | `l1_raw` | Original raw text from the user/conversation | Every turn, before any LLM |
-| L2 | `l2_fact` | LLM-extracted atomic facts from L1 | System2 digest (background) |
-| L3 | `l3_context` | Session context, conversation windows | During sessions |
-| L4 | `l4_identity` | Stable user/agent identity facts (preferences, traits) | Replayed from L1 → L2 reconciliation |
-| L5 | `l5_knowledge` | Knowledge graph nodes — entities + relations | Cross-domain sweeper, weekly |
-| L6 | `l6_schema` | Schema evolution records | L5 in-process extraction |
-| L7 | `l7_intention` | High-level intentions / goals | Experimental, weekly digest |
+| Layer | Name | What lives here | Store | When populated |
+|---|---|---|---|---|
+| L0 | `l0_basic_info` | Stable profile snippets (name, locale) | Zvec | Seeded / extracted |
+| L1 | `l1_raw` | Original raw text from the user/conversation | Zvec | Every turn, before any LLM |
+| L2 | `l2_fact` | LLM-extracted atomic facts (**primary capture layer**) | Zvec | System 1 on `add` (pro/ultra) |
+| L3 | `l3_summary` | Session / rollup summaries | Zvec | Periodic rollups |
+| L4 | `l4_identity` | **RETIRED** — legacy rows only, no writer | Zvec (legacy) | Identity now lives in L2 + L6 |
+| L5 | `l5_knowledge` | Knowledge graph nodes — entities + relations | Kuzu | System 2 digest |
+| L6 | `l6_schema` | Behavioral schemas ("When X, user Y…") | Kuzu | System 2 digest |
+| L7 | `l7_intention` | High-level intentions / goals (experimental) | Kuzu | System 2 digest |
 
-**Common gotcha:** `search` returns L4 hits by default. If a memory exists at L1 but isn't surfacing in search, it means System2 hasn't promoted it to L4 yet — wait for the weekly digest, or run a search with `?include_raw=true` to see unprocessed L1 entries.
+**Search channels** (`client.search`): **Profile** = L0 + L6 · **Normal** = L2 + L3 + L5 (+ legacy L4 rows) · **Proactive** = L7 (off by default).
+
+**Common gotcha:** a fresh write lands in **L1_RAW** first; System 1 promotes it to **L2** when extraction succeeds. If a memory exists at L1 but isn't surfacing in search, the LLM extractor likely rejected noisy input — list with `?include_raw=true` to see unprocessed L1 entries. There is **no L4 promotion step** (L4 is retired); durable recall comes from L2 facts and the L5/L6 graph built by the digest.
 
 ## Local embedder (no API key)
 
@@ -136,17 +143,18 @@ print('wired:', getattr(EmbedService, '_inprocess_embed_wired', False))
 "
 ```
 
-Version matrix that works (as of v3.4.5):
+Version matrix that works (as of v3.5.0):
 - `transformers==4.46.3`
-- `huggingface-hub<1.0,>=0.23.2` (not 1.x — that's the bug v3.4.2 fixed, v3.4.5 enforces)
+- `huggingface-hub<1.0,>=0.23.2` (not 1.x — that's the bug v3.4.2 fixed; enforced in core deps since v3.4.5)
 - `tokenizers<0.21,>=0.20`
 - `sentence-transformers==3.0.1`
 - `numpy<3`
 - `torch`
+- `zvec>=0.6.0` (Windows LOCK reopen fix; 0.5.1 could not reopen collections after a crash)
 
 ## LLM config
 
-LLM is BYO key. Default config in `D:/HyAtlas/.hyatlas/config/hy_memory.json`:
+LLM is BYO key. Example config in `D:/HyAtlas/.hyatlas/config/hy_memory.json` (the model below is an OpenRouter free-tier example — swap for whatever OpenAI-compatible endpoint you actually use):
 
 ```json
 "llm": {
@@ -202,9 +210,9 @@ Do NOT run the digest from git-bash in background — MSYS path mangling breaks 
 - Check `~/.hyatlas/config/hy_memory.json` `llm.api_key`.
 
 **Search returns nothing after a write**
-- New write went to L1_RAW but System2 hasn't promoted to L4 yet.
-- Either wait for the weekly digest, or pass `?include_raw=true` to see L1 entries.
-- Force-promote by writing directly with `layer: L4` (rare; usually let the digest do it).
+- New write went to L1_RAW but System 1 hasn't promoted it to L2 yet (or the extractor rejected noisy input).
+- Pass `?include_raw=true` to see L1 entries, or write a clean factual sentence.
+- Durable recall comes from L2 facts and the L5/L6 graph (built by the digest) — there is no L4 promotion step (L4 is retired).
 
 **Dashboard tabs show empty**
 - Check profile dropdown — you may be on a profile with no data.
@@ -215,7 +223,7 @@ Do NOT run the digest from git-bash in background — MSYS path mangling breaks 
 
 ## Versioning and releases
 
-Releases are GitHub-only. No PyPI. Install is `pip install git+https://...` (no version pin → gets latest). To pin a specific version: `pip install git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git@v3.4.5`.
+Releases are GitHub-only. No PyPI. Install is `pip install git+https://...` (no version pin → gets latest). To pin a specific version: `pip install git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git@v3.5.0`.
 
 Release flow:
 1. Bump version in `pyproject.toml`, `_version.py`, both `plugin.yaml` files
@@ -230,9 +238,9 @@ Latest release: see https://github.com/tuancookiez-hub/HyAtlas-Memory/releases
 
 - Default branch: `main`. PRs target `main`.
 - Apache 2.0 license (NOT MIT — note: there's a stale MIT-licensed `hyatlas-memory` package on PyPI from before the fork, different artifact, ignore it).
-- Python 3.10–3.12 (CI tests all three).
-- Tests: `pytest -v -m "not integration"` for unit; `pytest -m integration` for live-stack tests (requires server running).
-- Lint: `ruff check src/ tests/`. Format: `ruff format --check src/ tests/` (currently disabled in CI; 116 files need reformatting).
+- Python 3.10–3.12 (`requires-python = ">=3.10"`; CI tests 3.10/3.11/3.12).
+- Tests: `pytest -v -m "not integration"` for unit (snapshot 2026-07-29: 102 passed, 14 skipped); `pytest -m integration` for live-stack tests (requires server running).
+- Lint: `ruff check src/ tests/`. Format: `ruff format --check src/ tests/` (currently disabled in CI; many files need reformatting).
 
 ## When to escalate vs. handle yourself
 

@@ -1,6 +1,6 @@
 # HTTP API Reference
 
-> **HyAtlas v3.4.0** — Two local HTTP servers: memory **19527**, dashboard **8765**. Vector data is **Zvec** (via server `/api/v1/vdb/*`); graph **L5–L7** is **Kuzu** (`GET /api/v1/graph`). List is L1-transparent (`include_raw`); status is 3-tier (`ok` / `warning` / `error`).
+> **HyAtlas v3.5.0** — Two local HTTP servers: memory **19527**, dashboard **8765**. Vector data is **Zvec** (via server `/api/v1/vdb/*`); graph **L5–L7** is **Kuzu** (`GET /api/v1/graph`). List is L1-transparent (`include_raw`); status is 3-tier (`ok` / `warning` / `error`). Dashboard liveness (`/api/live`) is independent of backend health.
 
 See also: [DASHBOARD.md](./DASHBOARD.md) (UI), [HYATLAS_HERMES.md](./HYATLAS_HERMES.md) (identity + digest).
 
@@ -58,15 +58,15 @@ Stdlib HTTP server (`hyatlas_memory.core.server`). Integrations add graph + VDB 
 | `GET` | `/api/v1/vdb/layer_count` | Per-layer VDB count (`layer`, `require_is_latest`) |
 | `POST` | `/api/v1/vdb/scroll` | Scroll VDB points (dashboard L1 feed) |
 
-**Graph response (typical):**
+**Graph response (typical, counts are a 2026-07-29 snapshot):**
 
 ```json
 {
   "nodes": [ { "node_id": "...", "name": "...", "layer": "l5_knowledge", "entity_type": "..." } ],
   "relations": [ { "source": "...", "target": "...", "type": "..." } ],
-  "layer_counts": { "l5_knowledge": 1594, "l6_schema": 568, "l7_intention": 188 },
-  "node_count": 1594,
-  "relation_count": 8128
+  "layer_counts": { "l5_knowledge": 1907, "l6_schema": 587, "l7_intention": 188 },
+  "node_count": 1907,
+  "relation_count": 10384
 }
 ```
 
@@ -89,7 +89,8 @@ Loopback only, no auth. JSON unless serving HTML/assets.
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/` | SPA HTML |
-| `GET` | `/api/health` | `{status, upstream}` |
+| `GET` | `/api/health` | `{status, upstream}` — verifies backend readiness + degraded components |
+| `GET` | `/api/live` | Dashboard-process liveness; answers even when :19527 is down (**v3.5.0**) |
 | `GET` | `/api/status` | Proxy `/api/v1/status` |
 | `GET` | `/api/info` | Proxy `/info` |
 | `GET` | `/api/storage` | VDB provider + on-disk sizes (`zvec`, Kuzu, …) |
@@ -106,7 +107,7 @@ Loopback only, no auth. JSON unless serving HTML/assets.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/api/layer-counts` | L0–L4 via `/api/v1/vdb/layer_count`; L5–L7 merged from `/api/v1/graph` `layer_counts` |
+| `GET` | `/api/layer-counts` | L0–L4 via `/api/v1/vdb/layer_count`, merged with L5–L7 from `/api/v1/graph` `layer_counts` |
 | `GET` | `/api/graph-counts` | L5/L6/L7 + `relation_count` from live graph |
 | `GET` | `/api/layer-health` | Hermes digest readiness (namespace, `fresh_l2_for_digest`, graph counts, digest log, L6 sample hints) |
 | `GET` | `/api/l6-schemas?n=8&q=` | Sample L6 nodes from graph |

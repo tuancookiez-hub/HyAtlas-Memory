@@ -1,10 +1,10 @@
 # HyAtlas-Memory Architecture
 
-> **Scope:** Personal/local long-term memory stack for Hermes Agent, evolved from the [Hy-Memory](https://memory.hunyuan.tencent.com) (Tencent Hunyuan) framework and extended with an experimental **L7 intention** layer, **profile isolation** (`agent_id`), and L1_RAW transparency. This document reflects **HyAtlas v3.4.0** unless a section is marked historical.
+> **Scope:** Personal/local long-term memory stack for Hermes Agent, evolved from the [Hy-Memory](https://memory.hunyuan.tencent.com) (Tencent Hunyuan) framework and extended with an experimental **L7 intention** layer, **profile isolation** (`agent_id`), and L1_RAW transparency. This document reflects **HyAtlas v3.5.0** unless a section is marked historical.
 
 ---
 
-## HyAtlas v3.4 stack (current)
+## HyAtlas v3.5 stack (current)
 
 | Component | Choice |
 |-----------|--------|
@@ -25,7 +25,7 @@
 
 ## Layer mapping: this impl vs. the official spec
 
-| This impl (v3.4) | Official (memory.hunyuan.tencent.com) | Purpose |
+| This impl (v3.5) | Official (memory.hunyuan.tencent.com) | Purpose |
 |------------------|---------------------------------------|---------|
 | L1 raw | **L1 原始痕迹** | Verbatim / shadow ingest |
 | L2 fact | **L2 原子事实** | Atomic facts (Hermes capture) |
@@ -78,7 +78,7 @@ A user-visible `search()` merges both: fast VDB recall plus graph-backed schema/
 
 ---
 
-## Layer notes (v3.4)
+## Layer notes (v3.5)
 
 ### L1 — Raw (list-visible)
 
@@ -123,7 +123,9 @@ Experimental proactive layer in Kuzu.
 
 ---
 
-## Verified status (2026-07-16, v3.4.0)
+## Verified status
+
+> **Historical snapshot (2026-07-16, v3.4.0).** The layer model, store choices, and profile isolation below still hold in v3.5.0. What changed in v3.5.0 is operational: a dedicated venv (`hyatlas venv setup`), `zvec>=0.6.0` (Windows LOCK reopen fix), reconciler trailing-comma JSON repair, and `<think>` stripping for reasoning models. The dashboard also gained `/api/live` (process liveness independent of backend health) and completion-scheduled refreshes. Counts shown are from that date and will have grown.
 
 Single-user Hermes path on Windows (live probe):
 

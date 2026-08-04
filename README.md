@@ -418,7 +418,9 @@ The result is a signal-to-noise ratio that improves with every session. Raw conv
    │                                                    │
    │   L1 raw  →  L2 fact  →  L3 summary (every 20)    │
    │       │           │              │                 │
-   │       └───── L4 identity  ◄──────┘                 │
+   │       │     (L4 identity — RETIRED; legacy rows)    │
+   │       │           │                                 │
+   │       └────► System 2 digest (ultra) ◄─────────────┘
    │                  │                                 │
    │            L5 pipeline (async, Kuzu graph)         │
    │            L6 schema                              │
@@ -470,7 +472,7 @@ server/                    # standalone server launcher
     js/l5.js               # L5 Knowledge Graph page
     js/observatory.js      # Three.js memory observatory (split from app.js for size)
 
-tests/                     # pytest suite (47 tests)
+tests/                     # pytest suite (135 test functions; snapshot 2026-07-29)
 scripts/                   # one-off ops scripts
 docs/                      # architecture + migration notes
 assets/                    # infographic images
@@ -507,8 +509,8 @@ cd HyAtlas-Memory
 pip install -e ".[dev,test]"
 
 # 2. Run tests
-pytest                     # 33 tests pass offline, 19 skipped (need live server)
-pytest -m integration      # integration tests; needs `hyatlas start` (Zvec + server)
+pytest -m "not integration"   # 102 passed, 14 skipped (snapshot 2026-07-29, Python 3.11)
+pytest -m integration         # integration tests; needs `hyatlas start` (Zvec + server)
 
 # 3. Lint
 ruff check .

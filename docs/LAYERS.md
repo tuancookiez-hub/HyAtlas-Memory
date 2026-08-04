@@ -1,6 +1,6 @@
 # Memory Layers
 
-> **HyAtlas v3.4.0 (2026-07)** — Layer model for this repo. Runtime vector store is **Zvec** (in-process). **L4 is retired** for new writes; identity lives in **L2**. Graph layers **L5–L7** live in **Kuzu**. L1_RAW is list-visible by default (`include_raw=True`). Profile isolation is `agent_id`-scoped (dashboard dropdown in v3.4.0).
+> **HyAtlas v3.5.0 (2026-07)** — Layer model for this repo. Runtime vector store is **Zvec** (in-process). **L4 is retired** for new writes; identity lives in **L2**. Graph layers **L5–L7** live in **Kuzu**. L1_RAW is list-visible by default (`include_raw=True`). Profile isolation is `agent_id`-scoped (dashboard dropdown since v3.4.0).
 
 For Hermes single-user setup (digest, cron, L6 proof), see [HYATLAS_HERMES.md](./HYATLAS_HERMES.md). For disk cleanup after the zvec cutover, see [CLEANUP.md](./CLEANUP.md).
 
@@ -8,7 +8,7 @@ High-level design: [architecture.md](./architecture.md). API: [API.md](./API.md)
 
 ---
 
-## Layer at a glance (HyAtlas v3.4)
+## Layer at a glance (HyAtlas v3.5)
 
 | Layer | Key | Purpose | Canonical store | Hermes / digest notes |
 |-------|-----|---------|-----------------|------------------------|
@@ -94,7 +94,7 @@ Experimental proactive layer (extension beyond official 6-layer spec). Stored in
 
 ---
 
-## Storage summary (v3.4)
+## Storage summary (v3.5)
 
 | Layer | Store | Location |
 |-------|--------|----------|
