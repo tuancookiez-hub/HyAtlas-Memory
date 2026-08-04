@@ -1,53 +1,81 @@
 # HyAtlas-Memory — NOW.md
 
-## Current state (2026-07-29, clean-floor verification)
-- Clean-floor fix is committed locally in the current HEAD; it is not pushed.
-- Dashboard L1_RAW reads use a complete zvec filter, newest-first sorting, and all-user localhost scope unless `HYATLAS_DASHBOARD_USER_IDS` is explicitly set.
-- Dashboard `/api/status` now preserves the backend's live warning/error state instead of presenting stale green health.
-- Runtime LLM moved from capacity-limited `poolside/laguna-s-2.1:free` to local AI2API `alibaba-token:qwen3.8-max-preview`; the previous config was backed up under `D:\HyAtlas\.hyatlas\config`.
-- Live add → L2 fact → semantic read-back succeeded at score **0.9176**; all temporary verification records were deleted and the VDB returned to **64** points.
-- Backend and dashboard both report `status=ok`, `llm=ok`, `write_pipeline=ok`; browser shows `OPERATIONAL`, `L1_RAW 19`, no error overlay, and no JavaScript errors.
-- Verification: **78 passed, 19 deselected**; `ruff check src/ tests/` passes. Repository-wide `ruff format --check` remains pre-existing baseline debt affecting 115 files and is intentionally not swept into this fix.
+## Current state (2026-08-05, clean-floor Phase 7.3 complete)
 
-## Previous state (2026-07-29, dashboard L1 freshness)
-- HEAD is `02971b3`; dashboard fix remains local and uncommitted.
-- L1_RAW dashboard reads now use a complete zvec filter and newest-first sorting; default localhost view no longer hides legacy user scopes.
-- Regression gate: **76 passed, 19 deselected** under Python 3.11 + zvec 0.6.0; Ruff and AST checks pass.
-- User-approved restart succeeded: backend PID 33048 on `:19527`, dashboard PID 45116 on `:8765`.
-- Live API shows **19 L1_RAW** rows, newest `2026-07-29T12:47:46Z`; dashboard `/api/memories` includes the same 19 rows.
-- Browser shows `OPERATIONAL`, composition `L1 19`, `L1_RAW 19`, and populated recent ingestion with no JavaScript errors.
-- Newest L2 fact is `2026-07-29T08:41:18Z`; provider health recovered after restart, but repeated historical 503/429 reliability remains a separate pending task.
+**v3.5.0 is the certified stable floor.** All Phases 1–7 done; local commit
+series prepared for Tuna's review; nothing pushed.
 
-## Previous state (2026-07-28 19:55 +08, stability review)
+### Phase 7.3 — Release-floor review ✅
+- **Tracks A/B/C re-run live** (originally 5 pass / 23 fail on 2026-07-29).
+  Browser walkthrough: all 8 dashboard pages render real canonical data with
+  0 JS errors (Overview 1,756 VDB pts / 10,672 relations / 3,884 display;
+  Observatory Kuzu 2,849/615/188 stored-only; Explore live search 25 results;
+  Layers L4 retired; Today/Activity real entries; Settings v3.5.0 + zvec +
+  disk usage; Quality N/A-honest + stale-evidence gated; L5 live counts +
+  "Loaded at" + relation filters).
+- **Final gates:** 138 passed / 1 skipped / 0 deterministic failures
+  (`test_prefetch_returns_formatted_block` is a confirmed 15-19s LLM-latency
+  flake; passes isolated in 18.7s). Ruff `--no-cache`, compileall, JS syntax:
+  all green.
+- **Fixed during 7.3:** dashboard boot stuck at "Loading all profiles" —
+  `/api/memories` fetched 500 full-content rows per user (98MB / 43s, killed
+  by a 15s proxy timeout → false 502). Capped per-user fetch at 100 rows,
+  L1 window to the page size, proxy timeout to 120s, and corrected the
+  visible stale digest command. Load now completes in ~24s with a truthful
+  exact total (247) and a 32KB payload.
+- **Kuzu health gap closed earlier in the arc:** `/api/v1/status` +
+  `/api/health` now probe the graph store (no false-green); 5 failure-mode
+  contract tests cover embedder/VDB/Kuzu-down honestly.
+- Commit series (local, one concern each): health/kuzu contracts,
+  dashboard truth + resilient load, bounded list/count-only perf,
+  lifecycle offline-env + launcher probes, contract tests, docs, chore.
 
-**Version truth:** hyatlas-memory **3.5.0**. Local HEAD is **4eb0990** on `main`; the local commits are not pushed.
-**Verdict:** the process/HTTP/dashboard layer is stable; full memory-pipeline stability is **not signed off** until durable fact extraction and recall are proven.
+### Known remaining (non-blocking, tracked for 3.5.x / 4.0)
+- zvec zero-vector list scan cost (~20-25s at 1024d/1700 pts) is inherent to
+  the storage layer; bounded fetches make it acceptable. Proper fix belongs
+  to the v4.0 Go rewrite (or a fetch/output_fields optimization).
+- Upstream hy-memory is 1.2.21 (fork point 1.2.20): adds rolling_summary,
+  add_extracted, user_basic_info — design inputs for 4.0, not merged now.
+- Phase 6.3 profile-local skill duplicates (trading profile) still deferred
+  pending explicit hygiene approval.
+- `.venv` uv Python 3.11 corrupted (`_sre` mismatch); tests run via the
+  hermes-agent venv python. Worth fixing before 4.0 work.
 
-### Live stack (probed 2026-07-28)
-- `hyatlas start --detach` brought up server `:19527` and dashboard `:8765`; both remained listening during the review.
-- `/api/v1/status` → HTTP 200: `status=ok`, `vdb=ok`, `embed=ok`, `llm=ok`, `write_pipeline=ok`, zvec `1024d`.
-- Dashboard `/api/health`, `/api/layer-counts`, and `/api/graph-counts` → HTTP 200.
-- Display counts: VDB L0–L4 = **3** global rows; Kuzu L5–L7 = **2682**; display total = **2685**. Under `hermes-user/default`, VDB rows are currently 0 and the graph is the populated store.
+## Previous current state (2026-07-31, clean-floor Phase 7 — lifecycle cert passed)
+- Phases 1–6 remain complete and verified.
+- Phase 6 external blocker unchanged: profile-local skill duplicates (trading-profile) deferred until explicit hygiene approval.
+- **LLM provider swapped to `minimax:MiniMax-M3`** via ai2api proxy. Previous providers: alibaba-token (quota exhausted, resets 08-03), kimi-grey:k3 (429 rate-limited under load). Minimax is stable.
+- Stack running: server `:19527` PID 36176, dashboard `:8765` PID 33536. All green: `vdb=ok, embed=ok, llm=ok, write=ok, points=494`.
 
-### Verification results
-- Full suite: **63 passed, 14 skipped**.
-- Ruff, Python compilation, and dashboard JavaScript syntax checks: pass.
-- `hyatlas doctor` and `hyatlas status`: pass.
-- One tagged `add` returned a memory ID and exit 0; exact `delete` returned exit 0 and restored the VDB count.
-- Static standalone fallback fix is committed in `4eb0990`; no push performed.
+### Phase 7.1 — End-to-end memory lifecycle ✅
+- Write → `POST /api/v1/add` → `success: true`, `extraction_status: success`, memory_ids returned (~10s with minimax).
+- Extract → L2 facts created (count went from 55 → 90 after swap + probes).
+- Search → `POST /api/v1/search` returns the memory in the `normal` channel. (GET search returns 0 due to response shape mismatch — POST is the correct client API.)
+- Delete → `DELETE /api/v1/memories/{id}` and `POST /api/v1/delete_all` both 200. Probes cleaned.
+- **Full lifecycle certified.**
 
-## Known blockers / caveats
-- A new write is persisted as `l1_raw`, but the legacy reader deliberately excludes `l1_raw` from semantic recall. The live default profile has no L2 facts, so `write_pipeline=ok` does not prove durable extraction or recall. An exact L1 probe was not returned by search; this is a functional gap to resolve or explicitly document.
-- The current digest log is historical (last recorded run July 14); `digest_log_status=ok` is not evidence of a current digest run. `fresh_l2_for_digest=0`.
-- README documents `hyatlas memory ...` aliases, but the installed CLI exposes top-level `add/search/list/delete`; documentation drift remains.
+### Phase 7.2 — Failure-mode certification
+- ✅ **Provider limited/down:** verified with alibaba-token (quota exhausted) and kimi-grey (429 rate limit). Dashboard reported honest degradation; tests failed deterministically, not silently.
+- ✅ **Backend offline while dashboard alive:** verified 2026-07-30. Dashboard degraded honestly, recovered after restart.
+- ✅ **Service restart with persisted data:** verified 2026-07-30 and again on provider swap. VDB points and Kuzu graph preserved.
+- ✅ **Embedder/VDB/Kuzu unavailable:** 2026-08-04 contract tests (no store renames needed).
+- ✅ **Empty specialist profile:** honest `{"memories": [], "total": 0}`.
+- ✅ **Large graph rendering:** 1,907 nodes / 10,384 relations served in 0.28s; Observatory caps render at 500 with "showing N of M".
 
-## Solid
-- Dedicated HyAtlas venv and local BGE embedder (1024d).
-- Zvec 0.6+ runtime opens and stays alive after detached launch.
-- Kuzu graph/dashboard split count path is responding and internally consistent.
-- Launcher import fallback works without `hermes_constants` (covered by a standalone test).
+### Test suite
+- **121 passed, 14 skipped, 0 failed** (Python 3.13 via uv). Previous 4 integration failures (extraction) now pass with minimax provider.
+- `hyatlas doctor` — all checks passed, zero warnings.
 
-## Next
-- Decide whether L1 fallback recall is intentional; if not, fix reader routing or prove L2 extraction with a real fact and a read-back test.
-- Run a current digest only after the extraction path is fixed/confirmed.
-- Re-run the exact add → durable layer → search → delete probe before any stable-release claim.
+### Current blockers / caveats
+- GET `/api/v1/search` returns 0 hits due to response shape (returns dict with `profile`/`proactive`/`normal` keys, not a flat `memories` list). POST search works correctly. This is a client API inconsistency, not a data loss issue.
+- Phase 6.3 (profile-local skill duplicates) remains deferred.
+
+## Previous current state (2026-07-29, clean-floor Phase 5 complete)
+- Phases 1–4 remain live: separated datasets, stored-truth Observatory, explicit profile scope, truthful health/failure handling, durable quality evidence, and active-home storage reporting.
+- Phase 5 browser verification covered all eight pages against direct APIs: Overview, Observatory, Explore, Layers, Today, Settings, Quality, and L5.
+- The walkthrough found and fixed two additional bugs: specialist Overview used global `status.vdb_points` instead of scoped `vdb_total`, and a fixed 30-second interval overlapped slow scoped refreshes and left the header in a false Loading state.
+- Optional-domain failure was exercised by injecting a quality HTTP 503: last-known data remained visible and the page showed a stale-data banner.
+- Deep-check receipt: `C:\Users\tuanc\AppData\Local\hermes\checklists\default-hyatlas-phase5-20260729.md`.
+- Final verification: **102 passed, 14 skipped, 19 deselected** under Python 3.11; Ruff `--no-cache`, compileall, JavaScript syntax, API parity, profile scope, browser interactions, and screenshots pass.
+- The existing dashboard on `:8765` still runs the pre-Phase-4/5 process because no restart was approved. No commit, push, tag, or release performed.
+- Next: Phase 6 — reconcile current repository docs and active global HyAtlas skills. Profile-local duplicate cleanup remains a separate approval scope.
