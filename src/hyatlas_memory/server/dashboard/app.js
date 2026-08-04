@@ -15,7 +15,13 @@ let currentAgentId = PROFILE_IDS.includes(localStorage.getItem('hyatlas-agent-id
   ? localStorage.getItem('hyatlas-agent-id')
   : 'all';
 let loadSeq = 0;
-let allMemories = [];
+let vdbMemories = [];
+let codingMemories = [];
+let graphNodes = [];
+let graphRelations = [];
+let activityMemories = [];
+let observatoryMemories = [];
+
 let layerCountsData = null;  // display counts: VDB L0-L4 + graph L5-L7 (Memory Composition bar)
 let layerHealthData = null;  // per-user/agent counts from /api/layer-health
 let l6SchemasData = null;    // sample L6 schemas from /api/l6-schemas
@@ -25,6 +31,7 @@ let storageData = null;
 let metricsData = null;
 let qualityData = null;
 let codingCountData = null;
+let loadErrors = [];
 let l5Graph = null;  // full response from /api/l5/graph
 let activityChart = null;
 let radarChart = null;
@@ -96,6 +103,28 @@ function navigateTo(page) {
   if (page === 'l5') {
     initL5Page();
   }
+  renderLoadErrors();
+}
+
+function renderLoadErrors() {
+  document.querySelectorAll('.domain-error').forEach(el => el.remove());
+  const domains = {
+    overview: ['operations', 'graph'],
+    observatory: ['graph'],
+    layers: ['graph'],
+    today: ['operations'],
+    system: ['operations'],
+    quality: ['quality'],
+    l5: ['graph'],
+  };
+  const errors = loadErrors.filter(error => (domains[currentPage] || []).includes(error.name));
+  const page = document.getElementById(`page-${currentPage}`);
+  if (!page || !errors.length) return;
+  const banner = document.createElement('div');
+  banner.className = 'domain-error';
+  banner.style.cssText = 'margin:12px 0;padding:10px 12px;border:1px solid rgba(248,113,113,.45);color:var(--red);background:rgba(248,113,113,.06);';
+  banner.textContent = `Live ${errors.map(error => error.name).join(', ')} data is unavailable. Showing the last known values.`;
+  page.prepend(banner);
 }
 
 // Compute the obsZoom value that fits the full graph into the viewport.
@@ -145,13 +174,41 @@ function escapeAttr(s) {
 // API calls
 async function fetchJSON(url, options = {}) {
   const resp = await fetch(url, options);
-  return resp.json();
+  let data = null;
+  try {
+    data = await resp.json();
+  } catch {
+    data = null;
+  }
+  if (!resp.ok) {
+    const error = new Error(data?.error || `${resp.status} ${resp.statusText}`);
+    error.status = resp.status;
+    error.payload = data;
+    throw error;
+  }
+  return data;
+}
+
+async function fetchResult(name, task) {
+  try {
+    return {name, ok: true, data: await task};
+  } catch (error) {
+    return {name, ok: false, error};
+  }
 }
 
 function scopedPath(path, agentId = currentAgentId) {
-  if (!agentId || agentId === 'all') return path;
+  return scopeQuery(path, agentId);
+}
+
+function scopeQuery(path, agentId = currentAgentId) {
   const join = path.includes('?') ? '&' : '?';
+  if (!agentId || agentId === 'all') return `${path}${join}agent_id=all`;
   return `${path}${join}agent_id=${encodeURIComponent(agentId)}`;
+}
+
+function scopeAgents(agentId = currentAgentId) {
+  return agentId === 'all' ? [] : [agentId];
 }
 
 function setScopeStatus(text) {
@@ -167,6 +224,8 @@ function initAgentSelector() {
     const next = PROFILE_IDS.includes(el.value) ? el.value : 'all';
     currentAgentId = next;
     localStorage.setItem('hyatlas-agent-id', next);
+    l5State.data = null;
+    l5State.scope = null;
     setScopeStatus('Loading…');
     await loadAllData();
   });
@@ -179,22 +238,42 @@ async function loadAllData() {
   const agentId = currentAgentId;
   setScopeStatus(`Loading ${agentId === 'all' ? 'all profiles' : agentId}…`);
   try {
-    const [status, info, memories, storage, metrics, codingCount, codingMemories, layerCounts, graphCounts, layerHealth, l6Schemas, l5, quality] = await Promise.all([
-      fetchJSON('/api/status'),
-      fetchJSON('/api/info'),
-      fetchJSON(scopedPath('/api/memories?limit=500', agentId)),
-      fetchJSON('/api/storage'),
-      fetchJSON('/api/metrics?minutes=10080'),
-      fetchJSON('/api/coding-count'),
-      fetchJSON('/api/coding-memories?limit=500'),
-      fetchJSON(scopedPath('/api/layer-counts', agentId)),
-      fetchJSON(scopedPath('/api/graph-counts', agentId)),
-      fetchJSON(scopedPath('/api/layer-health', agentId)).catch(() => null),
-      fetchJSON(scopedPath('/api/l6-schemas?n=6', agentId)).catch(() => null),
-      fetchJSON(scopedPath('/api/l5/graph', agentId)).catch(() => null),  // L5 may not exist yet; ignore failure
-      fetchJSON(scopedPath('/api/quality-metrics', agentId)).catch(() => null),
+    const [coreResult, opsResult, graphResult, qualityResult] = await Promise.all([
+      fetchResult('core', Promise.all([
+        fetchJSON('/api/status'),
+        fetchJSON('/api/info'),
+        fetchJSON(scopedPath('/api/memories?limit=100', agentId)),
+        fetchJSON(scopedPath('/api/layer-counts', agentId)),
+      ])),
+      fetchResult('operations', Promise.all([
+        fetchJSON('/api/storage'),
+        fetchJSON('/api/metrics?minutes=10080'),
+        fetchJSON('/api/coding-count'),
+        fetchJSON('/api/coding-memories?limit=500'),
+      ])),
+      fetchResult('graph', Promise.all([
+        fetchJSON(scopedPath('/api/graph-counts', agentId)),
+        fetchJSON(scopedPath('/api/layer-health', agentId)),
+        fetchJSON(scopedPath('/api/l6-schemas?n=6', agentId)),
+        fetchJSON(scopedPath('/api/l5/graph', agentId)),
+        fetchJSON(scopedPath('/api/l5/graph?layer=l6_schema&n=500&rels=false', agentId)),
+        fetchJSON(scopedPath('/api/l5/graph?layer=l7_intention&n=500&rels=false', agentId)),
+      ])),
+      fetchResult('quality', fetchJSON(scopedPath('/api/quality-metrics', agentId))),
     ]);
+    if (!coreResult.ok) throw coreResult.error;
+    const [status, info, memories, layerCounts] = coreResult.data;
+    const [storage, metrics, codingCount, codingPayload] = opsResult.ok
+      ? opsResult.data
+      : [storageData, metricsData, codingCountData, {memories: codingMemories}];
+    const [graphCounts, layerHealth, l6Schemas, l5, l6, l7] = graphResult.ok
+      ? graphResult.data
+      : [layerCountsData?.graph_counts, layerHealthData, l6SchemasData, l5Graph, null, null];
+    const quality = qualityResult.ok ? qualityResult.data : qualityData;
+    const failed = [opsResult, graphResult, qualityResult].filter(result => !result.ok);
+
     if (seq !== loadSeq || agentId !== currentAgentId) return false;
+    loadErrors = failed;
     l5Graph = l5;
     layerHealthData = layerHealth;
     l6SchemasData = l6Schemas;
@@ -254,7 +333,7 @@ async function loadAllData() {
 
     // Normalize coding memories to the VDB memory shape so the existing
     // Today-page tabs / filters / sort work without further changes.
-    const codingMems = (codingMemories.memories || []).map(cm => ({
+    const codingMems = opsResult.ok ? (codingPayload.memories || []).map(cm => ({
       memory_id:        cm.memory_id,
       user_id:          'coding',
       agent_id:         cm.agent_id || 'default',
@@ -272,17 +351,16 @@ async function loadAllData() {
       session_id:       cm.session_id,
       confidence:       cm.confidence,
       _source:          'coding',
-    }));
+    })) : codingMemories;
 
-    // Normalize L5 entities to the VDB memory shape so the Observatory
-    // graph plots them in the L5 ring alongside L0-L4. L5 entities are
-    // extracted from L2_facts; their mention_count proxies the importance
-    // (high-mention entities get larger graph nodes; their synthetic
-    // timestamp scales with mention_count so they're spread out across
-    // the timeline instead of all bunched at "today").
-    const l5Mems = (l5Graph && l5Graph.nodes) ? l5Graph.nodes.map(n => {
-      const daysAgo = Math.min(180, Math.max(1, n.mention_count || 0));
-      const ts = Math.floor(Date.now() / 1000) - (86400 * daysAgo);
+    // Normalize graph nodes only for Observatory rendering. Their timestamps
+    // remain the real Kuzu creation time and never enter ingestion/activity.
+    const graphMems = [
+      ...(l5Graph?.nodes || []),
+      ...(l6?.nodes || []),
+      ...(l7?.nodes || []),
+    ].map(n => {
+      const ts = Math.floor(new Date(n.created_at || 0).getTime() / 1000) || 0;
       const rawLayer = (n.layer || '').toLowerCase();
       const layerMap = {
         'l5_knowledge': 'l5_knowledge',
@@ -290,28 +368,30 @@ async function loadAllData() {
         'l7_intention': 'l7_intention',
       };
       return {
-        memory_id:        'l5_' + n.node_id,
-        user_id:          'l5_knowledge',
+        memory_id:        'graph_' + n.node_id,
+        user_id:          'graph',
         agent_id:         n.agent_id || agentId || 'default',
         layer:            layerMap[rawLayer] || 'l5_knowledge',
         content:          n.name,
         gmt_created:      ts,
         gmt_updated:      ts,
         score:            null,
-        session_id:       'l5',
+        session_id:       'graph',
         confidence:       n.confidence || 0.95,
         entity_type:      n.entity_type,
         mention_count:    n.mention_count || 1,
         aliases:          n.aliases || [],
-        _source:          'l5_graph',
+        _source:          'kuzu_graph',
       };
-    }) : [];
+    });
 
-    allMemories = [
-      ...(memories.memories || []),
-      ...codingMems,
-      ...l5Mems,
-    ];
+    vdbMemories = memories.memories || [];
+    codingMemories = codingMems;
+    graphNodes = graphMems;
+    graphRelations = l5Graph?.relations || [];
+    activityMemories = [...vdbMemories, ...codingMemories];
+    observatoryMemories = [...vdbMemories, ...graphNodes];
+
 
     storageData = storage;
     metricsData = metrics;
@@ -319,14 +399,23 @@ async function loadAllData() {
     codingCountData = codingCount;
 
     renderAll();
+    renderLoadErrors();
+    if (sceneInitialized && currentPage === 'observatory') updateGraph(obsCurrentScope);
+    if (currentPage === 'explore') performSearch();
+    if (currentPage === 'l5') initL5Page();
     updateGlobalStatus();
     const label = document.getElementById('scope-label');
     if (label) label.textContent = agentId === 'all' ? 'All profiles' : agentId;
-    setScopeStatus(`Updated ${new Date().toLocaleTimeString()}`);
+    setScopeStatus(failed.length
+      ? `Updated with stale ${failed.map(result => result.name).join(', ')} data`
+      : `Updated ${new Date().toLocaleTimeString()}`);
     return true;
   } catch (err) {
     console.error('Failed to load data:', err);
-    if (seq === loadSeq) setScopeStatus('Refresh failed');
+    if (seq === loadSeq) {
+      loadErrors = [{name: 'core', error: err}];
+      setScopeStatus('Core refresh failed');
+    }
     return false;
   }
 }
@@ -360,12 +449,13 @@ function updateGlobalStatus() {
     text.style.color = 'var(--red)';
   }
   
-  const lastMemory = allMemories.length > 0
-    ? allMemories.reduce((latest, m) => {
+  const lastMemory = vdbMemories.length > 0
+    ? vdbMemories.reduce((latest, m) => {
         const ts = m.gmt_created || 0;
         return ts > (latest.gmt_created || 0) ? m : latest;
-      }, allMemories[0])
+      }, vdbMemories[0])
     : null;
+
   if (lastMemory && lastMemory.gmt_created) {
     const ts = Number(lastMemory.gmt_created);
     if (!Number.isFinite(ts) || ts <= 0) {
@@ -453,23 +543,24 @@ function renderOverview() {
 function getActiveLayerCount() {
   const counts = layerCountsData?.counts;
   if (counts) return Object.values(counts).filter(c => Number(c) > 0).length;
-  const layers = new Set(allMemories.map(m => m.layer).filter(Boolean));
+  const layers = new Set(observatoryMemories.map(m => m.layer).filter(Boolean));
   return layers.size;
 }
 
 function getLayerTotal() {
   const total = Number(layerCountsData?.display_total ?? layerCountsData?.total);
   if (Number.isFinite(total) && total > 0) return total;
-  return allMemories.length;
+  return observatoryMemories.length;
 }
 
 function getVdbPoints() {
+  const fromLayer = Number(layerCountsData?.vdb_total);
+  if (currentAgentId !== 'all' && Number.isFinite(fromLayer) && fromLayer >= 0) return fromLayer;
   const fromStatus = Number(statusData?.vdb_points);
   if (Number.isFinite(fromStatus) && fromStatus > 0) return fromStatus;
   const fromStorage = Number(storageData?.vdb?.points);
   if (Number.isFinite(fromStorage) && fromStorage > 0) return fromStorage;
-  const fromLayer = Number(layerCountsData?.vdb_total);
-  if (Number.isFinite(fromLayer) && fromLayer > 0) return fromLayer;
+  if (Number.isFinite(fromLayer) && fromLayer >= 0) return fromLayer;
   return 0;
 }
 
@@ -499,8 +590,8 @@ function renderCompositionBar() {
   } else {
     // Fallback to the sample if the endpoint failed for any reason.
     layerCounts = {};
-    allMemories.forEach(m => { layerCounts[m.layer] = (layerCounts[m.layer] || 0) + 1; });
-    total = allMemories.length;
+    observatoryMemories.forEach(m => { layerCounts[m.layer] = (layerCounts[m.layer] || 0) + 1; });
+    total = observatoryMemories.length;
   }
 
   let html = '<div class="tag-bar">';
@@ -578,7 +669,7 @@ function renderActivityChart() {
     days[key] = 0;
   }
   
-  allMemories.forEach(m => {
+  activityMemories.forEach(m => {
     const ts = Number(m.gmt_created);
     if (ts > 0) {
       const date = new Date(ts * 1000).toISOString().split('T')[0];
@@ -683,45 +774,80 @@ async function performSearch() {
   }
   
   try {
+    document.getElementById('results-count').textContent = 'Searching…';
+    document.getElementById('search-results').innerHTML = '<div class="text-muted">Searching memories…</div>';
+    const layer = document.getElementById('filter-layer').value;
+    const days = Number(document.getElementById('filter-time').value) || 0;
+    const sort = document.getElementById('sort-by').value;
+    const readers = {
+      semantic: 'legacy',
+      keyword: 'hybrid_tag',
+      hybrid: 'hybrid_v2',
+    };
     const body = {
       query,
       user_ids: USER_IDS,
-      limit: 20
+      agent_ids: scopeAgents(),
+      reader: readers[searchMode] || 'legacy',
+      limit: 20,
     };
-    
+    if (days) body.created_after = Date.now() / 1000 - days * 86400;
+
     const resp = await fetchJSON('/api/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
-    
-    // Merge all categories
+
     searchResults = [
       ...(resp.memories?.profile || []),
       ...(resp.memories?.proactive || []),
       ...(resp.memories?.normal || [])
     ];
-    
+    if (layer) searchResults = searchResults.filter(m => m.layer === layer);
+    if (days) {
+      const since = body.created_after;
+      searchResults = searchResults.filter(m => Number(m.gmt_created || 0) >= since);
+    }
+    if (sort === 'recent') {
+      searchResults.sort((a, b) => Number(b.gmt_created || 0) - Number(a.gmt_created || 0));
+    } else {
+      searchResults.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+    }
+
     renderSearchResults();
   } catch (err) {
     console.error('Search failed:', err);
+    searchResults = [];
+    renderSearchResults();
+    document.getElementById('search-results').innerHTML =
+      `<div class="text-muted">Search failed: ${escapeHtml(err.message || String(err))}</div>`;
   }
 }
 
 function renderSearchResults() {
   document.getElementById('results-count').textContent = `RESULTS (${searchResults.length})`;
-  
+  if (!searchResults.length) {
+    document.getElementById('search-results').innerHTML = '<div class="text-muted">No memories matched the current query and filters.</div>';
+    return;
+  }
+
   const html = searchResults.map((m, i) => {
     const title = (m.content || '').substring(0, 60) + '...';
     const snippet = (m.content || '').substring(0, 100) + '...';
     const score = m.score?.toFixed(2) || '—';
+    const scoreLabel = searchMode === 'keyword'
+      ? 'keyword/hybrid score'
+      : searchMode === 'hybrid'
+        ? 'hybrid retrieval score'
+        : 'semantic similarity score';
     const tagCount = (m.tags || []).length;
-    
+
     return `
       <div class="search-result" data-index="${i}">
         <div class="flex justify-between items-start mb-2">
           <span class="badge badge-layer layer-${m.layer}">${m.layer}</span>
-          <span class="font-mono text-xs text-muted">${score}</span>
+          <span class="font-mono text-xs text-muted" title="${scoreLabel}">${score}</span>
         </div>
         <div class="text-sm font-semibold mb-2">${title}</div>
         <div class="text-xs text-muted mb-2">${snippet}</div>
@@ -750,7 +876,7 @@ function showMemoryDetail(memory) {
   const title = (memory.content || '');
   const tagCounts = {};
   (memory.tags || []).forEach(tag => {
-    tagCounts[tag] = allMemories.filter(m => (m.tags || []).includes(tag)).length;
+    tagCounts[tag] = vdbMemories.filter(m => (m.tags || []).includes(tag)).length;
   });
 
   const imp = typeof memory.importance === 'number' ? memory.importance : null;
@@ -944,7 +1070,7 @@ function renderMemoryDetailPage(memory) {
 // and remembers the page we came from for the in-page Back button.
 function enterMemoryDetail(memoryId) {
   if (!memoryId) return;
-  const mem = allMemories.find(m => m.memory_id === memoryId);
+  const mem = observatoryMemories.find(m => m.memory_id === memoryId);
   if (!mem) {
     console.warn('enterMemoryDetail: memory not found', memoryId);
     return;
@@ -1014,7 +1140,7 @@ window.addEventListener('popstate', (e) => {
 
   if (memId) {
     // Restoring a memory-detail entry from history
-    const mem = allMemories.find(m => m.memory_id === memId);
+    const mem = observatoryMemories.find(m => m.memory_id === memId);
     if (mem) {
       memoryDetailReturnPage = state.returnPage || memoryDetailReturnPage || 'overview';
       renderMemoryDetailPage(mem);
@@ -1055,7 +1181,7 @@ function restoreMemoryDetailFromUrl() {
   try {
     const memId = new URL(window.location.href).searchParams.get('memory');
     if (!memId) return;
-    const mem = allMemories.find(m => m.memory_id === memId);
+    const mem = observatoryMemories.find(m => m.memory_id === memId);
     if (!mem) return;
     // Don't push a new history entry — replace current so Back works cleanly.
     history.replaceState(
@@ -1083,7 +1209,7 @@ function renderLayers() {
       if (typeof v === 'number') layerCounts[k] = v;
     });
   }
-  allMemories.forEach(m => {
+  observatoryMemories.forEach(m => {
     if (!(m.layer in layerCounts)) {
       layerCounts[m.layer] = (layerCounts[m.layer] || 0) + 1;
     }
@@ -1194,7 +1320,7 @@ document.addEventListener('click', (e) => {
 });
 
 document.getElementById('export-json').addEventListener('click', () => {
-  const today = allMemories.filter(m => {
+  const today = activityMemories.filter(m => {
     const created = tsToDate(m.gmt_created);
     const now = new Date();
     return created && created.toDateString() === now.toDateString();
@@ -1212,7 +1338,7 @@ document.getElementById('export-json').addEventListener('click', () => {
 function renderToday() {
   const since = Date.now() - 24 * 60 * 60 * 1000;
 
-  let filtered = allMemories.filter(m => {
+  let filtered = activityMemories.filter(m => {
     const created = tsToDate(m.gmt_created);
     return created && created.getTime() >= since;
   });
@@ -1264,7 +1390,7 @@ function renderTodaySummary(todayMemories) {
   const uniqueTags = new Set(todayMemories.flatMap(m => m.tags || [])).size;
   
   const weekAgo = Date.now() / 1000 - 7 * 86400;
-  const weekCount = allMemories.filter(m => m.gmt_created >= weekAgo).length;
+  const weekCount = activityMemories.filter(m => m.gmt_created >= weekAgo).length;
   
   const html = `
     <div class="right-section">
@@ -1309,7 +1435,7 @@ document.querySelectorAll('#page-system .tab').forEach(tab => {
 function renderSystem() {
   // System info
   const uptime = metricsData?.uptime_seconds ? formatUptime(metricsData.uptime_seconds) : '—';
-  const lastMemory = allMemories.length > 0 ? (tsToDate(allMemories[0].gmt_created)?.toLocaleString() ?? '—') : '—';
+  const lastMemory = vdbMemories.length > 0 ? (tsToDate(vdbMemories[0].gmt_created)?.toLocaleString() ?? '—') : '—';
   
   const infoHtml = `
     <div class="kv-item">
@@ -1508,23 +1634,28 @@ function renderSystem() {
   document.getElementById('component-details').innerHTML = detailsHtml;
   
   // Configuration
+  const runtime = storageData?.runtime || {};
   const configHtml = `
     <div class="kv-list">
       <div class="kv-item">
         <div class="kv-label">HY_MEMORY_BASE</div>
-        <div class="kv-value">http://127.0.0.1:19527</div>
+        <div class="kv-value">${escapeHtml(runtime.backend || '—')}</div>
       </div>
       <div class="kv-item">
         <div class="kv-label">BIND_HOST</div>
-        <div class="kv-value">127.0.0.1</div>
+        <div class="kv-value">${escapeHtml(runtime.bind_host || '—')}</div>
       </div>
       <div class="kv-item">
         <div class="kv-label">BIND_PORT</div>
-        <div class="kv-value">8765</div>
+        <div class="kv-value">${runtime.bind_port ?? '—'}</div>
       </div>
       <div class="kv-item">
         <div class="kv-label">REFRESH_S</div>
-        <div class="kv-value">${REFRESH_S}</div>
+        <div class="kv-value">${runtime.refresh_seconds ?? REFRESH_S}</div>
+      </div>
+      <div class="kv-item">
+        <div class="kv-label">PLATFORM</div>
+        <div class="kv-value">${escapeHtml(runtime.platform || '—')}</div>
       </div>
       <div class="kv-item">
         <div class="kv-label">User IDs</div>
@@ -1559,13 +1690,15 @@ function renderQuality() {
   const glance = root.at_a_glance || {};
 
   const barRow = (label, value, maxVal = 100, sub = '') => {
-    const v = value != null ? Number(value) : 0;
-    const pct = Math.max(0, Math.min(100, maxVal ? (v / maxVal) * 100 : v));
+    const available = value != null;
+    const v = available ? Number(value) : 0;
+    const shown = available ? v : 'N/A';
+    const pct = available ? Math.max(0, Math.min(100, maxVal ? (v / maxVal) * 100 : v)) : 0;
     return `
       <div class="quality-bar-row">
         <div class="quality-bar-meta">
           <span class="quality-bar-label">${escapeHtml(label)}</span>
-          <span class="quality-bar-value">${v}${maxVal && maxVal !== 100 ? ` / ${maxVal}` : ''}</span>
+          <span class="quality-bar-value">${shown}${available && maxVal && maxVal !== 100 ? ` / ${maxVal}` : ''}</span>
         </div>
         <div class="quality-bar-track"><div class="quality-bar-fill" style="width:${pct}%"></div></div>
         ${sub ? `<div class="quality-bar-sub">${escapeHtml(sub)}</div>` : ''}
@@ -1773,16 +1906,18 @@ function updateRightSidebar(page) {
   } else if (page === 'layers') {
     renderLayerHierarchy(layerCountsData?.counts || {});
   } else if (page === 'today') {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayMemories = allMemories.filter(m => { const d = tsToDate(m.gmt_created); return d && d >= today; });
+    const since = Date.now() - 24 * 60 * 60 * 1000;
+    const todayMemories = activityMemories.filter(m => {
+      const created = tsToDate(m.gmt_created);
+      return created && created.getTime() >= since;
+    });
     renderTodaySummary(todayMemories);
   } else if (page === 'system') {
     // System page has its own layout
     document.getElementById('right-sidebar').innerHTML = '';
   } else if (page === 'memory-detail') {
-    // The dedicated Memory Detail page replaces the right sidebar entirely
-    // — clear it and let CSS hide the column for a full-width view.
+    // The dedicated Memory Detail page replaces the right sidebar entirely.
+    // Clear it and let CSS hide the column for a full-width view.
     document.getElementById('right-sidebar').innerHTML = '';
   }
 }
@@ -1799,16 +1934,13 @@ function renderOverviewSidebar() {
   // 'all'      = everything merged, sorted newest first
   let recent;
   if (recentIngestionTab === 'vdb') {
-    recent = allMemories.filter(m => m.user_id !== 'coding' && m.layer !== 'l5_knowledge');
+    recent = activityMemories.filter(m => m.user_id !== 'coding');
   } else if (recentIngestionTab === 'coding') {
-    recent = allMemories.filter(m => m.user_id === 'coding');
+    recent = activityMemories.filter(m => m.user_id === 'coding');
   } else if (recentIngestionTab === 'l1_raw') {
-    recent = allMemories.filter(m => m.layer === 'l1_raw');
-  } else if (recentIngestionTab === 'l5') {
-    recent = allMemories.filter(m => m.layer === 'l5_knowledge');
+    recent = activityMemories.filter(m => m.layer === 'l1_raw');
   } else {
-    // 'all' — VDB + coding + l1_raw, but NOT l5 (L5 is a derivation, not an ingestion)
-    recent = allMemories.filter(m => m.layer !== 'l5_knowledge');
+    recent = activityMemories.filter(() => true);
   }
   // Prefer gmt_updated over gmt_created for the "ago" text — recent
   // UPDATEs of older memories should show as recent (otherwise the
@@ -1819,10 +1951,10 @@ function renderOverviewSidebar() {
 
   // Counts for each tab so the user can see what's available.
   const tabCounts = {
-    all:    allMemories.length,
-    vdb:    allMemories.filter(m => m.user_id !== 'coding' && m.layer !== 'l5_knowledge').length,
-    coding: allMemories.filter(m => m.user_id === 'coding').length,
-    l1_raw: allMemories.filter(m => m.layer === 'l1_raw').length,
+    all:    activityMemories.length,
+    vdb:    activityMemories.filter(m => m.user_id !== 'coding').length,
+    coding: activityMemories.filter(m => m.user_id === 'coding').length,
+    l1_raw: activityMemories.filter(m => m.layer === 'l1_raw').length,
   };
   const tabBtn = (id, label) => {
     const isActive = recentIngestionTab === id;
@@ -1882,7 +2014,7 @@ function getMostActiveLayer() {
 
 function getMostCommonTag() {
   const counts = {};
-  allMemories.forEach(m => {
+  vdbMemories.forEach(m => {
     (m.tags || []).forEach(t => {
       counts[t] = (counts[t] || 0) + 1;
     });
@@ -1906,11 +2038,14 @@ loadAllData().then(() => {
   enterPage('overview');
   hideBootScreen();
   // If the URL has ?memory=<id>, open the dedicated Memory Detail page
-  // (after data has loaded so allMemories is populated). Falls through
+  // (after data has loaded so observatoryMemories is populated). Falls through
   // silently if the memory is not in the current dataset.
   restoreMemoryDetailFromUrl();
+  setTimeout(refreshLoop, REFRESH_S * 1000);
 });
 
-// Auto-refresh
-setInterval(loadAllData, REFRESH_S * 1000);
+async function refreshLoop() {
+  await loadAllData();
+  setTimeout(refreshLoop, REFRESH_S * 1000);
+}
 

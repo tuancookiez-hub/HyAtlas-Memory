@@ -163,7 +163,7 @@
         <div id="composition-bar"></div>
         <div class="composition-caption" id="composition-caption">
           <span class="caption-icon">ⓘ</span>
-          <span class="caption-text">Layers reflect <strong>durable user knowledge</strong> (L0–L7). Task memories from coding sessions are in a separate journal — see Today → Coding Memories. L6 schemas &amp; L7 intentions come from the periodic System2 digest (run <code>python .hermes/plans/run_digest.py</code>).</span>
+          <span class="caption-text">Layers reflect <strong>durable user knowledge</strong> (L0–L7). Task memories from coding sessions are in a separate journal — see Today → Coding Memories. L6 schemas &amp; L7 intentions come from the periodic System2 digest (run <code>python %LOCALAPPDATA%\hermes\scripts\run_hyatlas_digest.py</code>).</span>
         </div>
       </div>
 
@@ -257,6 +257,13 @@
         <div class="filter-row">
           <select class="filter-select" id="filter-layer">
             <option value="">All Layers</option>
+            <option value="l0_basic_info">L0 Basic Info</option>
+            <option value="l1_raw">L1 Raw</option>
+            <option value="l2_fact">L2 Facts</option>
+            <option value="l3_summary">L3 Summaries</option>
+            <option value="l5_knowledge">L5 Knowledge</option>
+            <option value="l6_schema">L6 Schemas</option>
+            <option value="l7_intention">L7 Intentions</option>
           </select>
           <select class="filter-select" id="filter-time">
             <option value="">All Time</option>
@@ -447,6 +454,7 @@
           <input type="text" id="l5-search" class="form-input" placeholder="Search entities (name or alias)..."
                  style="flex: 1; min-width: 200px;" />
           <div class="flex gap-2" id="l5-type-chips" style="flex-wrap: wrap;"></div>
+          <div class="flex gap-2" id="l5-relation-chips" style="flex-wrap: wrap;"></div>
         </div>
       </div>
 

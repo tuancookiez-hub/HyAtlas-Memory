@@ -1,23 +1,26 @@
 // L5 Knowledge Graph page
 let l5State = {
   data: null,            // full response from /api/l5/graph
+  scope: null,
   selectedType: null,    // null = all
+  selectedRelation: null,
   search: '',
   selectedEntity: null,  // null = show all
 };
 
 async function initL5Page() {
-  if (l5State.data) {
+  if (l5State.data && l5State.scope === currentAgentId) {
     renderL5();
     return;
   }
   try {
-    const data = await fetchJSON('/api/l5/graph');
+    const data = await fetchJSON(scopedPath('/api/l5/graph', currentAgentId));
     l5State.data = data;
+    l5State.scope = currentAgentId;
     renderL5();
   } catch (e) {
     document.getElementById('l5-stats').innerHTML =
-      '<div class="text-muted">Failed to load L5 graph. Run <code>bin/l5_export_json.py</code> and refresh.</div>';
+      '<div class="text-muted">Failed to load the live Kuzu graph. Check Settings → System and refresh.</div>';
   }
 }
 
@@ -37,16 +40,20 @@ function renderL5() {
   document.getElementById('l5-stats').innerHTML = `
     <div class="kv"><span class="kv-k">NODES</span><span class="kv-v">${d.node_count}</span></div>
     <div class="kv"><span class="kv-k">RELATIONS</span><span class="kv-v">${d.relation_count}</span></div>
-    <div class="kv"><span class="kv-k">EXPORTED AT</span><span class="kv-v">${escapeHtml(d.exported_at || new Date().toISOString().slice(0, 19).replace('T', ' '))}</span></div>
+    <div class="kv"><span class="kv-k">LOADED AT</span><span class="kv-v">${escapeHtml(d.exported_at || new Date().toISOString().slice(0, 19).replace('T', ' '))}</span></div>
     <div class="kv"><span class="kv-k">ENTITY TYPES</span><span class="kv-v">${typeDistHtml}</span></div>
     <div class="kv"><span class="kv-k">RELATION TYPES</span><span class="kv-v">${relDistHtml}</span></div>
   `;
 
   // Type chips (All + each type)
-  const allTypes = ['TOOL', 'PROJECT', 'MODEL', 'PERSON', 'CONCEPT'].filter(t => (d.type_distribution || {})[t]);
+  const allTypes = Object.keys(d.type_distribution || {}).sort();
   const chips = ['<span class="l5-chip ' + (l5State.selectedType === null ? 'active' : '') + '" data-type="">ALL</span>']
     .concat(allTypes.map(t => `<span class="l5-chip ${l5State.selectedType === t ? 'active' : ''}" data-type="${t}">${t}</span>`));
   document.getElementById('l5-type-chips').innerHTML = chips.join('');
+  const relations = Object.keys(d.relation_type_distribution || {}).sort();
+  const relChips = ['<span class="l5-chip ' + (l5State.selectedRelation === null ? 'active' : '') + '" data-relation="">ALL RELATIONS</span>']
+    .concat(relations.map(t => `<span class="l5-chip ${l5State.selectedRelation === t ? 'active' : ''}" data-relation="${escapeAttr(t)}">${escapeHtml(t)}</span>`));
+  document.getElementById('l5-relation-chips').innerHTML = relChips.join('');
 
   // Wire up chip click handlers
   document.querySelectorAll('#l5-type-chips .l5-chip').forEach(chip => {
@@ -54,6 +61,13 @@ function renderL5() {
       const t = chip.getAttribute('data-type') || null;
       l5State.selectedType = t;
       l5State.selectedEntity = null;  // reset selection on filter change
+      renderL5EntitiesAndRelations();
+    };
+  });
+  document.querySelectorAll('#l5-relation-chips .l5-chip').forEach(chip => {
+    chip.onclick = () => {
+      l5State.selectedRelation = chip.getAttribute('data-relation') || null;
+      l5State.selectedEntity = null;
       renderL5EntitiesAndRelations();
     };
   });
@@ -74,6 +88,10 @@ function renderL5EntitiesAndRelations() {
   if (!l5State.data) return;
   let nodes = l5State.data.nodes || [];
   let rels = l5State.data.relations || [];
+
+  if (l5State.selectedRelation) {
+    rels = rels.filter(r => r.relation_type === l5State.selectedRelation);
+  }
 
   // Apply type filter
   if (l5State.selectedType) {
@@ -119,10 +137,17 @@ function renderL5EntitiesAndRelations() {
         const aliasStr = n.aliases && n.aliases.length
           ? `<div class="l5-aliases">aka: ${n.aliases.map(a => escapeHtml(a)).join(', ')}</div>`
           : '';
+        const source = n.source
+          ? `<span class="l5-source">source: ${escapeHtml(n.source)}</span>`
+          : '';
+        const created = n.created_at
+          ? `<span class="l5-source">created: ${escapeHtml(n.created_at)}</span>`
+          : '';
         return `<div class="l5-entity${selected}" data-name="${escapeAttr(n.name)}">
           <span class="l5-type-badge l5-type-${n.entity_type}">${escapeHtml(n.entity_type)}</span>
           <span class="l5-name">${escapeHtml(n.name)}</span>
           <span class="l5-mentions">×${n.mention_count || 1}</span>
+          ${source}${created}
           ${aliasStr}
         </div>`;
       }).join('');
