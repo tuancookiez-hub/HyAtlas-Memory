@@ -408,10 +408,11 @@ Primary global skills:
 
 **Requires explicit profile-hygiene scope before editing another profile.**
 
-- [ ] Compare trading-profile copies against global skills.
-- [ ] Decide update, redirect, archive, or remove per duplicate.
-- [ ] Ensure no profile receives contradictory HyAtlas procedures.
-- [ ] Record a Hestia/fleet receipt when this separate sweep is approved.
+- [x] Compare trading-profile copies against global skills.
+- [x] Decide update, redirect, archive, or remove per duplicate.
+- [x] Ensure no profile receives contradictory HyAtlas procedures.
+- [x] Record a Hestia/fleet receipt when this separate sweep is approved.
+  (Receipt: `F:/HermesVision/Orchestrator/docs/closeouts/hyatlas-phase-6.3-2026-08-05.md`)
 
 ### Phase 6 gate
 
