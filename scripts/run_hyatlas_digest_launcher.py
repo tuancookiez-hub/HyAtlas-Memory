@@ -14,9 +14,23 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(r"F:/HyAtlas-Memory")
+
+def _root() -> Path:
+    override = os.environ.get("HYATLAS_PROJECT_ROOT", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    here = Path(__file__).resolve()
+    for root in (here.parent, *here.parents):
+        if (root / "scripts" / "run_digest_once.py").is_file():
+            return root
+    raise FileNotFoundError(
+        "Could not locate scripts/run_digest_once.py; set HYATLAS_PROJECT_ROOT"
+    )
+
+
+ROOT = _root()
 SCRIPT = ROOT / "scripts" / "run_digest_once.py"
-LOG = Path.home() / ".hyatlas" / "logs" / "digest_run_latest.log"
+LOG = Path(os.environ.get("HYATLAS_HOME", Path.home() / ".hyatlas")) / "logs" / "digest_run_latest.log"
 # Use the running Python (the venv this script is installed into) by
 # default. Override with HERMES_DIGEST_PY env var if a specific
 # interpreter is needed.

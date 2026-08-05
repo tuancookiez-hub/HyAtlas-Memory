@@ -3,35 +3,52 @@
 This ensures the schema matches exactly what the server expects.
 
 Usage:
-    D:/HyAtlas/.hyatlas/venv/Scripts/python.exe scripts/reindex_zvec.py
+    python scripts/reindex_zvec.py
+
+The script reads the active ``HYATLAS_HOME`` configuration and uses its
+embedder model, dimensions, Kuzu database, and dimension-specific zvec
+collection. Stop the HyAtlas server before running it.
 """
 import asyncio
 import json
-import os
 import sys
 import time
+from pathlib import Path
 
-os.environ["HYATLAS_HOME"] = "D:/HyAtlas/.hyatlas"
-os.environ["MEMORY_DATA_DIR"] = "D:/HyAtlas/.hyatlas"
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 
-sys.path.insert(0, "f:/HyAtlas-Memory/src")
+import kuzu  # noqa: E402
+import numpy as np  # noqa: E402
 
-import kuzu
-import numpy as np
+from hyatlas_memory import layout  # noqa: E402
+from hyatlas_memory.core.config import MemoryConfig  # noqa: E402
+from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore  # noqa: E402
+from hyatlas_memory.core.models.memory import (  # noqa: E402
+    MemoryLayer,
+    MemoryNode,
+    MemoryStatus,
+    SourceType,
+)
 
-from hyatlas_memory.core.config import MemoryConfig
-from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
-from hyatlas_memory.core.models.memory import MemoryLayer, MemoryNode, MemoryStatus, SourceType
 
-KUZU_PATH = r"D:/HyAtlas/.hyatlas/data/kuzu_db"
-ZVEC_PATH = r"D:/HyAtlas/.hyatlas/zvec/agent_memories_1024"
-DIMS = 1024
+def runtime():
+    path = layout.active_config_path() or layout.cfgfile()
+    with path.open(encoding="utf-8") as file:
+        raw = json.load(file)
+    cfg = MemoryConfig.from_dict(raw)
+    emb = raw.get("embedder") or {}
+    vec = raw.get("vector_store") or {}
+    cfg.vector_store.embedding_dims = int(
+        emb.get("dims") or vec.get("embedding_dims") or cfg.vector_store.embedding_dims
+    )
+    return cfg, str(emb.get("model") or cfg.embedder.model), layout.kdata()
 
 
-def get_all_memory_nodes():
+def get_all_memory_nodes(path):
     """Read all Memory nodes from Kuzu."""
-    print(f"[1/4] Reading all Memory nodes from Kuzu ({KUZU_PATH})...")
-    db = kuzu.Database(KUZU_PATH)
+    print(f"[1/4] Reading all Memory nodes from Kuzu ({path})...")
+    db = kuzu.Database(str(path))
     conn = kuzu.Connection(db)
 
     result = conn.execute("MATCH (m:Memory) RETURN m;")
@@ -45,11 +62,11 @@ def get_all_memory_nodes():
     return nodes
 
 
-def load_embedder():
+def load_embedder(name):
     """Load the local BGE embedder."""
     print("[2/4] Loading local BGE embedder...")
     from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer("BAAI/bge-large-en-v1.5", device="cpu")
+    model = SentenceTransformer(name, device="cpu")
     print(f"  Embedder loaded (dim={model.get_sentence_embedding_dimension()})")
     return model
 
@@ -68,17 +85,9 @@ def embed_batch(model, texts, batch_size=16):
     return np.vstack(all_embeddings)
 
 
-async def rebuild_collection(nodes, model):
+async def rebuild_collection(nodes, model, config):
     """Use HyAtlas ZvecVectorStore to create collection and insert."""
     print("[3/4] Initializing HyAtlas ZvecVectorStore...")
-
-    with open("D:/HyAtlas/.hyatlas/config/hy_memory.json", encoding="utf-8") as f:
-        cfg_dict = json.load(f)
-    config = MemoryConfig.from_dict(cfg_dict)
-    config.vector_store.persist_directory = os.path.join(
-        os.environ["MEMORY_DATA_DIR"], "data", "vector_db"
-    )
-    config.vector_store.embedding_dims = DIMS
 
     vs = ZvecVectorStore(config)
     await vs.initialize()
@@ -207,14 +216,19 @@ def main():
 
     t_start = time.time()
 
-    nodes = get_all_memory_nodes()
+    config, model_name, kuzu_path = runtime()
+    print(f"  HyAtlas home: {layout.home()}")
+    print(f"  Embedder: {model_name} ({config.vector_store.embedding_dims}d)")
+    print()
+
+    nodes = get_all_memory_nodes(kuzu_path)
     if not nodes:
         print("ERROR: No nodes found in Kuzu. Aborting.")
         return
 
-    model = load_embedder()
+    model = load_embedder(model_name)
 
-    inserted, errors = asyncio.run(rebuild_collection(nodes, model))
+    inserted, errors = asyncio.run(rebuild_collection(nodes, model, config))
 
     t_end = time.time()
     print()

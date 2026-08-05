@@ -135,7 +135,7 @@ The embedder runs **in-process** via sentence-transformers. No API key needed, n
 If `embed: error` shows on `/api/v1/status`, the in-process wire failed. Diagnostic:
 
 ```bash
-"C:/Users/tuanc/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe" -c "
+python -c "
 from hyatlas_memory.integrations import wire_inprocess_embed
 from hyatlas_memory.core.core.embed_service import EmbedService
 wire_inprocess_embed(EmbedService)

@@ -299,7 +299,7 @@ Verification receipt: API reconciliation passed for all seven profiles. Browser 
 
 - [x] Backend-offline cannot produce a green readiness result.
 - [x] Missing metrics display as unavailable, not perfect or zero without qualification.
-- [x] Disk usage reflects `D:/HyAtlas/.hyatlas`.
+- [x] Disk usage reflects the active `HYATLAS_HOME`.
 - [x] Quality score is reproducible from timestamped, named evidence.
 
 Verification receipt: **38 passed, 3 skipped** for dashboard contracts; **100 passed, 14 skipped, 19 deselected** for the Python 3.11 non-integration suite. Ruff, Python compilation, and JavaScript syntax pass. A temporary dashboard on `:8766` live-verified `/api/live`, readiness, active-home storage, explicit coding `not_configured`, durable activity evidence, a **371.7-hour stale digest**, and `N/A` coaching suppression. Browser load completed with no JavaScript errors. The existing dashboard on `:8765` was intentionally not restarted without Tuna approval.
@@ -353,7 +353,7 @@ Do not sweep repository-wide formatting debt into a functional fix unless intent
 - [x] Browser evidence exists for all eight pages.
 - [x] Same-class profile-count and refresh-overlap discrepancies found during the walkthrough are fixed and regression-covered.
 
-Verification receipt: deep-check checklist at `C:/Users/tuanc/AppData/Local/hermes/checklists/default-hyatlas-phase5-20260729.md`. Browser walkthrough covered all eight pages, a live query and no-result state, stored-relation filtering, research scope, and an injected optional-domain HTTP 503. The walkthrough found and fixed two additional bugs: specialist Overview cards using global `status.vdb_points`, and overlapping 30-second refreshes leaving the scope indicator in a false Loading state. Final Python 3.11 gate: **102 passed, 14 skipped, 19 deselected**. Ruff `--no-cache`, compileall, and JavaScript syntax pass. Canonical `:8765` remains untouched pending explicit restart approval.
+Verification receipt: the Phase 5 browser walkthrough covered all eight pages, a live query and no-result state, stored-relation filtering, research scope, and an injected optional-domain HTTP 503. The walkthrough found and fixed two additional bugs: specialist Overview cards using global `status.vdb_points`, and overlapping 30-second refreshes leaving the scope indicator in a false Loading state. Final Python 3.11 gate: **102 passed, 14 skipped, 19 deselected**. Ruff `--no-cache`, compileall, and JavaScript syntax pass. Canonical `:8765` remained untouched until restart approval.
 
 ---
 
