@@ -1,9 +1,9 @@
 # HyAtlas v3.5 Clean-Floor Roadmap
 
-**Status:** Planning source of truth  
+**Status:** completed certification record
 **Created:** 2026-07-29  
 **Target:** A genuinely clean, truthful, fully verified Python floor before any v4.0 Go work  
-**Audit basis:** `C:/Users/tuanc/AppData/Local/hermes/checklists/default-hyatlas-tracks-abc-20260729.md`
+**Audit basis:** committed regression tests, live API probes, and the Phase 7.3 browser walkthrough summarized in `NOW.md`.
 
 ## Goal
 

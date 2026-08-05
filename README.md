@@ -2,10 +2,14 @@
 
 A personal, local, single-user long-term memory stack for Hermes Agent — built by forking the Hy-Memory 7-layer cognitive memory framework (Tencent Hunyuan) and refining it into something tuned for one person's daily, multi-session use. Includes the experimental L7 intention layer. Apache 2.0 licensed.
 
-> **v3.5.0** — Dedicated venv for dependency isolation (fixes the embedder `huggingface-hub` conflict with host apps like Hermes, and orphan console windows on Windows). New `hyatlas venv setup` command. Plus: reconciler trailing-comma JSON repair (no more silently dropped memories), `\<think\>` strip for reasoning models, `huggingface-hub<1.0` in core deps, and **`zvec>=0.6.0`** (Windows LOCK open fix; 0.5.1 could not reopen existing collections after crash). Upgrade: `pip install -U git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git` then `hyatlas venv setup` (pulls zvec 0.6+). See [CHANGELOG](./CHANGELOG.md).
+> **v3.5.0 stable floor** — dedicated venv isolation; truthful zvec/Kuzu dashboard contracts; bounded list/count APIs; extraction recovery; Windows lifecycle hardening; and **BGE-small (384d)** as the recommended local embedder for a substantially lighter daily memory stack. zvec 0.6.0 crash-reopen behavior is regression-tested: force-killed owners leave marker files, but a fresh process reopens the collection and preserves its records without deleting them. Upgrade: `pip install -U git+https://github.com/tuancookiez-hub/HyAtlas-Memory.git`, run `hyatlas venv setup`, then `hyatlas stop && hyatlas start --detach`. See [CHANGELOG](./CHANGELOG.md).
 
 <p align="center">
   <img src="./assets/hyatlas-v3.5.0-banner.jpeg" alt="HyAtlas v3.5.0: dedicated venv isolation, durable write path, server stay-up fixes, and zvec≥0.6 Windows LOCK floor — stable local memory install" width="100%" />
+</p>
+
+<p align="center">
+  <img src="./assets/hyatlas-v3.5.0-stable-floor.png" alt="HyAtlas-Memory v3.5.0 certified stable floor infographic: 384d BGE-small, zvec and Kuzu architecture, truthful dashboard, crash-reopen contract, verification gates, and safe operating rules" width="720" />
 </p>
 
 <p align="center">
@@ -20,7 +24,7 @@ A personal, local, single-user long-term memory stack for Hermes Agent — built
 
 ## What it is
 
-Hermes Agent is powerful. You tell it your preferences, your project structure, your coding conventions, but all of this only fits into 2200 char memory.md by default which is small. 
+Hermes Agent is powerful. You tell it your preferences, your project structure, your coding conventions, but all of this only fits into 2200 char memory.md by default which is small.
 
 HyAtlas-Memory fixes this. It's a memory provider plugin that drops into Hermes Agent and gives it **persistent, structured memory across sessions**. After a few conversations, your agent knows your name, your stack, your working style, your active projects, and the decisions you've made — without you repeating yourself.
 
@@ -127,14 +131,16 @@ hyatlas status          # port health table (short timeouts)
     "base_url": "https://api.openai.com/v1"
   },
   "embedder": {
-      "model": "BAAI/bge-large-en-v1.5",
-      "dims": 1024,
+      "model": "BAAI/bge-small-en-v1.5",
+      "dims": 384,
       "provider": "local"
     },
   "mode": "ultra",
-  "vector_store": {"provider": "zvec"}
+  "vector_store": {"provider": "zvec", "embedding_dims": 384}
 }
 ```
+
+> Existing collections are dimension-specific (`agent_memories_<dims>`). If you switch dimensions, start a fresh collection or perform an explicit re-index. HyAtlas never silently mixes vectors with different dimensions. For a lightweight personal setup, fresh memory at 384d is the recommended path.
 
 > **Three modes:** `lite` (no LLM, embedding-only) · `pro` (LLM extraction per `add`) · `ultra` (pro + System 2 graph — default). Without an LLM key, doctor warns and extraction quality drops.
 
@@ -144,7 +150,7 @@ hyatlas status          # port health table (short timeouts)
 
 ### Path A — Docker (zvec)
 
-> **Native is still preferred on Windows/dev:** `hyatlas start` (Zvec in-process).  
+> **Native is still preferred on Windows/dev:** `hyatlas start` (Zvec in-process).
 > Docker is for clean isolation / Linux hosts. **No Qdrant sidecar** (v3.4+).
 
 ```bash
@@ -167,7 +173,7 @@ curl http://127.0.0.1:8765/api/health
 open http://127.0.0.1:8765
 ```
 
-**Default image** uses **remote OpenAI-compatible embeddings** (small).  
+**Default image** uses **remote OpenAI-compatible embeddings** (small).
 For **local BGE** (larger image, needs `[local-embed]`):
 
 ```bash

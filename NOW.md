@@ -1,9 +1,25 @@
 # HyAtlas-Memory — NOW.md
 
-## Current state (2026-08-05, clean-floor Phase 7.3 complete)
+## Current state (2026-08-05, published v3.5.0 floor)
 
-**v3.5.0 is the certified stable floor.** All Phases 1–7 done; local commit
-series prepared for Tuna's review; nothing pushed.
+**v3.5.0 is the certified stable floor.** All clean-floor phases and the
+post-certification crash/reopen correction are complete. The maintained
+`main` branch, `v3.5.0` tag, and GitHub Release are the public distribution
+points for this floor. The release includes the stable-floor infographic at
+`assets/hyatlas-v3.5.0-stable-floor.png`.
+
+### Final local runtime
+- Recommended local embedder: `BAAI/bge-small-en-v1.5` (**384d**).
+- Active physical collection: `agent_memories_384`; fresh-memory strategy,
+  no full re-index of the retired 1024d collection.
+- zvec crash contract corrected: zero-byte `LOCK` files are normal marker
+  files. A force-killed isolated owner reopens successfully under zvec 0.6.0
+  without deleting them. Recovery rule: `hyatlas stop`, verify the owner is
+  gone, then `hyatlas start --detach`.
+- Valid code fixes retained: idempotent collection-path resolution and zvec
+  C++ open/create off the asyncio event loop.
+- Phase 6.3 complete: trading-profile HyAtlas skills synchronized; obsolete
+  copies archived, not deleted.
 
 ### Phase 7.3 — Release-floor review ✅
 - **Tracks A/B/C re-run live** (originally 5 pass / 23 fail on 2026-07-29).
@@ -30,16 +46,11 @@ series prepared for Tuna's review; nothing pushed.
   dashboard truth + resilient load, bounded list/count-only perf,
   lifecycle offline-env + launcher probes, contract tests, docs, chore.
 
-### Known remaining (non-blocking, tracked for 3.5.x / 4.0)
-- zvec zero-vector list scan cost (~20-25s at 1024d/1700 pts) is inherent to
-  the storage layer; bounded fetches make it acceptable. Proper fix belongs
-  to the v4.0 Go rewrite (or a fetch/output_fields optimization).
-- Upstream hy-memory is 1.2.21 (fork point 1.2.20): adds rolling_summary,
-  add_extracted, user_basic_info — design inputs for 4.0, not merged now.
-- Phase 6.3 profile-local skill duplicates (trading profile) still deferred
-  pending explicit hygiene approval.
-- `.venv` uv Python 3.11 corrupted (`_sre` mismatch); tests run via the
-  hermes-agent venv python. Worth fixing before 4.0 work.
+### Deferred by decision (not floor blockers)
+- No full re-index of the old 1024d collection. New 384d memory grows
+  naturally; old collection remains quarantined locally for rollback only.
+- Upstream Hy-Memory 1.2.21 design ideas (`rolling_summary`, `add_extracted`,
+  `user_basic_info`) remain future inputs. No v4.0/Go work in this release.
 
 ## Previous current state (2026-07-31, clean-floor Phase 7 — lifecycle cert passed)
 - Phases 1–6 remain complete and verified.

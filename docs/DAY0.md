@@ -13,7 +13,7 @@ This is the **default profile only** path. Specialist profiles (`research`, `sen
 | Python 3.10+ | Package + stack |
 | [Hermes Agent](https://hermes-agent.nousresearch.com) installed | HyAtlas is a Hermes **memory provider** |
 | An LLM API key (for `pro` / `ultra`) | Fact extraction. Without it, use `mode: lite` (embed-only — weaker “magic”) |
-| Disk for local embedder | First start may download `BAAI/bge-large-en-v1.5` |
+| Disk for local embedder | First start may download `BAAI/bge-small-en-v1.5` (~129 MB model cache) |
 
 ---
 
@@ -49,11 +49,11 @@ Edit `~/.hyatlas/config/hy_memory.json` (Windows often `D:\…\.hyatlas` if you 
     "base_url": "https://api.openai.com/v1"
   },
   "embedder": {
-    "model": "BAAI/bge-large-en-v1.5",
-    "dims": 1024,
+    "model": "BAAI/bge-small-en-v1.5",
+    "dims": 384,
     "provider": "local"
   },
-  "vector_store": { "provider": "zvec" }
+  "vector_store": { "provider": "zvec", "embedding_dims": 384 }
 }
 ```
 

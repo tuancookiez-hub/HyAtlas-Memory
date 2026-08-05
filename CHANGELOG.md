@@ -1,6 +1,17 @@
 # Changelog
 
-## [3.5.0] — 2026-07-25
+## [3.5.0] — 2026-08-05
+
+> **Certified stable floor:** truthful dashboard data contracts, bounded list/count APIs, explicit Kuzu health, Windows lifecycle recovery, extraction resilience, and a lighter BGE-small/384 local default. No v3.5.1 split: these fixes are folded into the maintained v3.5.0 floor.
+
+### Stable-floor certification (2026-08-05)
+
+- **Truthful dashboard datasets:** VDB memories, Kuzu graph nodes/relations, coding records, and operational metrics are separate contracts. Graph derivations no longer masquerade as memory writes or activity. All eight dashboard pages were walked against live canonical data with zero JavaScript errors.
+- **Bounded dashboard load:** `/api/memories` now caps its initial per-user fetch at 100 rows, opts out of graph payloads, and uses exact count-only scans. The pathological path dropped from 98–152 MB responses to tens/hundreds of KB while preserving truthful totals.
+- **Honest health:** `/api/v1/status` and dashboard health include Kuzu readiness and node counts. Embedder/VDB/Kuzu-down contract tests prevent false-green status.
+- **Crash/reopen contract:** zvec collection resolution accepts either a base or already-suffixed physical name, and potentially blocking C++ open/create calls run off the asyncio loop. A real subprocess regression test force-kills a zvec owner, confirms all three zero-byte `LOCK` marker files remain, then proves a fresh process reopens the collection and reads the persisted record. **Do not delete these marker files**; they also exist while a healthy owner is live.
+- **Lighter local default:** new local configurations use `BAAI/bge-small-en-v1.5` (384d). BGE-large/1024 remains available with `hyatlas config embedder --preset large`. Dimension changes use a separate `agent_memories_<dims>` collection; users may intentionally start fresh instead of re-indexing.
+- **Profile hygiene:** stale HyAtlas copies in the trading profile were synchronized or archived so every active profile receives the same v3.5.0 zvec/Kuzu guidance.
 
 ### Dependencies
 

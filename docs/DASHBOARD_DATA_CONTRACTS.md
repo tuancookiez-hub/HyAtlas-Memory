@@ -1,13 +1,11 @@
-# HyAtlas v3.6 Dashboard Data Contracts
+# HyAtlas v3.5 Dashboard Data Contracts
 
-**Status:** v3.6 implementation contract  
-**Baseline:** the pre-fix contract is documented in the Track A–C audit
-(`C:/Users/tuanc/AppData/Local/hermes/checklists/default-hyatlas-tracks-abc-20260729.md`).  
-**Audit:** `C:/Users/tuanc/AppData/Local/hermes/checklists/default-hyatlas-tracks-abc-20260729.md`
+**Status:** certified v3.5 implementation contract
+**Evidence:** regression tests, live API probes, and the Phase 7.3 browser walkthrough documented in `NOW.md` and `docs/CLEAN_FLOOR_ROADMAP.md`.
 
 ## Purpose
 
-The dashboard currently combines several distinct kinds of records into one array. That makes plausible-looking numbers disagree and lets graph derivations appear as memory writes or activity. v3.6 fixes this by defining one contract per data class and requiring every dashboard surface to name which contract it uses.
+The dashboard previously combined several distinct kinds of records into one array. That made plausible-looking numbers disagree and let graph derivations appear as memory writes or activity. The certified v3.5 floor fixes this by defining one contract per data class and requiring every dashboard surface to name which contract it uses.
 
 ## Data classes
 

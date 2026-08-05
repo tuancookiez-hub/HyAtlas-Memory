@@ -130,7 +130,7 @@ Memories are stored across 7 layers. Knowing what each is for helps debugging:
 
 ## Local embedder (no API key)
 
-The embedder runs **in-process** via sentence-transformers. No API key needed, no provider, no external call. Model: `BAAI/bge-large-en-v1.5` (1024 dims, 3.1s load on CPU). Matches the existing `agent_memories_1024` zvec collection.
+The embedder runs **in-process** via sentence-transformers. No API key needed, no provider, no external call. The recommended local floor is `BAAI/bge-small-en-v1.5` (384 dims), stored in `agent_memories_384`. `hyatlas config embedder --preset large` remains available for users who deliberately want 1024d and accept the heavier model/runtime footprint.
 
 If `embed: error` shows on `/api/v1/status`, the in-process wire failed. Diagnostic:
 
@@ -154,7 +154,7 @@ Version matrix that works (as of v3.5.0):
 
 ## LLM config
 
-LLM is BYO key. Example config in `D:/HyAtlas/.hyatlas/config/hy_memory.json` (the model below is an OpenRouter free-tier example — swap for whatever OpenAI-compatible endpoint you actually use):
+LLM is BYO key. Example configuration lives under `$HYATLAS_HOME/config/hy_memory.json` (the model below is an OpenRouter example — swap for whatever OpenAI-compatible endpoint you use):
 
 ```json
 "llm": {
@@ -171,11 +171,11 @@ The `extra_body` suppresses reasoning tokens that would otherwise consume the LL
 
 | Path | What |
 |---|---|
-| `D:/HyAtlas/.hyatlas/config/hy_memory.json` | Active config (LLM key, embedder model, vector store) |
-| `D:/HyAtlas/.hyatlas/data/kuzu_db/` | Kuzu graph (L1 raw, L2 fact, relations) |
-| `D:/HyAtlas/.hyatlas/data/zvec/` | zvec in-process vector store |
-| `D:/HyAtlas/.hyatlas/logs/hy_memory.log` | Server log (rotates daily) |
-| `D:/HyAtlas/.hyatlas/logs/dashboard.log` | Dashboard log |
+| `$HYATLAS_HOME/config/hy_memory.json` | Active config (LLM key, embedder model, vector store) |
+| `$HYATLAS_HOME/data/kuzu_db/` | Kuzu graph (L5–L7 entities, schemas, intentions, relations) |
+| `$HYATLAS_HOME/zvec/agent_memories_<dims>/` | zvec in-process vector collection (L0–L3 + legacy L4) |
+| `$HYATLAS_HOME/logs/hy-memory_server.log` | Server log |
+| `$HYATLAS_HOME/logs/dashboard.log` | Dashboard log |
 
 Override `HYATLAS_HOME` to relocate everything (e.g., to another drive).
 
@@ -201,9 +201,9 @@ Do NOT run the digest from git-bash in background — MSYS path mangling breaks 
 - Check version matrix above. v3.4.5+ should have correct pins.
 - Restart: `hyatlas stop && hyatlas start`.
 
-**`vdb: error`**
-- zvec store unreadable (corruption or lock file).
-- `hyatlas doctor` will tell you. `hyatlas stop && rm D:/HyAtlas/.hyatlas/data/zvec/LOCK && hyatlas start` as last resort (data-preserving).
+**`vdb: error` or `Can't lock read-write collection`**
+- First run `hyatlas stop`, verify no HyAtlas server process remains, then run `hyatlas start --detach`.
+- Do **not** delete zvec `LOCK` marker files. They are zero-byte even while a healthy process owns the collection. zvec 0.6.0 reopens a force-killed collection once the prior process is actually gone; the v3.5.0 regression suite proves the record survives.
 
 **`llm: error`**
 - OpenRouter key invalid or rate-limited.

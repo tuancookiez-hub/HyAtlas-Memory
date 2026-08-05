@@ -81,8 +81,8 @@ with `HERMES_HOME=/path/to/alt/home` if needed.
   "llm": "ok|warning: ...|rate_limited: ...|error: ...",
   "write_pipeline": "ok|warning|rate_limited|error",
   "vdb_provider": "zvec",
-  "vdb_collection": "agent_memories_1024",
-  "embed_dims": 1024
+  "vdb_collection": "agent_memories_384",
+  "embed_dims": 384
 }
 ```
 
