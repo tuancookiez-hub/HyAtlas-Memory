@@ -11,6 +11,7 @@
 - **Honest health:** `/api/v1/status` and dashboard health include Kuzu readiness and node counts. Embedder/VDB/Kuzu-down contract tests prevent false-green status.
 - **Crash/reopen contract:** zvec collection resolution accepts either a base or already-suffixed physical name, and potentially blocking C++ open/create calls run off the asyncio loop. A real subprocess regression test force-kills a zvec owner, confirms all three zero-byte `LOCK` marker files remain, then proves a fresh process reopens the collection and reads the persisted record. **Do not delete these marker files**; they also exist while a healthy owner is live.
 - **Lighter local default:** new local configurations use `BAAI/bge-small-en-v1.5` (384d). BGE-large/1024 remains available with `hyatlas config embedder --preset large`. Dimension changes use a separate `agent_memories_<dims>` collection; users may intentionally start fresh instead of re-indexing.
+- **Additive Kuzu dimension migration:** an existing graph created with `embedding FLOAT[1024]` is preserved when the active embedder changes to 384d. HyAtlas adds `embedding_384` / `beh_embedding_384` plus `memory_content_idx_384`, routes new graph writes/search to that lane, and exposes active/legacy dimensions in health. Historical graph nodes, relationships, and 1024d vectors remain untouched; no full graph re-index is required.
 - **Profile hygiene:** stale HyAtlas copies in the trading profile were synchronized or archived so every active profile receives the same v3.5.0 zvec/Kuzu guidance.
 
 ### Dependencies

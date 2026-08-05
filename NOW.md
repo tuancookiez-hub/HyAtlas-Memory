@@ -12,6 +12,11 @@ points for this floor. The release includes the stable-floor infographic at
 - Recommended local embedder: `BAAI/bge-small-en-v1.5` (**384d**).
 - Active physical collection: `agent_memories_384`; fresh-memory strategy,
   no full re-index of the retired 1024d collection.
+- **Kuzu dimension lane repaired 2026-08-05:** the preserved graph keeps its
+  original 1024d vector properties, while new writes/search use additive
+  `embedding_384` / `beh_embedding_384` and `memory_content_idx_384`. No old
+  graph node or relation was re-embedded or removed. Health exposes active
+  384d plus legacy `[1024]`; repeated live searches produce zero mismatch warnings.
 - zvec crash contract corrected: zero-byte `LOCK` files are normal marker
   files. A force-killed isolated owner reopens successfully under zvec 0.6.0
   without deleting them. Recovery rule: `hyatlas stop`, verify the owner is

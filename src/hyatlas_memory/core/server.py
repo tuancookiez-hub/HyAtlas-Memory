@@ -49,6 +49,22 @@ _ADMIN_UI_DIR: Path | None = None
 _SERVER_START_TIME = time.time()
 
 
+def _kuzu_health(stats: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Translate graph-store stats into truthful health + diagnostic fields."""
+    details = {
+        "kuzu_memory_nodes": stats.get("memory_nodes", 0),
+        "kuzu_embedding_dims": stats.get("embedding_dims"),
+        "kuzu_embedding_property": stats.get("embedding_property"),
+        "kuzu_embedding_index": stats.get("embedding_index"),
+        "kuzu_legacy_embedding_dims": stats.get("legacy_embedding_dims", []),
+    }
+    if not stats.get("available", True):
+        return f"error: {stats.get('reason', 'graph store unavailable')}", details
+    if not stats.get("vector_schema_compatible", False):
+        return "error: vector schema mismatch", details
+    return "ok", details
+
+
 def _admin_ui_dir() -> Path | None:
     global _ADMIN_UI_DIR
     if _ADMIN_UI_DIR is not None:
@@ -375,12 +391,9 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             loop = asyncio.new_event_loop()
             gstats = loop.run_until_complete(client._graph_store.get_stats())
             loop.close()
-            if gstats.get("available", True):
-                checks["kuzu"] = "ok"
-                checks["kuzu_memory_nodes"] = gstats.get("memory_nodes", 0)
-            else:
-                reason = gstats.get("reason", "graph store unavailable")
-                checks["kuzu"] = f"error: {reason}"
+            checks["kuzu"], details = _kuzu_health(gstats)
+            checks.update(details)
+            if checks["kuzu"] != "ok":
                 has_error = True
         except Exception as e:
             checks["kuzu"] = f"error: {e}"

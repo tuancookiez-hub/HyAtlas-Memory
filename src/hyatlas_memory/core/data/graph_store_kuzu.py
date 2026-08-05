@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 import logging
 import json
+import re
 
 from ..models.memory import MemoryNode, MemoryLayer, MemoryStatus
 from ..config import MemoryConfig
@@ -147,6 +148,11 @@ class KuzuGraphStore(GraphStoreBase):
         vs_dims = getattr(getattr(config, 'vector_store', None), 'embedding_dims', None)
         emb_dims = getattr(getattr(config, 'embedder', None), 'embedding_dims', None)
         self._embedding_dims = vs_dims or emb_dims or 1536
+        self._embedding_property = "embedding"
+        self._beh_embedding_property = "beh_embedding"
+        self._embedding_index = "memory_content_idx"
+        self._legacy_embedding_dims = []
+        self._vector_schema_compatible = False
 
         # 图数据库存储路径
         graph_config = getattr(config, 'graph_store', None)
@@ -270,13 +276,65 @@ class KuzuGraphStore(GraphStoreBase):
             self._available = False
             return
 
-        # 创建 HNSW 向量索引（已有则跳过）
-        self._ensure_vector_indexes(dims)
+        # Existing Kuzu tables keep their original fixed ARRAY dimensions.
+        # Add a dimension-specific lane when config dimensions change; never
+        # rewrite or delete historical graph vectors during normal startup.
+        self._ensure_embedding_lane(dims)
+        self._ensure_vector_indexes()
 
         self._available = True
         logger.info(f"GraphStore initialized (Kuzu), db_path={self._db_path}, embedding_dims={dims}")
 
-    def _ensure_vector_indexes(self, dims: int) -> None:
+    def _table_properties(self, table: str) -> dict[str, str]:
+        """Return property name → Kuzu type for a table."""
+        props = {}
+        result = self._conn.execute(f"CALL table_info('{table}') RETURN *;")
+        while result.has_next():
+            row = result.get_next()
+            props[str(row[1])] = str(row[2])
+        return props
+
+    @staticmethod
+    def _array_dims(kind: str | None) -> int | None:
+        match = re.fullmatch(r"FLOAT\[(\d+)\]", kind or "")
+        return int(match.group(1)) if match else None
+
+    def _ensure_embedding_lane(self, dims: int) -> None:
+        """Select or add the graph-vector properties for active dimensions."""
+        props = self._table_properties("Memory")
+        canonical = self._array_dims(props.get("embedding"))
+        legacy = {
+            found
+            for name, kind in props.items()
+            if (name == "embedding" or name.startswith("embedding_"))
+            and (found := self._array_dims(kind)) is not None
+            and found != dims
+        }
+
+        beh_canonical = self._array_dims(props.get("beh_embedding"))
+        if canonical == dims and beh_canonical == dims:
+            self._embedding_property = "embedding"
+            self._beh_embedding_property = "beh_embedding"
+            self._embedding_index = "memory_content_idx"
+        else:
+            self._embedding_property = f"embedding_{dims}"
+            self._beh_embedding_property = f"beh_embedding_{dims}"
+            self._embedding_index = f"memory_content_idx_{dims}"
+            expected = f"FLOAT[{dims}]"
+            for name in (self._embedding_property, self._beh_embedding_property):
+                if name not in props:
+                    self._conn.execute(f"ALTER TABLE Memory ADD {name} {expected};")
+                    props[name] = expected
+                    logger.info(f"Added Kuzu Memory.{name} ({expected})")
+                if props[name] != expected:
+                    raise RuntimeError(
+                        f"Kuzu Memory.{name} has type {props[name]}, expected {expected}"
+                    )
+
+        self._legacy_embedding_dims = sorted(legacy)
+        self._vector_schema_compatible = True
+
+    def _ensure_vector_indexes(self) -> None:
         """确保 Memory 表上的 HNSW 向量索引存在
 
         注意: Kuzu 不允许 SET 被索引的列。因此：
@@ -286,16 +344,20 @@ class KuzuGraphStore(GraphStoreBase):
         """
         try:
             self._conn.execute(
-                "CALL CREATE_VECTOR_INDEX('Memory', 'memory_content_idx', 'embedding', "
-                "metric := 'cosine');"
+                f"CALL CREATE_VECTOR_INDEX('Memory', '{self._embedding_index}', "
+                f"'{self._embedding_property}', metric := 'cosine');"
             )
-            logger.info("Created vector index memory_content_idx on Memory.embedding")
+            logger.info(
+                f"Created vector index {self._embedding_index} on "
+                f"Memory.{self._embedding_property}"
+            )
         except Exception as e:
             err_msg = str(e).lower()
             if "already exist" in err_msg or "duplicate" in err_msg:
-                logger.debug("Vector index memory_content_idx already exists")
+                logger.debug(f"Vector index {self._embedding_index} already exists")
             else:
-                logger.warning(f"Failed to create vector index memory_content_idx: {e}")
+                self._vector_schema_compatible = False
+                logger.warning(f"Failed to create vector index {self._embedding_index}: {e}")
 
     def _execute(self, query: str, params: dict[str, Any] | None = None) -> Any:
         """执行 Cypher 查询 (GraphStore 不可用时返回 None)"""
@@ -435,8 +497,7 @@ class KuzuGraphStore(GraphStoreBase):
             # CREATE 新节点（Kuzu 被索引的列只能在 CREATE 时写入，不能 SET）
             params["emb"] = embedding
             params["beh_emb"] = beh_embedding
-            self._execute(
-                """
+            query = """
                 CREATE (m:Memory {
                     node_id: $nid, isolation_key: $ik, user_id: $uid,
                     agent_id: $sid, layer: $layer, content: $content,
@@ -452,11 +513,12 @@ class KuzuGraphStore(GraphStoreBase):
                     previous_version_id: $pvid, superseded_by_id: $sbid,
                     change_reason: $cr, evidence_chain: $ec,
                     custom_json: $cust, tags: $tags, extra_json: $extra,
-                    embedding: $emb, beh_embedding: $beh_emb
+                    __EMBEDDING__: $emb, __BEH_EMBEDDING__: $beh_emb
                 });
-                """,
-                params,
-            )
+                """
+            query = query.replace("__EMBEDDING__", self._embedding_property)
+            query = query.replace("__BEH_EMBEDDING__", self._beh_embedding_property)
+            self._execute(query, params)
         else:
             # UPDATE 已有节点（content embedding 有索引，不能 SET，见 update_embedding）
             update_sets = [
@@ -469,7 +531,7 @@ class KuzuGraphStore(GraphStoreBase):
             ]
             if beh_embedding is not None:
                 params["beh_emb"] = beh_embedding
-                update_sets.append("m.beh_embedding = $beh_emb")
+                update_sets.append(f"m.{self._beh_embedding_property} = $beh_emb")
             if embedding is not None:
                 logger.debug(
                     f"Kuzu upsert: node {node.node_id} exists; content embedding "
@@ -1098,7 +1160,7 @@ class KuzuGraphStore(GraphStoreBase):
         try:
             # Kuzu QUERY_VECTOR_INDEX 支持直接传参数化 list
             r = self._execute(
-                f"CALL QUERY_VECTOR_INDEX('Memory', 'memory_content_idx', "
+                f"CALL QUERY_VECTOR_INDEX('Memory', '{self._embedding_index}', "
                 f"$vec, {int(limit * 3)}) "
                 f"RETURN node.node_id, node.content, node.layer, node.confidence, "
                 f"node.isolation_key, node.status, node.custom_json, distance;",
@@ -1161,8 +1223,9 @@ class KuzuGraphStore(GraphStoreBase):
             r = self._execute(
                 "MATCH (m:Memory) WHERE m.isolation_key = $ik "
                 "AND m.layer = 'l6_schema' AND m.status = 'active' "
-                "AND m.beh_embedding IS NOT NULL "
-                "RETURN m.node_id, m.content, m.embedding, m.beh_embedding;",
+                f"AND m.{self._beh_embedding_property} IS NOT NULL "
+                f"RETURN m.node_id, m.content, m.{self._embedding_property}, "
+                f"m.{self._beh_embedding_property};",
                 {"ik": isolation_key},
             )
             candidates = []
@@ -1222,7 +1285,8 @@ class KuzuGraphStore(GraphStoreBase):
         try:
             if beh_embedding is not None:
                 self._execute(
-                    "MATCH (m:Memory {node_id: $nid}) SET m.beh_embedding = $vec;",
+                    f"MATCH (m:Memory {{node_id: $nid}}) "
+                    f"SET m.{self._beh_embedding_property} = $vec;",
                     {"nid": node_id, "vec": beh_embedding},
                 )
             if embedding is not None:
@@ -1341,6 +1405,11 @@ class KuzuGraphStore(GraphStoreBase):
                 "db_path": self._db_path,
                 "memory_nodes": mc,
                 "user_nodes": uc,
+                "vector_schema_compatible": self._vector_schema_compatible,
+                "embedding_dims": self._embedding_dims,
+                "embedding_property": self._embedding_property,
+                "embedding_index": self._embedding_index,
+                "legacy_embedding_dims": self._legacy_embedding_dims,
             }
         except Exception as e:
             return {"backend": "kuzu", "error": str(e)}

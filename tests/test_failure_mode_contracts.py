@@ -14,6 +14,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+from hyatlas_memory.core.server import _kuzu_health
+
 PATH = (
     Path(__file__).parents[1] / "src" / "hyatlas_memory" / "server" / "dashboard" / "dashboard.py"
 )
@@ -75,6 +77,43 @@ def test_status_surface_propagates_kuzu_error(monkeypatch):
     assert code == 503
     assert payload["status"] == "error"
     assert payload["kuzu"].startswith("error")
+
+
+def test_kuzu_health_rejects_vector_schema_mismatch():
+    status, details = _kuzu_health(
+        {
+            "available": True,
+            "memory_nodes": 2852,
+            "vector_schema_compatible": False,
+            "embedding_dims": 384,
+            "embedding_property": "embedding",
+            "legacy_embedding_dims": [1024],
+        }
+    )
+
+    assert status.startswith("error: vector schema mismatch")
+    assert details["kuzu_memory_nodes"] == 2852
+    assert details["kuzu_embedding_dims"] == 384
+    assert details["kuzu_legacy_embedding_dims"] == [1024]
+
+
+def test_kuzu_health_reports_active_additive_lane():
+    status, details = _kuzu_health(
+        {
+            "available": True,
+            "memory_nodes": 2852,
+            "vector_schema_compatible": True,
+            "embedding_dims": 384,
+            "embedding_property": "embedding_384",
+            "embedding_index": "memory_content_idx_384",
+            "legacy_embedding_dims": [1024],
+        }
+    )
+
+    assert status == "ok"
+    assert details["kuzu_embedding_property"] == "embedding_384"
+    assert details["kuzu_embedding_index"] == "memory_content_idx_384"
+    assert details["kuzu_legacy_embedding_dims"] == [1024]
 
 
 def test_health_still_green_when_all_components_ok(monkeypatch):
