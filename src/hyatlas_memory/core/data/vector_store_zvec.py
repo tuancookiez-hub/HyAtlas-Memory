@@ -42,11 +42,11 @@ def resolve_zvec_path(config: MemoryConfig) -> Path:
     base = config.vector_store.collection_name or "agent_memories"
     dims = config.vector_store.embedding_dims or 1024
     suffix = f"_{dims}"
+    # Idempotent: config may carry the base name (agent_memories) or the
+    # already-suffixed physical name (agent_memories_1024, as appended by
+    # VectorStoreBase). Accept both — reject only a genuinely wrong name.
     if base.endswith(suffix):
-        raise ValueError(
-            "zvec config must use the base collection name; "
-            f"got {base!r}, expected {base[:-len(suffix)]!r}"
-        )
+        base = base[: -len(suffix)]
     return Path(home()) / "zvec" / f"{base}{suffix}"
 
 _vdb_executor = None
@@ -268,12 +268,14 @@ class ZvecVectorStore(VectorStoreBase):
             vectors=vectors,
         )
 
-        # Open existing or create new
+        # Open existing or create new off the asyncio loop. zvec's C++
+        # open/create path can block during Windows LOCK acquisition and mmap
+        # setup; using the VDB executor keeps the client event loop responsive.
         if os.path.exists(self._path):
-            self._coll = zvec.open(self._path)
+            self._coll = await _run_in_vdb_pool(zvec.open, self._path)
             logger.info(f"[zvec] Opened existing collection: {self._path}")
         else:
-            self._coll = zvec.create_and_open(self._path, schema)
+            self._coll = await _run_in_vdb_pool(zvec.create_and_open, self._path, schema)
             logger.info(f"[zvec] Created new collection: {self._path} (dims={dims})")
 
         _open_collections[self._path] = self._coll

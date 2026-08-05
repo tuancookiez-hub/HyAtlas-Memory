@@ -35,12 +35,17 @@ def default_config() -> dict[str, Any]:
             "extra_body": {"thinking": {"type": "disabled"}},
         },
         "embedder": {
-            "model": "BAAI/bge-large-en-v1.5",
-            "dims": 1024,
+            "model": "BAAI/bge-small-en-v1.5",
+            "dims": 384,
             "provider": "local",
         },
         "mode": "ultra",
-        "vector_store": {"provider": "zvec", "host": "127.0.0.1", "port": 6333},
+        "vector_store": {
+            "provider": "zvec",
+            "host": "127.0.0.1",
+            "port": 6333,
+            "embedding_dims": 384,
+        },
         "auto_start": True,
         "port": 19527,
     }
@@ -132,6 +137,7 @@ def embedder(args: Namespace) -> int:
     if args.dims:
         cfg["embedder"]["dims"] = args.dims
     cfg["embedder"]["provider"] = "local"
+    cfg.setdefault("vector_store", {})["embedding_dims"] = cfg["embedder"].get("dims")
     save(cfg)
     print(f"✓ Wrote embedder config to {layout.cfgfile()}")
     print("WARNING: changing embedder model/dims on existing data requires re-vectorization or a new collection.")
@@ -192,24 +198,25 @@ def init(_: Namespace | None = None) -> int:
     mode = ask("Mode (lite/pro/ultra)", str(cfg.get("mode", "ultra"))).lower()
     cfg["mode"] = mode if mode in {"lite", "pro", "ultra"} else "ultra"
     print()
-    print("Embedder: 1) BGE large 1024  2) BGE small 384  3) custom local")
+    print("Embedder: 1) BGE small 384 (recommended)  2) BGE large 1024  3) custom local")
     choice = ask("Embedder choice", "1")
     if choice == "2":
-        cfg["embedder"] = {"provider": "local", "model": _EMBEDS["small"][0], "dims": _EMBEDS["small"][1]}
+        cfg["embedder"] = {"provider": "local", "model": _EMBEDS["large"][0], "dims": _EMBEDS["large"][1]}
     elif choice == "3":
         dims_raw = ask("Vector dimensions")
         try:
             dims = int(dims_raw)
         except ValueError:
-            print(f"Invalid dimensions: {dims_raw!r}, defaulting to 1024")
-            dims = 1024
+            print(f"Invalid dimensions: {dims_raw!r}, defaulting to 384")
+            dims = 384
         cfg["embedder"] = {
             "provider": "local",
             "model": ask("Local sentence-transformers model/path"),
             "dims": dims,
         }
     else:
-        cfg["embedder"] = {"provider": "local", "model": _EMBEDS["large"][0], "dims": _EMBEDS["large"][1]}
+        cfg["embedder"] = {"provider": "local", "model": _EMBEDS["small"][0], "dims": _EMBEDS["small"][1]}
+    cfg.setdefault("vector_store", {})["embedding_dims"] = cfg["embedder"]["dims"]
     save(cfg)
     layout.envfile().write_text(
         f"HYATLAS_HOME={layout.home()}\nHY_MEMORY_MODE={cfg['mode']}\n",

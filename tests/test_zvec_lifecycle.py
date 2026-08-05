@@ -38,13 +38,14 @@ def test_zvec_path_uses_base_collection_once(monkeypatch, tmp_path):
     assert resolve_zvec_path(config) == tmp_path / "zvec" / "agent_memories_4"
 
 
-def test_zvec_path_rejects_pre_suffixed_collection(monkeypatch, tmp_path):
+def test_zvec_path_accepts_pre_suffixed_collection(monkeypatch, tmp_path):
+    """The resolver accepts either the configured base name or the physical
+    suffixed collection name produced by VectorStoreBase."""
     monkeypatch.setenv("HYATLAS_HOME", str(tmp_path))
     config = cfg(tmp_path)
     config.vector_store.collection_name = "agent_memories_4"
 
-    with pytest.raises(ValueError, match="base collection name"):
-        resolve_zvec_path(config)
+    assert resolve_zvec_path(config) == tmp_path / "zvec" / "agent_memories_4"
 
 
 def test_initialize_does_not_delete_lock_files(monkeypatch, tmp_path):
@@ -110,3 +111,77 @@ def test_zvec_temp_collection_reopens_after_close(monkeypatch, tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "zvec lifecycle proof"
+
+
+def test_zvec_temp_collection_reopens_after_forced_exit(monkeypatch, tmp_path):
+    """A killed zvec owner leaves zero-byte LOCK files, but zvec 0.6.0 must
+    reopen the collection once the owning process is gone. Do not delete the
+    marker files: they also exist while a healthy process owns the store."""
+    monkeypatch.setenv("HYATLAS_HOME", str(tmp_path))
+    child = textwrap.dedent(f"""
+        import asyncio
+        import os
+        import time
+        os.environ["HYATLAS_HOME"] = {str(tmp_path)!r}
+        from hyatlas_memory.core.config import MemoryConfig
+        from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
+        from hyatlas_memory.core.models.memory import MemoryLayer, MemoryNode
+        config = MemoryConfig()
+        config.vector_store.provider = "zvec"
+        config.vector_store.collection_name = "crash_probe"
+        config.vector_store.embedding_dims = 4
+        async def main():
+            store = ZvecVectorStore(config)
+            await store.initialize()
+            await store.upsert(MemoryNode(
+                node_id="probe", user_id="u", agent_id="a", session_id="s",
+                layer=MemoryLayer.L2_FACT, content="survives crash",
+                embedding=[0.1, 0.2, 0.3, 0.4],
+            ))
+            print("READY", flush=True)
+            while True:
+                await asyncio.sleep(1)
+        asyncio.run(main())
+    """)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", child],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert proc.stdout.readline().strip() == "READY"
+    proc.kill()
+    proc.wait(timeout=10)
+
+    path = tmp_path / "zvec" / "crash_probe_4"
+    assert sorted(item.name for item in path.rglob("LOCK")) == ["LOCK", "LOCK", "LOCK"]
+
+    reopen = textwrap.dedent(f"""
+        import asyncio
+        import os
+        os.environ["HYATLAS_HOME"] = {str(tmp_path)!r}
+        from hyatlas_memory.core.config import MemoryConfig
+        from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
+        config = MemoryConfig()
+        config.vector_store.provider = "zvec"
+        config.vector_store.collection_name = "crash_probe"
+        config.vector_store.embedding_dims = 4
+        async def main():
+            store = ZvecVectorStore(config)
+            await store.initialize()
+            node = await store.get_by_id("probe")
+            print(node.content if node else "missing")
+            await store.close()
+        asyncio.run(main())
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", reopen],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "survives crash"
