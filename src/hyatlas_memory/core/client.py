@@ -119,7 +119,11 @@ class _LoopThread:
     def run(self, coro, timeout: float = 300):
         """在后台 loop 中运行协程，同步等待结果"""
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result(timeout=timeout)
+        try:
+            return future.result(timeout=timeout)
+        except TimeoutError:
+            future.cancel()
+            raise
 
     async def run_async(self, coro):
         """
@@ -1052,8 +1056,15 @@ class HyMemoryClient:
                 f"digest() requires mode='ultra', but this client is mode='{self._mode}'. "
                 f"Create a new client with HyMemoryClient(mode='ultra') to use System 2."
             )
+        try:
+            timeout = int(os.getenv("MEMORY_DIGEST_TIMEOUT", "3600"))
+        except ValueError:
+            timeout = 3600
+        if timeout < 60 or timeout > 86400:
+            timeout = 3600
         return self._loop_thread.run(
-            self.async_digest(user_id=user_id, agent_id=agent_id)
+            self.async_digest(user_id=user_id, agent_id=agent_id),
+            timeout=timeout,
         )
 
     @_ensure_internal_loop

@@ -12,6 +12,14 @@ points for this floor. The release includes the stable-floor infographic at
 - Recommended local embedder: `BAAI/bge-small-en-v1.5` (**384d**).
 - Active physical collection: `agent_memories_384`; fresh-memory strategy,
   no full re-index of the retired 1024d collection.
+- **Digest recovery completed 2026-08-06:** the synchronous client inherited
+  `_LoopThread.run()`'s generic 300s timeout, so a valid multi-batch digest
+  returned HTTP 500 while continuing to mutate Kuzu. `digest()` now uses
+  `MEMORY_DIGEST_TIMEOUT` (3600s default), timed-out futures are cancelled,
+  and HTTP reports `504 digest_timeout`. After restart, the remaining default
+  digest completed in 383.2s: L5 +24, L6 +5, relations +104. Canonical digest
+  status is `ok`; three isolated L2 facts remain below the useful clustering
+  threshold and were intentionally not force-digested.
 - **Kuzu dimension lane repaired 2026-08-05:** the preserved graph keeps its
   original 1024d vector properties, while new writes/search use additive
   `embedding_384` / `beh_embedding_384` and `memory_content_idx_384`. No old

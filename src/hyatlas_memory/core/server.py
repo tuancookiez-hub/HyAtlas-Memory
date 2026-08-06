@@ -549,6 +549,12 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
         try:
             result = client.digest(user_id=user_id, agent_id=agent_id)
             _json_response(self, 200 if result.get("success", False) else 502, result)
+        except TimeoutError:
+            _json_response(self, 504, {
+                "success": False,
+                "error": "digest_timeout",
+                "detail": "System 2 digest exceeded MEMORY_DIGEST_TIMEOUT and was cancelled",
+            })
         except RuntimeError as e:
             # digest() 在非 ultra 模式抛 RuntimeError
             _json_response(self, 400, {

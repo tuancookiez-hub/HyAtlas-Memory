@@ -60,6 +60,8 @@ def test_start_server_boots_zvec_on_temp_port(monkeypatch, tmp_path):
         "HYATLAS_HOME": str(home),
         "HY_MEMORY_PORT": str(p),
         "MEMORY_LOG_LEVEL": "ERROR",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
     }
     proc = subprocess.Popen(
         [sys.executable, "-m", "hyatlas_memory.server.start_server"],
