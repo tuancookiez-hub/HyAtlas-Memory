@@ -423,7 +423,7 @@ class MemoryWriter(WritePipeline):
             agent_id=request.agent_id or "default_agent",
             vector_store=vector_store,
             embed_service=self.embed_service,
-            layers=[MemoryLayer.L2_FACT, MemoryLayer.L4_IDENTITY],
+            layers=[MemoryLayer.L2_FACT],
             cache=self._cache,
             request_id=req_id,
             current_time=current_time,

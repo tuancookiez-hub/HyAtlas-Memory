@@ -62,14 +62,12 @@ _VDB_PROFILE_LAYERS = [MemoryLayer.L0_BASIC_INFO]
 _PROFILE_RECALL_LIMIT = 10
 
 # 主 VDB 召回（语义 + BM25 关键词）覆盖的记忆层。
-# 覆盖 L2/L3/L4：fact / summary / identity。identity（L4）按 VDB 普通记忆处理，
-# 参与语义+BM25 融合排序，最终归入 normal 通道（不再算 profile）。
+# 覆盖 L2/L3：fact / summary。
 # 与 _PROFILE_LAYERS 互斥（L0/L6 只走 profile 路），杜绝双重召回。
 # 不含 L1_RAW（原始对话，append-only 不召回）、L5_KNOWLEDGE、L7（graph 专属通道）。
 _VDB_RECALL_LAYERS = [
     MemoryLayer.L2_FACT,
     MemoryLayer.L3_SUMMARY,
-    MemoryLayer.L4_IDENTITY,
 ]
 
 

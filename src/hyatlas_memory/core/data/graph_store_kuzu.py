@@ -617,20 +617,8 @@ class KuzuGraphStore(GraphStoreBase):
         return nodes
 
     async def get_profile(self, isolation_key: str) -> MemoryNode | None:
-        """获取 L5 Identity Profile 节点"""
-        if not self._available:
-            return None
-        result = self._execute(
-            "MATCH (m:Memory) WHERE m.isolation_key = $ik AND m.layer = $layer "
-            "AND m.status = 'active' RETURN m LIMIT 1;",
-            {"ik": isolation_key, "layer": MemoryLayer.L4_IDENTITY.value},
-        )
-        rows = []
-        while result.has_next():
-            rows.append(result.get_next())
-        if not rows:
-            return None
-        return self._row_to_memory_node(rows[0][0])
+        """获取 Profile 节点 (identity retired; profile lives in L0_BASIC_INFO VDB)."""
+        return None
 
     async def update_node(self, node_id: str, updates: dict[str, Any]) -> bool:
         """更新节点属性"""

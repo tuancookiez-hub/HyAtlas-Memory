@@ -848,7 +848,7 @@ class HyMemoryClient:
         三路召回（chat 路径）：
         - **Profile 路**: L0_BASIC_INFO + L6_SCHEMA（用户画像）
         - **Proactive 路**: L7_INTENTION（主动意图，默认关闭）
-        - **Normal 路**: L2_FACT + L3_SUMMARY + L4_IDENTITY + L5_KNOWLEDGE 等
+        - **Normal 路**: L2_FACT + L3_SUMMARY + L5_KNOWLEDGE 等
 
         Coding 路径（自动判定）：
         - 当 queries 上下文判定为 coding 时，走 CodingMemoryStore（task + search_keys
@@ -1591,7 +1591,7 @@ class HyMemoryClient:
         user_id: str,
         agent_id: str,
     ) -> None:
-        """对 search 结果中的 L2_FACT + L4_IDENTITY 做去重删库（fire-and-forget）。
+        """对 search 结果中的 L2_FACT 做去重删库（fire-and-forget）。
 
         只取这两层（重复重灾区）；带 evolution_chain 的项视为链头，其 chain node_ids
         从 evolution_chain 取出供连带删除。整体后台执行，不阻塞 search 返回。
@@ -1600,7 +1600,7 @@ class HyMemoryClient:
 
         from .pipelines._retrieval.dedup import DedupItem, execute_dedup
 
-        _DEDUP_LAYERS = {"l2_fact", "l4_identity"}
+        _DEDUP_LAYERS = {"l2_fact"}
         targets = [m for m in all_mems if (m.get("layer") or "").lower() in _DEDUP_LAYERS and m.get("memory_id")]
         if len(targets) < 2:
             return
@@ -1892,7 +1892,7 @@ class HyMemoryClient:
                 item["evolution_chain"] = mem["evolution_chain"]
             _all_mems.append(item)
 
-        # search 链路去重：仅对 L2_FACT + L4_IDENTITY（重复重灾区）判重删库。
+        # search 链路去重：仅对 L2_FACT（重复重灾区）判重删库。
         # L0 及其他层不参与。fire-and-forget，不阻塞本次返回（清理面向后续查询）。
         try:
             self._spawn_search_dedup(
@@ -1932,8 +1932,8 @@ class HyMemoryClient:
 
         # 按 channel 分组
         # profile = L0_BASIC_INFO + L6_SCHEMA（用户画像类）；proactive = intention；
-        # 其余（含 L4_IDENTITY / L2_FACT / L3_SUMMARY）归 normal。
-        # L4_IDENTITY 从 SDK 视角按 VDB 普通记忆处理（走主语义+BM25 路），不再算 profile，
+        # 其余（含 L2_FACT / L3_SUMMARY）归 normal。
+        # L2_FACT 从 SDK 视角按 VDB 普通记忆处理（走主语义+BM25 路）。
         # 避免同节点被 profile 路与主路双重召回、profile 高分被主路融合低分顶掉。
         # profile 桶仍额外卡 profile_min_score（对 L0/L6 有效），不达标降级 normal。
         _PROFILE_LAYERS = {"l0_basic_info", "l6_schema"}

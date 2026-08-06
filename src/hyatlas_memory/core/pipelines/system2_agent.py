@@ -5,7 +5,7 @@ System 2 Agent — 统一认知加工引擎
 
 流程:
   Phase 1 (硬编码预处理):
-    ① VDB 取未处理的 L2_FACT + L4_IDENTITY
+    ① VDB 取未处理的 L2_FACT
     ② DBSCAN 聚类 → clusters
     ③ Graph 正向搜索: 按 cluster 主题 query Graph
     ④ Graph 反向查找: VDB node_id → find_referencing_memories
@@ -125,7 +125,6 @@ SYSTEM2_AGENT_PROMPT_ZH = """你是一个认知加工 Agent，负责从用户的
 | L1 RAW | 原始对话记录 |
 | L2 FACT | 原子事实（从对话中提取的客观事实）|
 | L3 SUMMARY | 会话摘要 |
-| L4 IDENTITY | 身份画像（性格特征、偏好、习惯）|
 | L5 KNOWLEDGE | 领域知识 |
 
 ### Graph（知识图谱）— 你是唯一的写入者
@@ -182,7 +181,6 @@ SYSTEM2_AGENT_PROMPT_EN = """You are a cognitive processing Agent. Your job is t
 | L1 RAW | Original conversation transcripts |
 | L2 FACT | Atomic facts extracted from conversations |
 | L3 SUMMARY | Session summaries |
-| L4 IDENTITY | Identity traits, preferences, habits |
 | L5 KNOWLEDGE | Domain knowledge |
 
 ### Graph (Knowledge Graph) — you are the sole writer

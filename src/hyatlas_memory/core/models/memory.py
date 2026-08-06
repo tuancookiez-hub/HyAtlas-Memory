@@ -39,23 +39,21 @@ class MemoryLayer(str, Enum):
     L1_RAW = "l1_raw"
     L2_FACT = "l2_fact"
     L3_SUMMARY = "l3_summary"
-    L4_IDENTITY = "l4_identity"
     L5_KNOWLEDGE = "l5_knowledge"
     L6_SCHEMA = "l6_schema"
     L7_INTENTION = "l7_intention"
 
     # --- 旧编号兼容别名（已存储数据中的值） ---
     # v2 → v3 重编号兼容
-    L6_IDENTITY = "l4_identity"     # 旧 l6_identity → 新 l4_identity
+    L6_IDENTITY = "l4_identity"     # 旧 l6_identity → 新 (removed) — historical only
     L4_KNOWLEDGE = "l5_knowledge"   # 旧 l4_knowledge → 新 l5_knowledge
     L5_SCHEMA = "l6_schema"         # 旧 l5_schema → 新 l6_schema
     # v1 → v2 旧兼容（仍需保留）
     L4_5_SCHEMA = "l6_schema"       # 旧 l4_5_schema → 新 l6_schema
-    L5_IDENTITY = "l4_identity"     # 旧 l5_identity → 新 l4_identity
+    L5_IDENTITY = "l4_identity"     # 旧 l5_identity → 新 (removed) — historical only
     L6_INTENTION = "l7_intention"   # 旧 l6_intention → 新 l7_intention
 
     # --- V1 兼容别名 ---
-    PROFILE = "l4_identity"
     DIALOGUE = "l2_fact"
     SUMMARY = "l3_summary"
     KNOWLEDGE = "l5_knowledge"
@@ -68,19 +66,19 @@ class MemoryLayer(str, Enum):
         # 旧编号 → 新编号映射（兼容已存储数据的 payload）
         legacy_mapping = {
             # v2 → v3
-            "l6_identity": cls.L4_IDENTITY,
+            "l6_identity": cls.L2_FACT,       # identity retired → lives in l2_fact
             "l4_knowledge": cls.L5_KNOWLEDGE,
             "l5_schema": cls.L6_SCHEMA,
             # v1 → v2 → v3
             "l4_5_schema": cls.L6_SCHEMA,
-            "l5_identity": cls.L4_IDENTITY,
+            "l5_identity": cls.L2_FACT,       # identity retired → lives in l2_fact
             "l6_intention": cls.L7_INTENTION,
         }
         if value in legacy_mapping:
             return legacy_mapping[value]
         # V1 兼容映射
         v1_mapping = {
-            "profile": cls.L4_IDENTITY,
+            "profile": cls.L2_FACT,           # identity retired → lives in l2_fact
             "dialogue": cls.L2_FACT,
             "summary": cls.L3_SUMMARY,
             "knowledge": cls.L5_KNOWLEDGE,
@@ -90,16 +88,20 @@ class MemoryLayer(str, Enum):
             return v1_mapping[value]
         for layer in cls:
             if layer.value == value:
+                # Legacy identity aliases (L6_IDENTITY / L5_IDENTITY) share the
+                # stored "l4_identity" value — treat any such row as L2_FACT.
+                if value == "l4_identity":
+                    return cls.L2_FACT
                 return layer
         raise ValueError(f"Invalid memory layer: {value}")
 
     @classmethod
     def all_layers(cls) -> list["MemoryLayer"]:
-        """返回所有记忆层 (不含别名)"""
+        """返回所有记忆层 (不含别名) — L4 removed, identity lives in L2_FACT"""
         return [
             cls.L0_BASIC_INFO,
             cls.L1_RAW, cls.L2_FACT, cls.L3_SUMMARY,
-            cls.L4_IDENTITY, cls.L5_KNOWLEDGE,
+            cls.L5_KNOWLEDGE,
             cls.L6_SCHEMA, cls.L7_INTENTION,
         ]
 

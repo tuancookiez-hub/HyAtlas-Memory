@@ -189,7 +189,7 @@ def _agent_param(qs: dict) -> str:
 def _layer_counts(agent_id: str = "") -> dict:
     """Build the canonical VDB + Kuzu layer-count contract for one scope."""
     layers = [
-        "l0_basic_info", "l1_raw", "l2_fact", "l3_summary", "l4_identity",
+        "l0_basic_info", "l1_raw", "l2_fact", "l3_summary",
         "l5_knowledge", "l6_schema", "l7_intention",
     ]
     graph_layers = ("l5_knowledge", "l6_schema", "l7_intention")
@@ -232,7 +232,7 @@ def _layer_counts(agent_id: str = "") -> dict:
         "display_counts": display,
         "display_total": sum(display.values()),
         "is_active_filtered": True,
-        "sources": {"l0_l4": "vdb", "l5_l7": "graph"},
+        "sources": {"l0_l3": "vdb", "l5_l7": "graph"},
     }
 
 # Layer colors (matches CSS .layer-l0..l7)
@@ -241,7 +241,6 @@ LAYER_COLORS = {
     "L1_RAW":        "#3d8b8b",
     "L2_FACT":       "#6b4c9a",
     "L3_SUMMARY":    "#4a6fa5",
-    "L4_IDENTITY":   "#d4af37",
     "L5_KNOWLEDGE":  "#3d8b8b",
     "L6_SCHEMA":     "#6b4c9a",
     "L7_INTENTION":  "#d4af37",
@@ -723,7 +722,6 @@ HTML = r"""<!DOCTYPE html>
   .layer-l1 { background: #1a3030; color: #3d8b8b; }
   .layer-l2 { background: #2a1a3a; color: #6b4c9a; }
   .layer-l3 { background: #1a2a40; color: #4a6fa5; }
-  .layer-l4 { background: #3a3010; color: #d4af37; }
   .layer-l5 { background: #1a3030; color: #3d8b8b; }
   .layer-l6 { background: #2a1a3a; color: #6b4c9a; }
   .layer-l7 { background: #3a3010; color: #d4af37; }
@@ -1640,7 +1638,6 @@ HTML = r"""<!DOCTYPE html>
       <label style="font-size:11px;color:var(--muted);cursor:pointer"><input type="checkbox" class="layer-filter" value="l1" checked> L1</label>
       <label style="font-size:11px;color:var(--muted);cursor:pointer"><input type="checkbox" class="layer-filter" value="l2" checked> L2</label>
       <label style="font-size:11px;color:var(--muted);cursor:pointer"><input type="checkbox" class="layer-filter" value="l3" checked> L3</label>
-      <label style="font-size:11px;color:var(--muted);cursor:pointer"><input type="checkbox" class="layer-filter" value="l4" checked> L4</label>
       <label style="font-size:11px;color:var(--muted);cursor:pointer"><input type="checkbox" class="layer-filter" value="l5" checked> L5</label>
       <label style="font-size:11px;color:var(--muted);cursor:pointer"><input type="checkbox" class="layer-filter" value="l6" checked> L6</label>
       <label style="font-size:11px;color:var(--muted);cursor:pointer"><input type="checkbox" class="layer-filter" value="l7" checked> L7</label>
@@ -1823,15 +1820,15 @@ function fmtMs(ms) { return ms==null?'—':(ms<1000?ms.toFixed(0)+'ms':(ms/1000)
 function layerClass(l) { const key = (l||'l2').toLowerCase().replace(/[^a-z0-9]/g,''); const m = key.match(/^(l\d)/); return 'layer layer-' + (m ? m[1] : key); }
 function layerColor(l) {
   const c = {'l0':'#4a6fa5','l1':'#3d8b8b','l2':'#6b4c9a','l3':'#4a6fa5',
-             'l4':'#d4af37','l5':'#3d8b8b','l6':'#6b4c9a','l7':'#d4af37'};
+             'l5':'#3d8b8b','l6':'#6b4c9a','l7':'#d4af37'};
   const key = (l||'l2').toLowerCase().replace(/[^a-z0-9]/g,'');
-  // Extract layer prefix: "l2fact" -> "l2", "l4identity" -> "l4"
+  // Extract layer prefix: "l2fact" -> "l2"
   const m = key.match(/^(l\d)/);
   return c[m ? m[1] : key] || '#666666';
 }
 function layerLabel(l) {
   const m = {'l0':'L0 Basic','l1':'L1 Raw','l2':'L2 Fact','l3':'L3 Summary',
-             'l4':'L4 Identity','l5':'L5 Knowledge','l6':'L6 Schema','l7':'L7 Intention'};
+             'l5':'L5 Knowledge','l6':'L6 Schema','l7':'L7 Intention'};
   const key = (l||'l2').toLowerCase().replace(/[^a-z0-9]/g,'');
   const prefix = key.match(/^(l\d)/);
   return m[prefix ? prefix[1] : key] || l;
@@ -2326,7 +2323,7 @@ async function loadLayers() {
     if (m.score != null) { layers[l].totalScore += m.score; layers[l].scored++; }
   });
 
-  const layerOrder = ['L0_BASIC_INFO','L1_RAW','L2_FACT','L3_SUMMARY','L4_IDENTITY','L5_KNOWLEDGE','L6_SCHEMA','L7_INTENTION'];
+  const layerOrder = ['L0_BASIC_INFO','L1_RAW','L2_FACT','L3_SUMMARY','L5_KNOWLEDGE','L6_SCHEMA','L7_INTENTION'];
   const present = layerOrder.filter(l => layers[l]);
   const missing = layerOrder.filter(l => !layers[l]);
 
@@ -2401,7 +2398,6 @@ const OBS_CATS_V17 = [
   { key: 'L7_INTENTION',  label: 'WISDOM',    color: '#d4af37', layerIdx: 7 },
   { key: 'L6_SCHEMA',     label: 'SCHEMA',    color: '#f39c12', layerIdx: 6 },
   { key: 'L5_KNOWLEDGE',  label: 'KNOWLEDGE', color: '#1abc9c', layerIdx: 5 },
-  { key: 'L4_IDENTITY',   label: 'IDENTITY',  color: '#9b59b6', layerIdx: 4 },
   { key: 'L3_SUMMARY',    label: 'SUMMARIES', color: '#3498db', layerIdx: 3 },
   { key: 'L2_FACT',       label: 'FACTS',     color: '#27ae60', layerIdx: 2 },
   { key: 'L1_RAW',        label: 'CONTEXT',   color: '#e67e22', layerIdx: 1 },
@@ -2413,7 +2409,6 @@ const LAYER_META_V17 = {
   'L1_RAW':        { icon: '\u25C9', desc: 'Situational context, conditions, and environmental details.', label: 'CONTEXT' },
   'L2_FACT':       { icon: '\u2713', desc: 'Verified facts and concrete knowledge extracted from memories.', label: 'FACTS' },
   'L3_SUMMARY':    { icon: '\u25C6', desc: 'High-level synthesis of facts and events into meaningful takeaways.', label: 'SUMMARIES' },
-  'L4_IDENTITY':   { icon: '\u2605', desc: 'Who this is about. Core entities, values, roles, and self-model.', label: 'IDENTITY' },
   'L5_KNOWLEDGE':  { icon: '\u25C8', desc: 'Structured knowledge and domain expertise.', label: 'KNOWLEDGE' },
   'L6_SCHEMA':     { icon: '\u25A3', desc: 'Cognitive schemas and mental models.', label: 'SCHEMA' },
   'L7_INTENTION':  { icon: '\u25CA', desc: 'Goals, intentions, and strategic direction.', label: 'WISDOM' },
@@ -2452,7 +2447,6 @@ async function loadMemories(limit = 500) {
       'l1_raw': 'L1_RAW', 'l1': 'L1_RAW',
       'l2_fact': 'L2_FACT', 'l2': 'L2_FACT',
       'l3_summary': 'L3_SUMMARY', 'l3': 'L3_SUMMARY',
-      'l4_identity': 'L4_IDENTITY', 'l4': 'L4_IDENTITY',
       'l5_knowledge': 'L5_KNOWLEDGE', 'l5': 'L5_KNOWLEDGE',
       'l6_schema': 'L6_SCHEMA', 'l6': 'L6_SCHEMA',
       'l7_intention': 'L7_INTENTION', 'l7': 'L7_INTENTION',
@@ -3972,7 +3966,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 return self._json(400, {"error": "invalid agent_id"})
             isolation_key = f"{user_id}::{agent_id}::default_session"
             layer_keys = [
-                "l0_basic_info", "l1_raw", "l2_fact", "l3_summary", "l4_identity",
+                "l0_basic_info", "l1_raw", "l2_fact", "l3_summary",
                 "l5_knowledge", "l6_schema", "l7_intention",
             ]
             counts = dict.fromkeys(layer_keys, 0)
@@ -4027,8 +4021,6 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                         digest_log_status = "stale"
                 except OSError:
                     digest_log_status = "unreadable"
-            archive_dir = hy_home() / "archive"
-            l4_archives = sorted(archive_dir.glob("l4_identity_pre_migrate_*.jsonl"))
             local_app = os.environ.get("LOCALAPPDATA", "")
             if local_app:
                 digest_win = f'python "{local_app}\\hermes\\scripts\\run_hyatlas_digest.py"'
@@ -4045,15 +4037,12 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 "graph_relation_count_global": graph_relations_global,
                 "fresh_l2_for_digest": fresh_l2,
                 "l6_graph_sample_for_key": l6_for_key,
-                "l4_status": "retired_migrated_to_l2",
-                "l4_archive_path": str(l4_archives[-1]) if l4_archives else None,
                 "digest_command": digest_win,
                 "digest_log_path": str(log_path),
                 "digest_log_status": digest_log_status,
                 "digest_log_mtime": digest_log_mtime,
                 "layer_notes": {
                     "l1_raw": "Often 0 under Hermes key: L1 shadowed after L2 extract.",
-                    "l4_identity": "No writer; legacy rows only.",
                     "l6_schema": "Graph (Kuzu) is canonical; VDB l6 count may be 0.",
                     "l5_knowledge": "Use graph_layer_counts for L5–L7 totals.",
                 },

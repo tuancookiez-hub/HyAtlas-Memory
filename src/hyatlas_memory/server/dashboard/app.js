@@ -22,7 +22,7 @@ let graphRelations = [];
 let activityMemories = [];
 let observatoryMemories = [];
 
-let layerCountsData = null;  // display counts: VDB L0-L4 + graph L5-L7 (Memory Composition bar)
+let layerCountsData = null;  // display counts: VDB L0-L3 + graph L5-L7 (Memory Composition bar)
 let layerHealthData = null;  // per-user/agent counts from /api/layer-health
 let l6SchemasData = null;    // sample L6 schemas from /api/l6-schemas
 let statusData = null;
@@ -42,7 +42,6 @@ const LAYERS = {
   'l1_raw': { name: 'Raw', desc: 'Unprocessed sensory and contextual inputs', color: '#3d8b8b' },
   'l2_fact': { name: 'Facts', desc: 'Discrete, verifiable pieces of information', color: '#6b4c9a' },
   'l3_summary': { name: 'Summaries', desc: 'Syntheses of multiple facts, events, and observations', color: '#4a6fa5' },
-  'l4_identity': { name: 'Identity (retired)', desc: 'Legacy layer — migrated to L2 facts; archive only', color: '#888888' },
   'l5_knowledge': { name: 'Knowledge', desc: 'Consolidated understanding and expertise', color: '#3d8b8b' },
   'l6_schema': { name: 'Schemas', desc: 'Structural patterns and organizational frameworks', color: '#6b4c9a' },
   'l7_intention': { name: 'Intentions', desc: 'Forward-looking goals and commitments (L7)', color: '#d4af37' }
@@ -497,10 +496,10 @@ function renderOverview() {
   const lc = (layerCountsData && (layerCountsData.display_counts || layerCountsData.counts))
     ? (layerCountsData.display_counts || layerCountsData.counts)
     : {};
-  // L4 is retired; don't count it as healthy coverage.
+  // L4 removed; don't count it as healthy coverage.
   const coverageKeys = Object.keys(lc).filter(k => k !== 'l4_identity');
   const activeLayers = coverageKeys.filter(k => Number(lc[k]) > 0).length;
-  const totalLayers = 7;
+  const totalLayers = 6;
 
   // Stat cards
   const statsHtml = `
@@ -517,12 +516,12 @@ function renderOverview() {
     <div class="stat-card">
       <div class="stat-label">DISPLAY TOTAL</div>
       <div class="stat-value">${fmtCount(displayTotal)}</div>
-      <div class="text-xs text-muted mt-1">L0-L4 VDB + L5-L7 graph</div>
+      <div class="text-xs text-muted mt-1">L0-L3 VDB + L5-L7 graph</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">LAYER COVERAGE</div>
       <div class="stat-value">${activeLayers}<span style="color: var(--muted); font-size: 20px;">/${totalLayers}</span></div>
-      <div class="text-xs text-muted mt-1">L4 retired</div>
+      <div class="text-xs text-muted mt-1">L0-L3 VDB + L5-L7 graph</div>
     </div>
   `;
   document.getElementById('overview-stats').innerHTML = statsHtml;
@@ -579,7 +578,7 @@ function fmtCount(value) {
 }
 
 function renderCompositionBar() {
-  // Prefer split display counts from /api/layer-counts (VDB L0-L4 + graph L5-L7).
+  // Prefer split display counts from /api/layer-counts (VDB L0-L3 + graph L5-L7).
   // Always recompute total from the counts object so percentages cannot drift.
   const lc = (typeof layerCountsData === 'object' && layerCountsData) ? layerCountsData : null;
 
@@ -596,8 +595,8 @@ function renderCompositionBar() {
 
   let html = '<div class="tag-bar">';
 
-  // L5-L7 are graph-canonical (Kuzu). L0-L4 are VDB-canonical (zvec).
-  const layerOrder = ['l0_basic_info', 'l1_raw', 'l2_fact', 'l3_summary', 'l4_identity', 'l5_knowledge', 'l6_schema', 'l7_intention'];
+  // L0-L3 VDB, L5-L7 graph (L4 removed).
+  const layerOrder = ['l0_basic_info', 'l1_raw', 'l2_fact', 'l3_summary', 'l5_knowledge', 'l6_schema', 'l7_intention'];
   layerOrder.forEach(layer => {
     const count = layerCounts[layer] || 0;
     if (count > 0) {
@@ -1198,7 +1197,7 @@ function restoreMemoryDetailFromUrl() {
 
 // Memory Layers
 function renderLayers() {
-  // Display counts: VDB L0-L4 + graph L5-L7. Also show dual VDB|Graph for L5-L7.
+  // Display counts: VDB L0-L3 + graph L5-L7. Also show dual VDB|Graph for L5-L7.
   const layerCounts = {};
   const layerTagCounts = {};
   const vdbCounts = (layerCountsData && layerCountsData.vdb_counts) || {};
@@ -1226,7 +1225,7 @@ function renderLayers() {
     const avgTags = count > 0 ? ((Number(layerTagCounts[key]) || 0) / count).toFixed(1) : '0.0';
     const dual = graphLayerKeys.has(key)
       ? `<div class="text-xs text-muted">VDB ${fmtCount(vdbCounts[key] || 0)} · Graph ${fmtCount(graphCountsLocal[key] || count)}</div>`
-      : (key === 'l4_identity' ? `<div class="text-xs text-muted">retired · archive only</div>` : '');
+      : '';
     const source = graphLayerKeys.has(key) ? 'graph' : 'vdb';
 
     return `
@@ -1249,7 +1248,7 @@ function renderLayers() {
   }).join('');
 
   document.getElementById('layers-tbody').innerHTML = rows;
-  document.getElementById('layers-total').textContent = `Display total: ${fmtCount(total)} (L0-L4 VDB + L5-L7 graph)`;
+  document.getElementById('layers-total').textContent = `Display total: ${fmtCount(total)} (L0-L3 VDB + L5-L7 graph)`;
   document.getElementById('layers-active').textContent = `Layers Active: ${getActiveLayerCount()}`;
 
   // Right sidebar - layer hierarchy
@@ -1527,7 +1526,7 @@ function renderSystem() {
     </div>
     <div class="mb-4">
       <div class="flex justify-between mb-2">
-        <div class="text-sm">Display total (L0-L4 VDB + L5-L7 graph)</div>
+        <div class="text-sm">Display total (L0-L3 VDB + L5-L7 graph)</div>
         <div class="text-sm font-mono">${fmtCount(displayTotal)}</div>
       </div>
     </div>
@@ -1927,7 +1926,7 @@ let recentIngestionTab = 'all';
 
 function renderOverviewSidebar() {
   // Apply the active Recent Ingestion tab filter.
-  // 'vdb'      = durable L2/L3/L4/L0 (the user-facing "memory" store)
+  // 'vdb'      = durable L2/L3/L0 (the user-facing "memory" store)
   // 'coding'   = coding pipeline extracts (user_id === 'coding')
   // 'l1_raw'   = raw conversation snippets (the input layer)
   // 'l5'       = L5 knowledge graph entities (derivations, not real ingestions)
