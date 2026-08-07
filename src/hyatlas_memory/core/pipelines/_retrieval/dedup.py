@@ -1,7 +1,7 @@
 """
 记忆去重核心逻辑（纯函数，无 I/O，可单测）。
 
-线上 L2_FACT 经常出现重复（extractor 抽重 / reconcile 漏合并）。
+线上 L3_FACT 经常出现重复（extractor 抽重 / reconcile 漏合并）。
 本模块用 embedding cosine 相似度（> 阈值，默认 0.95）识别重复组，并按确定性
 规则决定保留/删除，供 extractor / reconcile / search 三条链路共用。
 

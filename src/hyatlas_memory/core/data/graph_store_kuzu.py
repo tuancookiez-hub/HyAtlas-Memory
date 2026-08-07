@@ -617,7 +617,7 @@ class KuzuGraphStore(GraphStoreBase):
         return nodes
 
     async def get_profile(self, isolation_key: str) -> MemoryNode | None:
-        """获取 Profile 节点 (identity retired; profile lives in L0_BASIC_INFO VDB)."""
+        """获取 Profile 节点 (identity retired; profile lives in L1_PROFILE VDB)."""
         return None
 
     async def update_node(self, node_id: str, updates: dict[str, Any]) -> bool:
@@ -1474,7 +1474,7 @@ class KuzuGraphStore(GraphStoreBase):
             "node_id": d.get("node_id", ""),
             "user_id": d.get("user_id", ""),
             "agent_id": d.get("agent_id", ""),
-            "layer": d.get("layer", "l1_raw"),
+            "layer": d.get("layer", "l2_raw"),
             "content": d.get("content", ""),
             "content_type": d.get("content_type", "raw"),
             "status": d.get("status", "active"),

@@ -11,9 +11,9 @@ Advantages over Qdrant:
 - pip install zvec — no binary to manage
 
 Filter syntax: SQL-like strings
-- Equality: layer = "l2_fact"
-- IN: layer IN ("l2_fact", "l3_summary")
-- AND/OR: user_id = "tuna" AND layer = "l2_fact"
+- Equality: layer = "l3_fact"
+- IN: layer IN ("l3_fact", "l4_summary")
+- AND/OR: user_id = "tuna" AND layer = "l3_fact"
 - Numeric: gmt_created >= 1783000000
 """
 

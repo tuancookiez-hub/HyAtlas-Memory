@@ -189,7 +189,7 @@ def _agent_param(qs: dict) -> str:
 def _layer_counts(agent_id: str = "") -> dict:
     """Build the canonical VDB + Kuzu layer-count contract for one scope."""
     layers = [
-        "l0_basic_info", "l1_raw", "l2_fact", "l3_summary",
+        "l1_profile", "l2_raw", "l3_fact", "l4_summary",
         "l5_knowledge", "l6_schema", "l7_intention",
     ]
     graph_layers = ("l5_knowledge", "l6_schema", "l7_intention")
@@ -237,10 +237,10 @@ def _layer_counts(agent_id: str = "") -> dict:
 
 # Layer colors (matches CSS .layer-l0..l7)
 LAYER_COLORS = {
-    "L0_BASIC_INFO": "#4a6fa5",
-    "L1_RAW":        "#3d8b8b",
-    "L2_FACT":       "#6b4c9a",
-    "L3_SUMMARY":    "#4a6fa5",
+    "L1_PROFILE": "#4a6fa5",
+    "L2_RAW":        "#3d8b8b",
+    "L3_FACT":       "#6b4c9a",
+    "L4_SUMMARY":    "#4a6fa5",
     "L5_KNOWLEDGE":  "#3d8b8b",
     "L6_SCHEMA":     "#6b4c9a",
     "L7_INTENTION":  "#d4af37",
@@ -352,10 +352,10 @@ def _memory_page(items: list[dict], offset: int, limit: int) -> tuple[list[dict]
     return deduped[offset : offset + limit], len(deduped)
 
 
-def _fetch_l1_raw_from_qdrant(limit_total: int = 1500, agent_id: str = "") -> list[dict]:
-    """Fetch active L1_RAW memories from legacy Qdrant (migration fallback).
+def _fetch_l2_raw_from_qdrant(limit_total: int = 1500, agent_id: str = "") -> list[dict]:
+    """Fetch active L2_RAW memories from legacy Qdrant (migration fallback).
 
-    Prefer list with ``include_raw=True`` / ``_fetch_l1_raw_from_vdb`` on
+    Prefer list with ``include_raw=True`` / ``_fetch_l2_raw_from_vdb`` on
     zvec-only installs (v3.4.0+). This path remains for archives and dual-
     stack transitions. Normalized to the same memory-dict shape as
     ``_extract_memories()``.
@@ -371,7 +371,7 @@ def _fetch_l1_raw_from_qdrant(limit_total: int = 1500, agent_id: str = "") -> li
     if not pairs_should:
         return []
     must = [
-        {"key": "layer", "match": {"value": "l1_raw"}},
+        {"key": "layer", "match": {"value": "l2_raw"}},
         {"key": "is_latest", "match": {"value": True}},
     ]
     if agent_id:
@@ -400,7 +400,7 @@ def _fetch_l1_raw_from_qdrant(limit_total: int = 1500, agent_id: str = "") -> li
         pl = p.get("payload") or {}
         items.append({
             "memory_id":  str(p.get("id") or ""),
-            "layer":      pl.get("layer", "l1_raw"),
+            "layer":      pl.get("layer", "l2_raw"),
             "score":      None,
             "content":    pl.get("content") or "",
             "metadata":   {},
@@ -410,21 +410,21 @@ def _fetch_l1_raw_from_qdrant(limit_total: int = 1500, agent_id: str = "") -> li
             "user_id":    pl.get("user_id"),
             "agent_id":   pl.get("agent_id"),
             "session_id": pl.get("session_id"),
-            "_source":    "l1_raw",
+            "_source":    "l2_raw",
         })
     return items
 
 
-def _fetch_l1_raw_from_vdb(limit_total: int = 500, agent_id: str = "") -> list[dict]:
+def _fetch_l2_raw_from_vdb(limit_total: int = 500, agent_id: str = "") -> list[dict]:
     code, body = hy(
         "POST",
         "/api/v1/vdb/scroll",
-        {"mode": "l1_raw", "user_ids": _vdb_user_ids(), "limit": limit_total, "agent_id": agent_id},
+        {"mode": "l2_raw", "user_ids": _vdb_user_ids(), "limit": limit_total, "agent_id": agent_id},
     )
     if code == 200 and isinstance(body, dict):
         items = body.get("items") or []
     else:
-        items = _fetch_l1_raw_from_qdrant(limit_total=limit_total, agent_id=agent_id)
+        items = _fetch_l2_raw_from_qdrant(limit_total=limit_total, agent_id=agent_id)
     # Upstream returns gmt_created as an ISO string; normalize to a Unix
     # int so the dashboard's `Date(ts * 1000)` math never hits NaN.
     for m in items:
@@ -433,7 +433,7 @@ def _fetch_l1_raw_from_vdb(limit_total: int = 500, agent_id: str = "") -> list[d
     return items
 
 
-def _count_l1_raw(agent_id: str = "", user_ids: list[str] | None = None) -> int:
+def _count_l2_raw(agent_id: str = "", user_ids: list[str] | None = None) -> int:
     """Exact active-L1 count without transferring full record content.
 
     zvec cannot project fields from a filtered query, but a count-only scan
@@ -444,7 +444,7 @@ def _count_l1_raw(agent_id: str = "", user_ids: list[str] | None = None) -> int:
     code, body = hy(
         "POST",
         "/api/v1/vdb/scroll",
-        {"mode": "l1_raw", "user_ids": uids, "count_only": True, "agent_id": agent_id},
+        {"mode": "l2_raw", "user_ids": uids, "count_only": True, "agent_id": agent_id},
         timeout=30,
     )
     if code == 200 and isinstance(body, dict):
@@ -2234,7 +2234,7 @@ async function doSearch() {
     (items||[]).forEach(m => flat.push({...m, layer: m.layer||layer}));
   }
   
-  // Apply layer filter (match prefix: "l0" matches "l0_basic_info", etc.)
+  // Apply layer filter (match prefix: "l0" matches "l1_profile", etc.)
   const filtered = flat.filter(m => {
     const l = (m.layer||'').toLowerCase().replace(/[^a-z0-9_]/g,'');
     for (const prefix of selectedLayers) {
@@ -2323,7 +2323,7 @@ async function loadLayers() {
     if (m.score != null) { layers[l].totalScore += m.score; layers[l].scored++; }
   });
 
-  const layerOrder = ['L0_BASIC_INFO','L1_RAW','L2_FACT','L3_SUMMARY','L5_KNOWLEDGE','L6_SCHEMA','L7_INTENTION'];
+  const layerOrder = ['L1_PROFILE','L2_RAW','L3_FACT','L4_SUMMARY','L5_KNOWLEDGE','L6_SCHEMA','L7_INTENTION'];
   const present = layerOrder.filter(l => layers[l]);
   const missing = layerOrder.filter(l => !layers[l]);
 
@@ -2398,17 +2398,17 @@ const OBS_CATS_V17 = [
   { key: 'L7_INTENTION',  label: 'WISDOM',    color: '#d4af37', layerIdx: 7 },
   { key: 'L6_SCHEMA',     label: 'SCHEMA',    color: '#f39c12', layerIdx: 6 },
   { key: 'L5_KNOWLEDGE',  label: 'KNOWLEDGE', color: '#1abc9c', layerIdx: 5 },
-  { key: 'L3_SUMMARY',    label: 'SUMMARIES', color: '#3498db', layerIdx: 3 },
-  { key: 'L2_FACT',       label: 'FACTS',     color: '#27ae60', layerIdx: 2 },
-  { key: 'L1_RAW',        label: 'CONTEXT',   color: '#e67e22', layerIdx: 1 },
-  { key: 'L0_BASIC_INFO', label: 'RAW',       color: '#e74c3c', layerIdx: 0 },
+  { key: 'L4_SUMMARY',    label: 'SUMMARIES', color: '#3498db', layerIdx: 3 },
+  { key: 'L3_FACT',       label: 'FACTS',     color: '#27ae60', layerIdx: 2 },
+  { key: 'L2_RAW',        label: 'CONTEXT',   color: '#e67e22', layerIdx: 1 },
+  { key: 'L1_PROFILE', label: 'RAW',       color: '#e74c3c', layerIdx: 0 },
 ];
 
 const LAYER_META_V17 = {
-  'L0_BASIC_INFO': { icon: '\u25CE', desc: 'Unprocessed memories and raw data.', label: 'RAW' },
-  'L1_RAW':        { icon: '\u25C9', desc: 'Situational context, conditions, and environmental details.', label: 'CONTEXT' },
-  'L2_FACT':       { icon: '\u2713', desc: 'Verified facts and concrete knowledge extracted from memories.', label: 'FACTS' },
-  'L3_SUMMARY':    { icon: '\u25C6', desc: 'High-level synthesis of facts and events into meaningful takeaways.', label: 'SUMMARIES' },
+  'L1_PROFILE': { icon: '\u25CE', desc: 'Unprocessed memories and raw data.', label: 'RAW' },
+  'L2_RAW':        { icon: '\u25C9', desc: 'Situational context, conditions, and environmental details.', label: 'CONTEXT' },
+  'L3_FACT':       { icon: '\u2713', desc: 'Verified facts and concrete knowledge extracted from memories.', label: 'FACTS' },
+  'L4_SUMMARY':    { icon: '\u25C6', desc: 'High-level synthesis of facts and events into meaningful takeaways.', label: 'SUMMARIES' },
   'L5_KNOWLEDGE':  { icon: '\u25C8', desc: 'Structured knowledge and domain expertise.', label: 'KNOWLEDGE' },
   'L6_SCHEMA':     { icon: '\u25A3', desc: 'Cognitive schemas and mental models.', label: 'SCHEMA' },
   'L7_INTENTION':  { icon: '\u25CA', desc: 'Goals, intentions, and strategic direction.', label: 'WISDOM' },
@@ -2443,15 +2443,15 @@ async function loadMemories(limit = 500) {
     // Normalize layer names: lowercase to uppercase with underscores
     const raw = (m.layer || '').toLowerCase();
     const map = {
-      'l0_basic_info': 'L0_BASIC_INFO', 'l0': 'L0_BASIC_INFO',
-      'l1_raw': 'L1_RAW', 'l1': 'L1_RAW',
-      'l2_fact': 'L2_FACT', 'l2': 'L2_FACT',
-      'l3_summary': 'L3_SUMMARY', 'l3': 'L3_SUMMARY',
+      'l1_profile': 'L1_PROFILE', 'l0': 'L1_PROFILE',
+      'l2_raw': 'L2_RAW', 'l1': 'L2_RAW',
+      'l3_fact': 'L3_FACT', 'l2': 'L3_FACT',
+      'l4_summary': 'L4_SUMMARY', 'l3': 'L4_SUMMARY',
       'l5_knowledge': 'L5_KNOWLEDGE', 'l5': 'L5_KNOWLEDGE',
       'l6_schema': 'L6_SCHEMA', 'l6': 'L6_SCHEMA',
       'l7_intention': 'L7_INTENTION', 'l7': 'L7_INTENTION',
     };
-    m.layer = map[raw] || m.layer || 'L2_FACT';
+    m.layer = map[raw] || m.layer || 'L3_FACT';
     return m;
   });
   document.getElementById('footer-mem-count').textContent = allMemories.length;
@@ -2669,7 +2669,7 @@ function renderV17Graph() {
   const groups = {};
   OBS_CATS_V17.forEach(c => groups[c.key] = []);
   allMemories.forEach(m => {
-    const layer = m.layer || 'L2_FACT';
+    const layer = m.layer || 'L3_FACT';
     if (!groups[layer]) groups[layer] = [];
     groups[layer].push(m);
   });
@@ -3426,7 +3426,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 created = _to_unix_ts(m.get("gmt_created")) or 0
                 if created >= _time.time() - 7 * 86400:
                     writes_7d += 1
-                if m.get("layer") == "l2_fact":
+                if m.get("layer") == "l3_fact":
                     l2_total += 1
                     if (m.get("custom") or {}).get("s2_evidence_count", 0) < 1:
                         fresh_l2 += 1
@@ -3528,7 +3528,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
         snapshot = {
             "captured_at": _time.time(),
             "vdb_points": vdb_pts,
-            "l2_facts": l2_total,
+            "l3_facts": l2_total,
             "fresh_l2_for_digest": fresh_l2,
             "graph": {
                 "l5": gcounts.get("l5_knowledge"),
@@ -3831,24 +3831,24 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                     raw_total = raw.get("total") if isinstance(raw, dict) else len(items)
                     all_items.extend(items)
                     total += raw_total if isinstance(raw_total, int) else 0
-            # Also pull L1_RAW via VDB (zvec scroll / include_raw path).
+            # Also pull L2_RAW via VDB (zvec scroll / include_raw path).
             # Legacy Qdrant fetch is only a fallback when VDB path is empty
             # and a Qdrant sidecar still exists.
             # Bounded scroll: only fetch what the page window can display
             # (full raw turns can be ~300KB each; transferring all of them
             # just to count was a multi-MB per-page-load cost). The exact
             # total comes from a separate in-process count scan.
-            l1_raw_items = _fetch_l1_raw_from_vdb(
+            l2_raw_items = _fetch_l2_raw_from_vdb(
                 limit_total=min(max(offset + limit, 50), 500),
                 agent_id=agent_id,
             )
-            all_items.extend(l1_raw_items)
+            all_items.extend(l2_raw_items)
             page, merged_total = _memory_page(all_items, offset, limit)
             # Exact L1 total from an in-process count scan. The per-user
             # list bucket already includes that user's L1, so subtract the
             # overlap (hermes-user L1) to avoid double-counting.
-            l1_count = _count_l1_raw(agent_id=agent_id)
-            overlap = _count_l1_raw(agent_id=agent_id, user_ids=HERMES_USER_IDS)
+            l1_count = _count_l2_raw(agent_id=agent_id)
+            overlap = _count_l2_raw(agent_id=agent_id, user_ids=HERMES_USER_IDS)
             merged_total = max(merged_total, total + l1_count - overlap)
             # Enrich with importance + access_count (vdb scroll payload;
             # upstream's /api/v1/list doesn't surface these fields)
@@ -3966,7 +3966,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 return self._json(400, {"error": "invalid agent_id"})
             isolation_key = f"{user_id}::{agent_id}::default_session"
             layer_keys = [
-                "l0_basic_info", "l1_raw", "l2_fact", "l3_summary",
+                "l1_profile", "l2_raw", "l3_fact", "l4_summary",
                 "l5_knowledge", "l6_schema", "l7_intention",
             ]
             counts = dict.fromkeys(layer_keys, 0)
@@ -3983,7 +3983,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                     layer = m.get("layer")
                     if layer in counts:
                         counts[layer] += 1
-                    if layer == "l2_fact" and (m.get("custom") or {}).get("s2_evidence_count", 0) < 1:
+                    if layer == "l3_fact" and (m.get("custom") or {}).get("s2_evidence_count", 0) < 1:
                         fresh_l2 += 1
                 graph = (listed or {}).get("graph") or {}
                 gnodes = graph.get("nodes") or []
@@ -4042,7 +4042,7 @@ color:white;cursor:pointer;margin-top:0.5rem}button:hover{background:#5a7fb5}
                 "digest_log_status": digest_log_status,
                 "digest_log_mtime": digest_log_mtime,
                 "layer_notes": {
-                    "l1_raw": "Often 0 under Hermes key: L1 shadowed after L2 extract.",
+                    "l2_raw": "Often 0 under Hermes key: L1 shadowed after L2 extract.",
                     "l6_schema": "Graph (Kuzu) is canonical; VDB l6 count may be 0.",
                     "l5_knowledge": "Use graph_layer_counts for L5–L7 totals.",
                 },

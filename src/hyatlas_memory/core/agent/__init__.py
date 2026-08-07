@@ -6,7 +6,7 @@ Agent Memory - 智能层 (Agent Layer)
 
 包含模块：
 - MemAgent: 智能体协调器，统一入口
-- Summarizer: Lite+Agent pipeline 摘要生成器 (L3_SUMMARY)
+- Summarizer: Lite+Agent pipeline 摘要生成器 (L4_SUMMARY)
 - Abstractor: System 2 全量摘要智能体 (Session摘要/Schema归纳/Profile摘要)
 - Extractor: 提取智能体，提取结构化信息 (V2: 轻量提取/深度提取双模式)
 - Reflector: 反思智能体，检测冲突和更新 (V2: UpdateType分类/冲突检测/隐式推断)

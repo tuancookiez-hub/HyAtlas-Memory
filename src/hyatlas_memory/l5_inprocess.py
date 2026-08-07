@@ -261,7 +261,7 @@ def _fact_ts(payload: dict) -> float:
     return 0.0
 
 
-async def _get_recent_l2_facts(vector_store, user_id: str, watermark: float, limit: int = 50) -> list[dict]:
+async def _get_recent_l3_facts(vector_store, user_id: str, watermark: float, limit: int = 50) -> list[dict]:
     """Get L2 facts created after the watermark from the live zvec vector store.
 
     Replaces the legacy Qdrant scroll path (Qdrant was removed in v3.1.0; zvec
@@ -291,13 +291,13 @@ async def _get_recent_l2_facts(vector_store, user_id: str, watermark: float, lim
                 logger.warning(f"[L5] list_by_user failed for {uid}: {e}")
                 continue
             for n in nodes:
-                # n.layer may be a MemoryLayer enum, the bare value "l2_fact",
-                # or the enum repr string "MemoryLayer.L2_FACT" (as stored in zvec).
+                # n.layer may be a MemoryLayer enum, the bare value "l3_fact",
+                # or the enum repr string "MemoryLayer.L3_FACT" (as stored in zvec).
                 layer_val = getattr(n, "layer", None)
                 if hasattr(layer_val, "value"):
                     layer_val = layer_val.value
                 layer_val = str(layer_val).replace("MemoryLayer.", "").lower()
-                if layer_val != "l2_fact":
+                if layer_val != "l3_fact":
                     continue
                 # Prefer the node attribute; custom may be a JSON string.
                 gmt = getattr(n, "gmt_created", None) or getattr(n, "memory_at", None)
@@ -648,7 +648,7 @@ async def run_l5_inprocess(
         watermark = _read_watermark()
 
         # 2. Get recent L2 facts from the live zvec vector store
-        facts = await _get_recent_l2_facts(vector_store, user_id, watermark, _L5_MAX_FACTS_PER_DIGEST)
+        facts = await _get_recent_l3_facts(vector_store, user_id, watermark, _L5_MAX_FACTS_PER_DIGEST)
         if not facts:
             return {"skipped": "no new facts since watermark"}
 

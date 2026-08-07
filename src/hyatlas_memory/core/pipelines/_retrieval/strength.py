@@ -80,7 +80,7 @@ def apply_strength_to_normal(
 
     hits: [{"node": MemoryNode, "score": float, "node_id": ...}, ...]
     profile_layers / intention_layers: 不参与衰减的 layer value 集合（如
-        {"l0_basic_info","l6_schema"} / {"l7_intention"}）。
+        {"l1_profile","l6_schema"} / {"l7_intention"}）。
     返回同一个 list（已就地修改），方便链式调用。
     """
     _now = now or datetime.now()

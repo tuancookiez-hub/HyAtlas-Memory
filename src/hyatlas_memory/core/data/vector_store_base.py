@@ -22,7 +22,7 @@ Agent Memory V2 - VectorStore 抽象基类
   - superseded_by: List[str] | None (被哪些新节点取代)
   - is_latest: bool               (是否链条末端，默认 True，加 payload index)
   - speculate: str | None         (推断注解，不参与 embed)
-  - source_raw_memory_id: str | None (L3_SUMMARY 锚点)
+  - source_raw_memory_id: str | None (L4_SUMMARY 锚点)
   - emotional_valence / emotional_arousal: float
   - meta_tags: List[str]
   - source_session_id: str
@@ -253,7 +253,7 @@ class VectorStoreBase(ABC):
             agent_id: 可选，限定某个 agent
             limit: 最大返回数量
             status_filter: 可选，只返回指定状态的节点（如 [MemoryStatus.ACTIVE]）
-            layers: 可选，只返回指定层级的节点（如 [MemoryLayer.L2_FACT]）
+            layers: 可选，只返回指定层级的节点（如 [MemoryLayer.L3_FACT]）
         """
         ...
 

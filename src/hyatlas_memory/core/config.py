@@ -153,7 +153,7 @@ class LLMConfig:
     retry_delay: float = None  # 重试间隔（秒）
 
     # 功能开关
-    enable_summary: bool = None  # 是否生成 L3_SUMMARY（默认关闭；可通过 LLMConfig(enable_summary=True) 或 client.add(enable_summary=True) 开启）
+    enable_summary: bool = None  # 是否生成 L4_SUMMARY（默认关闭；可通过 LLMConfig(enable_summary=True) 或 client.add(enable_summary=True) 开启）
     few_shot_enabled: bool = None  # 是否在 extractor / reconcile prompt 中附加 few-shot 示例（默认关闭，env: MEMORY_FEW_SHOT_ENABLED）
     extract_scene: str = None  # 抽取场景：'chat'（默认，实时对话提取）| 'migration'（从已沉淀记忆迁移抽取，保真优先）。env: MEMORY_EXTRACT_SCENE
 
@@ -315,7 +315,7 @@ class RecallConfig:
     access_tracking_enabled: bool = True  # 搜索后是否回写 access_count / last_accessed_at（受总开关约束）
 
     # Entity Store（对齐 mem0：独立 {collection}_entities collection + entity boost）
-    # 此开关**只控制写入侧**：开启后写入 L2_FACT 落库时自动抽 entity 刷 store。
+    # 此开关**只控制写入侧**：开启后写入 L3_FACT 落库时自动抽 entity 刷 store。
     # reader_mem0 的 entity boost 不受此开关控制——总是自动尝试（对齐 mem0），
     # 靠 entity store 里有没有数据自然决定是否生效。
     entity_store_enabled: bool = False    # 写入侧开关（默认关闭），env: MEMORY_ENTITY_STORE_ENABLED
@@ -601,7 +601,7 @@ class CodingConfig:
 @dataclass
 class BasicProfileConfig:
     """
-    用户基础画像（L0_BASIC_INFO）的字段 schema 配置。
+    用户基础画像（L1_PROFILE）的字段 schema 配置。
 
     设计原则：
     - 不再使用 LLM function-calling tool（会让弱模型乱填字段）。

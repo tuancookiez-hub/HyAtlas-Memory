@@ -1,13 +1,13 @@
 """
-基础画像（L0_BASIC_INFO）upsert 模块。
+基础画像（L1_PROFILE）upsert 模块。
 
 把用户稳定的结构化属性（name / age / location / occupation / employer，可配置）
-合并写入 L0_BASIC_INFO memory 演化链。
+合并写入 L1_PROFILE memory 演化链。
 
 特点：
 - 每次更新只存 diff 字段，创建新版本节点。
 - 旧版本标记为 superseded，通过 supersedes/superseded_by 链关联。
-- 用户真实 search 时，reader 把 L0_BASIC_INFO 纳入 Profile 路召回。
+- 用户真实 search 时，reader 把 L1_PROFILE 纳入 Profile 路召回。
 - 字段表（fields schema）由 MemoryConfig.basic_profile.fields 配置。
 
 设计变更（2026-06）：
@@ -85,7 +85,7 @@ def render_l0_evolution_chain(l0_nodes: list) -> str:
     """
     按属性分组、时间正序展示 L0 全部历史版本。
 
-    输入：L0_BASIC_INFO 节点列表（含 superseded 的旧版本）
+    输入：L1_PROFILE 节点列表（含 superseded 的旧版本）
     输出：格式化的字符串，例如：
         用户姓名: 张三
         用户年龄: (2026-01-15 用户称年龄25) → (2026-05-10 用户称年龄26)
@@ -227,7 +227,7 @@ async def upsert_basic_profile(
     allowed_fields: list[str] | None = None,
 ) -> BasicProfileUpsertResult:
     """
-    把 LLM 提取出的 basic_info kv 入库到 L0_BASIC_INFO 演化链。
+    把 LLM 提取出的 basic_info kv 入库到 L1_PROFILE 演化链。
 
     kv 中字段不在 allowed_fields 里的会被丢弃（防止 LLM 编出多余字段）。
     新版本节点：deterministic node_id，新 UUID。
@@ -282,7 +282,7 @@ async def upsert_basic_profile(
         user_id=user_id,
         agent_id=agent_id,
         session_id=session_id,
-        layer=MemoryLayer.L0_BASIC_INFO,
+        layer=MemoryLayer.L1_PROFILE,
         content=content,
         source_type=SourceType.EXPLICIT,
         status=MemoryStatus.ACTIVE,
@@ -333,16 +333,16 @@ async def upsert_basic_profile(
 # ================================================================
 
 def _is_valid_l0_head(node) -> bool:
-    """链头必须是合法 L0 节点：layer==L0_BASIC_INFO 且带 basic_info_kv 结构。
+    """链头必须是合法 L0 节点：layer==L1_PROFILE 且带 basic_info_kv 结构。
 
     防御 defense-in-depth：即便上游查询（list_by_user / get_by_id）因后端
-    layer 过滤失效等原因返回了非 L0 节点（如 l1_raw），也不把它当链头去
+    layer 过滤失效等原因返回了非 L0 节点（如 l2_raw），也不把它当链头去
     supersede，避免生成跨层脏链（raw 被串进 L0 演化链）。
     """
     from ...models.memory import MemoryLayer
     if node is None:
         return False
-    if getattr(node, "layer", None) != MemoryLayer.L0_BASIC_INFO:
+    if getattr(node, "layer", None) != MemoryLayer.L1_PROFILE:
         return False
     custom = getattr(node, "custom", None)
     return isinstance(custom, dict) and "basic_info_kv" in custom
@@ -355,7 +355,7 @@ async def _find_latest_l0(vector_store, user_id: str, agent_id: str):
         user_id=user_id,
         agent_id=agent_id,
         status_filter=[MemoryStatus.ACTIVE],
-        layers=[MemoryLayer.L0_BASIC_INFO],
+        layers=[MemoryLayer.L1_PROFILE],
         limit=10,
     )
     # 只认合法 L0 节点（layer + kv 结构校验），过滤掉脏节点
@@ -384,7 +384,7 @@ async def _assemble_full_kv(
     all_nodes = await vector_store.list_by_user(
         user_id=user_id,
         agent_id=agent_id,
-        layers=[MemoryLayer.L0_BASIC_INFO],
+        layers=[MemoryLayer.L1_PROFILE],
         limit=100,
     )
     all_nodes.sort(key=lambda x: x.gmt_created or x.valid_from)

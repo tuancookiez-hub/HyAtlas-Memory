@@ -54,7 +54,7 @@ def test_scroll_l1_uses_filtered_full_scan_and_recency():
     now = datetime.now()
     newer = MemoryNode(node_id="new", content="new", user_id="u1", agent_id="default")
     older = MemoryNode(node_id="old", content="old", user_id="u2", agent_id="default")
-    newer.layer = older.layer = MemoryLayer.L1_RAW
+    newer.layer = older.layer = MemoryLayer.L2_RAW
     newer.gmt_created = now
     older.gmt_created = now - timedelta(minutes=5)
 
@@ -91,10 +91,10 @@ def test_scroll_l1_uses_filtered_full_scan_and_recency():
     )
 
     assert [item["memory_id"] for item in out] == ["new", "old"]
-    assert out[0]["_source"] == "l1_raw"
+    assert out[0]["_source"] == "l2_raw"
     filt = coll.kwargs["filter"]
     assert 'user_id IN ("u1", "u2")' in filt
     assert 'agent_id = "default"' in filt
-    assert 'layer = "l1_raw"' in filt
+    assert 'layer = "l2_raw"' in filt
     assert 'status = "active"' in filt
     assert 'is_latest = "true"' in filt

@@ -174,7 +174,7 @@ class WriteRequest:
     # 记忆时间戳（不传则用当前时间 datetime.now()）
     memory_at: datetime | None = None
 
-    # 本次写入是否生成 L3_SUMMARY；None = 沿用 LLMConfig.enable_summary（全局默认 False）
+    # 本次写入是否生成 L4_SUMMARY；None = 沿用 LLMConfig.enable_summary（全局默认 False）
     enable_summary: bool | None = None
 
     # 本次抽取场景：'chat'（默认对话提取）| 'migration'（保真迁移提取）。
@@ -255,7 +255,7 @@ class WriteResponse:
     error_code: int = 0
     error_message: str = ""
 
-    # 版本特有数据 (V1: routing_confidence, should_merge 等; V2: gate_passed, l2_fact_ids 等)
+    # 版本特有数据 (V1: routing_confidence, should_merge 等; V2: gate_passed, l3_fact_ids 等)
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

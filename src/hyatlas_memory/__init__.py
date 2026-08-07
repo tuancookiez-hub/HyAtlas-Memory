@@ -698,7 +698,7 @@ class HyMemoryProvider(MemoryProvider):
         Gated by ``HYATLAS_MEMORY_IMPORTANCE=1`` (default off). Tries to
         locate all qdrant points produced by a single write call via the
         upstream ``request_id`` (fast, exact). If the SDK didn't tag every
-        layer with ``request_id`` (e.g. ``l0_basic_info`` and ``l1_raw``
+        layer with ``request_id`` (e.g. ``l1_profile`` and ``l2_raw``
         don't), we fall back to a time-window match by ``user_id`` +
         ``session_id`` + ``gmt_created``. Then PATCHes each point with an
         importance score derived from its layer. This feeds the 0.15
@@ -706,7 +706,7 @@ class HyMemoryProvider(MemoryProvider):
         adding LLM cost. Runs in a daemon thread so it never blocks the write
         path.
 
-        The upstream reconciler promotes l1_raw → l4_identity asynchronously,
+        The upstream reconciler promotes l2_raw → l4_identity asynchronously,
         often AFTER the patch thread fires. So we also schedule a delayed
         retry (8s) to catch the reconciled points. The retry scans by
         user_id + session_id + time-window — same fallback the patch uses
@@ -732,8 +732,8 @@ class HyMemoryProvider(MemoryProvider):
             "since_timestamp": since_timestamp,
         }
 
-        # Immediate patch — catches points created by add() itself (l1_raw,
-        # l2_fact when extracted in the same call).
+        # Immediate patch — catches points created by add() itself (l2_raw,
+        # l3_fact when extracted in the same call).
         threading.Thread(
             target=patches.patch_importance_for_request,
             args=patch_args,

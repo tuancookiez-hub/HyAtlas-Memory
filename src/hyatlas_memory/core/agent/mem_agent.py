@@ -163,7 +163,7 @@ class MemAgent:
             tools:   **DEPRECATED** v0.1.5.13+ 不再透传到 LLM；保留参数仅向后兼容
             tool_registry: **DEPRECATED** 同上
             tool_context:  保留（未使用）
-            enable_summary: 本次是否生成 L3_SUMMARY；None = 沿用 self.config.llm.enable_summary
+            enable_summary: 本次是否生成 L4_SUMMARY；None = 沿用 self.config.llm.enable_summary
             basic_profile_fields:
                 {field_name: description} 字段表，由调用方从 MemoryConfig.basic_profile.fields
                 透传过来，extractor 会渲染到 prompt 中要求 LLM 在 JSON basic_info 字段返回。

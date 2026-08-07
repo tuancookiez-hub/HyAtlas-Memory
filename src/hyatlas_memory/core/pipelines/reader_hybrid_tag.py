@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 # 向量 / tag / BM25 主路覆盖全层（profile 层独立召回，避免被 RRF 挤出）
-_PROFILE_LAYERS = [MemoryLayer.L0_BASIC_INFO, MemoryLayer.L6_SCHEMA]
+_PROFILE_LAYERS = [MemoryLayer.L1_PROFILE, MemoryLayer.L6_SCHEMA]
 
 
 class HybridTagReadPipeline(ReadPipeline):
@@ -349,7 +349,7 @@ class HybridTagReadPipeline(ReadPipeline):
                 elapsed_ms=_evo_ms,
             )
 
-            # 9b. Proactive 路：召回未过期 intention（L7），过期惰性转 L2_FACT。
+            # 9b. Proactive 路：召回未过期 intention（L7），过期惰性转 L3_FACT。
             intention_hits: list[dict[str, Any]] = []
             if request.intention_limit > 0:
                 intention_hits = await recall_intentions(
@@ -626,7 +626,7 @@ class HybridTagReadPipeline(ReadPipeline):
         profile_min_score: float,
         profile_limit: int,
     ) -> list[dict[str, Any]]:
-        """Profile 路：L0_BASIC_INFO + L6_SCHEMA，按 profile_min_score 过滤。"""
+        """Profile 路：L1_PROFILE + L6_SCHEMA，按 profile_min_score 过滤。"""
         if layers_filter is not None and not any(l in layers_filter for l in _PROFILE_LAYERS):
             return []
         effective = (

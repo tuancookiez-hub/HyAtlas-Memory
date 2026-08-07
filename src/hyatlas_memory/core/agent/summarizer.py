@@ -1,7 +1,7 @@
 """
 HY Memory - Summarizer (Lite+Agent Pipeline)
 
-负责 agent 写入流程中的 L3_SUMMARY 生成。
+负责 agent 写入流程中的 L4_SUMMARY 生成。
 仅供 MemAgent / MemoryWriter 调用。
 
 System 2 pro pipeline 相关的摘要能力（SessionSummary / Schema / Profile）
@@ -27,7 +27,7 @@ class SummaryResult:
     """摘要结果"""
     success: bool
     summary: str | None = None          # 摘要文本，直接用于存储
-    source_raw_memory_id: str | None = None  # 对应的 L1_RAW 节点 ID（锚点）
+    source_raw_memory_id: str | None = None  # 对应的 L2_RAW 节点 ID（锚点）
     tokens_used: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -87,7 +87,7 @@ class Summarizer:
     """
     Lite+Agent Pipeline 摘要生成器。
 
-    生成 L3_SUMMARY 层的会话摘要，直接存入向量库。
+    生成 L4_SUMMARY 层的会话摘要，直接存入向量库。
     摘要文本即 LLM 原始输出（已 strip），不加任何前缀/包装。
     """
 
@@ -108,7 +108,7 @@ class Summarizer:
         self,
         content: str,
         current_time: str = "",
-        source_raw_memory_id: str | None = None,  # 对应 L1_RAW 节点 ID
+        source_raw_memory_id: str | None = None,  # 对应 L2_RAW 节点 ID
     ) -> SummaryResult:
         """
         生成摘要。
@@ -116,7 +116,7 @@ class Summarizer:
         Args:
             content: 原始对话内容
             current_time: 记忆发生时间（ISO 格式字符串），不传则为空字符串
-            source_raw_memory_id: 对应的 L1_RAW 节点 ID，存入 L3_SUMMARY 节点作为锚点
+            source_raw_memory_id: 对应的 L2_RAW 节点 ID，存入 L4_SUMMARY 节点作为锚点
 
         Returns:
             SummaryResult.summary: 摘要文本（LLM 原始输出 strip 后），直接用于存入向量库

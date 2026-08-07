@@ -4,16 +4,16 @@ HY Memory - Write (System 1)
 写入流程:
   1. 参数校验
   2. 向量化 (EmbedService)
-  3. Qdrant 持久化 (VectorStore) - 原始内容始终存为 L1_RAW
+  3. Qdrant 持久化 (VectorStore) - 原始内容始终存为 L2_RAW
   4. [可选] MemAgent 智能处理 (提取实体、生成摘要、冲突检测)
-     - Agent 提取的高层信息存为 L2_FACT/L3_SUMMARY（不再区分 L4_IDENTITY，统一 L2_FACT）
+     - Agent 提取的高层信息存为 L3_FACT/L4_SUMMARY（不再区分 L4_IDENTITY，统一 L3_FACT）
      - intentions（前瞻意图）存为 L7_INTENTION（带 valid_until，过期由 reader 惰性转 L2）
-     - 提取成功后，L1_RAW 降级为 SHADOW 状态（不被召回）
+     - 提取成功后，L2_RAW 降级为 SHADOW 状态（不被召回）
   5. [可选] 合并检测 (Merger)
 
 mode 行为差异:
-  - lite:  只存 L1_RAW，不调 LLM，最简 embed 入库
-  - pro:   L1_RAW + MemAgent 提取高层信息 → reconcile → L2/L4/L3
+  - lite:  只存 L2_RAW，不调 LLM，最简 embed 入库
+  - pro:   L2_RAW + MemAgent 提取高层信息 → reconcile → L2/L4/L3
   - ultra: 同 pro，但 System2Writer 会在之后异步执行 System 2 认知加工
 """
 
@@ -60,7 +60,7 @@ class MemoryWriter(WritePipeline):
     """
     核心写入器 (System 1)
 
-    写入流程: 原始内容存 L1_RAW + 单路 Qdrant 存储 + 可选 MemAgent LLM 提取高层信息
+    写入流程: 原始内容存 L2_RAW + 单路 Qdrant 存储 + 可选 MemAgent LLM 提取高层信息
     lite 模式不调 LLM，pro/ultra 模式调 MemAgent。
     """
 
@@ -149,14 +149,14 @@ class MemoryWriter(WritePipeline):
     async def _maybe_index_entities(
         self, vector_store, node, request,
     ) -> None:
-        """若 entity_store 开关开启且为 L2_FACT，落库后刷 entity store（best-effort）。
+        """若 entity_store 开关开启且为 L3_FACT，落库后刷 entity store（best-effort）。
 
         覆盖 reconcile（ADD/UPDATE/SUPERSEDE）与首写（_direct_store）两条路。
         """
         try:
             if not getattr(self.config.recall, "entity_store_enabled", False):
                 return
-            if node is None or node.layer != MemoryLayer.L2_FACT:
+            if node is None or node.layer != MemoryLayer.L3_FACT:
                 return
             from ._retrieval.entity_store import index_memory_entities
             await index_memory_entities(
@@ -178,7 +178,7 @@ class MemoryWriter(WritePipeline):
         从 extract 结果中收集新 memory 文本列表和完整 meta 列表。
 
         注意：basic_info 字段由 extractor 在 JSON 输出中返回，writer 单独处理
-        （走 upsert_basic_profile() 落 L0_BASIC_INFO 演化链），这里不再收集。
+        （走 upsert_basic_profile() 落 L1_PROFILE 演化链），这里不再收集。
 
         Returns:
             (new_memory_texts, new_memories_meta)
@@ -187,7 +187,7 @@ class MemoryWriter(WritePipeline):
         new_memory_texts: list[str] = []
         new_memories_meta: list[dict] = []
 
-        # 1) memory → 每条独立 memory（统一 L2_FACT）
+        # 1) memory → 每条独立 memory（统一 L3_FACT）
         #    新版 extractor 输出 `memory`；兼容旧版 `facts` 字段。
         for item in (extracted_info.get("memory") or extracted_info.get("facts") or []):
             if not isinstance(item, dict):
@@ -198,12 +198,12 @@ class MemoryWriter(WritePipeline):
             new_memory_texts.append(content)
             new_memories_meta.append({
                 "content": content,
-                "layer": "L2_FACT",
+                "layer": "L3_FACT",
                 "tags": item.get("tags") or [],
                 "owner": _norm_owner(item.get("owner")),
             })
 
-        # 2) 向后兼容：旧 extractor 输出的 identity 也并入 L2_FACT
+        # 2) 向后兼容：旧 extractor 输出的 identity 也并入 L3_FACT
         #    （新版 extractor 不再产出 identity；L4_IDENTITY 不再写入，仅读历史数据）
         for item in (extracted_info.get("identity") or []):
             if not isinstance(item, dict):
@@ -214,7 +214,7 @@ class MemoryWriter(WritePipeline):
             new_memory_texts.append(content)
             new_memories_meta.append({
                 "content": content,
-                "layer": "L2_FACT",
+                "layer": "L3_FACT",
                 "tags": item.get("tags") or [],
                 "owner": _norm_owner(item.get("owner")),
             })
@@ -237,11 +237,11 @@ class MemoryWriter(WritePipeline):
                 if profile_items:
                     t = "; ".join(profile_items)
                     new_memory_texts.append(t)
-                    new_memories_meta.append({"content": t, "layer": "L2_FACT", "tags": []})
+                    new_memories_meta.append({"content": t, "layer": "L3_FACT", "tags": []})
             for f in (extracted_info.get("facts") or []):
                 if isinstance(f, dict) and f.get("content"):
                     new_memory_texts.append(f["content"])
-                    new_memories_meta.append({"content": f["content"], "layer": "L2_FACT", "tags": f.get("tags") or []})
+                    new_memories_meta.append({"content": f["content"], "layer": "L3_FACT", "tags": f.get("tags") or []})
 
         return new_memory_texts, new_memories_meta
 
@@ -346,7 +346,7 @@ class MemoryWriter(WritePipeline):
         把 intentions 直接 upsert 为 L7_INTENTION 节点（不走 reconcile）。
 
         意图是 point-in-time 信号，不与已有 fact 合并；过期后由 reader 惰性
-        转成 L2_FACT。返回新建节点 id 列表。
+        转成 L3_FACT。返回新建节点 id 列表。
         """
         if not intentions:
             return []
@@ -423,7 +423,7 @@ class MemoryWriter(WritePipeline):
             agent_id=request.agent_id or "default_agent",
             vector_store=vector_store,
             embed_service=self.embed_service,
-            layers=[MemoryLayer.L2_FACT],
+            layers=[MemoryLayer.L3_FACT],
             cache=self._cache,
             request_id=req_id,
             current_time=current_time,
@@ -512,7 +512,7 @@ class MemoryWriter(WritePipeline):
                     continue
 
                 content = op.content or ""
-                layer = MemoryLayer.from_string(op.layer) if op.layer else MemoryLayer.L2_FACT
+                layer = MemoryLayer.from_string(op.layer) if op.layer else MemoryLayer.L3_FACT
 
                 # SUPERSEDE → 旧节点进演化链，status=SUPERSEDED（仍可被召回，
                 #   命中后双向展开整链）；新节点 supersedes=[old_id]。
@@ -731,7 +731,7 @@ class MemoryWriter(WritePipeline):
                 continue
 
             content = op.content or ""
-            layer = MemoryLayer.from_string(op.layer) if op.layer else MemoryLayer.L2_FACT
+            layer = MemoryLayer.from_string(op.layer) if op.layer else MemoryLayer.L3_FACT
 
             new_node = MemoryNode(
                 user_id=request.user_id,
@@ -855,7 +855,7 @@ class MemoryWriter(WritePipeline):
             if not content:
                 continue
 
-            layer = MemoryLayer.from_string(meta.get("layer", "L2_FACT"))
+            layer = MemoryLayer.from_string(meta.get("layer", "L3_FACT"))
             tags = meta.get("tags") or []
             speculate = meta.get("speculate")
 
@@ -892,12 +892,12 @@ class MemoryWriter(WritePipeline):
         request: WriteRequest,
         vector_store: VectorStoreBase,
     ) -> str:
-        """存储 L3_SUMMARY 节点，返回 node_id。"""
+        """存储 L4_SUMMARY 节点，返回 node_id。"""
         summary_node = MemoryNode(
             user_id=request.user_id,
             agent_id=request.agent_id or "default_agent",
             session_id=request.session_id or "default_session",
-            layer=MemoryLayer.L3_SUMMARY,
+            layer=MemoryLayer.L4_SUMMARY,
             content=summary_content,
             source_type=SourceType.INFERRED,
             status=MemoryStatus.ACTIVE,
@@ -1025,7 +1025,7 @@ class MemoryWriter(WritePipeline):
                     suggested_layer = layer_str
                     s.set_output({"layer": suggested_layer, "source": "explicit"})
                 else:
-                    suggested_layer = MemoryLayer.L1_RAW.value
+                    suggested_layer = MemoryLayer.L2_RAW.value
                     s.set_output({"layer": suggested_layer, "source": "default_raw"})
 
             response.layer = suggested_layer
@@ -1041,7 +1041,7 @@ class MemoryWriter(WritePipeline):
             from ..metrics import MetricsCollector
             MetricsCollector.get().sys1_start()
 
-            # 2. 向量化 + 持久化（L1_RAW）
+            # 2. 向量化 + 持久化（L2_RAW）
             _t_embed = datetime.now()
             with tracer.span("embed") as s:
                 embedding = await self.embed_service.embed_queued(request.content)
@@ -1055,7 +1055,7 @@ class MemoryWriter(WritePipeline):
                 elapsed_ms=_embed_ms,
             )
 
-            # 3. 持久化到向量库（L1_RAW）
+            # 3. 持久化到向量库（L2_RAW）
             _t_l1 = datetime.now()
             memory_id = ""
             _l1_error: str | None = None
@@ -1252,9 +1252,9 @@ class MemoryWriter(WritePipeline):
         max_chars_assistant: int = 500,
     ) -> str:
         """
-        获取该用户最近的 L1_RAW 对话记录，按轮次拆分后拼成 history context。
+        获取该用户最近的 L2_RAW 对话记录，按轮次拆分后拼成 history context。
 
-        每条 L1_RAW 的 content 是多轮对话（[user]: ...\n[assistant]: ...）。
+        每条 L2_RAW 的 content 是多轮对话（[user]: ...\n[assistant]: ...）。
         拆成单条 message 后，user 消息完整保留，assistant 消息截取前 max_chars_assistant 字符。
         最终取最近 max_turns 轮。
 
@@ -1265,7 +1265,7 @@ class MemoryWriter(WritePipeline):
             nodes = await vector_store.list_by_user(
                 user_id=user_id,
                 agent_id=agent_id,
-                layers=[MemoryLayer.L1_RAW],
+                layers=[MemoryLayer.L2_RAW],
                 status_filter=[MemoryStatus.ACTIVE, MemoryStatus.SHADOW],
                 limit=50,
             )
@@ -1278,8 +1278,8 @@ class MemoryWriter(WritePipeline):
             # 按 gmt_created 升序（时间正序）
             nodes.sort(key=lambda n: n.gmt_created or datetime.min)
 
-            # 拆分每条 L1_RAW 内容为单条 messages。
-            # L1_RAW content 格式: "[user]: xxx\n[assistant]: yyy\n[user]: zzz..."
+            # 拆分每条 L2_RAW 内容为单条 messages。
+            # L2_RAW content 格式: "[user]: xxx\n[assistant]: yyy\n[user]: zzz..."
             # 关键：单条 message 的 content 本身可能含换行（多行 user 输入），
             # 因此必须按「[role]: 前缀」识别消息边界，无前缀的行视为上一条消息的续行
             # 归属其下，而不是逐行当成独立 message——否则续行会被当成裸消息，且后续
@@ -1450,7 +1450,7 @@ class MemoryWriter(WritePipeline):
         )
 
         # ── basic_info: prompt-driven schema, no LLM function-calling ──
-        # extractor 把 basic_info dict 放进 extracted_info；writer 在此 upsert L0_BASIC_INFO
+        # extractor 把 basic_info dict 放进 extracted_info；writer 在此 upsert L1_PROFILE
         # 演化链。失败/无效都不抛错，落 tool_results_summary 走原 TOOL_CALLS pipeline log。
         basic_info_raw = None
         if isinstance(agent_result.extracted_info, dict):
@@ -1660,7 +1660,7 @@ class MemoryWriter(WritePipeline):
             )
             logger.debug(f"[agent] persisted {len(stored_ids)} nodes to vector store")
 
-            # L1_RAW → SHADOW
+            # L2_RAW → SHADOW
             if stored_ids and memory_id:
                 try:
                     mem_node.status = MemoryStatus.SHADOW

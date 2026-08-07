@@ -56,7 +56,7 @@ DOMAIN_KEYWORDS = {
         "Qwen3-4B", "Qwen", "dola-seed", "DeepSeek", "BGE", "BAAI",
     ],
     "Concept": [
-        "LongMemEval", "L1_RAW", "L2_FACT", "L4_IDENTITY", "L5",
+        "LongMemEval", "L2_RAW", "L3_FACT", "L4_IDENTITY", "L5",
         "Kuzu", "VDB", "FAISS", "System2",
     ],
 }

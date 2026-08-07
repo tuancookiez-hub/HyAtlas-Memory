@@ -6,8 +6,8 @@ or called explicitly during server startup.
 
 Integrations:
   1. VDB circuit breaker (server resilience)
-  2. L1_RAW rolling delete sweep (retention management)
-  3. L1_RAW dedup skip (write-side dedup at source)
+  2. L2_RAW rolling delete sweep (retention management)
+  3. L2_RAW dedup skip (write-side dedup at source)
   4. L5 auto-trigger (L5 pipeline spawn from S2 digest)
   5. L5 in-process extraction (L5 as S2 peer step)
   6. Graph endpoint (/api/v1/graph for dashboard + S1)
@@ -17,7 +17,7 @@ Integrations:
   10. LLM fast/smart model split (cost optimization)
   11. DisabledCache kwargs tolerance (no-op cache compatibility)
   12. Rerank stage (cross-encoder opt-in)
-  13. L1_RAW normal fallback (lite mode support)
+  13. L2_RAW normal fallback (lite mode support)
 """
 from __future__ import annotations
 
@@ -175,13 +175,13 @@ def wire_circuit_breaker(handler_cls, json_resp_fn):
     logger.info("[integrations] circuit breaker wired on _handle_add + _handle_search")
 
 
-# ─── 2. L1_RAW Rolling Delete Sweep ──────────────────────────────────────────
+# ─── 2. L2_RAW Rolling Delete Sweep ──────────────────────────────────────────
 
 _l1_sweep_thread: threading.Thread | None = None
 
 
-def start_l1_raw_sweep(vector_store=None):
-    """Start daemon thread for periodic L1_RAW shadow cleanup.
+def start_l2_raw_sweep(vector_store=None):
+    """Start daemon thread for periodic L2_RAW shadow cleanup.
 
     If `vector_store` (the live ZvecVectorStore / Qdrant store) is passed,
     the zvec sweep reuses it instead of opening a second handle (which would
@@ -190,7 +190,7 @@ def start_l1_raw_sweep(vector_store=None):
     global _l1_sweep_thread
     if _l1_sweep_thread is not None:
         return
-    if os.environ.get("HY_MEMORY_L1_RAW_ROLLING_DELETE", "true").lower() not in ("1", "true", "yes", "on"):
+    if os.environ.get("HY_MEMORY_L2_RAW_ROLLING_DELETE", "true").lower() not in ("1", "true", "yes", "on"):
         return
 
     window_days = int(os.environ.get("MEMORY_RAW_WINDOW_DAYS", "30"))
@@ -223,7 +223,7 @@ def start_l1_raw_sweep(vector_store=None):
 
 
     def _sweep_zvec(cutoff: float, vector_store=None):
-        """Delete shadowed L1_RAW on a zvec store.
+        """Delete shadowed L2_RAW on a zvec store.
 
         Uses the live `vector_store` handle when provided (the server's own
         collection) to avoid a second open that would collide on the lock.
@@ -246,7 +246,7 @@ def start_l1_raw_sweep(vector_store=None):
                 vs = vector_store
                 docs = await vs.search(
                     query_embedding=[0.0] * (vs.config.vector_store.embedding_dims or 1024),
-                    layers=[MemoryLayer.L1_RAW],
+                    layers=[MemoryLayer.L2_RAW],
                     status_filter=[MemoryStatus.SHADOW],
                     limit=100000,
                     only_latest=False,
@@ -266,7 +266,7 @@ def start_l1_raw_sweep(vector_store=None):
                         await vs.delete_by_filter(f"node_id = {_quote(nid)}")
                         killed += 1
                 if killed:
-                    logger.info(f"[l1-sweep] zvec deleted {killed} shadowed L1_RAW older than {window_days} days")
+                    logger.info(f"[l1-sweep] zvec deleted {killed} shadowed L2_RAW older than {window_days} days")
                 return killed
 
             if loop is not None:
@@ -283,13 +283,13 @@ def start_l1_raw_sweep(vector_store=None):
             time.sleep(sweep_interval)
             _sweep()
 
-    _l1_sweep_thread = threading.Thread(target=_loop, daemon=True, name="l1_raw_sweep")
+    _l1_sweep_thread = threading.Thread(target=_loop, daemon=True, name="l2_raw_sweep")
     _l1_sweep_thread.start()
     _sweep()  # initial sweep
-    logger.info(f"[integrations] L1_RAW sweep started: window={window_days}d, interval={sweep_interval}s")
+    logger.info(f"[integrations] L2_RAW sweep started: window={window_days}d, interval={sweep_interval}s")
 
 
-# ─── 3. L1_RAW Dedup Skip ────────────────────────────────────────────────────
+# ─── 3. L2_RAW Dedup Skip ────────────────────────────────────────────────────
 
 def _extract_content(data) -> str:
     if isinstance(data, str):
@@ -308,8 +308,8 @@ def _extract_content(data) -> str:
 
 
 def wire_l1_dedup_skip(client_cls):
-    """Skip writes when a near-duplicate already exists (prevents L1_RAW bloat)."""
-    if os.environ.get("HY_MEMORY_L1_RAW_DEDUP_SKIP", "true").lower() not in ("1", "true", "yes", "on"):
+    """Skip writes when a near-duplicate already exists (prevents L2_RAW bloat)."""
+    if os.environ.get("HY_MEMORY_L2_RAW_DEDUP_SKIP", "true").lower() not in ("1", "true", "yes", "on"):
         return
     if getattr(client_cls, "_l1_dedup_skip_wired", False):
         return
@@ -353,7 +353,7 @@ def wire_l1_dedup_skip(client_cls):
 
     client_cls.async_add = patched
     client_cls._l1_dedup_skip_wired = True
-    logger.info(f"[integrations] L1_RAW dedup skip wired: threshold={skip_threshold}")
+    logger.info(f"[integrations] L2_RAW dedup skip wired: threshold={skip_threshold}")
 
 
 # ─── 4. L5 Auto-Trigger ──────────────────────────────────────────────────────
@@ -669,13 +669,13 @@ def wire_vdb_dashboard(handler_cls, json_resp_fn, get_client_fn):
                     return
                 mode = body.get("mode", "")
                 client = get_client_fn()
-                if mode == "l1_raw":
+                if mode == "l2_raw":
                     uids = body.get("user_ids") or []
                     limit = int(body.get("limit") or 1500)
                     count_only = bool(body.get("count_only"))
                     if count_only:
                         n = vdb_dashboard.layer_count(
-                            client, "l1_raw", require_is_latest=True,
+                            client, "l2_raw", require_is_latest=True,
                             agent_id=body.get("agent_id", ""),
                         )
                         json_resp_fn(self, 200, {"items": [], "count": n})
@@ -1093,11 +1093,11 @@ def wire_rerank(reader_legacy_cls, reader_hybrid_cls):
     logger.info("[integrations] rerank stage wired on reader pipelines")
 
 
-# ─── 13. L1_RAW Normal Fallback ──────────────────────────────────────────────
+# ─── 13. L2_RAW Normal Fallback ──────────────────────────────────────────────
 
 def wire_l1_normal_fallback(reader_legacy_cls):
-    """Include L1_RAW in normal search when L2+ is empty (lite mode support)."""
-    if getattr(reader_legacy_cls, "_l1_raw_fallback_wired", False):
+    """Include L2_RAW in normal search when L2+ is empty (lite mode support)."""
+    if getattr(reader_legacy_cls, "_l2_raw_fallback_wired", False):
         return
 
     from hyatlas_memory.core.models.memory import MemoryLayer
@@ -1107,12 +1107,12 @@ def wire_l1_normal_fallback(reader_legacy_cls):
     async def _read_with_fallback(self, request, ctx=None, tracer=None):
         resp = await orig(self, request, ctx=ctx, tracer=tracer)
         mems = list(getattr(resp, "memories", []) or [])
-        has_non_l1 = any(m.get("layer") != MemoryLayer.L1_RAW.value for m in mems)
+        has_non_l1 = any(m.get("layer") != MemoryLayer.L2_RAW.value for m in mems)
         if mems and has_non_l1:
             return resp
         if mems and not has_non_l1:
             return resp
-        # Normal bucket empty — do L1_RAW fallback search
+        # Normal bucket empty — do L2_RAW fallback search
         try:
             query_emb = await self.embed_service.embed(request.query)
         except Exception:
@@ -1123,7 +1123,7 @@ def wire_l1_normal_fallback(reader_legacy_cls):
                 user_ids=getattr(request, "user_ids", None),
                 agent_ids=getattr(request, "agent_ids", None),
                 limit=max(getattr(request, "limit", 10) or 10, 10),
-                layers=[MemoryLayer.L1_RAW],
+                layers=[MemoryLayer.L2_RAW],
                 score_threshold=None,
                 only_latest=True,
             )
@@ -1136,15 +1136,15 @@ def wire_l1_normal_fallback(reader_legacy_cls):
             nid = hit.get("node_id", "") or (getattr(node, "node_id", "") if node else "")
             merged.append({
                 "node_id": nid, "score": hit.get("score", 0.0),
-                "content": content, "layer": MemoryLayer.L1_RAW.value,
-                "source": "l1_raw_fallback",
+                "content": content, "layer": MemoryLayer.L2_RAW.value,
+                "source": "l2_raw_fallback",
             })
         resp.memories = list(getattr(resp, "memories", []) or []) + merged
         return resp
 
     reader_legacy_cls.read = _read_with_fallback
-    reader_legacy_cls._l1_raw_fallback_wired = True
-    logger.info("[integrations] L1_RAW normal fallback wired")
+    reader_legacy_cls._l2_raw_fallback_wired = True
+    logger.info("[integrations] L2_RAW normal fallback wired")
 
 
 # ─── 14. In-Process Embedding (local sentence-transformers) ─────────────────
@@ -1208,14 +1208,14 @@ def wire_all():
     # 1. Circuit breaker
     wire_circuit_breaker(MemoryHTTPHandler, _json_response)
 
-    # 2. L1_RAW sweep
+    # 2. L2_RAW sweep
     try:
         _vs = _get_client()._vector_store
     except Exception:
         _vs = None
-    start_l1_raw_sweep(vector_store=_vs)
+    start_l2_raw_sweep(vector_store=_vs)
 
-    # 3. L1_RAW dedup skip
+    # 3. L2_RAW dedup skip
     wire_l1_dedup_skip(HyMemoryClient)
 
     # 4. L5 auto-trigger
@@ -1248,7 +1248,7 @@ def wire_all():
     # 12. Rerank
     wire_rerank(LegacyReadPipeline, HybridV2ReadPipeline)
 
-    # 13. L1_RAW normal fallback
+    # 13. L2_RAW normal fallback
     wire_l1_normal_fallback(LegacyReadPipeline)
 
     # 14. In-process embedding (local sentence-transformers, no API)

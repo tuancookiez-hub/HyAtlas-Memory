@@ -799,7 +799,7 @@ class HyMemoryClient:
             session_id:   Session ID（三级隔离 key）
             metadata:     自定义元数据
             memory_at:    记忆时间戳（不传则用当前时间），用于导入历史记忆
-            enable_summary: 本次写入是否生成 L3_SUMMARY。
+            enable_summary: 本次写入是否生成 L4_SUMMARY。
                             None（默认）= 沿用 LLMConfig.enable_summary（全局默认 False）；
                             True/False = 仅对此次调用生效，覆盖默认。
                             仅 pro/ultra 模式有效（lite 模式不调 LLM）。
@@ -846,9 +846,9 @@ class HyMemoryClient:
         搜索记忆。
 
         三路召回（chat 路径）：
-        - **Profile 路**: L0_BASIC_INFO + L6_SCHEMA（用户画像）
+        - **Profile 路**: L1_PROFILE + L6_SCHEMA（用户画像）
         - **Proactive 路**: L7_INTENTION（主动意图，默认关闭）
-        - **Normal 路**: L2_FACT + L3_SUMMARY + L5_KNOWLEDGE 等
+        - **Normal 路**: L3_FACT + L4_SUMMARY + L5_KNOWLEDGE 等
 
         Coding 路径（自动判定）：
         - 当 queries 上下文判定为 coding 时，走 CodingMemoryStore（task + search_keys
@@ -976,7 +976,7 @@ class HyMemoryClient:
             limit:    每页条数（默认 100）
             offset:   偏移量（默认 0）
             order:    排序方式，"desc"（默认，最新在前）或 "asc"
-            include_raw: 是否包含 L1_RAW（未提取的原始记忆）。默认 True。
+            include_raw: 是否包含 L2_RAW（未提取的原始记忆）。默认 True。
 
         Returns:
             {"vdb": {...}, "graph": {...} | 省略, "elapsed_ms": ...}
@@ -1403,7 +1403,7 @@ class HyMemoryClient:
         """写入记忆（异步）
 
         Args:
-            enable_summary: 本次是否生成 L3_SUMMARY；None = 沿用 LLMConfig.enable_summary（全局默认 False）。
+            enable_summary: 本次是否生成 L4_SUMMARY；None = 沿用 LLMConfig.enable_summary（全局默认 False）。
                             仅 pro/ultra 模式有效。
             workspace_id / branch: Coding memory 路径专用，详见 add() docstring。
         """
@@ -1541,7 +1541,7 @@ class HyMemoryClient:
             resp["memory_ids"] = result.extra["agent_stored_ids"]
 
         # Extraction visibility: surface agent outcome so callers know whether
-        # the memory was fully processed or left as unextracted l1_raw.
+        # the memory was fully processed or left as unextracted l2_raw.
         _agent_status = result.extra.get("agent_status", "")
         if _agent_status:
             resp["extraction_status"] = _agent_status
@@ -1591,7 +1591,7 @@ class HyMemoryClient:
         user_id: str,
         agent_id: str,
     ) -> None:
-        """对 search 结果中的 L2_FACT 做去重删库（fire-and-forget）。
+        """对 search 结果中的 L3_FACT 做去重删库（fire-and-forget）。
 
         只取这两层（重复重灾区）；带 evolution_chain 的项视为链头，其 chain node_ids
         从 evolution_chain 取出供连带删除。整体后台执行，不阻塞 search 返回。
@@ -1600,7 +1600,7 @@ class HyMemoryClient:
 
         from .pipelines._retrieval.dedup import DedupItem, execute_dedup
 
-        _DEDUP_LAYERS = {"l2_fact"}
+        _DEDUP_LAYERS = {"l3_fact"}
         targets = [m for m in all_mems if (m.get("layer") or "").lower() in _DEDUP_LAYERS and m.get("memory_id")]
         if len(targets) < 2:
             return
@@ -1892,7 +1892,7 @@ class HyMemoryClient:
                 item["evolution_chain"] = mem["evolution_chain"]
             _all_mems.append(item)
 
-        # search 链路去重：仅对 L2_FACT（重复重灾区）判重删库。
+        # search 链路去重：仅对 L3_FACT（重复重灾区）判重删库。
         # L0 及其他层不参与。fire-and-forget，不阻塞本次返回（清理面向后续查询）。
         try:
             self._spawn_search_dedup(
@@ -1931,12 +1931,12 @@ class HyMemoryClient:
                     logger.debug(f"[search] access bump schedule failed: {_be}")
 
         # 按 channel 分组
-        # profile = L0_BASIC_INFO + L6_SCHEMA（用户画像类）；proactive = intention；
-        # 其余（含 L2_FACT / L3_SUMMARY）归 normal。
-        # L2_FACT 从 SDK 视角按 VDB 普通记忆处理（走主语义+BM25 路）。
+        # profile = L1_PROFILE + L6_SCHEMA（用户画像类）；proactive = intention；
+        # 其余（含 L3_FACT / L4_SUMMARY）归 normal。
+        # L3_FACT 从 SDK 视角按 VDB 普通记忆处理（走主语义+BM25 路）。
         # 避免同节点被 profile 路与主路双重召回、profile 高分被主路融合低分顶掉。
         # profile 桶仍额外卡 profile_min_score（对 L0/L6 有效），不达标降级 normal。
-        _PROFILE_LAYERS = {"l0_basic_info", "l6_schema"}
+        _PROFILE_LAYERS = {"l1_profile", "l6_schema"}
         _PROACTIVE_LAYERS = {"l7_intention"}
         memories = {"profile": [], "proactive": [], "normal": []}
         total = 0
@@ -2397,7 +2397,7 @@ class HyMemoryClient:
 
         from .models.memory import MemoryLayer
         layer_value = node.layer.value if node.layer else ""
-        extracted = node.layer != MemoryLayer.L1_RAW if node.layer else True
+        extracted = node.layer != MemoryLayer.L2_RAW if node.layer else True
 
         return {
             "memory_id": node.node_id,
@@ -2451,7 +2451,7 @@ class HyMemoryClient:
             status_filter=[MemoryStatus.ACTIVE],
         )
         if not include_raw:
-            all_nodes = [n for n in all_nodes if n.layer != MemoryLayer.L1_RAW]
+            all_nodes = [n for n in all_nodes if n.layer != MemoryLayer.L2_RAW]
         all_nodes = self._sort_memory_nodes(all_nodes, order=order)
         total = len(all_nodes)
         page_nodes = all_nodes[offset: offset + limit]
@@ -2522,7 +2522,7 @@ class HyMemoryClient:
         VDB 与图库分桶返回（图库仅在存在 Kuzu/Neo4j 数据时包含 graph 键）。
 
         Args:
-            include_raw: 是否包含 L1_RAW（未提取的原始记忆）。默认 True。
+            include_raw: 是否包含 L2_RAW（未提取的原始记忆）。默认 True。
                 设为 False 可获得与之前相同的「仅已提取」视图。
             include_graph: 是否同时返回图库节点桶。默认 True 保持兼容；
                 调用方已有独立 graph 端点时传 False 可省去整个 Kuzu 桶的
@@ -2572,7 +2572,7 @@ class HyMemoryClient:
         agent_id: str = "default_agent",
         rebuild: bool = False,
     ) -> dict[str, Any]:
-        """为指定 user 的全部 L2_FACT（含旧数据）抽取 entity 刷入 entity store（同步）。
+        """为指定 user 的全部 L3_FACT（含旧数据）抽取 entity 刷入 entity store（同步）。
 
         用于给历史 collection 补建 entity store，使 reader=mem0 的 entity boost 生效。
         与 mode 无关（pro 也可调）。
@@ -2606,14 +2606,14 @@ class HyMemoryClient:
         t0 = time.perf_counter()
         vs = self._vector_store
 
-        # 扫描该 user 的全部 ACTIVE L2_FACT
+        # 扫描该 user 的全部 ACTIVE L3_FACT
         try:
             nodes = await vs.list_by_user(
                 user_id=user_id,
                 agent_id=agent_id,
                 limit=100000,
                 status_filter=[MemoryStatus.ACTIVE],
-                layers=[MemoryLayer.L2_FACT],
+                layers=[MemoryLayer.L3_FACT],
             )
         except Exception as e:
             logger.error(f"[build_entity_store] list_by_user failed: {e}")

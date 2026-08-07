@@ -73,7 +73,7 @@ def test_zvec_temp_collection_reopens_after_close(monkeypatch, tmp_path):
         user_id="user-a",
         agent_id="agent-a",
         session_id="session-a",
-        layer=MemoryLayer.L2_FACT,
+        layer=MemoryLayer.L3_FACT,
         content="zvec lifecycle proof",
         embedding=[0.1, 0.2, 0.3, 0.4],
     )
@@ -135,7 +135,7 @@ def test_zvec_temp_collection_reopens_after_forced_exit(monkeypatch, tmp_path):
             await store.initialize()
             await store.upsert(MemoryNode(
                 node_id="probe", user_id="u", agent_id="a", session_id="s",
-                layer=MemoryLayer.L2_FACT, content="survives crash",
+                layer=MemoryLayer.L3_FACT, content="survives crash",
                 embedding=[0.1, 0.2, 0.3, 0.4],
             ))
             print("READY", flush=True)

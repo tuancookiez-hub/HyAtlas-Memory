@@ -18,7 +18,7 @@ API Endpoints:
     DELETE /api/v1/memories/:id — Delete memory
     POST /api/v1/delete_all   — Delete all user memories
     POST /api/v1/digest       — Trigger System 2 digest (ultra mode)
-    POST /api/v1/reprocess    — Retry extraction for orphaned l1_raw memories
+    POST /api/v1/reprocess    — Retry extraction for orphaned l2_raw memories
     GET  /healthz             — Health check
     GET  /info                — Server info
 """
@@ -565,10 +565,10 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             _digest_lock.release()
 
     def _handle_reprocess(self, body: dict):
-        """POST /api/v1/reprocess — retry extraction for orphaned l1_raw memories.
+        """POST /api/v1/reprocess — retry extraction for orphaned l2_raw memories.
 
         When the LLM was unavailable during a write, the memory persists as
-        l1_raw (active) but never gets extracted into l2_fact, making it
+        l2_raw (active) but never gets extracted into l3_fact, making it
         invisible to search. This endpoint re-submits those memories through
         the normal add pipeline and cleans up the orphans on success.
 
@@ -583,14 +583,14 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
 
         client = _get_client()
 
-        # Find orphaned l1_raw: active, unextracted
+        # Find orphaned l2_raw: active, unextracted
         listing = client.list_memories(
             user_id=user_id, agent_id=agent_id,
             limit=limit * 2, include_raw=True,
         )
         orphans = [
             m for m in (listing.get("vdb", {}).get("memories") or [])
-            if m.get("layer") == "l1_raw"
+            if m.get("layer") == "l2_raw"
             and m.get("status") == "active"
             and not m.get("extracted", True)
         ][:limit]
@@ -598,7 +598,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
         if not orphans:
             _json_response(self, 200, {
                 "success": True, "reprocessed": 0, "failed": 0,
-                "message": "no orphaned l1_raw memories found",
+                "message": "no orphaned l2_raw memories found",
             })
             return
 
@@ -621,7 +621,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                 )
                 extraction = add_resp.get("extraction_status", "")
                 if extraction == "success":
-                    # Clean up the orphaned l1_raw
+                    # Clean up the orphaned l2_raw
                     try:
                         client.delete(mid)
                     except Exception:

@@ -50,15 +50,15 @@ SYSTEM2_TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "search_vdb",
-            "description": "Semantic search in VDB. Returns list: content, score, layer. Only searches L2_FACT and L3_SUMMARY layers.",
+            "description": "Semantic search in VDB. Returns list: content, score, layer. Only searches L3_FACT and L4_SUMMARY layers.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search query"},
                     "layers": {
                         "type": "array",
-                        "items": {"type": "string", "enum": ["l2_fact", "l3_summary"]},
-                        "description": "Layer filter. Options: 'l2_fact', 'l3_summary'. Omit to search both."
+                        "items": {"type": "string", "enum": ["l3_fact", "l4_summary"]},
+                        "description": "Layer filter. Options: 'l3_fact', 'l4_summary'. Omit to search both."
                     },
                     "limit": {"type": "integer", "description": "Max results, default 10"}
                 },

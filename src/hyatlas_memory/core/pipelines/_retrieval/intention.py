@@ -6,7 +6,7 @@ HY Memory - Intention (L7) 召回 + 惰性过期转换
 
   - 召回 status=ACTIVE 的 L7 节点；
   - 对每条命中检查 `valid_until`：若已过期（now > valid_until），则**惰性**把该
-    节点的 layer 改写为 l2_fact（持久化 update_payload），并从意图结果里剔除——
+    节点的 layer 改写为 l3_fact（持久化 update_payload），并从意图结果里剔除——
     过期意图变成普通历史事实，下次走 normal 召回；
   - 返回仍然有效（未过期）的意图命中。
 
@@ -34,7 +34,7 @@ async def recall_intentions(
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """
-    召回未过期的 L7_INTENTION 节点（VDB），并惰性把过期意图转成 L2_FACT。
+    召回未过期的 L7_INTENTION 节点（VDB），并惰性把过期意图转成 L3_FACT。
 
     Args:
         vector_store: VectorStoreBase 实例
@@ -73,11 +73,11 @@ async def recall_intentions(
         valid_until = getattr(node, "valid_until", None) if node else None
 
         if valid_until and _now > valid_until:
-            # 过期 → 惰性转 L2_FACT（持久化），从意图结果剔除
+            # 过期 → 惰性转 L3_FACT（持久化），从意图结果剔除
             try:
-                await vector_store.update_payload(node_id, {"layer": MemoryLayer.L2_FACT.value})
+                await vector_store.update_payload(node_id, {"layer": MemoryLayer.L3_FACT.value})
                 logger.debug(
-                    f"[intention] expired L7 → L2_FACT: node_id={node_id} "
+                    f"[intention] expired L7 → L3_FACT: node_id={node_id} "
                     f"valid_until={valid_until}"
                 )
             except Exception as e:

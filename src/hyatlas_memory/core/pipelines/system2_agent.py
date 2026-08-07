@@ -5,7 +5,7 @@ System 2 Agent — 统一认知加工引擎
 
 流程:
   Phase 1 (硬编码预处理):
-    ① VDB 取未处理的 L2_FACT
+    ① VDB 取未处理的 L3_FACT
     ② DBSCAN 聚类 → clusters
     ③ Graph 正向搜索: 按 cluster 主题 query Graph
     ④ Graph 反向查找: VDB node_id → find_referencing_memories
@@ -273,10 +273,10 @@ async def prepare_materials(
 
     isolation_key = MemoryNode.build_isolation_key(user_id, agent_id or "default")
 
-    # ① VDB: L2_FACT (+ optional L3_SUMMARY). L4 retired — identity lives in L2.
-    _s2_layers = [MemoryLayer.L2_FACT]
+    # ① VDB: L3_FACT (+ optional L4_SUMMARY). L4 retired — identity lives in L2.
+    _s2_layers = [MemoryLayer.L3_FACT]
     if _S2_SUMMARY_ENABLED:
-        _s2_layers.append(MemoryLayer.L3_SUMMARY)
+        _s2_layers.append(MemoryLayer.L4_SUMMARY)
     all_facts = await vector_store.list_by_user(
         user_id=user_id,
         agent_id=agent_id,

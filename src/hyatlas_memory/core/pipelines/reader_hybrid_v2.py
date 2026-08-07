@@ -49,13 +49,13 @@ logger = logging.getLogger(__name__)
 
 # Profile 路覆盖的层：L0（基础属性，VDB）+ L6_SCHEMA（心智模型，graph 专属）。
 # 用于 client 分桶判断 / strength 排除。L4_IDENTITY 不在此——走主 VDB 路归 normal。
-_PROFILE_LAYERS = [MemoryLayer.L0_BASIC_INFO, MemoryLayer.L6_SCHEMA]
+_PROFILE_LAYERS = [MemoryLayer.L1_PROFILE, MemoryLayer.L6_SCHEMA]
 
 # profile 路在 VDB 里实际只搜 L0（basic_info）。L6 是 graph 专属，由 graph 正反路提供：
 #   正路 = graph vector_search（query 语义相近的 L6，过 profile_min_score + evidence boost）
 #   反路 = 从 normal 命中的 VDB 节点反查支撑它们的 L6（按支撑度排序，不卡阈值）
 # 正反 RRF 融合 + L0 置顶 = profile 路输出。
-_VDB_PROFILE_LAYERS = [MemoryLayer.L0_BASIC_INFO]
+_VDB_PROFILE_LAYERS = [MemoryLayer.L1_PROFILE]
 
 # L0 召回候选上限（basic_info 是单条演化链，少量即可覆盖）。最终 profile 条数
 # 由 Stage 11 按 profile_limit 截断，故召回上限与 profile_limit 解耦。
@@ -64,10 +64,10 @@ _PROFILE_RECALL_LIMIT = 10
 # 主 VDB 召回（语义 + BM25 关键词）覆盖的记忆层。
 # 覆盖 L2/L3：fact / summary。
 # 与 _PROFILE_LAYERS 互斥（L0/L6 只走 profile 路），杜绝双重召回。
-# 不含 L1_RAW（原始对话，append-only 不召回）、L5_KNOWLEDGE、L7（graph 专属通道）。
+# 不含 L2_RAW（原始对话，append-only 不召回）、L5_KNOWLEDGE、L7（graph 专属通道）。
 _VDB_RECALL_LAYERS = [
-    MemoryLayer.L2_FACT,
-    MemoryLayer.L3_SUMMARY,
+    MemoryLayer.L3_FACT,
+    MemoryLayer.L4_SUMMARY,
 ]
 
 
@@ -338,7 +338,7 @@ class HybridV2ReadPipeline(ReadPipeline):
                     logger.warning(f"[hybrid_v2] graph schema search failed: {results[3]}")
 
             # Proactive 路：intention（L7）从 VDB 召回（与 graph 解耦，全模式可用），
-            # 过期惰性转 L2_FACT。仅当 intention_limit > 0 时启用。
+            # 过期惰性转 L3_FACT。仅当 intention_limit > 0 时启用。
             graph_intention_hits: list[dict[str, Any]] = []
             if request.intention_limit > 0:
                 graph_intention_hits = await recall_intentions(

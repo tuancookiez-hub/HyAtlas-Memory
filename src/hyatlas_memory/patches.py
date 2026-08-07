@@ -66,10 +66,10 @@ _applied: dict[str, bool] = {}
 # without adding LLM cost. Tuned 2026-06-21: high-signal layers (identity,
 # basic_info) get higher weights than raw turns / summaries.
 _LAYER_IMPORTANCE: dict[str, float] = {
-    "l0_basic_info": 0.8,
-    "l1_raw": 0.3,
-    "l2_fact": 0.6,
-    "l3_summary": 0.5,
+    "l1_profile": 0.8,
+    "l2_raw": 0.3,
+    "l3_fact": 0.6,
+    "l4_summary": 0.5,
     "l5_knowledge": 0.6,
     "l6_schema": 0.8,
     "l7_intention": 0.5,
@@ -151,8 +151,8 @@ def patch_importance_for_request(
 ) -> None:
     """Set `importance` on all qdrant points produced by a single add() call.
 
-    Upstream tags some extracted memories (l2_fact, l4_identity) with
-    ``custom.request_id``. Other layers (l0_basic_info, l1_raw) do not get
+    Upstream tags some extracted memories (l3_fact, l4_identity) with
+    ``custom.request_id``. Other layers (l1_profile, l2_raw) do not get
     that tag, so we fall back to a time-window + user/session match when the
     request_id path yields no points.
 
@@ -189,8 +189,8 @@ def patch_importance_for_request(
                     points_by_id[point["id"]] = point
 
         # Always run the fallback when user_id/session_id/since_timestamp are
-        # provided. The upstream SDK only tags some layers (l2_fact, l4_identity)
-        # with custom.request_id; l0_basic_info and l1_raw don't get it, so
+        # provided. The upstream SDK only tags some layers (l3_fact, l4_identity)
+        # with custom.request_id; l1_profile and l2_raw don't get it, so
         # we need the time-window match to catch the full set produced by one
         # add() call. We merge the results to avoid double-patching.
         if user_id and since_timestamp is not None:
@@ -222,7 +222,7 @@ def patch_importance_for_request(
         # Group by importance to minimize the number of PATCH calls
         by_importance: dict[float, list[str]] = {}
         for point in points:
-            layer = point.get("payload", {}).get("layer", "l1_raw")
+            layer = point.get("payload", {}).get("layer", "l2_raw")
             importance = _LAYER_IMPORTANCE.get(layer, 0.5)
             by_importance.setdefault(importance, []).append(point.get("id"))
 
@@ -371,15 +371,15 @@ def apply_llm_extra_body_patch() -> bool:
     return True
 
 
-def apply_l3_summary_patch() -> bool:
-    """Conditionally enable L3_SUMMARY on every Nth add.
+def apply_l4_summary_patch() -> bool:
+    """Conditionally enable L4_SUMMARY on every Nth add.
 
     L3 generation is a per-call LLM call, so doing it on every add doubles active
     latency. This wrapper enables summaries only after a per-user add counter
     reaches MEMORY_L3_TRIGGER_EVERY. Patch HyMemoryClient.add because all server
     paths eventually call it.
     """
-    if _applied.get("l3_summary"):
+    if _applied.get("l4_summary"):
         return True
 
     try:
@@ -389,13 +389,13 @@ def apply_l3_summary_patch() -> bool:
 
         from hy_memory.client import HyMemoryClient
     except Exception as e:
-        logger.debug("[hy-memory/patches] l3_summary: cannot import deps: %s", e)
+        logger.debug("[hy-memory/patches] l4_summary: cannot import deps: %s", e)
         return False
 
     every = int(os.environ.get("MEMORY_L3_TRIGGER_EVERY", "20"))
     if every <= 0:
         logger.info("[hy-memory/patches] L3 conditional trigger disabled")
-        _applied["l3_summary"] = True
+        _applied["l4_summary"] = True
         return True
 
     home = Path(os.environ.get("HERMES_HOME", Path.home() / "AppData/Local/hermes"))
@@ -456,7 +456,7 @@ def apply_l3_summary_patch() -> bool:
         )
 
     HyMemoryClient.add = patched
-    _applied["l3_summary"] = True
+    _applied["l4_summary"] = True
     logger.info(
         f"[hy-memory/patches] L3 conditional trigger enabled on HyMemoryClient.add "
         f"(every {every} adds per user)"
@@ -857,13 +857,13 @@ def apply_dedup_threshold_patch() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Patch 6: L1_RAW rolling-delete sweep
+# Patch 6: L2_RAW rolling-delete sweep
 # ---------------------------------------------------------------------------
 
 
-def apply_l1_raw_rolling_delete_patch() -> bool:
-    """Patch #6: periodic sweep that deletes shadowed L1_RAW entries older than
-    ``MEMORY_RAW_WINDOW_DAYS``. Prevents unbounded L1_RAW shadow accumulation
+def apply_l2_raw_rolling_delete_patch() -> bool:
+    """Patch #6: periodic sweep that deletes shadowed L2_RAW entries older than
+    ``MEMORY_RAW_WINDOW_DAYS``. Prevents unbounded L2_RAW shadow accumulation
     in the VDB. Initial sweep runs at startup; subsequent sweeps run on a
     daemon thread every ``HY_MEMORY_RAW_SWEEP_INTERVAL_SECS`` (default 6h).
 
@@ -874,37 +874,37 @@ def apply_l1_raw_rolling_delete_patch() -> bool:
     no-op gate that warns if qdrant_client is somehow still installed.
 
     Configurable via env vars:
-      - HY_MEMORY_L1_RAW_ROLLING_DELETE (default true): master switch
+      - HY_MEMORY_L2_RAW_ROLLING_DELETE (default true): master switch
       - MEMORY_RAW_WINDOW_DAYS (default 30): retention window
       - HY_MEMORY_RAW_SWEEP_INTERVAL_SECS (default 21600 = 6h): sweep frequency
     """
-    if _applied.get("l1_raw_rolling_delete"):
+    if _applied.get("l2_raw_rolling_delete"):
         return True
 
-    if os.environ.get("HY_MEMORY_L1_RAW_ROLLING_DELETE", "true").lower() not in ("1", "true", "yes", "on"):
+    if os.environ.get("HY_MEMORY_L2_RAW_ROLLING_DELETE", "true").lower() not in ("1", "true", "yes", "on"):
         return False
 
     # v3.4+: Qdrant sweep removed. Real sweep lives in
     # hyatlas_memory.integrations._sweep_zvec and runs via the server's
     # own vector_store handle. We keep this entry point so external
-    # callers that probe "is the L1_RAW sweep patch installed?" still get
+    # callers that probe "is the L2_RAW sweep patch installed?" still get
     # a True answer, but no work is performed here.
     logger.info(
-        "[hy-memory/patches] L1_RAW rolling-delete patch #6 no-op in v3.4+ "
+        "[hy-memory/patches] L2_RAW rolling-delete patch #6 no-op in v3.4+ "
         "(zvec sweep is handled by hyatlas_memory.integrations)."
     )
-    _applied["l1_raw_rolling_delete"] = True
+    _applied["l2_raw_rolling_delete"] = True
     return True
 
 
 # ---------------------------------------------------------------------------
-# Patch 7: L1_RAW dedup skip (write-side dedup at the source)
+# Patch 7: L2_RAW dedup skip (write-side dedup at the source)
 # ---------------------------------------------------------------------------
 
 
-def apply_l1_raw_dedup_skip_patch() -> bool:
+def apply_l2_raw_dedup_skip_patch() -> bool:
     """Patch #7: if a pre-search finds a near-duplicate (cosine score >= threshold),
-    skip the write entirely so no L1_RAW entry is created. Prevents L1_RAW shadow
+    skip the write entirely so no L2_RAW entry is created. Prevents L2_RAW shadow
     bloat at the source rather than cleaning it up after.
 
     Wraps ``HyMemoryClient.async_add`` to add the skip check. When a skip fires,
@@ -912,16 +912,16 @@ def apply_l1_raw_dedup_skip_patch() -> bool:
     callers can detect it. When no skip, falls through to the wrapped version.
 
     Cost: one extra pre-search per write (this patch's pre-search + Patch #4's
-    pre-search). Acceptable for the no-L1_RAW guarantee.
+    pre-search). Acceptable for the no-L2_RAW guarantee.
 
     Configurable via env vars:
-      - HY_MEMORY_L1_RAW_DEDUP_SKIP (default true): master switch
+      - HY_MEMORY_L2_RAW_DEDUP_SKIP (default true): master switch
       - MEMORY_DEDUP_SKIP_THRESHOLD (default 0.92): cosine similarity for skip
     """
-    if _applied.get("l1_raw_dedup_skip"):
+    if _applied.get("l2_raw_dedup_skip"):
         return True
 
-    if os.environ.get("HY_MEMORY_L1_RAW_DEDUP_SKIP", "true").lower() not in ("1", "true", "yes", "on"):
+    if os.environ.get("HY_MEMORY_L2_RAW_DEDUP_SKIP", "true").lower() not in ("1", "true", "yes", "on"):
         return False
 
     try:
@@ -959,7 +959,7 @@ def apply_l1_raw_dedup_skip_patch() -> bool:
                         top_layer = top.get("layer")
                         if top_score >= skip_threshold:
                             logger.info(
-                                "[hy-memory/patches] L1_RAW dedup skip: score=%.3f >= threshold=%.2f, existing_id=%s layer=%s",
+                                "[hy-memory/patches] L2_RAW dedup skip: score=%.3f >= threshold=%.2f, existing_id=%s layer=%s",
                                 top_score, skip_threshold, top.get("memory_id", "")[:12], top_layer,
                             )
                             return {
@@ -976,7 +976,7 @@ def apply_l1_raw_dedup_skip_patch() -> bool:
                 # Log when we found a near-miss but didn't skip — for tuning
                 if top_score > 0:
                     logger.debug(
-                        "[hy-memory/patches] L1_RAW dedup pre-search: top_score=%.3f < threshold=%.2f (layer=%s), write will proceed",
+                        "[hy-memory/patches] L2_RAW dedup pre-search: top_score=%.3f < threshold=%.2f (layer=%s), write will proceed",
                         top_score, skip_threshold, top_layer,
                     )
             except Exception as e:
@@ -986,20 +986,20 @@ def apply_l1_raw_dedup_skip_patch() -> bool:
         return await current_async_add(self, data, **kwargs)
 
     HyMemoryClient.async_add = patched_async_add_skip
-    _applied["l1_raw_dedup_skip"] = True
+    _applied["l2_raw_dedup_skip"] = True
     logger.info(
-        "[hy-memory/patches] L1_RAW dedup skip installed: threshold=%.2f (patch #7)",
+        "[hy-memory/patches] L2_RAW dedup skip installed: threshold=%.2f (patch #7)",
         skip_threshold,
     )
     return True
 
 
 # ---------------------------------------------------------------------------
-# Patch 8: L1_RAW → SHADOW on agent completion
+# Patch 8: L2_RAW → SHADOW on agent completion
 # ---------------------------------------------------------------------------
 
-def apply_l1_raw_shadow_patch() -> bool:
-    """Patch #8: after the agent run completes, mark the source L1_RAW as
+def apply_l2_raw_shadow_patch() -> bool:
+    """Patch #8: after the agent run completes, mark the source L2_RAW as
     ``shadowed`` using ``update_payload`` (the correct method).
 
     **Root cause** (writer.py:1266-1273 in hy-memory 1.2.18):
@@ -1012,7 +1012,7 @@ def apply_l1_raw_shadow_patch() -> bool:
             except Exception as shadow_err:
                 logger.warning(f"[agent] failed to shadow L1 raw: {shadow_err}")
 
-    The L1_RAW shadow block uses ``vector_store.upsert(mem_node)``, which
+    The L2_RAW shadow block uses ``vector_store.upsert(mem_node)``, which
     REPLACES the entire Qdrant point (vector + payload). This silently
     fails or breaks the point when:
 
@@ -1024,14 +1024,14 @@ def apply_l1_raw_shadow_patch() -> bool:
 
     The SUPERSEDE/UPDATE branches in the same file (line 311, 337)
     correctly use ``update_payload(memory_id, {...})`` for partial
-    payload updates. The L1_RAW block is the only place using the
+    payload updates. The L2_RAW block is the only place using the
     wrong method.
 
-    **Verified (2026-06-13)**: the user's install had 1,015 active L1_RAWs
+    **Verified (2026-06-13)**: the user's install had 1,015 active L2_RAWs
     after Phase 5 cleanup. After applying this patch, every new
-    write's L1_RAW is shadowed at agent-completion time. The rolling-delete
+    write's L2_RAW is shadowed at agent-completion time. The rolling-delete
     patch (#6) and dedup-skip patch (#7) become unnecessary for new
-    writes (they still apply to old shadowed L1_RAWs that pre-date this
+    writes (they still apply to old shadowed L2_RAWs that pre-date this
     fix).
 
     **Upstream PR**: this is a 4-line change to ``writer.py:1269-1270``
@@ -1040,14 +1040,14 @@ def apply_l1_raw_shadow_patch() -> bool:
     for the PR template.
 
     **Verified working (2026-06-13, 4 test writes)**: every fresh
-    L1_RAW created by a new ``/api/v1/add`` call gets
+    L2_RAW created by a new ``/api/v1/add`` call gets
     ``is_latest=False, status=shadow`` set via ``update_payload``
-    after the agent completes. Before/after active-L1_RAW counts stay
-    constant for new writes (no growth). The user's 1,015-L1_RAW
+    after the agent completes. Before/after active-L2_RAW counts stay
+    constant for new writes (no growth). The user's 1,015-L2_RAW
     backlog (from Phase 5) is now bounded by the rolling-delete patch
     (#6); new writes no longer add to it.
     """
-    if _applied.get("l1_raw_shadow"):
+    if _applied.get("l2_raw_shadow"):
         return True
 
     try:
@@ -1058,7 +1058,7 @@ def apply_l1_raw_shadow_patch() -> bool:
         return False
 
     if MemoryWriter._run_agent.__name__ == "_run_agent_with_l1_shadow":
-        _applied["l1_raw_shadow"] = True
+        _applied["l2_raw_shadow"] = True
         return True
 
     original_run_agent = MemoryWriter._run_agent
@@ -1070,7 +1070,7 @@ def apply_l1_raw_shadow_patch() -> bool:
         #   tracer_span, history_context
         result = await original_run_agent(*args, **kwargs)
 
-        # After the agent finishes, ensure the source L1_RAW is shadowed
+        # After the agent finishes, ensure the source L2_RAW is shadowed
         # via the correct method (update_payload), regardless of whether
         # the broken upsert-based path succeeded.
         try:
@@ -1102,12 +1102,12 @@ def apply_l1_raw_shadow_patch() -> bool:
                 },
             )
             logger.info(
-                "[hy-memory/patches] L1_RAW %s → SHADOW via update_payload (patch #8)",
+                "[hy-memory/patches] L2_RAW %s → SHADOW via update_payload (patch #8)",
                 memory_id,
             )
         except Exception as e:
             logger.warning(
-                "[hy-memory/patches] L1_RAW shadow patch failed for %s: %s",
+                "[hy-memory/patches] L2_RAW shadow patch failed for %s: %s",
                 kwargs.get("memory_id", "?"),
                 e,
             )
@@ -1115,8 +1115,8 @@ def apply_l1_raw_shadow_patch() -> bool:
         return result
 
     MemoryWriter._run_agent = _run_agent_with_l1_shadow
-    _applied["l1_raw_shadow"] = True
-    logger.info("[hy-memory/patches] L1_RAW shadow patch installed (patch #8)")
+    _applied["l2_raw_shadow"] = True
+    logger.info("[hy-memory/patches] L2_RAW shadow patch installed (patch #8)")
     return True
 
 
@@ -1451,7 +1451,7 @@ def apply_l5_inprocess_patch() -> bool:
 
 
 def apply_l4_identity_patch() -> bool:
-    """L4 identity is fully removed (2026-08-06) — no-op. Identity lives in L2_FACT."""
+    """L4 identity is fully removed (2026-08-06) — no-op. Identity lives in L3_FACT."""
     _applied["l4_identity"] = True
     return True
 
@@ -1881,25 +1881,25 @@ def apply_disabled_cache_timing_patch() -> bool:
     return True
 
 
-# Patch 15: include L1_RAW in normal search results
+# Patch 15: include L2_RAW in normal search results
 # ---------------------------------------------------------------------------
-# The legacy reader deliberately excludes L1_RAW from the "normal" search
-# (reader_legacy.py line 313 puts L1_RAW in all_special, and line 462 filters
+# The legacy reader deliberately excludes L2_RAW from the "normal" search
+# (reader_legacy.py line 313 puts L2_RAW in all_special, and line 462 filters
 # it out). That is correct for pro/ultra mode where L2+ layers are populated
 # by the LLM extraction. But in lite mode (and in any setup where L2+ is
-# empty), the only memories the user has are L1_RAW, and the search returns
-# 0 results. We patch read() to fall back to L1_RAW when normal search
+# empty), the only memories the user has are L2_RAW, and the search returns
+# 0 results. We patch read() to fall back to L2_RAW when normal search
 # comes back empty.
 
-def apply_l1_raw_normal_fallback_patch() -> bool:
-    """Include L1_RAW in normal search results when L2+ is empty.
+def apply_l2_raw_normal_fallback_patch() -> bool:
+    """Include L2_RAW in normal search results when L2+ is empty.
 
     Without this patch:
-      - lite mode: 0 normal results (lite only writes L1_RAW, reader skips L1_RAW)
+      - lite mode: 0 normal results (lite only writes L2_RAW, reader skips L2_RAW)
       - ultra with LLM extraction disabled: 0 normal results
 
     With this patch:
-      - If normal search returns 0 hits, do a second L1_RAW-only search
+      - If normal search returns 0 hits, do a second L2_RAW-only search
         and merge the results.
     """
     try:
@@ -1907,7 +1907,7 @@ def apply_l1_raw_normal_fallback_patch() -> bool:
     except Exception:
         return False
 
-    if getattr(LegacyReadPipeline, "_l1_raw_fallback_applied", False):
+    if getattr(LegacyReadPipeline, "_l2_raw_fallback_applied", False):
         return True
 
     try:
@@ -1922,12 +1922,12 @@ def apply_l1_raw_normal_fallback_patch() -> bool:
     async def _read_with_l1_fallback(self, request, ctx=None, tracer=None):
         resp = await _orig_read(self, request, ctx=ctx, tracer=tracer)
         mems = list(getattr(resp, "memories", []) or [])
-        has_non_l1 = any(m.get("layer") != MemoryLayer.L1_RAW.value for m in mems)
+        has_non_l1 = any(m.get("layer") != MemoryLayer.L2_RAW.value for m in mems)
         if mems and has_non_l1:
             return resp
         if mems and not has_non_l1:
             return resp
-        # Normal bucket is empty. Do a direct L1_RAW search and merge.
+        # Normal bucket is empty. Do a direct L2_RAW search and merge.
         try:
             from hy_memory.pipelines.reader_legacy import _resolve_isolation_keys_for_request
             ik, iks, uids, aids = _resolve_isolation_keys_for_request(self, request)
@@ -1950,7 +1950,7 @@ def apply_l1_raw_normal_fallback_patch() -> bool:
                 user_ids=uids,
                 agent_ids=aids,
                 limit=max(getattr(request, "limit", 10) or 10, 10),
-                layers=[MemoryLayer.L1_RAW],
+                layers=[MemoryLayer.L2_RAW],
                 score_threshold=None,
                 only_latest=True,
             )
@@ -1971,14 +1971,14 @@ def apply_l1_raw_normal_fallback_patch() -> bool:
                 "node_id": node_id,
                 "score": hit.get("score", 0.0),
                 "content": content,
-                "layer": MemoryLayer.L1_RAW.value,
-                "source": "l1_raw_fallback",
+                "layer": MemoryLayer.L2_RAW.value,
+                "source": "l2_raw_fallback",
             })
         resp.memories = list(getattr(resp, "memories", []) or []) + merged
         return resp
 
     _LRP.read = _read_with_l1_fallback
-    _LRP._l1_raw_fallback_applied = True
+    _LRP._l2_raw_fallback_applied = True
     return True
 
 
@@ -2355,21 +2355,21 @@ def apply_all_patches() -> dict[str, bool]:
     """Apply all patches. Idempotent. Returns a dict of which patches succeeded."""
     return {
         "llm_extra_body": apply_llm_extra_body_patch(),
-        "l3_summary": apply_l3_summary_patch(),
+        "l4_summary": apply_l4_summary_patch(),
         "rerank_stage": apply_rerank_patches(),
         "inprocess_embed": apply_inprocess_embed_patch(),
-        "l1_raw_rolling_delete": apply_l1_raw_rolling_delete_patch(),
+        "l2_raw_rolling_delete": apply_l2_raw_rolling_delete_patch(),
         "dedup_pre_search": apply_dedup_pre_search_patch(),
         "dedup_threshold": apply_dedup_threshold_patch(),
-        "l1_raw_dedup_skip": apply_l1_raw_dedup_skip_patch(),
-        "l1_raw_shadow": apply_l1_raw_shadow_patch(),
+        "l2_raw_dedup_skip": apply_l2_raw_dedup_skip_patch(),
+        "l2_raw_shadow": apply_l2_raw_shadow_patch(),
         "l5_auto_trigger": apply_l5_auto_trigger_patch() if os.getenv("MEMORY_L5_VERSION", "").strip() == "1" else False,
         "l5_inprocess": apply_l5_inprocess_patch(),
         "l4_identity": apply_l4_identity_patch(),
         "vdb_circuit_breaker": apply_vdb_circuit_breaker_patch(),
         "llm_fast_smart": apply_llm_fast_smart_patch(),
         "disabled_cache_timing": apply_disabled_cache_timing_patch(),
-        "l1_raw_normal_fallback": apply_l1_raw_normal_fallback_patch(),
+        "l2_raw_normal_fallback": apply_l2_raw_normal_fallback_patch(),
         "coding_judge": _patch_coding_judge(),
         "s2_operations_json": apply_s2_operations_json_patch(),
         "user_identity": apply_user_identity_patch(),
@@ -2395,16 +2395,16 @@ def status() -> dict[str, Any]:
         ),
         "dedup_search_limit": int(os.environ.get("MEMORY_DEDUP_SEARCH_LIMIT", "5")),
         "dedup_min_score": float(os.environ.get("MEMORY_DEDUP_MIN_SCORE", "0.5")),
-        "l1_raw_rolling_delete_enabled": (
-            os.environ.get("HY_MEMORY_L1_RAW_ROLLING_DELETE", "true").strip().lower()
+        "l2_raw_rolling_delete_enabled": (
+            os.environ.get("HY_MEMORY_L2_RAW_ROLLING_DELETE", "true").strip().lower()
             in ("1", "true", "yes", "on")
         ),
-        "l1_raw_window_days": int(os.environ.get("MEMORY_RAW_WINDOW_DAYS", "30")),
-        "l1_raw_dedup_skip_enabled": (
-            os.environ.get("HY_MEMORY_L1_RAW_DEDUP_SKIP", "true").strip().lower()
+        "l2_raw_window_days": int(os.environ.get("MEMORY_RAW_WINDOW_DAYS", "30")),
+        "l2_raw_dedup_skip_enabled": (
+            os.environ.get("HY_MEMORY_L2_RAW_DEDUP_SKIP", "true").strip().lower()
             in ("1", "true", "yes", "on")
         ),
-        "l1_raw_dedup_skip_threshold": float(
+        "l2_raw_dedup_skip_threshold": float(
             os.environ.get("MEMORY_DEDUP_SKIP_THRESHOLD", "0.92")
         ),
         "vdb_breaker_state": _vdb_breaker.snapshot(),
@@ -2760,7 +2760,7 @@ def apply_auto_forgetting_patch() -> bool:
     # ── Part 2: Expiry sweep in S2 digest ──
     # Hook into the S2 scheduled loop to archive expired L2 facts.
     # Runs after each S2 cycle, before the sweeper.
-    # Only touches L2_FACT nodes with valid_until < now.
+    # Only touches L3_FACT nodes with valid_until < now.
     # L4_IDENTITY is never expired (permanent preferences).
 
     try:

@@ -134,11 +134,11 @@ async def _expand_one_chain(vector_store, head_item: dict[str, Any]) -> dict[str
 
     head_node = chain[0]  # 链头（is_latest=True 的那个）
 
-    # 防御：演化链中绝不暴露 L1_RAW 原始对话节点。
+    # 防御：演化链中绝不暴露 L2_RAW 原始对话节点。
     # search 在任何路径都不返回 raw 层内容；若链上混入 raw（如跨层
     # supersede 的历史/异常 linkage），在此过滤掉，避免从 evolution_chain 泄漏。
     from ...models.memory import MemoryLayer
-    chain_visible = [n for n in chain if n.layer != MemoryLayer.L1_RAW]
+    chain_visible = [n for n in chain if n.layer != MemoryLayer.L2_RAW]
 
     # 原始链数据
     evolution_chain = [_node_to_chain_item(n) for n in chain_visible]

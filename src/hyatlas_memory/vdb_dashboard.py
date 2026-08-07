@@ -114,7 +114,7 @@ def _item(n) -> dict:
         "user_id": n.user_id,
         "agent_id": n.agent_id,
         "session_id": n.session_id,
-        "_source": "l1_raw",
+        "_source": "l2_raw",
     }
 
 
@@ -143,7 +143,7 @@ async def _scroll_l1_async(
             parts.append(f"agent_id = {_quote(agent_id)}")
         parts.extend(
             [
-                f"layer = {_quote(MemoryLayer.L1_RAW.value)}",
+                f"layer = {_quote(MemoryLayer.L2_RAW.value)}",
                 f"status = {_quote(MemoryStatus.ACTIVE.value)}",
                 f"is_latest = {_quote('true')}",
             ]
@@ -166,7 +166,7 @@ async def _scroll_l1_async(
                 await vs.list_by_user(
                     user_id=uid,
                     agent_id=agent_id or None,
-                    layers=[MemoryLayer.L1_RAW],
+                    layers=[MemoryLayer.L2_RAW],
                     limit=min(limit, 500),
                 )
             )

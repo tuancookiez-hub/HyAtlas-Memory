@@ -10,7 +10,7 @@ Legacy Read Pipeline.
 3. post15 新增：接受 cache 参数，把 read 阶段的关键步骤写入 pipeline_logs 表
    （step 前缀 `READ_*`），供 inspector 查询 search trace。
 
-行为语义：profile 路（L0_BASIC_INFO + L6_SCHEMA）+ 其他路两路并行
+行为语义：profile 路（L1_PROFILE + L6_SCHEMA）+ 其他路两路并行
 向量召回，profile 按 `profile_min_score` / `profile_limit` 过滤，最后合并 +
 演化链回溯。L4_IDENTITY 按普通记忆走 normal 路（不算 profile）。
 """
@@ -293,12 +293,12 @@ class LegacyReadPipeline(ReadPipeline):
                     # 三路分流定义
                     # ========================================
 
-                    # Profile VDB 路：L0_BASIC_INFO（存在 VDB 中）。
+                    # Profile VDB 路：L1_PROFILE（存在 VDB 中）。
                     # L4_IDENTITY 不再算 profile —— 按普通记忆走 normal 路（与 hybrid_v2/
                     # tencent_hybrid 对齐）。normal = all_layers - special，移除 L4 后
                     # 它自动落入 normal。
                     profile_vdb_layers = [
-                        MemoryLayer.L0_BASIC_INFO,
+                        MemoryLayer.L1_PROFILE,
                     ]
 
                     # Profile Graph 路：L6_SCHEMA（存在 Graph 中，走 graph vector_search）
@@ -311,10 +311,10 @@ class LegacyReadPipeline(ReadPipeline):
                     proactive_layers = [MemoryLayer.L7_INTENTION]
                     intention_limit = request.intention_limit if request.intention_limit > 0 else 0
 
-                    # Normal 路：L2_FACT + L5_KNOWLEDGE + L3_SUMMARY 等（VDB 中）
-                    all_special = set(profile_layers) | set(proactive_layers) | {MemoryLayer.L1_RAW}
+                    # Normal 路：L3_FACT + L5_KNOWLEDGE + L4_SUMMARY 等（VDB 中）
+                    all_special = set(profile_layers) | set(proactive_layers) | {MemoryLayer.L2_RAW}
                     if not _READER_ENABLE_SUMMARY:
-                        all_special.add(MemoryLayer.L3_SUMMARY)
+                        all_special.add(MemoryLayer.L4_SUMMARY)
                     normal_layers_default = [
                         l for l in MemoryLayer.all_layers()
                         if l not in all_special
@@ -408,7 +408,7 @@ class LegacyReadPipeline(ReadPipeline):
                         return results
 
                     async def _search_proactive():
-                        """Proactive 路：L7_INTENTION（VDB），过期惰性转 L2_FACT。"""
+                        """Proactive 路：L7_INTENTION（VDB），过期惰性转 L3_FACT。"""
                         if skip_proactive:
                             return []
                         effective = (
@@ -430,7 +430,7 @@ class LegacyReadPipeline(ReadPipeline):
 
                     async def _search_normal():
                         if layers_filter is not None:
-                            normal_effective = [l for l in layers_filter if l not in profile_layers and l not in proactive_layers and l != MemoryLayer.L1_RAW]
+                            normal_effective = [l for l in layers_filter if l not in profile_layers and l not in proactive_layers and l != MemoryLayer.L2_RAW]
                             if not normal_effective:
                                 return []
                         else:

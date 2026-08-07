@@ -310,7 +310,7 @@ def main(argv: list[str]) -> int:
         print("Usage:")
         print('  hyatlas memory write    "the fact to remember"')
         print('  hyatlas memory recall   "search query"')
-        print('  hyatlas memory list     [--layer l2_fact] [--limit 20]')
+        print('  hyatlas memory list     [--layer l3_fact] [--limit 20]')
         print('  hyatlas memory reflect  "search query"')
         print('  hyatlas memory status')
         print()

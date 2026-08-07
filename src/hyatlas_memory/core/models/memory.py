@@ -25,20 +25,22 @@ class MemoryLayer(str, Enum):
     """
     七层记忆模型 (V2 Memory Hierarchy)
 
-    L1 RAW       — 原始对话层 (Append-Only, 向量数据库)
-    L2 FACT      — 原子事实层 (版本化不可变记录)
-    L3 SUMMARY   — 会话摘要层
-    L4 IDENTITY  — 身份画像层 (核心画像)
-    L5 KNOWLEDGE — 知识图谱层 (实体/关系/主题, Graph 层, 暂未实现)
+    L1 PROFILE   — 用户基础画像 (basic_info, 向量数据库)
+    L2 RAW       — 原始对话层 (Append-Only, 向量数据库)
+    L3 FACT      — 原子事实层 (版本化不可变记录, 向量数据库)
+    L4 SUMMARY   — 会话摘要层 (向量数据库)
+    L5 KNOWLEDGE — 知识图谱层 (实体/关系/主题, Graph 层)
     L6 SCHEMA    — 心智模型层 (抽象叙事模板, Graph 层)
     L7 INTENTION — 前瞻意图层 (未来待触发的意图, Graph 层)
 
-    存储分界: L0-L4 在 VDB, L5-L7 在 Graph (ultra 模式)
+    存储分界: L1-L4 在 VDB, L5-L7 在 Graph (ultra 模式)
+    L4 IDENTITY 在 v3.2.0 退役, 身份信息全部并入 L3 FACT.
+    2026-08-08 重编号: L0/L1/L2/L3 依次提升为 L1/L2/L3/L4 (gap closed).
     """
-    L0_BASIC_INFO = "l0_basic_info"
-    L1_RAW = "l1_raw"
-    L2_FACT = "l2_fact"
-    L3_SUMMARY = "l3_summary"
+    L1_PROFILE = "l1_profile"
+    L2_RAW = "l2_raw"
+    L3_FACT = "l3_fact"
+    L4_SUMMARY = "l4_summary"
     L5_KNOWLEDGE = "l5_knowledge"
     L6_SCHEMA = "l6_schema"
     L7_INTENTION = "l7_intention"
@@ -54,10 +56,10 @@ class MemoryLayer(str, Enum):
     L6_INTENTION = "l7_intention"   # 旧 l6_intention → 新 l7_intention
 
     # --- V1 兼容别名 ---
-    DIALOGUE = "l2_fact"
-    SUMMARY = "l3_summary"
+    DIALOGUE = "l3_fact"
+    SUMMARY = "l4_summary"
     KNOWLEDGE = "l5_knowledge"
-    RAW = "l1_raw"
+    RAW = "l2_raw"
 
     @classmethod
     def from_string(cls, value: str) -> "MemoryLayer":
@@ -66,41 +68,46 @@ class MemoryLayer(str, Enum):
         # 旧编号 → 新编号映射（兼容已存储数据的 payload）
         legacy_mapping = {
             # v2 → v3
-            "l6_identity": cls.L2_FACT,       # identity retired → lives in l2_fact
+            "l6_identity": cls.L3_FACT,       # identity retired → lives in l3_fact
             "l4_knowledge": cls.L5_KNOWLEDGE,
             "l5_schema": cls.L6_SCHEMA,
             # v1 → v2 → v3
             "l4_5_schema": cls.L6_SCHEMA,
-            "l5_identity": cls.L2_FACT,       # identity retired → lives in l2_fact
+            "l5_identity": cls.L3_FACT,       # identity retired → lives in l3_fact
             "l6_intention": cls.L7_INTENTION,
+            # 2026-08-08 renumber: l0/l1/l2/l3/l5/l6/l7 → l1/l2/l3/l4/l5/l6/l7
+            "l0_basic_info": cls.L1_PROFILE,
+            "l1_raw": cls.L2_RAW,
+            "l2_fact": cls.L3_FACT,
+            "l3_summary": cls.L4_SUMMARY,
         }
         if value in legacy_mapping:
             return legacy_mapping[value]
         # V1 兼容映射
         v1_mapping = {
-            "profile": cls.L2_FACT,           # identity retired → lives in l2_fact
-            "dialogue": cls.L2_FACT,
-            "summary": cls.L3_SUMMARY,
+            "profile": cls.L3_FACT,           # identity retired → lives in l2_fact
+            "dialogue": cls.L3_FACT,
+            "summary": cls.L4_SUMMARY,
             "knowledge": cls.L5_KNOWLEDGE,
-            "raw": cls.L1_RAW,
+            "raw": cls.L2_RAW,
         }
         if value in v1_mapping:
             return v1_mapping[value]
         for layer in cls:
             if layer.value == value:
                 # Legacy identity aliases (L6_IDENTITY / L5_IDENTITY) share the
-                # stored "l4_identity" value — treat any such row as L2_FACT.
+                # stored "l4_identity" value — treat any such row as L3_FACT.
                 if value == "l4_identity":
-                    return cls.L2_FACT
+                    return cls.L3_FACT
                 return layer
         raise ValueError(f"Invalid memory layer: {value}")
 
     @classmethod
     def all_layers(cls) -> list["MemoryLayer"]:
-        """返回所有记忆层 (不含别名) — L4 removed, identity lives in L2_FACT"""
+        """返回所有记忆层 (不含别名) — L4 removed, identity lives in L3_FACT"""
         return [
-            cls.L0_BASIC_INFO,
-            cls.L1_RAW, cls.L2_FACT, cls.L3_SUMMARY,
+            cls.L1_PROFILE,
+            cls.L2_RAW, cls.L3_FACT, cls.L4_SUMMARY,
             cls.L5_KNOWLEDGE,
             cls.L6_SCHEMA, cls.L7_INTENTION,
         ]
@@ -231,7 +238,7 @@ class MemoryNode:
     - 时空维度 (memory_at, temporal_anchor, valid_from/until, gmt_created/modified)
     - 演化图谱 (supersedes, superseded_by, is_latest) — EVOLVE 语义
     - 推断注解 (speculate) — 不参与 embed
-    - Summary 锚点 (source_raw_memory_id) — L3_SUMMARY/L4_IDENTITY 专用
+    - Summary 锚点 (source_raw_memory_id) — L4_SUMMARY/L4_IDENTITY 专用
     - 状态 (status)
     - 置信与校准 (confidence, evidence_count, source_type)
     - 情绪标记 (emotional_valence, emotional_arousal)
@@ -245,7 +252,7 @@ class MemoryNode:
     # === 基础标识 ===
     node_id: str = ""
     user_id: str = ""
-    layer: MemoryLayer = MemoryLayer.L1_RAW
+    layer: MemoryLayer = MemoryLayer.L2_RAW
     content: str = ""                        # 核心语义内容，embed 只用此字段
 
     # === 业务隔离 ===
@@ -254,7 +261,7 @@ class MemoryNode:
 
     # === 归属（owner）===
     # 该记忆属于谁：'user'（关于用户/用户陈述）| 'agent'（assistant 提供/用户要 agent 做的事）。
-    # 仅 L2_FACT / L7_INTENTION 写入；其他层（L0/L1/L3/L5/L6）留空（None）。
+    # 仅 L3_FACT / L7_INTENTION 写入；其他层（L0/L1/L3/L5/L6）留空（None）。
     owner: str | None = None
 
     # === 时空维度 ===
@@ -275,8 +282,8 @@ class MemoryNode:
     # === 推断注解（不参与 embed）===
     speculate: str | None = None              # LLM 对复杂/模糊信号的推断注解
 
-    # === Summary 锚点（L3_SUMMARY / L4_IDENTITY）===
-    source_raw_memory_id: str | None = None   # 对应的 L1_RAW 节点 ID
+    # === Summary 锚点（L4_SUMMARY / L4_IDENTITY）===
+    source_raw_memory_id: str | None = None   # 对应的 L2_RAW 节点 ID
 
     # === 状态 ===
     status: MemoryStatus = MemoryStatus.ACTIVE
@@ -466,7 +473,7 @@ class MemoryNode:
             agent_id=data.get("agent_id", ""),
             session_id=data.get("session_id", ""),
             owner=data.get("owner") or None,
-            layer=parse_enum(MemoryLayer, data.get("layer"), MemoryLayer.L1_RAW),
+            layer=parse_enum(MemoryLayer, data.get("layer"), MemoryLayer.L2_RAW),
             content=data.get("content", ""),
             # memory_at: 优先读 memory_at，兼容旧 key created_at
             memory_at=parse_dt(data.get("memory_at") or data.get("created_at")),
@@ -528,8 +535,8 @@ class VersionedFact(MemoryNode):
 
     def __post_init__(self):
         super().__post_init__()
-        if self.layer == MemoryLayer.L1_RAW:
-            self.layer = MemoryLayer.L2_FACT
+        if self.layer == MemoryLayer.L2_RAW:
+            self.layer = MemoryLayer.L3_FACT
 
     def to_dict(self) -> dict[str, Any]:
         d = super().to_dict()
@@ -1094,7 +1101,7 @@ class MemoryMetadata:
     """
     uid: str = ""
     agent_id: str = ""
-    layer: MemoryLayer = MemoryLayer.L1_RAW
+    layer: MemoryLayer = MemoryLayer.L2_RAW
 
     event_time: datetime | None = None
     created_at: datetime | None = None
@@ -1155,7 +1162,7 @@ class MemoryMetadata:
                 return datetime.fromisoformat(value)
             return None
 
-        layer = data.get("layer", MemoryLayer.L1_RAW)
+        layer = data.get("layer", MemoryLayer.L2_RAW)
         if isinstance(layer, str):
             layer = MemoryLayer.from_string(layer)
 

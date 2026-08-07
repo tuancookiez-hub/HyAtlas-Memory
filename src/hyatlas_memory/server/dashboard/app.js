@@ -38,10 +38,10 @@ let radarChart = null;
 
 // Layer definitions
 const LAYERS = {
-  'l0_basic_info': { name: 'Basic Info', desc: 'Foundational data points and identifiers', color: '#4a6fa5' },
-  'l1_raw': { name: 'Raw', desc: 'Unprocessed sensory and contextual inputs', color: '#3d8b8b' },
-  'l2_fact': { name: 'Facts', desc: 'Discrete, verifiable pieces of information', color: '#6b4c9a' },
-  'l3_summary': { name: 'Summaries', desc: 'Syntheses of multiple facts, events, and observations', color: '#4a6fa5' },
+  'l1_profile': { name: 'Basic Info', desc: 'Foundational data points and identifiers', color: '#4a6fa5' },
+  'l2_raw': { name: 'Raw', desc: 'Unprocessed sensory and contextual inputs', color: '#3d8b8b' },
+  'l3_fact': { name: 'Facts', desc: 'Discrete, verifiable pieces of information', color: '#6b4c9a' },
+  'l4_summary': { name: 'Summaries', desc: 'Syntheses of multiple facts, events, and observations', color: '#4a6fa5' },
   'l5_knowledge': { name: 'Knowledge', desc: 'Consolidated understanding and expertise', color: '#3d8b8b' },
   'l6_schema': { name: 'Schemas', desc: 'Structural patterns and organizational frameworks', color: '#6b4c9a' },
   'l7_intention': { name: 'Intentions', desc: 'Forward-looking goals and commitments (L7)', color: '#d4af37' }
@@ -596,7 +596,7 @@ function renderCompositionBar() {
   let html = '<div class="tag-bar">';
 
   // L0-L3 VDB, L5-L7 graph (L4 removed).
-  const layerOrder = ['l0_basic_info', 'l1_raw', 'l2_fact', 'l3_summary', 'l5_knowledge', 'l6_schema', 'l7_intention'];
+  const layerOrder = ['l1_profile', 'l2_raw', 'l3_fact', 'l4_summary', 'l5_knowledge', 'l6_schema', 'l7_intention'];
   layerOrder.forEach(layer => {
     const count = layerCounts[layer] || 0;
     if (count > 0) {
@@ -1921,14 +1921,14 @@ function updateRightSidebar(page) {
   }
 }
 
-// Recent Ingestion tab state: 'all' | 'vdb' | 'coding' | 'l1_raw'
+// Recent Ingestion tab state: 'all' | 'vdb' | 'coding' | 'l2_raw'
 let recentIngestionTab = 'all';
 
 function renderOverviewSidebar() {
   // Apply the active Recent Ingestion tab filter.
   // 'vdb'      = durable L2/L3/L0 (the user-facing "memory" store)
   // 'coding'   = coding pipeline extracts (user_id === 'coding')
-  // 'l1_raw'   = raw conversation snippets (the input layer)
+  // 'l2_raw'   = raw conversation snippets (the input layer)
   // 'l5'       = L5 knowledge graph entities (derivations, not real ingestions)
   // 'all'      = everything merged, sorted newest first
   let recent;
@@ -1936,8 +1936,8 @@ function renderOverviewSidebar() {
     recent = activityMemories.filter(m => m.user_id !== 'coding');
   } else if (recentIngestionTab === 'coding') {
     recent = activityMemories.filter(m => m.user_id === 'coding');
-  } else if (recentIngestionTab === 'l1_raw') {
-    recent = activityMemories.filter(m => m.layer === 'l1_raw');
+  } else if (recentIngestionTab === 'l2_raw') {
+    recent = activityMemories.filter(m => m.layer === 'l2_raw');
   } else {
     recent = activityMemories.filter(() => true);
   }
@@ -1953,7 +1953,7 @@ function renderOverviewSidebar() {
     all:    activityMemories.length,
     vdb:    activityMemories.filter(m => m.user_id !== 'coding').length,
     coding: activityMemories.filter(m => m.user_id === 'coding').length,
-    l1_raw: activityMemories.filter(m => m.layer === 'l1_raw').length,
+    l2_raw: activityMemories.filter(m => m.layer === 'l2_raw').length,
   };
   const tabBtn = (id, label) => {
     const isActive = recentIngestionTab === id;
@@ -1968,7 +1968,7 @@ function renderOverviewSidebar() {
         ${tabBtn('all',    'All')}
         ${tabBtn('vdb',    'VDB')}
         ${tabBtn('coding', 'Coding')}
-        ${tabBtn('l1_raw', 'L1_RAW')}
+        ${tabBtn('l2_raw', 'L1_RAW')}
       </div>
       ${recent.length === 0 ? '<div class="text-xs text-muted" style="margin-top: 12px;">No recent memories in this filter</div>' : recent.map(m => {
         const title = (m.content || '').substring(0, 50) + '...';
@@ -1984,7 +1984,7 @@ function renderOverviewSidebar() {
                   <div class="ingestion-item" data-memory-id="${m.memory_id}" onclick="window.__openMemoryDetail && window.__openMemoryDetail('${m.memory_id}')">
                     <div class="ingestion-title" title="${escapeHtml(titleAttr)}">${escapeHtml(title)}</div>
                     <div class="ingestion-meta">
-                      <span class="badge badge-layer layer-${m.layer || 'l2_fact'}" style="font-size: 9px; padding: 2px 6px;">${m.layer || '—'}</span>
+                      <span class="badge badge-layer layer-${m.layer || 'l3_fact'}" style="font-size: 9px; padding: 2px 6px;">${m.layer || '—'}</span>
                       ${typeof m.importance === 'number' ? `<span class="badge badge-importance ${m.importance >= 0.7 ? 'importance-high' : m.importance >= 0.4 ? 'importance-mid' : 'importance-low'}" style="font-size: 9px; padding: 2px 6px;" title="Importance">★ ${m.importance.toFixed(2)}</span>` : ''}
                       <span>${agoText}${wasUpdated ? ' <span style="color:#888;" title="Memory was updated, not created">⟳</span>' : ''}</span>
                     </div>

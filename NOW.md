@@ -20,6 +20,12 @@ points for this floor. The release includes the stable-floor infographic at
   digest completed in 383.2s: L5 +24, L6 +5, relations +104. Canonical digest
   status is `ok`; three isolated L2 facts remain below the useful clustering
   threshold and were intentionally not force-digested.
+- **Layer numbering closed 2026-08-08:** the retired `L4 IDENTITY` slot is now
+  gone — layers renumbered to a contiguous `L1..L7` (`L0/L1/L2/L3 → L1/L2/L3/L4`).
+  362 VDB rows had their `layer` payload rewritten on disk; graph storage
+  values for `l5_knowledge / l6_schema / l7_intention` were unchanged.
+  Historical archive file `archive/l4_identity_pre_migrate_20260707.jsonl`
+  deleted (no rows referenced it any longer).
 - **Kuzu dimension lane repaired 2026-08-05:** the preserved graph keeps its
   original 1024d vector properties, while new writes/search use additive
   `embedding_384` / `beh_embedding_384` and `memory_content_idx_384`. No old

@@ -176,7 +176,7 @@ class HyMemoryClient:
         """POST /api/v1/list — list memories.
 
         Args:
-            include_raw: When True (server default), include L1_RAW rows.
+            include_raw: When True (server default), include L2_RAW rows.
                 Pass False for extracted-only. None omits the field so the
                 server default applies.
         """

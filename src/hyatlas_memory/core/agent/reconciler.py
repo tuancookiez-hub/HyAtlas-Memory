@@ -86,8 +86,8 @@ class ReconcileOp:
     op: str = "ADD"
     # --- 共用字段 ---
     content: str | None = None  # 最终存储内容
-    layer: str | None = None  # "L2_FACT"
-    owner: str | None = None  # 'user' / 'agent'（仅 L2_FACT 有意义）
+    layer: str | None = None  # "L3_FACT"
+    owner: str | None = None  # 'user' / 'agent'（仅 L3_FACT 有意义）
     tags: list[str] = field(default_factory=list)  # 1-3 topic keywords
     speculate: str | None = None  # 隐性偏好推导（仅 identity）
     # --- SUPERSEDE / UPDATE 字段 ---
@@ -487,7 +487,7 @@ class MemoryReconciler:
         from ..models.memory import MemoryLayer, MemoryNode, MemoryStatus
 
         if layers is None:
-            layers = [MemoryLayer.L2_FACT]
+            layers = [MemoryLayer.L3_FACT]
 
         try:
             import time as _time
@@ -701,13 +701,13 @@ class MemoryReconciler:
             )
 
             # ── Step 2.6: 候选去重（pre-search）──
-            # 候选都是链头（is_latest）。只对 L2_FACT（重复重灾区）
+            # 候选都是链头（is_latest）。只对 L3_FACT（重复重灾区）
             # 判重，其他层不参与（与 search 链路一致）。命中即删库（被删链头连带
             # 删其历史链），并从 candidate_map 移除，避免 LLM 看到重复候选。
             try:
                 from ..pipelines._retrieval.dedup import DedupItem, execute_dedup
 
-                _DEDUP_LAYERS = frozenset({MemoryLayer.L2_FACT})
+                _DEDUP_LAYERS = frozenset({MemoryLayer.L3_FACT})
                 head_ids = [
                     hid for hid, node in candidate_map.items()
                     if node.layer in _DEDUP_LAYERS

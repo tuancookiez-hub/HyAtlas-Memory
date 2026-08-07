@@ -6,7 +6,7 @@ Agent Memory V2 - Abstractor 摘要智能体 (System 2 Pro Pipeline)
   2. Schema 归纳 (L5 层 — System 2 Schema Miner 调用)
   3. Profile 摘要生成 (Context Assembly 调用)
 
-注意：lite+agent pipeline 的 L3_SUMMARY 生成由 summarizer.py 的 Summarizer 负责。
+注意：lite+agent pipeline 的 L4_SUMMARY 生成由 summarizer.py 的 Summarizer 负责。
 """
 
 import json
@@ -131,7 +131,7 @@ class Abstractor:
     摘要智能体 (System 2 Pro Pipeline)
 
     负责 System 2 的高阶摘要：Session 摘要 / Schema 归纳 / Profile 摘要。
-    lite+agent pipeline 的 L3_SUMMARY 由 Summarizer（summarizer.py）负责。
+    lite+agent pipeline 的 L4_SUMMARY 由 Summarizer（summarizer.py）负责。
     """
 
     def __init__(
