@@ -422,6 +422,11 @@ class ZvecVectorStore(VectorStoreBase):
             self._coll.upsert(zvec.DocList(docs))
             self._coll.flush()
         await _run_in_vdb_pool(_upsert)
+        # Self-healing: after a bulk write, compact if fragmentation exceeds
+        # the threshold. This is what keeps the store from ballooning to tens
+        # of GB of mostly-empty 5MB shards. The expensive merge only runs when
+        # bloat is actually detected; the per-batch check is a cheap walk.
+        await self.maybe_compact()
         return [n.node_id for n in nodes]
 
     async def update_embedding(self, node_id: str, embedding: list[float]) -> bool:
@@ -726,6 +731,44 @@ class ZvecVectorStore(VectorStoreBase):
         except Exception as e:
             logger.warning(f"[zvec] compact failed: {e}")
             return False
+
+    async def maybe_compact(self) -> bool:
+        """Threshold-driven auto-compact.
+
+        If the number of index segments (`.proxima` shards) exceeds the
+        configured threshold, compact. Healthy stores (few segments) pay only
+        the cheap directory-walk check and never run the expensive merge.
+        Returns True if a compact was performed.
+        """
+        threshold = int(os.getenv("ZVEC_COMPACT_SEGMENTS", "64"))
+        try:
+            n = await self.segment_count()
+            if n is not None and n >= threshold:
+                logger.info(
+                    f"[zvec] auto-compact: {n} segments >= threshold {threshold}"
+                )
+                return await self.compact()
+            return False
+        except Exception as e:
+            logger.warning(f"[zvec] maybe_compact check failed: {e}")
+            return False
+
+    async def segment_count(self) -> int | None:
+        """Count `.proxima` index shard files under the collection dir."""
+        if not self._path or not os.path.isdir(self._path):
+            return None
+        try:
+            def _count():
+                c = 0
+                for root, _, files in os.walk(self._path):
+                    for f in files:
+                        if f.endswith(".proxima"):
+                            c += 1
+                return c
+            return await _run_in_vdb_pool(_count)
+        except Exception as e:
+            logger.warning(f"[zvec] segment_count failed: {e}")
+            return None
 
     async def delete_by_metadata(
         self,

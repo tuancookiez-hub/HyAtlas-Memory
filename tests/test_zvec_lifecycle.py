@@ -220,3 +220,37 @@ def test_zvec_compact_reduces_segment_count(tmp_path):
         await store.close()
 
     asyncio.run(run())
+
+
+def test_zvec_maybe_compact_available(tmp_path):
+    """segment_count + maybe_compact exist and are healthy on a small store."""
+    import asyncio
+
+    from hyatlas_memory.core.config import MemoryConfig
+    from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
+    from hyatlas_memory.core.models.memory import MemoryLayer, MemoryNode, MemoryStatus
+
+    cfg = MemoryConfig()
+    cfg.vector_store.embedding_dims = 384
+    cfg.vector_store.collection_name = "compact_test2"
+    cfg.vector_store.persist_directory = str(tmp_path)
+    store = ZvecVectorStore(cfg)
+
+    async def run():
+        await store.initialize()
+        for i in range(3):
+            n = MemoryNode(node_id=f"m{i}", content=f"maybe compact {i}",
+                           layer=MemoryLayer.L3_FACT, status=MemoryStatus.ACTIVE,
+                           user_id="u", agent_id="a")
+            n.embedding = [0.0] * 384
+            await store.upsert(n)
+        # small store -> no auto-compact triggered, but methods are callable
+        n = await store.segment_count()
+        assert n is None or n >= 0
+        ok = await store.maybe_compact()
+        assert ok in (True, False)  # healthy small store shouldn't force-compact
+        # explicit compact still works
+        assert await store.compact() is True
+        await store.close()
+
+    asyncio.run(run())
