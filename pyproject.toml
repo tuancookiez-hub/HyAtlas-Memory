@@ -62,6 +62,12 @@ dependencies = [
     # faster-whisper) and transformers>=5.5 (required to fix 3 RCE advisories)
     # mandates hub>=1.5 anyway. Keep a floor and let the resolver pick 1.x.
     "huggingface-hub>=0.23.2",
+    # transformers is a transitive dep of sentence-transformers, but pinned
+    # explicitly here so Dependabot's resolved graph sees the patched floor.
+    # v5.5.0 fixes 3 RCE advisories (GHSA-fgcw-684q-jj6r / GHSA-29pf-2h5f-8g72 /
+    # GHSA-69w3-r845-3855). sentence-transformers>=5.x is the only line
+    # compatible with transformers 5.
+    "transformers>=5.5.0",
 ]
 
 [project.optional-dependencies]
