@@ -1,6 +1,6 @@
 # HyAtlas-Memory Architecture
 
-> **Scope:** Personal/local long-term memory stack for Hermes Agent, evolved from the [Hy-Memory](https://memory.hunyuan.tencent.com) (Tencent Hunyuan) framework and extended with an experimental **L7 intention** layer, **profile isolation** (`agent_id`), and L1_RAW transparency. This document reflects **HyAtlas v3.5.0** unless a section is marked historical.
+> **Scope:** Personal/local long-term memory stack for Hermes Agent, evolved from the [Hy-Memory](https://memory.hunyuan.tencent.com) (Tencent Hunyuan) framework and extended with an experimental **L7 intention** layer, **profile isolation** (`agent_id`), and L2_RAW transparency. This document reflects **HyAtlas v3.5.0** unless a section is marked historical.
 
 ---
 
@@ -27,10 +27,10 @@
 
 | This impl (v3.5) | Official (memory.hunyuan.tencent.com) | Purpose |
 |------------------|---------------------------------------|---------|
-| L1 raw | **L1 原始痕迹** | Verbatim / shadow ingest |
-| L2 fact | **L2 原子事实** | Atomic facts (Hermes capture) |
-| L3 summary | (often folded in official L2) | Rollups / session summaries |
-| L4 identity | **L3 身份画像** (legacy) | **Retired in HyAtlas** → use **L2** |
+| L1 profile | (profile basics) | Stable user attributes |
+| L2 raw | **L1 原始痕迹** | Verbatim / shadow ingest |
+| L3 fact | **L2 原子事实** | Atomic facts (Hermes capture; identity too) |
+| L4 summary | (often folded in official L2) | Rollups / session summaries |
 | L5 knowledge | **L4 心智** / graph facts | Kuzu knowledge nodes |
 | L6 schema | **L5 模式** | Behavioral schemas in Kuzu |
 | L7 intention | **L6 意图** (proactive) | Experimental extension |
@@ -80,17 +80,25 @@ A user-visible `search()` merges both: fast VDB recall plus graph-backed schema/
 
 ## Layer notes (v3.5)
 
-### L1 — Raw (list-visible)
+The layer model is a **contiguous 7-layer design** — `L1 Profile / L2 Raw / L3 Fact / L4 Summary / L5 Knowledge / L6 Schema / L7 Intention`. The former `L4 IDENTITY` slot was retired in v3.2 and the layer indices renumbered so there is no gap (`L0-L3/L5-L7` → `L1-L7`). Identity content lives in **L3 Fact**.
 
-Always written on `add()`. Listed by default with `extracted: false` until System 1 extraction produces L2. Pass `include_raw=false` for the old extracted-only view.
+L1-L4 are stored in the zvec VDB; L5-L7 live in the Kuzu graph.
 
-### L2 — Fact
+### L1 — Profile
 
-Primary capture layer for Hermes. Namespace must match digest (`default`, not only `default_agent` aliases).
+User attributes (name, age, occupation, etc.). The lightest layer.
 
-### L4 — Identity (retired)
+### L2 — Raw (list-visible)
 
-Historical `l4_identity` VDB rows may remain; System 2 **does not** read L4 as an input layer. Archive before deletion.
+Always written on `add()`. Listed by default with `extracted: false` until System 1 extraction produces L3. Pass `include_raw=false` for the old extracted-only view.
+
+### L3 — Fact
+
+Primary capture layer for Hermes. Atomic facts extracted from conversation; identity content also lives here. Namespace must match digest (`default`, not only `default_agent` aliases).
+
+### L4 — Summary
+
+Session-level syntheses / summaries.
 
 ### L5 — Knowledge
 
@@ -114,9 +122,10 @@ Experimental proactive layer in Kuzu.
 
 | Layer | Analog |
 |-------|--------|
-| L1 raw | sensory trace / buffer |
-| L2 fact | working / episodic facts |
-| L3 summary | episodic rollups |
+| L1 profile | stable identity / self-model |
+| L2 raw | sensory trace / buffer |
+| L3 fact | working / episodic facts |
+| L4 summary | episodic rollups |
 | L5 knowledge | semantic network |
 | L6 schema | scripts / self-model patterns |
 | L7 intention | prospective memory |

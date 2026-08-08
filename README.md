@@ -54,7 +54,7 @@ hyatlas setup hermes -y   # plugin shim + memory.provider=hy_memory + stack chec
 HyAtlas's heavy dependencies (sentence-transformers, torch, transformers, zvec)
 can conflict with a host application's packages when they share one environment
 — e.g. Hermes's `faster-whisper` pins `huggingface-hub>=1.0` while the local BGE
-embedder needs `<1.0`; the two cannot coexist in one venv. Give HyAtlas its own
+embedder on transformers 5 needs `huggingface-hub>=1.5`; give HyAtlas its own
 isolated venv so its deps never fight the host app's (and, on Windows, so the
 stack launches via a clean GUI-subsystem `pythonw.exe` with no orphan console
 windows):
@@ -257,7 +257,7 @@ Memories.sh's `add|search|recall` patterns:
 ```bash
 hyatlas memory write    "the fact to remember"
 hyatlas memory recall   "your search query" --limit 5
-hyatlas memory list     [--layer l2_fact] [--limit 20]
+hyatlas memory list     [--layer l3_fact] [--limit 20]
 hyatlas memory reflect  "your query" --limit 10
 hyatlas memory status
 
@@ -368,7 +368,7 @@ HyAtlas-Memory populates the `importance` and `access` factors that upstream lea
 
 | Field | How it's populated | Default |
 |---|---|---|
-| `importance` | Layer-derived: `l2_fact=0.8`, `l3_summary=0.6`, `l0_basic_info=0.5`, `l1_raw=0.3` (legacy `l4_identity=1.0` if present) | **ON** |
+| `importance` | Layer-derived: `l3_fact=0.8`, `l4_summary=0.6`, `l1_profile=0.5`, `l2_raw=0.3` | **ON** |
 | `access_count` | Incremented on every recall (fire-and-forget thread) | **ON** |
 
 Both run on existing points too — a one-shot backfill (`scripts/backfill_importance.py`) populates them across the corpus, and new memories pick them up automatically on write.
@@ -422,10 +422,9 @@ The result is a signal-to-noise ratio that improves with every session. Raw conv
                               ▼
    ┌────────── HyAtlas-Memory (this package) ──────────┐
    │                                                    │
-   │   L1 raw  →  L2 fact  →  L3 summary (every 20)    │
+   │   L2 raw  →  L3 fact  →  L4 summary (every 20)    │
    │       │           │              │                 │
-   │       │     (L4 identity — RETIRED; legacy rows)    │
-   │       │           │                                 │
+   │       │                │                          │
    │       └────► System 2 digest (ultra) ◄─────────────┘
    │                  │                                 │
    │            L5 pipeline (async, Kuzu graph)         │
@@ -490,7 +489,7 @@ assets/                    # infographic images
 - **Server** (auto-started on port 19527) runs the forked hy-memory SDK (`src/hyatlas_memory/core/`). This is where embedding, LLM extraction, and vector search happen. The plugin manages its lifecycle as a subprocess.
 - **L5 pipeline** (`l5_inprocess.py`) runs in-process — entity/relation extraction writes directly to Kuzu without a batch lock. The dashboard's graph tab reads live from the server's `/api/v1/graph` endpoint.
 - **Context pressure** (`context_pressure.py`) monitors the agent's context window. At 50% usage it starts compressing old tool outputs to ref files. At 95% it aggressively prunes to prevent overflow.
-- **Integrations** (`integrations.py`) are 13 first-class modules applied at import time: VDB circuit breaker, L1_RAW rolling delete/dedup, L5 auto-trigger + in-process extraction, graph endpoint, L5/L6/L7 counts, S1 L5 context, user identity alias expansion, LLM fast/smart split, DisabledCache tolerance, rerank stage, and L1_RAW normal fallback. Each is idempotent and documented inline. The active set is logged at startup.
+- **Integrations** (`integrations.py`) are 13 first-class modules applied at import time: VDB circuit breaker, L2_RAW rolling delete/dedup, L5 auto-trigger + in-process extraction, graph endpoint, L5/L6/L7 counts, S1 L5 context, user identity alias expansion, LLM fast/smart split, DisabledCache tolerance, rerank stage, and L2_RAW normal fallback. Each is idempotent and documented inline. The active set is logged at startup.
 
 ## Documentation
 

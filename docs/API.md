@@ -1,6 +1,6 @@
 # HTTP API Reference
 
-> **HyAtlas v3.5.0** — Two local HTTP servers: memory **19527**, dashboard **8765**. Vector data is **Zvec** (via server `/api/v1/vdb/*`); graph **L5–L7** is **Kuzu** (`GET /api/v1/graph`). List is L1-transparent (`include_raw`); status is 3-tier (`ok` / `warning` / `error`). Dashboard liveness (`/api/live`) is independent of backend health.
+> **HyAtlas v3.5.0** — Two local HTTP servers: memory **19527**, dashboard **8765**. Vector data is **Zvec** (via server `/api/v1/vdb/*`); graph **L5–L7** is **Kuzu** (`GET /api/v1/graph`). List is L2-transparent (`include_raw`); status is 3-tier (`ok` / `warning` / `error`). Dashboard liveness (`/api/live`) is independent of backend health.
 
 See also: [DASHBOARD.md](./DASHBOARD.md) (UI), [HYATLAS_HERMES.md](./HYATLAS_HERMES.md) (identity + digest).
 
@@ -167,9 +167,9 @@ Request body accepts:
 | `limit` | int | 50 | Page size |
 | `offset` | int | 0 | Pagination |
 | `order` | string | optional | Sort order when supported |
-| `include_raw` | bool | **`true`** | When `true`, include L1_RAW; when `false`, extracted-only |
+| `include_raw` | bool | **`true`** | When `true`, include L2_RAW; when `false`, extracted-only |
 
-Response: each memory entry has an `extracted: bool` field indicating whether the LLM extractor has processed it. L1_RAW rows typically have `extracted: false` until a sibling L2 fact is produced.
+Response: each memory entry has an `extracted: bool` field indicating whether the LLM extractor has processed it. L2_RAW rows typically have `extracted: false` until a sibling L3 fact is produced.
 
 ```bash
 curl -X POST http://127.0.0.1:19527/api/v1/list \

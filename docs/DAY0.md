@@ -104,7 +104,7 @@ hyatlas list --limit 10
 hyatlas search "dark themes Bun" --limit 5
 ```
 
-Expect: list/search show your sentence (or an extracted L2 fact about dark themes / Bun).
+Expect: list/search show your sentence (or an extracted L3 fact about dark themes / Bun).
 
 ### B. Hermes chat (proves the plugin)
 

@@ -19,7 +19,7 @@ HyAtlas-Memory is a personal, local, single-user long-term memory stack for Herm
 **What it gives Hermes:**
 
 - **Auto-recall** — relevant memories are injected into the agent's context at the start of every turn (no tool call needed).
-- **Capture** — every conversation is broken into atomic facts across 7 memory layers (L1 raw → L7 intention).
+- **Capture** — every conversation is broken into atomic facts across 7 memory layers (L1 profile → L7 intention, contiguous).
 - **Background evolution** — System2 digests merge duplicates, resolve contradictions, refine the model of you over time.
 - **Local, private** — your memories live on your disk under `~/.hyatlas/`. No API keys required for embedding (sentence-transformers runs in-process). LLM key is BYO (OpenRouter / OpenAI / anything OpenAI-compatible).
 - **Profile isolation** — multiple agents (default, research, trading, etc.) each get their own memory namespace via `agent_id`. The dashboard lets you filter to one profile at a time.
@@ -69,7 +69,7 @@ hyatlas stop && hyatlas start
 | `hyatlas status` | One-line health: ports, status, embed, llm |
 | `hyatlas doctor` | Fail-fast health check; exit 1 on issues |
 | `hyatlas add "..."` | Write a memory fact |
-| `hyatlas search "..."` | Search memories (normal channel: L2 facts + L3 summaries + L5 knowledge; legacy L4 rows may surface) |
+| `hyatlas search "..."` | Search memories (normal channel: L3 facts + L4 summaries + L5 knowledge) |
 | `hyatlas list --layer L5` | List memories from a specific layer |
 | `hyatlas venv setup` | Create the isolated dedicated venv (`[zvec,local-embed]`) |
 | `hyatlas setup hermes -y` | Wire the plugin into Hermes (`memory.provider=hy_memory`) |
@@ -84,8 +84,8 @@ Server listens on `127.0.0.1:19527`. Useful endpoints (all `GET` unless noted):
 | Endpoint | Purpose |
 |---|---|
 | `/api/v1/status` | Health: `status`, `vdb`, `embed`, `llm`, `embed_dims`, `write_pipeline` |
-| `/api/v1/search?q=<text>&agent_id=<id>` | Semantic search across the normal channel (L2/L3/L5 + legacy L4) |
-| `/api/v1/list?agent_id=<id>&limit=N` | List recent memories, with optional `include_raw=true` to see the original L1_RAW payload |
+| `/api/v1/search?q=<text>&agent_id=<id>` | Semantic search across the normal channel (L3/L4/L5) |
+| `/api/v1/list?agent_id=<id>&limit=N` | List recent memories, with optional `include_raw=true` to see the original L2_RAW payload |
 | `/api/v1/vdb/layer_count?agent_id=<id>` | Per-layer VDB counts (l1..l7) |
 | `/api/v1/profiles` | List known agent profiles and their counts |
 | `/api/v1/layer-health?agent_id=<id>` | Both VDB and graph layer counts in one call |
@@ -115,18 +115,19 @@ Memories are stored across 7 layers. Knowing what each is for helps debugging:
 
 | Layer | Name | What lives here | Store | When populated |
 |---|---|---|---|---|
-| L0 | `l0_basic_info` | Stable profile snippets (name, locale) | Zvec | Seeded / extracted |
-| L1 | `l1_raw` | Original raw text from the user/conversation | Zvec | Every turn, before any LLM |
-| L2 | `l2_fact` | LLM-extracted atomic facts (**primary capture layer**) | Zvec | System 1 on `add` (pro/ultra) |
-| L3 | `l3_summary` | Session / rollup summaries | Zvec | Periodic rollups |
-| L4 | `l4_identity` | **RETIRED** — legacy rows only, no writer | Zvec (legacy) | Identity now lives in L2 + L6 |
+| L1 | `l1_profile` | Stable profile snippets (name, locale) | Zvec | Seeded / extracted |
+| L2 | `l2_raw` | Original raw text from the user/conversation | Zvec | Every turn, before any LLM |
+| L3 | `l3_fact` | LLM-extracted atomic facts (**primary capture layer**; identity lives here too) | Zvec | System 1 on `add` (pro/ultra) |
+| L4 | `l4_summary` | Session / rollup summaries | Zvec | Periodic rollups |
 | L5 | `l5_knowledge` | Knowledge graph nodes — entities + relations | Kuzu | System 2 digest |
 | L6 | `l6_schema` | Behavioral schemas ("When X, user Y…") | Kuzu | System 2 digest |
 | L7 | `l7_intention` | High-level intentions / goals (experimental) | Kuzu | System 2 digest |
 
-**Search channels** (`client.search`): **Profile** = L0 + L6 · **Normal** = L2 + L3 + L5 (+ legacy L4 rows) · **Proactive** = L7 (off by default).
+> **Layers are contiguous `L1-L7`.** The former `L0` numbering and `L4 IDENTITY` slot were retired; the indices were renumbered so there is no gap. L1-L4 live in zvec, L5-L7 in Kuzu.
 
-**Common gotcha:** a fresh write lands in **L1_RAW** first; System 1 promotes it to **L2** when extraction succeeds. If a memory exists at L1 but isn't surfacing in search, the LLM extractor likely rejected noisy input — list with `?include_raw=true` to see unprocessed L1 entries. There is **no L4 promotion step** (L4 is retired); durable recall comes from L2 facts and the L5/L6 graph built by the digest.
+**Search channels** (`client.search`): **Profile** = L1 + L6 · **Normal** = L3 + L4 + L5 · **Proactive** = L7 (off by default).
+
+**Common gotcha:** a fresh write lands in **L2_RAW** first; System 1 promotes it to **L3** when extraction succeeds. If a memory exists at L2 but isn't surfacing in search, the LLM extractor likely rejected noisy input — list with `?include_raw=true` to see unprocessed L2 entries. Durable recall comes from L3 facts and the L5/L6 graph built by the digest.
 
 ## Local embedder (no API key)
 
@@ -143,11 +144,11 @@ print('wired:', getattr(EmbedService, '_inprocess_embed_wired', False))
 "
 ```
 
-Version matrix that works (as of v3.5.0):
-- `transformers==4.46.3`
-- `huggingface-hub<1.0,>=0.23.2` (not 1.x — that's the bug v3.4.2 fixed; enforced in core deps since v3.4.5)
-- `tokenizers<0.21,>=0.20`
-- `sentence-transformers==3.0.1`
+Version matrix that works (as of v3.5.0 — the real floor):
+- `transformers==5.14.1`
+- `sentence-transformers==5.7.0` (the only line compatible with transformers 5)
+- `huggingface-hub>=0.23.2` (transformers ≥5.5 requires hub ≥1.5)
+- `tokenizers` (pulled to 0.22.x by transformers 5)
 - `numpy<3`
 - `torch`
 - `zvec>=0.6.0` (Windows LOCK reopen fix; 0.5.1 could not reopen collections after a crash)
@@ -173,7 +174,7 @@ The `extra_body` suppresses reasoning tokens that would otherwise consume the LL
 |---|---|
 | `$HYATLAS_HOME/config/hy_memory.json` | Active config (LLM key, embedder model, vector store) |
 | `$HYATLAS_HOME/data/kuzu_db/` | Kuzu graph (L5–L7 entities, schemas, intentions, relations) |
-| `$HYATLAS_HOME/zvec/agent_memories_<dims>/` | zvec in-process vector collection (L0–L3 + legacy L4) |
+| `$HYATLAS_HOME/zvec/agent_memories_<dims>/` | zvec in-process vector collection (L1–L4) |
 | `$HYATLAS_HOME/logs/hy-memory_server.log` | Server log |
 | `$HYATLAS_HOME/logs/dashboard.log` | Dashboard log |
 
@@ -210,9 +211,9 @@ Do NOT run the digest from git-bash in background — MSYS path mangling breaks 
 - Check `~/.hyatlas/config/hy_memory.json` `llm.api_key`.
 
 **Search returns nothing after a write**
-- New write went to L1_RAW but System 1 hasn't promoted it to L2 yet (or the extractor rejected noisy input).
-- Pass `?include_raw=true` to see L1 entries, or write a clean factual sentence.
-- Durable recall comes from L2 facts and the L5/L6 graph (built by the digest) — there is no L4 promotion step (L4 is retired).
+- New write went to L2_RAW but System 1 hasn't promoted it to L3 yet (or the extractor rejected noisy input).
+- Pass `?include_raw=true` to see L2 entries, or write a clean factual sentence.
+- Durable recall comes from L3 facts and the L5/L6 graph (built by the digest).
 
 **Dashboard tabs show empty**
 - Check profile dropdown — you may be on a profile with no data.
