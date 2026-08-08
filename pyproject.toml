@@ -56,12 +56,12 @@ dependencies = [
     "pyyaml>=6.0",
     "requests>=2.31",
     # The local embedder (default mode, provider="local") needs transformers,
-    # which requires huggingface-hub<1.0. Pinning here (not just in the
-    # local-embed extra) ensures pip's resolver enforces <1.0 even when other
-    # packages in a shared venv (e.g. faster-whisper>=0.21, no upper bound)
-    # would otherwise float it to 1.x and silently break the embedder.
-    # huggingface-hub is a small pure-python package — cheap to always require.
-    "huggingface-hub>=0.23.2,<1.0",
+    # which since v5 requires huggingface-hub>=1.5. We used to pin <1.0 to
+    # guard against faster-whisper floating hub to 1.x in a shared venv, but
+    # HyAtlas runs in its own isolated venv (D:/HyAtlas/.hyatlas/venv, no
+    # faster-whisper) and transformers>=5.5 (required to fix 3 RCE advisories)
+    # mandates hub>=1.5 anyway. Keep a floor and let the resolver pick 1.x.
+    "huggingface-hub>=0.23.2",
 ]
 
 [project.optional-dependencies]
@@ -73,10 +73,10 @@ zvec = ["zvec>=0.6.0"]
 # Embedding server (local SentenceTransformers-based; no API key needed)
 # In-process local embedder (integrations.wire_inprocess_embed):
 # - sentence-transformers drives the model
-# - huggingface-hub must be <1.0 to match transformers 4.46.x
-#   (transformers 4.50+ would allow hf-hub 1.x, but 4.46 is what we ship)
+# - transformers >=5.5 (fixes 3 RCE advisories) requires huggingface-hub>=1.5
+# - sentence-transformers >=5.0 is the only line compatible with transformers 5
 # - numpy, torch are pulled in transitively but pinned here for clarity
-local-embed = ["sentence-transformers>=2.0.0,<4.0", "huggingface-hub<1.0,>=0.23.2", "uvicorn>=0.27.0", "fastapi>=0.100.0"]
+local-embed = ["sentence-transformers>=5.0.0", "huggingface-hub>=0.23.2", "uvicorn>=0.27.0", "fastapi>=0.100.0"]
 # Dev tooling
 dev = [
     "pytest>=7.0",
