@@ -121,10 +121,10 @@ SYSTEM2_AGENT_PROMPT_ZH = """你是一个认知加工 Agent，负责从用户的
 ### VDB（向量数据库）— 你只能读取，不能修改
 | 层级 | 说明 |
 |------|------|
-| L0 BASIC_INFO | 用户基础属性（姓名、年龄、职业等）|
-| L1 RAW | 原始对话记录 |
-| L2 FACT | 原子事实（从对话中提取的客观事实）|
-| L3 SUMMARY | 会话摘要 |
+| L1 PROFILE | 用户基础属性（姓名、年龄、职业等）|
+| L2 RAW | 原始对话记录 |
+| L3 FACT | 原子事实（从对话中提取的客观事实）|
+| L4 SUMMARY | 会话摘要 |
 | L5 KNOWLEDGE | 领域知识 |
 
 ### Graph（知识图谱）— 你是唯一的写入者
@@ -177,10 +177,10 @@ SYSTEM2_AGENT_PROMPT_EN = """You are a cognitive processing Agent. Your job is t
 ### VDB (Vector Database) — read-only
 | Layer | Description |
 |-------|-------------|
-| L0 BASIC_INFO | User attributes (name, age, occupation) |
-| L1 RAW | Original conversation transcripts |
-| L2 FACT | Atomic facts extracted from conversations |
-| L3 SUMMARY | Session summaries |
+| L1 PROFILE | User attributes (name, age, occupation) |
+| L2 RAW | Original conversation transcripts |
+| L3 FACT | Atomic facts extracted from conversations |
+| L4 SUMMARY | Session summaries |
 | L5 KNOWLEDGE | Domain knowledge |
 
 ### Graph (Knowledge Graph) — you are the sole writer

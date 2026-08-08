@@ -496,10 +496,10 @@ function renderOverview() {
   const lc = (layerCountsData && (layerCountsData.display_counts || layerCountsData.counts))
     ? (layerCountsData.display_counts || layerCountsData.counts)
     : {};
-  // L4 removed; don't count it as healthy coverage.
+  // 7-layer model (L1-L7); skip any stray legacy l4_identity key defensively.
   const coverageKeys = Object.keys(lc).filter(k => k !== 'l4_identity');
   const activeLayers = coverageKeys.filter(k => Number(lc[k]) > 0).length;
-  const totalLayers = 6;
+  const totalLayers = 7;
 
   // Stat cards
   const statsHtml = `
@@ -516,12 +516,12 @@ function renderOverview() {
     <div class="stat-card">
       <div class="stat-label">DISPLAY TOTAL</div>
       <div class="stat-value">${fmtCount(displayTotal)}</div>
-      <div class="text-xs text-muted mt-1">L0-L3 VDB + L5-L7 graph</div>
+      <div class="text-xs text-muted mt-1">L1-L4 VDB + L5-L7 graph</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">LAYER COVERAGE</div>
       <div class="stat-value">${activeLayers}<span style="color: var(--muted); font-size: 20px;">/${totalLayers}</span></div>
-      <div class="text-xs text-muted mt-1">L0-L3 VDB + L5-L7 graph</div>
+      <div class="text-xs text-muted mt-1">L1-L4 VDB + L5-L7 graph</div>
     </div>
   `;
   document.getElementById('overview-stats').innerHTML = statsHtml;
@@ -595,7 +595,7 @@ function renderCompositionBar() {
 
   let html = '<div class="tag-bar">';
 
-  // L0-L3 VDB, L5-L7 graph (L4 removed).
+  // L1-L4 VDB, L5-L7 graph.
   const layerOrder = ['l1_profile', 'l2_raw', 'l3_fact', 'l4_summary', 'l5_knowledge', 'l6_schema', 'l7_intention'];
   layerOrder.forEach(layer => {
     const count = layerCounts[layer] || 0;
@@ -1248,7 +1248,7 @@ function renderLayers() {
   }).join('');
 
   document.getElementById('layers-tbody').innerHTML = rows;
-  document.getElementById('layers-total').textContent = `Display total: ${fmtCount(total)} (L0-L3 VDB + L5-L7 graph)`;
+  document.getElementById('layers-total').textContent = `Display total: ${fmtCount(total)} (L1-L4 VDB + L5-L7 graph)`;
   document.getElementById('layers-active').textContent = `Layers Active: ${getActiveLayerCount()}`;
 
   // Right sidebar - layer hierarchy
@@ -1526,7 +1526,7 @@ function renderSystem() {
     </div>
     <div class="mb-4">
       <div class="flex justify-between mb-2">
-        <div class="text-sm">Display total (L0-L3 VDB + L5-L7 graph)</div>
+        <div class="text-sm">Display total (L1-L4 VDB + L5-L7 graph)</div>
         <div class="text-sm font-mono">${fmtCount(displayTotal)}</div>
       </div>
     </div>

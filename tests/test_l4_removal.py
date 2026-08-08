@@ -82,8 +82,10 @@ def test_dashboard_omits_l4_layer():
 
 def test_dashboard_sources_now_l1_l4():
     text = _dashboard_text()
-    assert '"l1_l4": "vdb"' in text or '"l0_l4": "vdb"' in text or '"l0_l3": "vdb"' in text
+    assert '"l1_l4": "vdb"' in text
     assert '"l5_l7": "graph"' in text
+    assert '"l0_l3"' not in text
+    assert '"l0_l4"' not in text
 
 
 def test_appjs_omits_l4_and_uses_new_labels():

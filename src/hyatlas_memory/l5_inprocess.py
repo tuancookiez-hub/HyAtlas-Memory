@@ -694,7 +694,7 @@ async def run_l5_inprocess(
 
 
 def l5_rollback() -> dict[str, Any]:
-    """Rollback: drop all L5 nodes from Kuzu. Leaves L0-L4/L6/L7 intact.
+    """Rollback: drop all L5 nodes from Kuzu. Leaves L1-L4/L6/L7 intact.
 
     v3.1.0+: L5 knowledge lives in zvec, not Qdrant. The Qdrant HTTP
     rollback path that previously lived here was removed because there

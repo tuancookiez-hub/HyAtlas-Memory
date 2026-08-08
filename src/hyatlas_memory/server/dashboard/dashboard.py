@@ -12,8 +12,7 @@ Talks to the local hyatlas-memory HTTP API (port 19527 by default).
 Tabs:
   1. Overview  — health, layer distribution, recent memories, quick actions
   2. Explore   — search, memory browser, recall debugger
-  3. Layers    — L0-L7 visualization and stats (L7 is the experimental
-                 intention layer, not in the official 6-layer spec)
+  3. Layers    — L1-L7 layer visualization and stats (7-layer model, contiguous)
   4. Today     — daily digest of memories added/recalled/consolidated
   5. Graph     — constellation view of entity relationships
   6. Activity  — timeline of memory writes and consolidations
@@ -232,10 +231,10 @@ def _layer_counts(agent_id: str = "") -> dict:
         "display_counts": display,
         "display_total": sum(display.values()),
         "is_active_filtered": True,
-        "sources": {"l0_l3": "vdb", "l5_l7": "graph"},
+        "sources": {"l1_l4": "vdb", "l5_l7": "graph"},
     }
 
-# Layer colors (matches CSS .layer-l0..l7)
+# Layer colors (matches CSS .layer-l1..l7)
 LAYER_COLORS = {
     "L1_PROFILE": "#4a6fa5",
     "L2_RAW":        "#3d8b8b",
@@ -718,10 +717,10 @@ HTML = r"""<!DOCTYPE html>
   /* Layer badges */
   .layer { display: inline-block; padding: 2px 6px; border-radius: 3px;
            font-size: 10px; font-weight: 600; text-transform: uppercase; }
-  .layer-l0 { background: #1a2a40; color: #4a6fa5; }
-  .layer-l1 { background: #1a3030; color: #3d8b8b; }
-  .layer-l2 { background: #2a1a3a; color: #6b4c9a; }
-  .layer-l3 { background: #1a2a40; color: #4a6fa5; }
+  .layer-l1 { background: #1a2a40; color: #4a6fa5; }
+  .layer-l2 { background: #1a3030; color: #3d8b8b; }
+  .layer-l3 { background: #2a1a3a; color: #6b4c9a; }
+  .layer-l4 { background: #1a2a40; color: #4a6fa5; }
   .layer-l5 { background: #1a3030; color: #3d8b8b; }
   .layer-l6 { background: #2a1a3a; color: #6b4c9a; }
   .layer-l7 { background: #3a3010; color: #d4af37; }
@@ -1634,10 +1633,10 @@ HTML = r"""<!DOCTYPE html>
   <div style="display:flex;gap:16px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
     <div style="display:flex;gap:6px;align-items:center">
       <span style="color:var(--muted);font-size:11px">LAYERS:</span>
-      <label style="font-size:11px;color:var(--muted);cursor:pointer"><input type="checkbox" class="layer-filter" value="l0" checked> L0</label>
       <label style="font-size:11px;color:var(--muted);cursor:pointer"><input type="checkbox" class="layer-filter" value="l1" checked> L1</label>
       <label style="font-size:11px;color:var(--muted);cursor:pointer"><input type="checkbox" class="layer-filter" value="l2" checked> L2</label>
       <label style="font-size:11px;color:var(--muted);cursor:pointer"><input type="checkbox" class="layer-filter" value="l3" checked> L3</label>
+      <label style="font-size:11px;color:var(--muted);cursor:pointer"><input type="checkbox" class="layer-filter" value="l4" checked> L4</label>
       <label style="font-size:11px;color:var(--muted);cursor:pointer"><input type="checkbox" class="layer-filter" value="l5" checked> L5</label>
       <label style="font-size:11px;color:var(--muted);cursor:pointer"><input type="checkbox" class="layer-filter" value="l6" checked> L6</label>
       <label style="font-size:11px;color:var(--muted);cursor:pointer"><input type="checkbox" class="layer-filter" value="l7" checked> L7</label>
@@ -1817,19 +1816,19 @@ let overviewTimer = null, allMemories = [];
 function esc(s) { return (s==null?'':String(s)).replace(/[&<>\"']/g,
   c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmtMs(ms) { return ms==null?'—':(ms<1000?ms.toFixed(0)+'ms':(ms/1000).toFixed(2)+'s'); }
-function layerClass(l) { const key = (l||'l2').toLowerCase().replace(/[^a-z0-9]/g,''); const m = key.match(/^(l\d)/); return 'layer layer-' + (m ? m[1] : key); }
+function layerClass(l) { const key = (l||'l3').toLowerCase().replace(/[^a-z0-9]/g,''); const m = key.match(/^(l\d)/); return 'layer layer-' + (m ? m[1] : key); }
 function layerColor(l) {
-  const c = {'l0':'#4a6fa5','l1':'#3d8b8b','l2':'#6b4c9a','l3':'#4a6fa5',
+  const c = {'l1':'#4a6fa5','l2':'#3d8b8b','l3':'#6b4c9a','l4':'#4a6fa5',
              'l5':'#3d8b8b','l6':'#6b4c9a','l7':'#d4af37'};
-  const key = (l||'l2').toLowerCase().replace(/[^a-z0-9]/g,'');
-  // Extract layer prefix: "l2fact" -> "l2"
+  const key = (l||'l3').toLowerCase().replace(/[^a-z0-9]/g,'');
+  // Extract layer prefix: "l3fact" -> "l3"
   const m = key.match(/^(l\d)/);
   return c[m ? m[1] : key] || '#666666';
 }
 function layerLabel(l) {
-  const m = {'l0':'L0 Basic','l1':'L1 Raw','l2':'L2 Fact','l3':'L3 Summary',
+  const m = {'l1':'L1 Profile','l2':'L2 Raw','l3':'L3 Fact','l4':'L4 Summary',
              'l5':'L5 Knowledge','l6':'L6 Schema','l7':'L7 Intention'};
-  const key = (l||'l2').toLowerCase().replace(/[^a-z0-9]/g,'');
+  const key = (l||'l3').toLowerCase().replace(/[^a-z0-9]/g,'');
   const prefix = key.match(/^(l\d)/);
   return m[prefix ? prefix[1] : key] || l;
 }
@@ -2234,7 +2233,7 @@ async function doSearch() {
     (items||[]).forEach(m => flat.push({...m, layer: m.layer||layer}));
   }
   
-  // Apply layer filter (match prefix: "l0" matches "l1_profile", etc.)
+  // Apply layer filter (match prefix: "l1" matches "l1_profile", etc.)
   const filtered = flat.filter(m => {
     const l = (m.layer||'').toLowerCase().replace(/[^a-z0-9_]/g,'');
     for (const prefix of selectedLayers) {

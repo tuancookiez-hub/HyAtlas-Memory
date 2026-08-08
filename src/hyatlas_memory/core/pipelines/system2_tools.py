@@ -4,7 +4,7 @@ System 2 Agent Tools
 8 个工具供 System 2 Agent (LLM) 操作 VDB + Graph 双层存储。
 
 Read (4):
-  1. search_vdb     — 向量语义检索 VDB (L0-L4)
+  1. search_vdb     — 向量语义检索 VDB (L1-L4)
   2. search_graph   — 按内容/标签/层级查 Graph (L5-L7)
   3. get_node       — 统一获取节点详情 (VDB or Graph)，渐进式披露
   4. expand_node    — 图遍历，查看某节点的关联节点
