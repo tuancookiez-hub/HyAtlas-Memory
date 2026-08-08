@@ -1095,6 +1095,20 @@ class HyMemoryClient:
             }
 
         result = await writer.digest(user_id=user_id, agent_id=agent_id)
+        # Post-digest: compact the vector store so fragmented index segments
+        # from the heavy write workload consolidate. This prevents the
+        # thousands-of-5MB-shards bloat that occurs when optimize() is never
+        # called. Fire-and-forget best-effort; a failure never fails the digest.
+        try:
+            vs = getattr(writer, "_vector_store", None)
+            if vs is None:
+                vs = getattr(self, "_vector_store", None)
+            if vs is not None and hasattr(vs, "compact"):
+                compacted = await vs.compact()
+                result["zvec_compacted"] = compacted
+        except Exception as e:  # pragma: no cover - defensive
+            result["zvec_compacted"] = False
+            logger.warning(f"[zvec] post-digest compact skipped: {e}")
         result["elapsed_ms"] = round((__import__("time").perf_counter() - t0) * 1000, 2)
         return result
 

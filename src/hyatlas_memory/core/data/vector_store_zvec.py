@@ -703,6 +703,30 @@ class ZvecVectorStore(VectorStoreBase):
             logger.warning(f"[zvec] delete_by_isolation_key failed: {e}")
             return 0
 
+    async def compact(self) -> bool:
+        """Compact/optimize the zvec collection to merge fragmented segments.
+
+        zvec rolls new fixed-size index segments on writes and never merges them
+        unless optimize() is called. Left unchecked this produces thousands of
+        near-empty 5 MB shards (16+ GB for <1000 points). This re-packs the
+        index into a handful of segments — the data is untouched, only the
+        physical layout shrinks. Safe to run periodically (e.g. after the
+        weekly System-2 digest, which is the heaviest writer).
+        """
+        if self._coll is None:
+            logger.info("[zvec] compact skipped: collection not open")
+            return False
+        try:
+            def _compact():
+                self._coll.optimize()
+                self._coll.flush()
+            await _run_in_vdb_pool(_compact)
+            logger.info("[zvec] compact completed (optimize + flush)")
+            return True
+        except Exception as e:
+            logger.warning(f"[zvec] compact failed: {e}")
+            return False
+
     async def delete_by_metadata(
         self,
         user_id: str,

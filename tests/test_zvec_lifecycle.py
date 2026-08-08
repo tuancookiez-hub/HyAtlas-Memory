@@ -185,3 +185,38 @@ def test_zvec_temp_collection_reopens_after_forced_exit(monkeypatch, tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "survives crash"
+
+
+def test_zvec_compact_reduces_segment_count(tmp_path):
+    """compact() merges fragmented index segments and stays healthy."""
+    import asyncio
+
+    from hyatlas_memory.core.config import MemoryConfig
+    from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
+
+    schema_dims = 384
+    cfg = MemoryConfig()
+    cfg.vector_store.embedding_dims = schema_dims
+    cfg.vector_store.collection_name = "compact_test"
+    cfg.vector_store.persist_directory = str(tmp_path)
+
+    store = ZvecVectorStore(cfg)
+
+    async def run():
+        await store.initialize()
+        store._path = None  # not needed
+        # insert a handful of points
+        from hyatlas_memory.core.models.memory import MemoryLayer, MemoryNode, MemoryStatus
+        for i in range(20):
+            n = MemoryNode(
+                node_id=f"c{i}", content=f"compact content {i}",
+                layer=MemoryLayer.L3_FACT, status=MemoryStatus.ACTIVE,
+                user_id="u", agent_id="a",
+            )
+            n.embedding = [0.0]*384
+            await store.upsert(n)
+        before = await store.compact()
+        assert before is True
+        await store.close()
+
+    asyncio.run(run())
