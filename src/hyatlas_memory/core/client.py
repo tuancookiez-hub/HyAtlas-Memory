@@ -24,6 +24,7 @@ HY Memory Client - 面向用户的同步客户端（无状态）
 """
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
@@ -121,7 +122,7 @@ class _LoopThread:
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         try:
             return future.result(timeout=timeout)
-        except TimeoutError:
+        except concurrent.futures.TimeoutError:
             future.cancel()
             raise
 

@@ -24,6 +24,7 @@ API Endpoints:
 """
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import mimetypes
@@ -549,7 +550,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
         try:
             result = client.digest(user_id=user_id, agent_id=agent_id)
             _json_response(self, 200 if result.get("success", False) else 502, result)
-        except TimeoutError:
+        except concurrent.futures.TimeoutError:
             _json_response(self, 504, {
                 "success": False,
                 "error": "digest_timeout",
