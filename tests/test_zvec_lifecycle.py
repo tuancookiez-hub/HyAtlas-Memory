@@ -195,6 +195,7 @@ def test_zvec_compact_reduces_segment_count(tmp_path):
     from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
 
     schema_dims = 384
+    os.environ["HYATLAS_HOME"] = str(tmp_path)  # isolate from the live store
     cfg = MemoryConfig()
     cfg.vector_store.embedding_dims = schema_dims
     cfg.vector_store.collection_name = "compact_test"
@@ -230,6 +231,7 @@ def test_zvec_maybe_compact_available(tmp_path):
     from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
     from hyatlas_memory.core.models.memory import MemoryLayer, MemoryNode, MemoryStatus
 
+    os.environ["HYATLAS_HOME"] = str(tmp_path)  # isolate from the live store
     cfg = MemoryConfig()
     cfg.vector_store.embedding_dims = 384
     cfg.vector_store.collection_name = "compact_test2"
