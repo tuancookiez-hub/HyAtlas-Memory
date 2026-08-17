@@ -638,7 +638,7 @@ class LLMProvider:
     def _should_fallback(self, e: Exception) -> bool:
         """决定是否切 fallback：502/503/连接错误/超时都触发"""
         msg = str(e).lower()
-        for token in ('502', '503', '504', 'connection', 'timed out', 'timeout', 'unavailable'):
+        for token in ('429', '502', '503', '504', 'connection', 'timed out', 'timeout', 'rate_limit', 'unavailable'):
             if token in msg:
                 return True
         return False

@@ -2,12 +2,12 @@
 
 ## [3.5.0] — 2026-08-17
 
-> **v3.5.0 floor refresh (2026-08-17).** Same `3.5.0` tag, new floor. Live compaction wired into the single-memory write path, OpenRouter free-model primary + ds-grey fallback chain, autostart flipped off-by-default upstream, and the shadow `LLMConfig` class finally aligned with `core.config.LLMConfig`. This is the new stable floor before the planned memory-system overhaul.
+> **v3.5.0 floor refresh (2026-08-17).** Same `3.5.0` tag, new floor. Live compaction wired into the single-memory write path, configurable LLM primary + fallback chain, autostart flipped off-by-default upstream, and the shadow `LLMConfig` class finally aligned with `core.config.LLMConfig`. This is the new stable floor before the planned memory-system overhaul.
 
 ### Added
-- **Free-model primary + paid fallback chain.** `hy_memory.json` now supports `llm.fallback_model` / `fallback_base_url` / `fallback_api_key`. Primary `openrouter:poolside/laguna-s-2.1:free` switches to `ds-grey:DeepSeek-V4-Flash` on 502/503/504/connection/timeout. Single transition, no infinite fallback loop.
+- **LLM primary + fallback chain.** `hy_memory.json` now supports `llm.fallback_model` / `fallback_base_url` / `fallback_api_key`. When the primary returns 429/502/503/504/connection/timeout/unavailable, the server automatically switches to the fallback model once. Single transition, no infinite fallback loop.
 - **`hyatlas status` wired** to the CLI module so `hyatlas status --short` returns real data.
-- **`llm_identity()` helper** in `config_cli.py` resolves provider/model from the `model` field prefix unconditionally (handles `openrouter:poolside/laguna-s-2.1:free` correctly).
+- **`llm_identity()` helper** in `config_cli.py` resolves provider/model from the `model` field prefix (e.g. `provider/model:variant`).
 
 ### Fixed
 - **Shadow `LLMConfig` class.** `core/agent/llm_provider.py` had a duplicate `LLMConfig` definition (line 98) that lacked every new field. Both classes now have the same 4 fallback fields, eliminating the `TypeError: got an unexpected keyword argument 'fallback_model'` that blocked server startup after the original free-model wiring.
@@ -17,7 +17,7 @@
 
 ### Changed
 - **Plugin `auto_start` defaults to off upstream** (`__init__.py` runtime + config loader, `config_cli.py` setup). Explicit local `auto_start: true` remains supported and is preserved in this repo's `hy_memory.json`.
-- **`hyatlas status`, `config`, `doctor`, and `console`** display only the configured LLM provider and model (e.g. `Provider: openrouter` / `Model: poolside/laguna-s-2.1:free`).
+- **`hyatlas status`, `config`, `doctor`, and `console`** display only the configured LLM provider and model (e.g. `Provider: openai` / `Model: gpt-4o`).
 
 ### Tests
 - 167 tests collected, **166 passed, 1 skipped**, `ruff check src/ tests/` clean.
