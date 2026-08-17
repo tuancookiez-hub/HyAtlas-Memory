@@ -40,10 +40,10 @@ def preflight(user_id: str, agent_id: str) -> dict:
     chosen = post_json("/api/v1/list", {"user_id": user_id, "agent_id": agent_id, "limit": 5000})
     vdb = chosen.get("vdb") or {}
     mems = vdb.get("memories") or []
-    l2 = [m for m in mems if m.get("layer") == "l2_fact"]
+    facts = [m for m in mems if m.get("layer") == "l3_fact"]
     fresh = sum(
         1
-        for m in l2
+        for m in facts
         if (m.get("custom") or {}).get("s2_evidence_count", 0) < 1
     )
     alt = None
@@ -52,16 +52,16 @@ def preflight(user_id: str, agent_id: str) -> dict:
         try:
             d = post_json("/api/v1/list", {"user_id": user_id, "agent_id": "default", "limit": 5000})
             am = (d.get("vdb") or {}).get("memories") or []
-            alt_l2 = sum(1 for m in am if m.get("layer") == "l2_fact")
-            if alt_l2 > len(l2):
+            alt_l2 = sum(1 for m in am if m.get("layer") == "l3_fact")
+            if alt_l2 > len(facts):
                 alt = "default"
         except Exception:
             pass
     return {
         "agent_id": agent_id,
         "vdb_total": vdb.get("total", len(mems)),
-        "l2_facts": len(l2),
-        "fresh_l2": fresh,
+        "l3_facts": len(facts),
+        "fresh_l3": fresh,
         "suggest_agent_id": alt,
         "alt_l2_facts": alt_l2,
     }
@@ -74,7 +74,7 @@ def main() -> int:
         print(
             f"WARNING: agent_id={AGENT!r} has few facts; "
             f"hermes-user data may be under {pf['suggest_agent_id']!r} "
-            f"({pf.get('alt_l2_facts')} l2_fact). Re-run with: "
+            f"({pf.get('alt_l2_facts')} l3_fact). Re-run with: "
             f"{sys.argv[0]} {USER} {pf['suggest_agent_id']}"
         )
         return 2

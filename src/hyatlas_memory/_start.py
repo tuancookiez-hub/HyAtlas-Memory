@@ -847,6 +847,8 @@ def show_status() -> None:
         sys.exit(1)
     services = _services(project_root)
     cfg = _read_config()
+    from .config_cli import llm_identity
+    provider, model = llm_identity(cfg)
     banner()
     print(f"  {BOLD}Service Status{RESET}")
     print()
@@ -885,6 +887,9 @@ def show_status() -> None:
         else:
             detail = _zvec_status_line(cfg)
         print(ok(f"{'Zvec store':20s} {detail}"))
+    print()
+    print(f"  Provider: {provider}")
+    print(f"  Model:    {model}")
     print()
 
 

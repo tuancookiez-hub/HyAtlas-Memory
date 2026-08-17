@@ -68,6 +68,13 @@ def _health_lines() -> list[str]:
             icon = "\033[32mPASS\033[0m" if ok else "\033[31mFAIL\033[0m"
             lines.append(f"  {label:<8} {icon}")
         lines.append(f"  Storage  {srv.get('vdb_provider', '?')} / {srv.get('vdb_collection', '?')}")
+        try:
+            from hyatlas_memory.config_cli import llm_identity, merged
+            provider, model = llm_identity(merged())
+            lines.append(f"  Provider {provider}")
+            lines.append(f"  Model    {model}")
+        except Exception:
+            pass
     else:
         lines.append("  \033[31mServer not responding on :19527\033[0m")
 

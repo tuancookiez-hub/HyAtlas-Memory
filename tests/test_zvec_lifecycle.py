@@ -187,6 +187,136 @@ def test_zvec_temp_collection_reopens_after_forced_exit(monkeypatch, tmp_path):
     assert result.stdout.strip() == "survives crash"
 
 
+def test_zvec_single_upsert_checks_compaction(tmp_path):
+    """Single upsert invokes the threshold-driven compaction check."""
+    import asyncio
+
+    from hyatlas_memory.core.config import MemoryConfig
+    from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
+    from hyatlas_memory.core.models.memory import MemoryLayer, MemoryNode, MemoryStatus
+
+    os.environ["HYATLAS_HOME"] = str(tmp_path)
+    cfg = MemoryConfig()
+    cfg.vector_store.embedding_dims = 384
+    cfg.vector_store.collection_name = "single_upsert_test"
+    store = ZvecVectorStore(cfg)
+    calls = 0
+
+    async def check():
+        nonlocal calls
+        calls += 1
+        return False
+
+    async def run():
+        await store.initialize()
+        store.maybe_compact = check
+        node = MemoryNode(
+            node_id="single-0", content="single upsert", layer=MemoryLayer.L3_FACT,
+            status=MemoryStatus.ACTIVE, user_id="u", agent_id="a",
+        )
+        node.embedding = [0.0] * 384
+        await store.upsert(node)
+        assert calls == 1
+        assert await store.get_by_id("single-0") is not None
+        await store.close()
+
+    asyncio.run(run())
+
+
+def test_zvec_maybe_compact_runs_above_threshold(tmp_path, monkeypatch):
+    """Fragmentation above the threshold performs exactly one compact."""
+    import asyncio
+
+    from hyatlas_memory.core.config import MemoryConfig
+    from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
+
+    monkeypatch.setenv("ZVEC_COMPACT_SEGMENTS", "64")
+    monkeypatch.setenv("ZVEC_COMPACT_COOLDOWN", "0")
+    os.environ["HYATLAS_HOME"] = str(tmp_path)
+    store = ZvecVectorStore(MemoryConfig())
+    calls = 0
+
+    async def count():
+        return 64
+
+    async def compact():
+        nonlocal calls
+        calls += 1
+        return True
+
+    async def run():
+        store.segment_count = count
+        store.compact = compact
+        assert await store.maybe_compact() is True
+        assert calls == 1
+
+    asyncio.run(run())
+
+
+def test_zvec_compact_cooldown_skips_segment_scan(tmp_path, monkeypatch):
+    """A recent compact prevents an immediate second scan and compact."""
+    import asyncio
+    import time
+
+    from hyatlas_memory.core.config import MemoryConfig
+    from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
+
+    monkeypatch.setenv("ZVEC_COMPACT_COOLDOWN", "3600")
+    os.environ["HYATLAS_HOME"] = str(tmp_path)
+    store = ZvecVectorStore(MemoryConfig())
+    store._last_compact_at = time.monotonic()
+
+    async def count():
+        raise AssertionError("cooldown should skip the segment scan")
+
+    async def run():
+        store.segment_count = count
+        assert await store.maybe_compact() is False
+
+    asyncio.run(run())
+
+
+def test_zvec_batch_upsert_checks_compaction(tmp_path):
+    """Batch upsert preserves its threshold-driven compaction check."""
+    import asyncio
+
+    from hyatlas_memory.core.config import MemoryConfig
+    from hyatlas_memory.core.data.vector_store_zvec import ZvecVectorStore
+    from hyatlas_memory.core.models.memory import MemoryLayer, MemoryNode, MemoryStatus
+
+    os.environ["HYATLAS_HOME"] = str(tmp_path)
+    cfg = MemoryConfig()
+    cfg.vector_store.embedding_dims = 384
+    cfg.vector_store.collection_name = "batch_preserve_test"
+    store = ZvecVectorStore(cfg)
+    calls = 0
+
+    async def check():
+        nonlocal calls
+        calls += 1
+        return False
+
+    async def run():
+        await store.initialize()
+        store.maybe_compact = check
+        nodes = []
+        for i in range(5):
+            node = MemoryNode(
+                node_id=f"b{i}", content=f"batch {i}",
+                layer=MemoryLayer.L3_FACT, status=MemoryStatus.ACTIVE,
+                user_id="u", agent_id="a",
+            )
+            node.embedding = [0.0] * 384
+            nodes.append(node)
+        ids = await store.upsert_batch(nodes)
+        assert len(ids) == 5
+        assert calls == 1
+        assert await store.get_by_id("b0") is not None
+        await store.close()
+
+    asyncio.run(run())
+
+
 def test_zvec_compact_reduces_segment_count(tmp_path):
     """compact() merges fragmented index segments and stays healthy."""
     import asyncio

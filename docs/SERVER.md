@@ -4,9 +4,9 @@
 
 This directory contains the standalone HyAtlas server launcher, the L5
 async pipeline scripts, and the local dashboard. The plugin (in
-`src/hyatlas_memory/`) auto-starts the server when needed, but you can
-also run any of these scripts by hand for debugging, batch jobs, or
-custom pipelines.
+`src/hyatlas_memory/`) can auto-start the server when the user explicitly
+enables `auto_start`; upstream defaults remain off. You can also run any of
+these scripts by hand for debugging, batch jobs, or custom pipelines.
 
 ## Files
 
@@ -50,7 +50,7 @@ python -m server.dashboard.dashboard
 
 | Script | When to run by hand |
 |--------|---------------------|
-| `start_server.py` | When the plugin's auto-start fails, or for debugging port conflicts |
+| `start_server.py` | When opt-in plugin auto-start fails, or for debugging port conflicts |
 | `hymemory.py` | When the plugin thinks the server is running but it's actually down |
 | `l5_full_pipeline.py` | After a large batch of adds, to force L5 ingestion immediately (otherwise runs on schedule) |
 | `l5_quality_review.py` | When L5 outputs look off, to spot-check the extraction quality |

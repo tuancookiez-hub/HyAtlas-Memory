@@ -276,7 +276,7 @@ class HyMemoryProvider(MemoryProvider):
         the lifecycle of its dependencies. No manual 'hyatlas start' is
         required for end users.
         """
-        if not self._config.get("auto_start", True):
+        if not self._config.get("auto_start", False):
             return
         try:
             home = get_hermes_home()
@@ -1093,7 +1093,7 @@ This session ended. The next session will automatically load this summary.
             {"key": "server_port", "description": "Hy-Memory server port",
              "default": str(_DEFAULT_PORT)},
             {"key": "auto_start", "description": "Auto-start server with Hermes",
-             "default": "true", "choices": ["true", "false"]},
+             "default": "false", "choices": ["true", "false"]},
             {"key": "llm_api_key", "description": "LLM API key for memory extraction",
              "secret": True, "env_var": "HY_MEMORY_LLM_API_KEY",
              "when": {"mode": ["pro", "ultra"]}},
@@ -1272,7 +1272,9 @@ This session ended. The next session will automatically load this summary.
         if val:
             provider_config["server_port"] = int(val)
 
-        provider_config["auto_start"] = True
+        # auto_start defaults to False upstream; only force True if the user
+        # explicitly opted in locally.
+        provider_config.setdefault("auto_start", False)
 
         # Step 7: Start server + health check
         print("\n  Starting Hy-Memory server...")

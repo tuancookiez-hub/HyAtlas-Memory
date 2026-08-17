@@ -165,6 +165,13 @@ class LLMConfig:
     eval_user: str | None = None
     eval_apikey: str | None = None
 
+    # Fallback chain: primary 502/503/超时 → 切到 fallback model 一次
+    fallback_model: str | None = None
+    fallback_base_url: str | None = None
+    fallback_api_key: str | None = None
+    # 标记是否已经在 fallback 路径上，防止循环切回主模型
+    _on_fallback: bool = False
+
     def __post_init__(self):
         if self.provider is None:
             self.provider = os.getenv("MEMORY_LLM_PROVIDER", "openai")

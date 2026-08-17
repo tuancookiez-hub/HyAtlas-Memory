@@ -1,5 +1,28 @@
 # Changelog
 
+## [3.5.0] — 2026-08-17
+
+> **v3.5.0 floor refresh (2026-08-17).** Same `3.5.0` tag, new floor. Live compaction wired into the single-memory write path, OpenRouter free-model primary + ds-grey fallback chain, autostart flipped off-by-default upstream, and the shadow `LLMConfig` class finally aligned with `core.config.LLMConfig`. This is the new stable floor before the planned memory-system overhaul.
+
+### Added
+- **Free-model primary + paid fallback chain.** `hy_memory.json` now supports `llm.fallback_model` / `fallback_base_url` / `fallback_api_key`. Primary `openrouter:poolside/laguna-s-2.1:free` switches to `ds-grey:DeepSeek-V4-Flash` on 502/503/504/connection/timeout. Single transition, no infinite fallback loop.
+- **`hyatlas status` wired** to the CLI module so `hyatlas status --short` returns real data.
+- **`llm_identity()` helper** in `config_cli.py` resolves provider/model from the `model` field prefix unconditionally (handles `openrouter:poolside/laguna-s-2.1:free` correctly).
+
+### Fixed
+- **Shadow `LLMConfig` class.** `core/agent/llm_provider.py` had a duplicate `LLMConfig` definition (line 98) that lacked every new field. Both classes now have the same 4 fallback fields, eliminating the `TypeError: got an unexpected keyword argument 'fallback_model'` that blocked server startup after the original free-model wiring.
+- **zvec fragmentation regression.** Ordinary `upsert()` writes now run the same `maybe_compact()` threshold check as `upsert_batch()`, guarded by a 60-second cooldown and single-flight lock. Reclaimed 18.33 GB / 3,443 shards in the live store on 2026-08-17 (19.75 GB → 1.42 GB).
+- **Weekly digest scripts** use canonical `l3_fact` after the L1–L7 renumber and run through the dedicated HyAtlas venv (`D:\HyAtlas\.hyatlas\venv`).
+- **Digest timeout coverage:** `concurrent.futures.TimeoutError` is now caught on Py3.10 alongside the existing `asyncio.TimeoutError` path.
+
+### Changed
+- **Plugin `auto_start` defaults to off upstream** (`__init__.py` runtime + config loader, `config_cli.py` setup). Explicit local `auto_start: true` remains supported and is preserved in this repo's `hy_memory.json`.
+- **`hyatlas status`, `config`, `doctor`, and `console`** display only the configured LLM provider and model (e.g. `Provider: openrouter` / `Model: poolside/laguna-s-2.1:free`).
+
+### Tests
+- 167 tests collected, **166 passed, 1 skipped**, `ruff check src/ tests/` clean.
+- New: `tests/test_zvec_lifecycle.py` (compaction cooldown + single-flight), `tests/test_autostart_default.py` (missing-key-off invariant), `tests/test_config_cli_embedder.py::test_llm_identity_prefers_model_prefix`.
+
 ## [3.5.0] — 2026-08-05
 
 > **Certified stable floor:** truthful dashboard data contracts, bounded list/count APIs, explicit Kuzu health, Windows lifecycle recovery, extraction resilience, and a lighter BGE-small/384 local default. No v3.5.1 split: these fixes are folded into the maintained v3.5.0 floor.

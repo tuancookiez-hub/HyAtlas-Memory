@@ -36,6 +36,7 @@ except ImportError:
         return Path(os.environ.get("HERMES_HOME", Path.home() / "AppData" / "Local" / "hermes"))
 
 from . import layout
+from .config_cli import llm_identity
 
 
 def _add_subcommands(sub: argparse._SubParsersAction) -> None:
@@ -274,7 +275,10 @@ def _cmd_doctor(args) -> int:
     )
     hy_cfg = manager._read_hy_memory_json()
     mode = hy_cfg.get("mode", "ultra")
+    provider, model = llm_identity(hy_cfg)
     info(f"hy_memory mode: {mode}")
+    info(f"Provider: {provider}")
+    info(f"Model: {model}")
     if _has_llm_key(hy_cfg):
         ok("LLM API key present (env or hy_memory.json)")
     elif str(mode).lower() in ("pro", "ultra", ""):

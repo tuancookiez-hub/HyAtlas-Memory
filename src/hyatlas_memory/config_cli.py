@@ -18,6 +18,18 @@ _EMBEDS = {
 }
 
 
+def llm_identity(cfg: dict) -> tuple[str, str]:
+    """Return the configured provider and model without secrets."""
+    llm = cfg.get("llm") or {}
+    provider = llm.get("provider") or ""
+    model = llm.get("model") or ""
+    if ":" in model:
+        provider, model = model.split(":", 1)
+    if not provider:
+        provider = "openai"
+    return provider, model
+
+
 def redact(value: str) -> str:
     if not value:
         return ""
@@ -46,7 +58,7 @@ def default_config() -> dict[str, Any]:
             "port": 6333,
             "embedding_dims": 384,
         },
-        "auto_start": True,
+        "auto_start": False,
         "port": 19527,
     }
 
@@ -77,16 +89,14 @@ def _legacy_data_paths() -> list[Path]:
 def show(_: Namespace) -> int:
     path = layout.active_config_path()
     cfg = merged()
-    llm = cfg.get("llm", {})
     emb = cfg.get("embedder", {})
     vec = cfg.get("vector_store", {})
+    provider, model = llm_identity(cfg)
     print(f"HyAtlas home: {layout.home()}")
     print(f"Config path: {path or layout.cfgfile()}")
     print()
-    print("LLM")
-    print(f"  base_url: {llm.get('base_url', '')}")
-    print(f"  model:    {llm.get('model', '')}")
-    print(f"  api_key:  {redact(str(llm.get('api_key', '')))}")
+    print(f"Provider: {provider}")
+    print(f"Model:    {model}")
     print()
     print("Embedder")
     print(f"  model:    {emb.get('model', '')}")

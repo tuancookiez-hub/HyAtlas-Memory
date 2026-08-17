@@ -1,3 +1,24 @@
+## Current repair set (2026-08-17, v3.5.0 floor refresh)
+
+- **Free-model primary + ds-grey fallback chain.** `hy_memory.json` carries `llm.fallback_model` / `fallback_base_url`. Primary `openrouter:poolside/laguna-s-2.1:free` switches to `ds-grey:DeepSeek-V4-Flash` once on 502/503/504/connection/timeout. `_on_fallback` guard prevents loops.
+- **Shadow `LLMConfig` class aligned.** `core/agent/llm_provider.py:98` had a duplicate `LLMConfig` definition that lacked every new field. Both `LLMConfig` classes (in `core/config.py` and `core/agent/llm_provider.py`) now have the same 4 fallback fields — this is what unblocked the restart cycle on 2026-08-17.
+- **AsyncOpenAI client cached.** `LLMProvider` now reuses a single `AsyncOpenAI(...)` per instance; the cached client is reset (`self._client = None`) when the fallback fires so the new credentials/base_url take effect.
+- **zvec ordinary `upsert()` triggers `maybe_compact()`** with cooldown/single-flight; `upsert_batch()` behavior preserved. **Reclaimed 18.33 GB / 3,443 shards live on 2026-08-17** (19.75 GB → 1.42 GB across 1–4 shards).
+- **Plugin `auto_start` defaults to `False` upstream**; explicit local `true` still honored. Regression test: `tests/test_autostart_default.py`.
+- **`hyatlas status`, `config`, `doctor`, `console`** show only `Provider:` + `Model:` (e.g. `openrouter` / `poolside/laguna-s-2.1:free`).
+- **Weekly digest scripts** use canonical `l3_fact` and run via the dedicated HyAtlas venv (`D:\HyAtlas\.hyatlas\venv`).
+
+### Static + Live Gates
+
+- 167 tests collected, **166 passed, 1 skipped**, `ruff check src/ tests/` clean.
+- Live server: `127.0.0.1:19527` returns `status=ok`, `vdb_points≈1151`, `write_pipeline=ok`, `LLM=openrouter:poolside/laguna-s-2.1:free`.
+- L3 write proven: memory_id `818c39c1-abab-4dfb-9dc0-261f48...`.
+
+### Risks / Open Items
+
+- OpenRouter free quota is 50 calls/day; reset at 2026-08-17T08:00 MYT. After reset, fallback chain kicks in cleanly when quota runs out.
+- This is the **stable floor for the upcoming memory-system overhaul**. Anything pushed after this commit should branch from this SHA.
+
 # HyAtlas-Memory — NOW.md
 
 ## Current state (2026-08-05, published v3.5.0 floor)

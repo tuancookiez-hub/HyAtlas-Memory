@@ -13,7 +13,20 @@ def test_default_local_embedder_is_small_384():
         "dims": 384,
         "provider": "local",
     }
+    assert cfg["auto_start"] is False
     assert cfg["vector_store"]["embedding_dims"] == 384
+
+
+def test_llm_identity_prefers_model_prefix():
+    assert config_cli.llm_identity({"llm": {"model": "openrouter:poolside/laguna-s-2.1:free"}}) == (
+        "openrouter",
+        "poolside/laguna-s-2.1:free",
+    )
+    assert config_cli.llm_identity({"llm": {"provider": "minimax", "model": "MiniMax-M3"}}) == (
+        "minimax",
+        "MiniMax-M3",
+    )
+    assert config_cli.llm_identity({"llm": {}}) == ("openai", "")
 
 
 def test_embedder_preset_keeps_vector_dims_aligned(monkeypatch, tmp_path):

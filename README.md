@@ -78,7 +78,7 @@ hyatlas search "dark themes" --limit 5
 
 Open http://127.0.0.1:8765 — you should see the write under **default**. Full checklist: **[docs/DAY0.md](docs/DAY0.md)** (15‑minute first proof).
 
-The first Hermes session after setup also auto-starts the stack when the provider loads (**Zvec** in-process — no Qdrant sidecar by default).
+HyAtlas auto-start is opt-in. Enable it during setup or set `auto_start: true` locally; upstream defaults remain off. The stack uses **Zvec** in-process with no Qdrant sidecar by default.
 
 **Hermes identity:** `user_id=hermes-user`, `agent_id=default` — [docs/HYATLAS_HERMES.md](docs/HYATLAS_HERMES.md). Weekly digest + L6 graph notes live there too.
 

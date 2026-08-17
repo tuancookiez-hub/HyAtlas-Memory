@@ -42,7 +42,7 @@ _S2_MAX_CLUSTERS_PER_CALL = int(os.getenv("MEMORY_S2_MAX_CLUSTERS_PER_CALL", "4"
 # 量控制：单次 LLM 调用最多携带多少条事实；单个大 cluster 也必须拆分
 _S2_MAX_FACTS_PER_CALL = int(os.getenv("MEMORY_S2_MAX_FACTS_PER_CALL", "8"))
 # S2 输出是短 JSON 操作；限制推理生成预算，避免 reasoning 吞满上下文而无 JSON。
-_S2_MAX_TOKENS = int(os.getenv("MEMORY_S2_MAX_TOKENS", "1024"))
+_S2_MAX_TOKENS = int(os.getenv("MEMORY_S2_MAX_TOKENS", "4096"))
 # 量控制：一个认知周期最多处理多少个 cluster（0 = 不限）；超出留到下个周期重新聚类
 _S2_MAX_CLUSTERS_PER_RUN = int(os.getenv("MEMORY_S2_MAX_CLUSTERS_PER_RUN", "0"))
 
@@ -625,7 +625,7 @@ async def run_system2_agent(
     try:
         response = await llm_provider.complete_messages(
             messages=messages,
-            max_tokens=min(config.llm.agent_max_tokens or 4000, _S2_MAX_TOKENS),
+            max_tokens=config.llm.agent_max_tokens or _S2_MAX_TOKENS,
             temperature=config.llm.temperature,
         )
     except Exception as e:

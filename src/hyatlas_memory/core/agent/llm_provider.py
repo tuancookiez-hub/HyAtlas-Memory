@@ -113,6 +113,12 @@ class LLMConfig:
     eval_user: str | None = None
     eval_apikey: str | None = None
 
+    # Fallback chain (mirrors core.config.LLMConfig)
+    fallback_model: str | None = None
+    fallback_base_url: str | None = None
+    fallback_api_key: str | None = None
+    _on_fallback: bool = False
+
 
 class LLMProvider:
     """
@@ -191,6 +197,9 @@ class LLMProvider:
             extra_body=llm.extra_body,
             eval_user=llm.eval_user,
             eval_apikey=llm.eval_apikey,
+            fallback_model=getattr(llm, 'fallback_model', None),
+            fallback_base_url=getattr(llm, 'fallback_base_url', None),
+            fallback_api_key=getattr(llm, 'fallback_api_key', None),
         )
 
     async def complete(
@@ -256,6 +265,23 @@ class LLMProvider:
             except Exception as e:
                 self._errors += 1
                 logger.warning(f"LLM call failed (attempt {attempt + 1}): {e}")
+
+                # Fallback chain: primary 失败（502/503/超时） → 切到 fallback 一次
+                if (
+                    not getattr(self._llm_config, '_on_fallback', False)
+                    and self._llm_config.fallback_model
+                    and self._should_fallback(e)
+                ):
+                    logger.warning(
+                        f"[llm] primary {self._llm_config.model} failed; "
+                        f"switching to fallback {self._llm_config.fallback_model}"
+                    )
+                    self._switch_to_fallback()
+                    return await self._call_llm(
+                        prompt=prompt, max_tokens=max_tokens,
+                        temperature=temperature, stop=stop,
+                        tools=tools, tool_choice=tool_choice,
+                    )
 
                 if attempt < self._llm_config.max_retries - 1:
                     delay = self._llm_config.retry_delay * (attempt + 1)
@@ -332,12 +358,14 @@ class LLMProvider:
         try:
             from openai import AsyncOpenAI
 
-            client = AsyncOpenAI(
-                api_key=self._llm_config.api_key,
-                base_url=self._llm_config.base_url or None,
-                timeout=self._llm_config.timeout,
-                max_retries=0,
-            )
+            if self._client is None:
+                self._client = AsyncOpenAI(
+                    api_key=self._llm_config.api_key,
+                    base_url=self._llm_config.base_url or None,
+                    timeout=self._llm_config.timeout,
+                    max_retries=0,
+                )
+            client = self._client
 
             # 构建请求参数，确保有 system 消息（部分内部平台要求）
             messages = [{"role": "user", "content": prompt}]
@@ -577,11 +605,57 @@ class LLMProvider:
             except Exception as e:
                 self._errors += 1
                 logger.warning(f"LLM call failed (attempt {attempt + 1}): {e}")
+                # Fallback: try fallback_model once before exhausting retries
+                if (
+                    not getattr(self._llm_config, '_on_fallback', False)
+                    and self._llm_config.fallback_model
+                    and self._should_fallback(e)
+                ):
+                    logger.warning(
+                        f"[llm] primary {self._llm_config.model} failed; "
+                        f"switching to fallback {self._llm_config.fallback_model}"
+                    )
+                    self._switch_to_fallback()
+                    if self._llm_config.backend == LLMBackend.EVAL_PLATFORM:
+                        response = await self._call_eval_platform_messages(
+                            messages, max_tokens, temperature,
+                            tools=tools, tool_choice=tool_choice,
+                        )
+                    else:
+                        response = await self._call_openai_messages(
+                            messages, max_tokens, temperature,
+                            tools=tools, tool_choice=tool_choice,
+                        )
+                    self._total_calls += 1
+                    self._total_tokens += response.tokens_used
+                    return response
                 if attempt < self._llm_config.max_retries - 1:
                     delay = self._llm_config.retry_delay * (attempt + 1)
                     await asyncio.sleep(delay)
 
         raise RuntimeError("LLM call failed after all retries")
+
+    def _should_fallback(self, e: Exception) -> bool:
+        """决定是否切 fallback：502/503/连接错误/超时都触发"""
+        msg = str(e).lower()
+        for token in ('502', '503', '504', 'connection', 'timed out', 'timeout', 'unavailable'):
+            if token in msg:
+                return True
+        return False
+
+    def _switch_to_fallback(self) -> None:
+        """切到 fallback model，并把 _on_fallback 标记为 True"""
+        cfg = self._llm_config
+        model = cfg.fallback_model
+        logger.warning(f"[llm] switching model: {cfg.model} -> {model}")
+        cfg.model = model
+        if cfg.fallback_base_url:
+            cfg.base_url = cfg.fallback_base_url
+        if cfg.fallback_api_key:
+            cfg.api_key = cfg.fallback_api_key
+        cfg._on_fallback = True
+        # Reset cached client so next call creates AsyncOpenAI with new config
+        self._client = None
 
     async def _call_openai_messages(
         self,
@@ -594,12 +668,14 @@ class LLMProvider:
         """OpenAI 兼容接口 — 多轮 messages 版本。"""
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI(
-            api_key=self._llm_config.api_key,
-            base_url=self._llm_config.base_url or None,
-            timeout=self._llm_config.timeout,
-            max_retries=0,
-        )
+        if self._client is None:
+            self._client = AsyncOpenAI(
+                api_key=self._llm_config.api_key,
+                base_url=self._llm_config.base_url or None,
+                timeout=self._llm_config.timeout,
+                max_retries=0,
+            )
+        client = self._client
 
         # 确保有 system 消息
         if not any(m.get("role") == "system" for m in messages):

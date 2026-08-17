@@ -20,6 +20,7 @@ Filter syntax: SQL-like strings
 import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -227,6 +228,10 @@ class ZvecVectorStore(VectorStoreBase):
         self._path = None
         # zvec BM25 returns normalized scores in [0,1] range
         self._keyword_score_normalized = True
+        # Auto-compact single-flight + cooldown (seconds)
+        self._compact_lock = asyncio.Lock()
+        self._last_compact_at = 0.0
+        self._compact_cooldown = float(os.getenv("ZVEC_COMPACT_COOLDOWN", "60"))
 
     async def initialize(self) -> None:
         """Open or create the zvec collection (singleton per path)."""
@@ -412,6 +417,7 @@ class ZvecVectorStore(VectorStoreBase):
             self._coll.upsert(zvec.DocList([doc]))
             self._coll.flush()
         await _run_in_vdb_pool(_upsert)
+        await self.maybe_compact()
         return node.node_id
 
     async def upsert_batch(self, nodes: list[MemoryNode]) -> list[str]:
@@ -738,17 +744,29 @@ class ZvecVectorStore(VectorStoreBase):
         If the number of index segments (`.proxima` shards) exceeds the
         configured threshold, compact. Healthy stores (few segments) pay only
         the cheap directory-walk check and never run the expensive merge.
+        A per-instance cooldown and single-flight guard prevent concurrent
+        or back-to-back compacts on ordinary writes.
         Returns True if a compact was performed.
         """
         threshold = int(os.getenv("ZVEC_COMPACT_SEGMENTS", "64"))
+        if self._compact_lock.locked():
+            return False
+        if time.monotonic() - self._last_compact_at < self._compact_cooldown:
+            return False
         try:
             n = await self.segment_count()
-            if n is not None and n >= threshold:
-                logger.info(
-                    f"[zvec] auto-compact: {n} segments >= threshold {threshold}"
-                )
-                return await self.compact()
-            return False
+            if n is None or n < threshold:
+                return False
+            logger.info(
+                f"[zvec] auto-compact: {n} segments >= threshold {threshold}"
+            )
+            async with self._compact_lock:
+                if time.monotonic() - self._last_compact_at < self._compact_cooldown:
+                    return False
+                ok = await self.compact()
+                if ok:
+                    self._last_compact_at = time.monotonic()
+                return ok
         except Exception as e:
             logger.warning(f"[zvec] maybe_compact check failed: {e}")
             return False
