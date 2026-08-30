@@ -315,16 +315,26 @@ class HyMemoryProvider(MemoryProvider):
             return
         HyMemoryProvider._console_launched = True  # type: ignore[attr-defined]
         try:
-            cmd = [_sys.executable, "-m", "hyatlas_memory.console"]
-            creationflags = 0
+            # Reuse _start.py's hardened spawn: _console_spawn_env() strips
+            # MSYS/Git-Bash vars that make CREATE_NEW_CONSOLE windows fail
+            # to paint (blank windows), and pins a clean PYTHONPATH so the
+            # base python resolves the package without hermes-agent bleed.
+            from ._start import _console_spawn_env, _status_console_already_running
+
             if _sys.platform == "win32":
+                if _status_console_already_running():
+                    logger.info("[hy-memory] Console already open, skip spawn")
+                    return
                 creationflags = (
                     subprocess.CREATE_NEW_CONSOLE
                     | subprocess.CREATE_NEW_PROCESS_GROUP
                 )
+            else:
+                creationflags = 0
             subprocess.Popen(
-                cmd,
+                [_sys.executable, "-m", "hyatlas_memory.console"],
                 creationflags=creationflags,
+                env=_console_spawn_env(),
                 close_fds=True,
             )
             logger.info("[hy-memory] Console launched (HERMES_HYATLAS_CONSOLE=1)")
