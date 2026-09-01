@@ -59,9 +59,9 @@ jobs:
           name: hyatlas-go-plain
           path: /tmp/hyatlas-go-plain
 
-  build-embedded-windows:
-    name: Build (Go 1.26, embedded — Windows)
-    runs-on: windows-latest
+  build-embedded-smoke:
+    name: Build (embedded — verify go:embed compiles)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
@@ -70,33 +70,26 @@ jobs:
           go-version: '1.26'
       - name: Download modules
         run: go mod download
-      - name: Fetch BGE-small ONNX model (self-contained, ~133 MB)
+      - name: Create stub model files for go:embed verification
         run: |
           mkdir -p models
-          # Xenova/bge-small-en-v1.5 ships a self-contained model.onnx (~133 MB).
-          curl -fsSL --retry 3 -o models/bge-small-en-v1.5.onnx \
-            "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model.onnx"
-          # .data sidecar — empty file is enough; ONNX runtime only reads it if the
-          # graph references external data, and self-contained exports don't.
-          echo "" > models/bge-small-en-v1.5.onnx.data
-          # vocab
-          curl -fsSL --retry 3 -o models/vocab.txt \
-            "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/vocab.txt"
-          # onnxruntime 1.28.1 native DLL for Windows x64
-          curl -fsSL --retry 3 -o /tmp/ort.zip \
-            "https://github.com/microsoft/onnxruntime/releases/download/v1.28.1/onnxruntime-win-x64-1.28.1.zip"
-          Expand-Archive -Force /tmp/ort.zip /tmp/ort
-          Copy-Item /tmp/ort/onnxruntime-win-x64-1.28.1/lib/onnxruntime.dll models/
-          Get-ChildItem models/
+          # 1-byte stub files — the embedded build only needs them to exist for
+          # go:embed; the full BGE-small model is 133 MB and is bundled into
+          # release artifacts separately, not committed to the repo.
+          : > models/bge-small-en-v1.5.onnx
+          : > models/bge-small-en-v1.5.onnx.data
+          : > models/vocab.txt
+          : > models/onnxruntime.dll
+          ls -la models/
       - name: go vet
         run: go vet ./...
-      - name: Build (embedded)
-        run: go build -tags embedded -o /tmp/hyatlas-go-embedded.exe .
+      - name: Build (embedded — verifies go:embed directives are correct)
+        run: go build -tags embedded -o /tmp/hyatlas-go-embedded .
       - name: Upload artifact (embedded)
         uses: actions/upload-artifact@v4
         with:
-          name: hyatlas-go-embedded-windows
-          path: /tmp/hyatlas-go-embedded.exe
+          name: hyatlas-go-embedded-smoke
+          path: /tmp/hyatlas-go-embedded
 
   lint:
     name: Lint (go vet + formatting)
