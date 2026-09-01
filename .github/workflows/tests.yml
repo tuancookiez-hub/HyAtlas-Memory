@@ -7,8 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  build:
-    name: Build (Go 1.26)
+  build-plain:
+    name: Build (Go 1.26, plain — Linux)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,12 +20,107 @@ jobs:
         run: go mod download
       - name: go vet
         run: go vet ./...
-      - name: Build (embedded)
-        run: go build -tags embedded -o /tmp/hyatlas-go .
-      - name: Build (plain)
+      - name: Build (plain — no embedded tag)
         run: go build -o /tmp/hyatlas-go-plain .
-      - name: Upload artifact
+      - name: Smoke test (server boots and serves /healthz)
+        run: |
+          set -e
+          # Start the server with a fake LLM endpoint; VDB + embed should be ok,
+          # LLM will be reported degraded, but /healthz (liveness) must return 200.
+          HYATLAS_LLM_BASE=http://127.0.0.1:1/v1 \
+          HYATLAS_LLM_MODEL=fake-model \
+          HYATLAS_LLM_KEY=ci-key \
+          /tmp/hyatlas-go-plain &
+          SERVER_PID=$!
+          sleep 4
+          if curl -fsS http://127.0.0.1:19528/healthz > /tmp/healthz.txt; then
+            echo "OK /healthz:"
+            cat /tmp/healthz.txt
+          else
+            echo "FAIL /healthz (exit $?)"
+            cat /tmp/healthz.txt 2>/dev/null || true
+            kill $SERVER_PID 2>/dev/null || true
+            exit 1
+          fi
+          if curl -fsS http://127.0.0.1:19528/api/v1/status > /tmp/status.json; then
+            echo "OK /api/v1/status:"
+            cat /tmp/status.json
+          else
+            echo "FAIL /api/v1/status (exit $?)"
+            cat /tmp/status.json 2>/dev/null || true
+            kill $SERVER_PID 2>/dev/null || true
+            exit 1
+          fi
+          kill $SERVER_PID 2>/dev/null || true
+          sleep 1
+      - name: Upload artifact (plain)
         uses: actions/upload-artifact@v4
         with:
-          name: hyatlas-go-binaries
-          path: /tmp/hyatlas-go*
+          name: hyatlas-go-plain
+          path: /tmp/hyatlas-go-plain
+
+  build-embedded-windows:
+    name: Build (Go 1.26, embedded — Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Download modules
+        run: go mod download
+      - name: Fetch BGE-small ONNX model (self-contained, ~133 MB)
+        run: |
+          mkdir -p models
+          # Xenova/bge-small-en-v1.5 ships a self-contained model.onnx (~133 MB).
+          curl -fsSL --retry 3 -o models/bge-small-en-v1.5.onnx \
+            "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model.onnx"
+          # .data sidecar — empty file is enough; ONNX runtime only reads it if the
+          # graph references external data, and self-contained exports don't.
+          echo "" > models/bge-small-en-v1.5.onnx.data
+          # vocab
+          curl -fsSL --retry 3 -o models/vocab.txt \
+            "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/vocab.txt"
+          # onnxruntime 1.28.1 native DLL for Windows x64
+          curl -fsSL --retry 3 -o /tmp/ort.zip \
+            "https://github.com/microsoft/onnxruntime/releases/download/v1.28.1/onnxruntime-win-x64-1.28.1.zip"
+          Expand-Archive -Force /tmp/ort.zip /tmp/ort
+          Copy-Item /tmp/ort/onnxruntime-win-x64-1.28.1/lib/onnxruntime.dll models/
+          Get-ChildItem models/
+      - name: go vet
+        run: go vet ./...
+      - name: Build (embedded)
+        run: go build -tags embedded -o /tmp/hyatlas-go-embedded.exe .
+      - name: Upload artifact (embedded)
+        uses: actions/upload-artifact@v4
+        with:
+          name: hyatlas-go-embedded-windows
+          path: /tmp/hyatlas-go-embedded.exe
+
+  lint:
+    name: Lint (go vet + formatting)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: go vet
+        run: go vet ./...
+      - name: gofmt check
+        run: |
+          if [ "$(gofmt -l . | wc -l)" -gt 0 ]; then
+            echo "Files not gofmt-clean:"
+            gofmt -l .
+            exit 1
+          fi
+      - name: go mod tidy verify
+        run: |
+          go mod tidy
+          if [ -n "$(git diff --name-only -- go.mod go.sum)" ]; then
+            echo "go.mod or go.sum changed after 'go mod tidy' — commit the result"
+            git diff -- go.mod go.sum
+            exit 1
+          fi
