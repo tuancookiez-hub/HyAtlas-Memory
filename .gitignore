@@ -1,40 +1,41 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
+# Built binaries
+*.exe
+*.exe~
+*.dll
 *.so
-.Python
-*.egg
-*.egg-info/
-build/
-dist/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-htmlcov/
-.tox/
+*.dylib
 
-# Virtual envs
-.venv/
-venv/
-env/
+# Runtime data store (regenerated on each run)
+data/
+models/
+
+# Editor / backup files
+*~
+*.swp
+*.swo
 
 # IDEs
 .vscode/
 .idea/
-*.swp
-*.swo
+*.iml
 
 # OS
 .DS_Store
 Thumbs.db
 
-# ----------------------------------------------------------------------
-# NEVER COMMIT — these files contain real API keys, credentials, or
-# user data. Listed here so even `git add -A` cannot accidentally stage
-# them. The .example versions ARE committed.
-# ----------------------------------------------------------------------
+# Logs
+*.log
+logs/
+
+# Go build cache
+.cache/
+
+# Test artifacts
+*.test
+*.out
+coverage.txt
+
+# Never commit — secrets, user data, session artifacts
 .env
 .env.local
 *.env
@@ -43,63 +44,11 @@ hy_memory.json
 hy_memory.local.json
 auth.json
 credentials.json
-token.json
 *.pem
 *.key
-*.p12
-*.pfx
-secrets/
 
-# User data (HyAtlas runtime DB; lives at ~/.hy_memory by default)
-*.db
-*.db-wal
-*.db-shm
-/data/
-/runtime/
-
-# Logs
-*.log
-logs/
-
-# Backup / scratch
-*.bak
-*.bak-*
-*.tmp
-*.swp
-.cache/
-.pytest_cache/
-
-# Local override files
-.override/
-overrides/
-
-# ----------------------------------------------------------------------
-# Build outputs
-# ----------------------------------------------------------------------
-node_modules/
-.next/
-.turbo/
-.parcel-cache/
-dist_final/
-dist_venv/
-plans/
-
-# Runtime
-.qdrant-initialized
-storage/
-.git-commit-msg-*
-*-draft.txt
-.worktrees/
-
-# Internal planning artifacts (not for public release)
+# AI / agent session artifacts
 .hermes/
-research/
-snapshots/
-
-# Process / handoff artifacts (Tuna Agent OS session docs)
-# Not part of the public artifact; treated as session-local.
-TUNA_AGENT_OS_TASK_BRIEF.md
 handoff.md
-
-# Scratch release notes
-.tmp-release-notes*
+NOW.md
+TUNA_AGENT_OS_TASK_BRIEF.md

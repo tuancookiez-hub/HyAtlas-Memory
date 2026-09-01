@@ -1,48 +1,18 @@
-# HyAtlas Memory — zvec-native image (v3.4+)
-# No Qdrant sidecar. Vector store + Kuzu graph run in-process.
-FROM python:3.11-slim
+# Build (embedded — model weights bundled in the binary)
+FROM golang:1.26-alpine AS build
+RUN apk add --no-cache git
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=1 go build -tags embedded -o /out/hyatlas-go .
 
-WORKDIR /app
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    HYATLAS_HOME=/data/hyatlas \
-    HY_MEMORY_HOST=0.0.0.0 \
-    HY_MEMORY_PORT=19527 \
-    HY_DASH_BIND=0.0.0.0 \
-    HY_DASH_PORT=8765 \
-    HY_MEMORY_BASE=http://127.0.0.1:19527 \
-    FOR_DISABLE_CONSOLE_CLOSE_HANDLER=1
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        curl \
-        ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# Build-time switch: remote OpenAI-compatible embeddings (default) or local BGE.
-#   docker build --build-arg INSTALL_LOCAL_EMBED=1 -t hyatlas-memory .
-ARG INSTALL_LOCAL_EMBED=0
-
-COPY pyproject.toml README.md LICENSE MANIFEST.in ./
-COPY src/ ./src/
-COPY docker/ ./docker/
-
-# Core + zvec always. local-embed is optional (large torch/ST deps).
-RUN pip install --no-cache-dir ".[zvec]" \
-    && if [ "$INSTALL_LOCAL_EMBED" = "1" ]; then \
-         pip install --no-cache-dir ".[local-embed]"; \
-       fi \
-    && mkdir -p /data/hyatlas/config /data/hyatlas/data /data/hyatlas/logs /data/hyatlas/zvec \
-    && chmod +x /app/docker/entrypoint.sh
-
-EXPOSE 19527 8765
-
-VOLUME ["/data/hyatlas"]
-
-HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=5 \
-  CMD curl -fsS "http://127.0.0.1:${HY_MEMORY_PORT}/api/v1/status" >/dev/null || exit 1
-
-ENTRYPOINT ["/app/docker/entrypoint.sh"]
-CMD ["stack"]
+# Runtime
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates libgcc
+COPY --from=build /out/hyatlas-go /usr/local/bin/hyatlas-go
+EXPOSE 19528
+ENV HYATLAS_PORT=19528
+HEALTHCHECK --interval=15s --timeout=5s --retries=8 \
+  CMD wget -qO- http://127.0.0.1:19528/healthz || exit 1
+ENTRYPOINT ["/usr/local/bin/hyatlas-go"]

@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HyAtlas Dashboard</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/assets/hy-memory-favicon.png?v=4">
+<link rel="icon" type="image/png" sizes="16x16" href="/assets/hy-memory-favicon.png?v=4">
+<link rel="icon" type="image/png" sizes="48x48" href="/assets/hy-memory-favicon.png?v=4">
+<link rel="icon" type="image/x-icon" href="/assets/hy-memory-favicon.png?v=4">
+<link rel="apple-touch-icon" sizes="180x180" href="/assets/hy-memory-favicon.png?v=4">
+<meta name="theme-color" content="#050505">
+<meta property="og:image" content="/assets/hy-memory-favicon.png?v=4">
+<meta property="og:title" content="HyAtlas Dashboard">
+<meta property="og:description" content="AI memory atlas — zvec + Kuzu cognitive store">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="boot-screen" id="boot-screen">
+  <div class="boot-logo">HyAtlas</div>
+  <div class="boot-sub">AI Memory Atlas</div>
+  <div class="boot-bar"><div class="boot-bar-fill"></div></div>
+</div>
+
+<!-- Left Sidebar -->
+<div class="sidebar">
+  <div class="sidebar-logo">
+    <img class="brand-mark" src="/assets/hy-memory-icon.png?v=2" alt="Hy-Memory">
+    <div>
+      <h1>HyAtlas</h1>
+      <div class="tagline">AI MEMORY ATLAS</div>
+      <div class="official-ref">
+        <a href="https://memory.hunyuan.tencent.com" target="_blank" rel="noopener noreferrer" title="Official Hy-Memory framework by Tencent Hunyuan">official framework ↗</a>
+      </div>
+    </div>
+  </div>
+  
+  <div class="sidebar-nav">
+    <div class="nav-item active" data-page="overview">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="7" height="7"/>
+        <rect x="14" y="3" width="7" height="7"/>
+        <rect x="14" y="14" width="7" height="7"/>
+        <rect x="3" y="14" width="7" height="7"/>
+      </svg>
+      <span>Overview</span>
+    </div>
+    
+    <div class="nav-item" data-page="observatory">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <circle cx="12" cy="12" r="6"/>
+        <circle cx="12" cy="12" r="2"/>
+      </svg>
+      <span>Memory Observatory</span>
+    </div>
+    
+    <div class="nav-item" data-page="explore">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"/>
+        <path d="m21 21-4.35-4.35"/>
+      </svg>
+      <span>Explore Memory</span>
+    </div>
+    
+    <div class="nav-item" data-page="layers">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="m12 2 2 2 2-2 2 2 2-2 2 2v20l-2-2-2 2-2-2-2 2-2-2-2 2V2z"/>
+      </svg>
+      <span>Memory Layers</span>
+    </div>
+    
+    <div class="nav-item" data-page="today">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+        <line x1="16" y1="2" x2="16" y2="6"/>
+        <line x1="8" y1="2" x2="8" y2="6"/>
+        <line x1="3" y1="10" x2="21" y2="10"/>
+      </svg>
+      <span>Today / Activity</span>
+    </div>
+    
+    <div class="nav-item" data-page="system">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+      <span>Settings / System</span>
+    </div>
+
+    <div class="nav-item" data-page="quality">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 3v18h18"/>
+        <path d="M7 16l4-8 4 5 5-9"/>
+      </svg>
+      <span>Quality Metrics</span>
+    </div>
+
+    <div class="nav-item" data-page="l5">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="6" cy="6" r="3"/>
+        <circle cx="18" cy="6" r="3"/>
+        <circle cx="12" cy="18" r="3"/>
+        <line x1="8.5" y1="7.5" x2="11" y2="15.5"/>
+        <line x1="15.5" y1="7.5" x2="13" y2="15.5"/>
+        <line x1="9" y1="6" x2="15" y2="6"/>
+      </svg>
+      <span>L5 Knowledge Graph</span>
+    </div>
+  </div>
+  
+  <div class="sidebar-status">
+    <div class="status-indicator">
+      <div class="status-dot" id="global-status-dot"></div>
+      <div class="status-text" id="global-status-text">OPERATIONAL</div>
+    </div>
+    <div class="status-meta" id="global-status-meta">Last sync: —</div>
+  </div>
+</div>
+
+<!-- Main Content -->
+<div class="main-content">
+  <div class="scope-bar" role="region" aria-label="Memory profile scope">
+    <div class="scope-bar-label">MEMORY SCOPE</div>
+    <label class="scope-select-wrap" for="agent-selector">
+      <span class="text-xs text-muted">Profile</span>
+      <select class="filter-select" id="agent-selector">
+        <option value="all">All profiles</option>
+        <option value="default">default</option>
+        <option value="research">research</option>
+        <option value="sentinel">sentinel</option>
+        <option value="work-backend">work-backend</option>
+        <option value="work-frontend">work-frontend</option>
+        <option value="trading">trading</option>
+        <option value="hestia">hestia</option>
+      </select>
+    </label>
+    <div class="scope-bar-meta">
+      <span id="scope-label">All profiles</span>
+      <span class="scope-separator">·</span>
+      <span id="scope-status">Loading…</span>
+    </div>
+  </div>
+  <div class="content-area">
+    
+    <!-- Page 1: Overview -->
+    <div class="page-section active" id="page-overview">
+      <div class="page-header">
+        <div class="page-label">01 // OVERVIEW</div>
+        <h1 class="page-title">Overview</h1>
+        <div class="page-subtitle">Complete system snapshot and memory intelligence overview.</div>
+      </div>
+      
+      <div class="stat-grid" id="overview-stats"></div>
+      
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">MEMORY COMPOSITION</div>
+        </div>
+        <div id="composition-bar"></div>
+        <div class="composition-caption" id="composition-caption">
+          <span class="caption-icon">ⓘ</span>
+          <span class="caption-text">Layers reflect <strong>durable user knowledge</strong> (L0–L7). Task memories from coding sessions are in a separate journal — see Today → Coding Memories. L6 schemas &amp; L7 intentions come from the periodic System2 digest (run <code>python %LOCALAPPDATA%\hermes\scripts\run_hyatlas_digest.py</code>).</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">MEMORIES INGESTED</div>
+        </div>
+        <div class="chart-container">
+          <canvas id="activity-chart"></canvas>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">MEMORY STORE</div>
+        </div>
+        <div id="memory-store"></div>
+      </div>
+      
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">OPERATIONS</div>
+        </div>
+        <div class="stat-grid" id="operations-stats"></div>
+        <div class="flex gap-3 mt-4">
+          <button class="btn" onclick="navigateTo('explore')">Explore Memory</button>
+          <button class="btn" onclick="navigateTo('layers')">View Layers</button>
+          <button class="btn" onclick="navigateTo('today')">Today's Digest</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Page 2: Memory Observatory -->
+    <div class="page-section" id="page-observatory">
+      <div class="page-header">
+        <div class="page-label">02 // MEMORY OBSERVATORY</div>
+        <h1 class="page-title">Memory Observatory</h1>
+        <div class="page-subtitle">Explore the structure of memory across layers and relationships.</div>
+      </div>
+      
+      <div class="graph-controls">
+        <div class="control-group">
+          <button class="control-btn" data-scope="25">Last 25</button>
+          <button class="control-btn" data-scope="50">Last 50</button>
+          <button class="control-btn" data-scope="100">Last 100</button>
+          <button class="control-btn active" data-scope="500">Last 500</button>
+          <button class="control-btn" id="reset-view-btn" title="Reset view (fit all)">&#x21BA; Reset</button>
+        </div>
+      </div>
+      
+      <div class="layer-filters" id="layer-filters"></div>
+      
+      <div class="graph-wrapper">
+        <div class="graph-container" id="graph-container"></div>
+        <div class="seed-overlay" id="obs-seed" style="display:none">
+          <div class="seed-dot"></div>
+          <div class="seed-ring" style="animation-delay:0s"></div>
+          <div class="seed-ring" style="animation-delay:.4s"></div>
+          <div class="seed-ring" style="animation-delay:.8s"></div>
+        </div>
+        <div class="graph-overlay">
+          <div class="obs-layer-rail" id="obs-layer-rail"></div>
+          <div class="obs-note" id="obs-zoom-note">SCROLL TO ZOOM · DRAG TO PAN · +/− KEYS · 0 RESET</div>
+          <div class="obs-tooltip" id="obs-tooltip"></div>
+        </div>
+      </div>
+      <div class="graph-legend" id="obs-legend"></div>
+      
+      <div class="text-xs text-muted mt-4">
+        Drag to pan • Scroll to zoom • Click nodes to inspect
+      </div>
+    </div>
+    
+    <!-- Page 3: Explore Memory -->
+    <div class="page-section" id="page-explore">
+      <div class="page-header">
+        <div class="page-label">03 // EXPLORE MEMORY</div>
+        <h1 class="page-title">Explore Memory</h1>
+        <div class="page-subtitle">Search, discover, and inspect memories across the system.</div>
+      </div>
+      
+      <div class="panel">
+        <input type="text" class="input mb-4" id="search-input" placeholder="Search memories...">
+        
+        <div class="tabs mb-4">
+          <div class="tab active" data-mode="semantic">SEMANTIC</div>
+          <div class="tab" data-mode="keyword">KEYWORD</div>
+          <div class="tab" data-mode="hybrid">HYBRID</div>
+        </div>
+        
+        <div class="filter-row">
+          <select class="filter-select" id="filter-layer">
+            <option value="">All Layers</option>
+            <option value="l1_profile">L1 Profile</option>
+            <option value="l2_raw">L2 Raw</option>
+            <option value="l3_fact">L3 Facts</option>
+            <option value="l4_summary">L4 Summaries</option>
+            <option value="l5_knowledge">L5 Knowledge</option>
+            <option value="l6_schema">L6 Schemas</option>
+            <option value="l7_intention">L7 Intentions</option>
+          </select>
+          <select class="filter-select" id="filter-time">
+            <option value="">All Time</option>
+            <option value="1">Last 24h</option>
+            <option value="7">Last 7 days</option>
+            <option value="30">Last 30 days</option>
+          </select>
+          <button class="btn" id="clear-filters">Clear</button>
+        </div>
+        
+        <div class="flex justify-between items-center mb-4">
+          <div class="text-sm text-muted" id="results-count">RESULTS (0)</div>
+          <select class="filter-select" id="sort-by">
+            <option value="relevance">Sort by Relevance</option>
+            <option value="recent">Sort by Recent</option>
+          </select>
+        </div>
+        
+        <div id="search-results"></div>
+      </div>
+    </div>
+    
+    <!-- Page 4: Memory Layers -->
+    <div class="page-section" id="page-layers">
+      <div class="page-header">
+        <div class="page-label">04 // MEMORY LAYERS</div>
+        <h1 class="page-title">Memory Layers</h1>
+        <div class="page-subtitle">Structure that organizes memory from raw signals to meta principles.</div>
+      </div>
+      
+      <div class="panel">
+        <table class="table" id="layers-table">
+          <thead>
+            <tr>
+              <th>NAME & DESCRIPTION</th>
+              <th>COUNT</th>
+              <th>% OF TOTAL</th>
+              <th>TAGS</th>
+            </tr>
+          </thead>
+          <tbody id="layers-tbody"></tbody>
+        </table>
+        <div class="flex justify-between items-center mt-4 text-sm text-muted">
+          <div id="layers-total">Total: 0</div>
+          <div id="layers-active">Layers Active: 0</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Page 5: Today / Activity -->
+    <div class="page-section" id="page-today">
+      <div class="page-header">
+        <div class="page-label">05 // TODAY / ACTIVITY</div>
+        <h1 class="page-title">Today</h1>
+        <div class="page-subtitle">Timeline of the last 24 hours of memory activity, events, and system operations.</div>
+      </div>
+      
+      <div class="tabs mb-4">
+        <div class="tab active" data-filter="all">All</div>
+        <div class="tab" data-filter="vdb">VDB Memories</div>
+        <div class="tab" data-filter="coding">Coding Memories</div>
+      </div>
+      
+      <div class="timeline" id="timeline"></div>
+      
+      <button class="export-btn" id="export-json">Export JSON</button>
+    </div>
+    
+    <!-- Page 6: Settings / System -->
+    <div class="page-section" id="page-system">
+      <div class="page-header">
+        <div class="page-label">06 // SETTINGS / SYSTEM</div>
+        <h1 class="page-title">Settings</h1>
+        <div class="page-subtitle">System configuration, status, and diagnostics.</div>
+      </div>
+      
+      <div class="tabs mb-4">
+        <div class="tab active" data-tab="system">System</div>
+        <div class="tab" data-tab="components">Components</div>
+        <div class="tab" data-tab="config">Configuration</div>
+        <div class="tab" data-tab="diagnostics">Diagnostics</div>
+      </div>
+      
+      <div id="tab-system" class="tab-content active">
+        <div class="flex gap-4">
+          <div style="flex: 1;">
+            <div class="panel">
+              <div class="panel-title mb-4">SYSTEM INFORMATION</div>
+              <div class="kv-list" id="system-info"></div>
+            </div>
+            
+            <div class="panel">
+              <div class="panel-title mb-4">STORAGE</div>
+              <div id="storage-info"></div>
+            </div>
+          </div>
+          
+          <div style="flex: 1;">
+            <div class="panel">
+              <div class="panel-title mb-4">COMPONENTS HEALTH</div>
+              <div id="components-health"></div>
+            </div>
+            
+            <div class="panel">
+              <div class="panel-title mb-4">SYSTEM STATUS</div>
+              <div id="system-status"></div>
+              <div class="radar-container">
+                <canvas id="radar-chart"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div id="tab-components" class="tab-content" style="display:none;">
+        <div class="panel">
+          <div class="panel-title mb-4">COMPONENT DETAILS</div>
+          <div id="component-details"></div>
+        </div>
+      </div>
+      
+      <div id="tab-config" class="tab-content" style="display:none;">
+        <div class="panel">
+          <div class="panel-title mb-4">CONFIGURATION</div>
+          <div id="config-info"></div>
+        </div>
+      </div>
+      
+      <div id="tab-diagnostics" class="tab-content" style="display:none;">
+        <div class="panel">
+          <div class="panel-title mb-4">DIAGNOSTICS</div>
+          <pre id="diagnostics-json" style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text); white-space: pre-wrap; overflow-x: auto;"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Page: Quality Metrics -->
+    <div class="page-section" id="page-quality">
+      <div class="page-header">
+        <div class="page-label">08 // QUALITY METRICS</div>
+        <h1 class="page-title">Quality Metrics</h1>
+        <div class="page-subtitle">Live health of your memory — no setup, trends update every time you open this page.</div>
+      </div>
+
+      <div class="panel quality-vitals-panel">
+        <div id="quality-vitals"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title mb-4">LIVE SIGNALS (7D)</div>
+        <div class="kv-list" id="quality-live"></div>
+      </div>
+
+      <div class="panel" id="quality-nudge-panel" style="display:none;">
+        <div class="panel-title mb-4">GENTLE NUDGE</div>
+        <div id="quality-tips"></div>
+      </div>
+
+      <details class="panel">
+        <summary class="panel-title" style="cursor: pointer; list-style: none;">How scores are calculated</summary>
+        <p class="composition-caption mb-3" id="quality-weights"></p>
+        <div id="quality-breakdown"></div>
+        <div class="kv-list mt-4" id="quality-glossary"></div>
+      </details>
+
+      <details class="panel" style="margin-top: 1rem;">
+        <summary class="panel-title" style="cursor: pointer; list-style: none;">Advanced (raw JSON)</summary>
+        <pre id="quality-json" style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text); white-space: pre-wrap; overflow-x: auto; max-height: 320px; margin-top: 12px;"></pre>
+      </details>
+    </div>
+
+    <!-- Page 7: L5 Knowledge Graph -->
+    <div class="page-section" id="page-l5">
+      <div class="page-header">
+        <div class="page-label">07 // KNOWLEDGE GRAPH (L5)</div>
+        <h1 class="page-title">L5 Knowledge Graph</h1>
+        <div class="page-subtitle">Entities and relations extracted from your memories. Built by LLM batch extraction from L2_facts; persisted in Kuzu.</div>
+      </div>
+
+      <!-- Stats panel -->
+      <div class="panel" id="l5-stats-panel">
+        <div class="kv-list" id="l5-stats"></div>
+      </div>
+
+      <!-- Filter bar -->
+      <div class="panel">
+        <div class="flex gap-3 items-center" style="flex-wrap: wrap;">
+          <input type="text" id="l5-search" class="form-input" placeholder="Search entities (name or alias)..."
+                 style="flex: 1; min-width: 200px;" />
+          <div class="flex gap-2" id="l5-type-chips" style="flex-wrap: wrap;"></div>
+          <div class="flex gap-2" id="l5-relation-chips" style="flex-wrap: wrap;"></div>
+        </div>
+      </div>
+
+      <!-- Two-panel grid: entities (left) + relations (right) -->
+      <div class="flex gap-4" style="align-items: flex-start;">
+        <div style="flex: 1; min-width: 0;">
+          <div class="panel">
+            <div class="panel-title mb-3" id="l5-entities-title">ENTITIES</div>
+            <div id="l5-entities-list" style="max-height: 60vh; overflow-y: auto;"></div>
+          </div>
+        </div>
+        <div style="flex: 1; min-width: 0;">
+          <div class="panel">
+            <div class="panel-title mb-3" id="l5-relations-title">RELATIONS</div>
+            <div id="l5-relations-list" style="max-height: 60vh; overflow-y: auto;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Page: Memory Detail (dedicated page reached by clicking a memory card) -->
+    <div class="page-section" id="page-memory-detail">
+      <div class="memory-detail-page-header">
+        <button class="btn back-btn" id="memory-detail-back-btn" type="button">
+          <span class="back-arrow">&larr;</span>
+          <span>Back</span>
+        </button>
+        <div class="page-label" style="margin-bottom: 0;">MEMORY DETAIL</div>
+      </div>
+      <div class="page-header" style="margin-bottom: 16px;">
+        <h1 class="page-title" id="memory-detail-title">Memory</h1>
+        <div class="page-subtitle" id="memory-detail-subtitle"></div>
+      </div>
+      <div id="memory-detail-content">
+        <!-- Populated by renderMemoryDetailPage(memory) -->
+      </div>
+    </div>
+
+  </div>
+  
+  <!-- Right Sidebar -->
+  <div class="right-sidebar" id="right-sidebar">
+    <!-- Content populated by JS based on current page -->
+  </div>
+</div>
+
+<script>window.REFRESH_S = __REFRESH_S__; window.USER_IDS = __USER_IDS__;</script>
+<script src="app.js"></script>
+<script src="js/l5.js"></script>
+<script src="js/observatory.js"></script>
+</body>
+</html>

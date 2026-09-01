@@ -1,92 +1,37 @@
-# HyAtlas Memory — Docker (zvec-native, v3.4+)
-#
-# No Qdrant sidecar. Vector store is in-process zvec; graph is Kuzu on the
-# HYATLAS_HOME volume. Native path remains: `hyatlas start` on the host.
+# HyAtlas v4.0 — Docker (single Go binary, embedded BGE-small)
 #
 # Usage:
-#   cp .env.example .env   # set HY_MEMORY_LLM_API_KEY
+#   cp .env.example .env  # set HYATLAS_LLM_KEY
 #   docker compose up -d --build
-#   curl http://127.0.0.1:19527/api/v1/status
-#   open http://127.0.0.1:8765
+#   curl http://127.0.0.1:19528/healthz
+#   open http://127.0.0.1:19528/dashboard/
 #
-# Optional local embeddings (large image):
-#   docker compose --profile local-embed up -d --build
+# One Go binary, no Python, no sidecar vector DB, no HTTP embed subprocess.
 
 services:
   hyatlas:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        INSTALL_LOCAL_EMBED: "0"
-    image: hyatlas-memory:3.4.5
+    image: hyatlas-memory:4.0.0
     container_name: hyatlas-memory
     ports:
-      - "19527:19527"
-      - "8765:8765"
+      - "19528:19528"
     environment:
-      HYATLAS_HOME: /data/hyatlas
-      HY_MEMORY_HOST: "0.0.0.0"
-      HY_MEMORY_PORT: "19527"
-      HY_DASH_BIND: "0.0.0.0"
-      HY_DASH_PORT: "8765"
-      HY_MEMORY_BASE: "http://127.0.0.1:19527"
-      HY_MEMORY_LLM_API_KEY: ${HY_MEMORY_LLM_API_KEY:-}
-      HY_MEMORY_LLM_MODEL: ${HY_MEMORY_LLM_MODEL:-gpt-4o-mini}
-      HY_MEMORY_LLM_BASE_URL: ${HY_MEMORY_LLM_BASE_URL:-https://api.openai.com/v1}
-      HY_MEMORY_EMBEDDER_PROVIDER: ${HY_MEMORY_EMBEDDER_PROVIDER:-remote}
-      HY_MEMORY_EMBEDDER_MODEL: ${HY_MEMORY_EMBEDDER_MODEL:-text-embedding-3-small}
-      HY_MEMORY_EMBEDDER_DIMS: ${HY_MEMORY_EMBEDDER_DIMS:-1536}
-      HY_MEMORY_EMBEDDER_API_KEY: ${HY_MEMORY_EMBEDDER_API_KEY:-${HY_MEMORY_LLM_API_KEY:-}}
-      MEMORY_MODE: ${MEMORY_MODE:-ultra}
-      FOR_DISABLE_CONSOLE_CLOSE_HANDLER: "1"
+      HYATLAS_PORT: "19528"
+      HYATLAS_LLM_BASE: ${HYATLAS_LLM_BASE:-http://127.0.0.1:49200/v1}
+      HYATLAS_LLM_MODEL: ${HYATLAS_LLM_MODEL:-deepseek:deepseek-v4-flash}
+      HYATLAS_LLM_KEY: ${HYATLAS_LLM_KEY:-}
+      HYATLAS_EMBED_BASE: bge
     volumes:
       - hyatlas_data:/data/hyatlas
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:19527/api/v1/status"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:19528/healthz"]
       interval: 15s
       timeout: 5s
-      start_period: 45s
+      start_period: 10s
       retries: 8
-
-  # Same stack with sentence-transformers baked in (slower build / larger image).
-  hyatlas-local-embed:
-    profiles: ["local-embed"]
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        INSTALL_LOCAL_EMBED: "1"
-    image: hyatlas-memory:3.4.5-local-embed
-    container_name: hyatlas-memory-local-embed
-    ports:
-      - "19527:19527"
-      - "8765:8765"
-    environment:
-      HYATLAS_HOME: /data/hyatlas
-      HY_MEMORY_HOST: "0.0.0.0"
-      HY_MEMORY_PORT: "19527"
-      HY_DASH_BIND: "0.0.0.0"
-      HY_DASH_PORT: "8765"
-      HY_MEMORY_BASE: "http://127.0.0.1:19527"
-      HY_MEMORY_LLM_API_KEY: ${HY_MEMORY_LLM_API_KEY:-}
-      HY_MEMORY_LLM_MODEL: ${HY_MEMORY_LLM_MODEL:-gpt-4o-mini}
-      HY_MEMORY_LLM_BASE_URL: ${HY_MEMORY_LLM_BASE_URL:-https://api.openai.com/v1}
-      HY_MEMORY_EMBEDDER_PROVIDER: local
-      HY_MEMORY_EMBEDDER_MODEL: ${HY_MEMORY_EMBEDDER_MODEL:-BAAI/bge-large-en-v1.5}
-      HY_MEMORY_EMBEDDER_DIMS: ${HY_MEMORY_EMBEDDER_DIMS:-1024}
-      MEMORY_MODE: ${MEMORY_MODE:-ultra}
-      FOR_DISABLE_CONSOLE_CLOSE_HANDLER: "1"
-    volumes:
-      - hyatlas_data:/data/hyatlas
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:19527/api/v1/status"]
-      interval: 15s
-      timeout: 5s
-      start_period: 90s
-      retries: 10
 
 volumes:
   hyatlas_data:

@@ -1,56 +1,50 @@
-__pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-.eggs/
-build/
-dist/
+# Build artifacts
+*.exe
+*.exe~
+*.dll
+go.sum
 
+# Runtime data (regenerated at runtime, never baked in)
+data/
+models/
+
+# Git / IDE
 .git/
 .github/
-.hermes/
+.vscode/
+.idea/
+*.swp
 .worktrees/
-.pytest_cache/
-.ruff_cache/
-
-# Runtime / host data — never bake into the image
-logs/
-*.log
-storage/
-snapshots/
-qdrant_data/
-qdrant_storage/
-.qdrant-initialized
 
 # Secrets and local config
 .env
 .env.*
 !.env.example
-hy_memory.json
-**/.hyatlas/
-**/.hy_memory/
+*.pem
+*.key
+*.log
 
-# Docs/assets not required at runtime (README kept for packaging)
-*.md
-!README.md
-!LICENSE
+# OS
+.DS_Store
+Thumbs.db
+
+# Scratch files
+*.tmp
+*.bak
+cache/
+logs/
+snapshots/
+
+# Docs not needed at runtime (source kept in repo, built into the binary)
+# README.md, CHANGELOG.md, CONTRIBUTING.md, V3_V4_COMPARISON.md are NOT excluded
+# so the dashboard can serve them.
 docs/
-assets/
-examples/
-scripts/
-tests/
 handoff.md
 NOW.md
 TUNA_AGENT_OS_TASK_BRIEF.md
 ROADMAP_v2_public.md
-*.jpeg
-*.jpg
-*.png
-!src/**/*.png
+v3-upgrade-overview.jpeg
 
-# Editor / OS
-.vscode/
-.idea/
-*.swp
-.DS_Store
-Thumbs.db
+# Assets not needed at runtime (banner images are cosmetic, not required for the binary)
+# The dashboard uses embedded HTML/CSS/JS, not the assets/ folder.
+assets/

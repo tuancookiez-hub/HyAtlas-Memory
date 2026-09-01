@@ -1,0 +1,4 @@
+github.com/philippgille/chromem-go v0.7.0 h1:4jfvfyKymjKNfGxBUhHUcj1kp7B17NL/I1P+vGh1RvY=
+github.com/philippgille/chromem-go v0.7.0/go.mod h1:hTd+wGEm/fFPQl7ilfCwQXkgEUxceYh86iIdoKMolPo=
+github.com/yalue/onnxruntime_go v1.32.0 h1:O4pPw3IT+46CRrfuT0lcHWkczVoFvtfq6kMAO/iIVKc=
+github.com/yalue/onnxruntime_go v1.32.0/go.mod h1:b4X26A8pekNb1ACJ58wAXgNKeUCGEAQ9dmACut9Sm/4=
