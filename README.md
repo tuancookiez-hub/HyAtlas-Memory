@@ -10,52 +10,90 @@ HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It r
 
 ---
 
-## Install
+## Install (v3.5 vs v4.0)
 
-### 1. One-time: MinGW-W64 (required for onnxruntime-go / cgo)
+| Step | v3.5 (Python) | v4.0 (Pure Go) |
+|------|---------------|-----------------|
+| 1. One-time prereq | Python 3.11, venv tooling | MinGW-W64 (cgo for onnxruntime-go) |
+| 2. Get the code | `git clone` | `git clone` (same) |
+| 3. Install | `pip install hyatlas-memory` (or `uv sync`) | `go build -tags embedded -o hyatlas-go.exe .` |
+| 4. Run | `python start.py` (5 processes) | `./hyatlas-go.exe` (1 process) |
+| Disk footprint | ~1 GB venv | **17.6 MB binary** |
+| External services | zvec + Kuzu + FastAPI + embed subprocess | none — all in-process |
 
-```bash
-winget install BrechtSanders.WinLibs.POSIX.UCRT
-```
-
-Restart your terminal after installation.
-
-### 2. Clone
-
+**v3.5 install:**
 ```bash
 git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 cd HyAtlas-Memory
+pip install hyatlas-memory
+python -m hyatlas_memory.start
 ```
 
-### 3. Build
-
+**v4.0 install (this release):**
 ```bash
-# Embedded build — model weights bundled into the binary (recommended)
+# One-time: MinGW-W64 (Windows) for cgo / onnxruntime-go
+winget install BrechtSanders.WinLibs.POSIX.UCRT
+# Restart your terminal after.
+
+git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
+cd HyAtlas-Memory
 go build -tags embedded -o hyatlas-go.exe .
-```
-
-> **Non-embedded build** (model files on disk at `./models/`):
-> `go build -o hyatlas-go.exe .`
-
-### 4. Run
-
-```bash
-# Required environment variables
-export HYATLAS_LLM_BASE="http://127.0.0.1:49200/v1"
-export HYATLAS_LLM_MODEL="deepseek:deepseek-v4-flash"
-export HYATLAS_LLM_KEY="your-key"
-
+HYATLAS_LLM_BASE=http://127.0.0.1:49200/v1 \
+HYATLAS_LLM_MODEL=deepseek:deepseek-v4-flash \
+HYATLAS_LLM_KEY=your-key \
 ./hyatlas-go.exe
 ```
 
-The server listens on `127.0.0.1:19528` (loopback only — no external surface).
-
-**Windows batch runner** (reads AI2API key from Hermes `.env`):
-```bash
-hyatlas-v4-start.bat
-```
+> **Linux / macOS:** replace `winget install ...` with your distro's MinGW package (e.g. `apt install gcc-mingw-w64-x86-64` for cross-compile, or just use the system Go toolchain — cgo works on Linux/macOS with `gcc`/`clang`).
 
 ---
+
+## Hermes Integration
+
+HyAtlas v4 is the **backend HTTP server** (`127.0.0.1:19528`) that backs the existing Hermes `hy_memory` memory provider plugin. It is **not** a native Hermes `MemoryProvider` ABC plugin — those are Python classes that subclass `agent.memory_provider.MemoryProvider` and live in `~/.hermes/plugins/memory/<name>/`.
+
+### How it works
+
+```
+┌─────────────────────┐     HTTP/JSON      ┌──────────────────────┐
+│  Hermes Agent       │ ─────────────────► │  hyatlas-go (v4)     │
+│  (Python)           │   /api/v1/*        │  127.0.0.1:19528     │
+│                     │ ◄───────────────── │  Pure Go binary      │
+│  hy_memory plugin   │   JSON responses   │  (this release)      │
+│  (~/.hermes/plugins/                        │  chromem-go + BGE    │
+│   memory/hy_memory/                          │  in-process          │
+│   client.py)                                └──────────────────────┘
+└─────────────────────┘
+```
+
+The `hy_memory` plugin (Python, in your Hermes install) calls HyAtlas v4's HTTP API. Switching from the v3.5 Python floor to v4 is a port change — same client, new backend.
+
+### Wire it up
+
+**1. Run HyAtlas v4** (see Install above).
+
+**2. Configure Hermes to use the v4 port** in `~/.hermes/config.yaml`:
+
+```yaml
+memory:
+  enabled: true
+  provider: hy_memory
+  providers:
+    hy_memory:
+      provider: hy_memory
+      server_port: 19528
+      auto_start: false
+```
+
+> If you previously pointed at v3.5, just change `server_port: 19527` → `server_port: 19528`.
+
+**3. Restart Hermes.**
+
+The `hy_memory` plugin (Python client) is already wire-compatible with v4. Verified against the real v3.5 `HyMemoryClient` — all four operations (reachable / add / list / search) pass cleanly.
+
+### Building a native `MemoryProvider` plugin
+
+If you want a **true native** Hermes memory plugin (Python, subclasses `MemoryProvider`, lives in `~/.hermes/plugins/memory/`), you can write a thin wrapper that calls HyAtlas v4 over HTTP. This is a future-work item — it would let `memory.provider: hyatlas` work directly. For now, the `hy_memory` plugin is the path of least resistance.
 
 ## Architecture
 
@@ -143,29 +181,7 @@ Response shape:
 
 ---
 
-## Hermes Plugin Wiring
-
-HyAtlas v4 implements the Hermes memory provider plugin contract. Once your Hermes `memory.providers.hy_memory` config points at `server_port: 19528`, a Hermes restart routes all memory reads/writes through v4.
-
-```json
-{
-  "memory": {
-    "providers": {
-      "hy_memory": {
-        "provider": "hy_memory",
-        "server_port": 19528,
-        "auto_start": false
-      }
-    }
-  }
-}
-```
-
-After updating the config, restart Hermes. The plugin-compatible server was verified against the real v3.5 HyMemoryClient — all four operations (reachable / add / list / search) pass cleanly.
-
----
-
-## Migration from v3.5
+## Hermes Integration
 
 HyAtlas v4 is a **binary replacement** for the Python v3.5 floor. The memory data formats are incompatible (zvec → Chromem, Kuzu → JSON graph), but the HTTP API surface is identical.
 
