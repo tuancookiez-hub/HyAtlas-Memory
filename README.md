@@ -2,98 +2,55 @@
 
 # HyAtlas v4.0 — Pure-Go Memory Core
 
-> **One binary. Seven layers. No Python.**
+> **One binary. Seven layers. Cross-platform.** Single 17.6 MB Go binary, no Python at runtime, in-process BGE embeddings, 7-layer memory model fully active. **Linux ✅ · macOS ✅ · Windows ✅.**
 
-HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It replaces the Python floor (venv, zvec, Kuzu, FastAPI, HTTP embed subprocess) with a single 17.6 MB binary: an embedded Chromem vector store, in-process BGE-small embeddings via onnxruntime-go, and async LLM fact extraction. The 7-layer memory model (Profile · Raw · Fact · Summary · Knowledge · Schema · Intention) is fully active — including L4 Summary extraction which was dormant in v3.5.
+HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It replaces the Python floor (venv, zvec, Kuzu, FastAPI, HTTP embed subprocess) with a single binary: an embedded Chromem vector store, in-process BGE-small embeddings via onnxruntime-go, and async LLM fact extraction. The 7-layer memory model (Profile · Raw · Fact · Summary · Knowledge · Schema · Intention) is fully active — including L4 Summary extraction which was dormant in v3.5.
 
 **Previous floor:** [HyAtlas v3.5.0](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.5.0) — Python/Zvec/Kuzu. See [V3_V4_COMPARISON.md](V3_V4_COMPARISON.md) for the full side-by-side and [CHANGELOG.md](CHANGELOG.md) for the migration history.
 
 ---
 
-## Install (v3.5 vs v4.0)
+## Quick start (Linux / macOS / Windows)
 
-| Step | v3.5 (Python) | v4.0 (Pure Go) |
-|------|---------------|-----------------|
-| 1. One-time prereq | Python 3.11, venv tooling | MinGW-W64 (cgo for onnxruntime-go) |
-| 2. Get the code | `git clone` | `git clone` (same) |
-| 3. Install | `pip install hyatlas-memory` (or `uv sync`) | `go build -tags embedded -o hyatlas-go.exe .` |
-| 4. Run | `python start.py` (5 processes) | `./hyatlas-go.exe` (1 process) |
-| Disk footprint | ~1 GB venv | **17.6 MB binary** |
-| External services | zvec + Kuzu + FastAPI + embed subprocess | none — all in-process |
+### 1. Prereqs
 
-**v3.5 install:**
+| OS | What's needed | Install command |
+|---|---|---|
+| **Linux** | Go 1.26+, gcc (for cgo) | `apt install golang-go gcc` (or distro equivalent) |
+| **macOS** | Go 1.26+, Xcode CLI tools | `xcode-select --install` + install Go 1.26+ from [go.dev](https://go.dev/dl/) |
+| **Windows** | Go 1.26+, MinGW-W64 (for cgo) | `winget install BrechtSanders.WinLibs.POSIX.UCRT` then restart terminal |
+
+> **cgo is required** — onnxruntime-go links against the platform's C runtime via cgo. Every platform has a free toolchain; you just need one.
+
+### 2. Clone + build
+
 ```bash
 git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 cd HyAtlas-Memory
-pip install hyatlas-memory
-python -m hyatlas_memory.start
+go build -o hyatlas-go .                     # plain build (~17 MB, reads ./models/ at runtime)
+go build -tags embedded -o hyatlas-go .       # embedded build (one binary, model bundled in)
 ```
 
-**v4.0 install (this release):**
+> **For the embedded build to work**, drop the platform-matching onnxruntime library into `./models/` before compiling (see [Model assets](#model-assets) below). The `go:embed` directives are platform-aware: Windows expects `models/onnxruntime.dll`, Linux expects `models/libonnxruntime.so`, macOS expects `models/libonnxruntime.dylib`.
+
+### 3. Run
+
 ```bash
-# One-time: MinGW-W64 (Windows) for cgo / onnxruntime-go
-winget install BrechtSanders.WinLibs.POSIX.UCRT
-# Restart your terminal after.
+export HYATLAS_LLM_BASE="http://127.0.0.1:49200/v1"   # or any OpenAI-compatible endpoint
+export HYATLAS_LLM_MODEL="deepseek:deepseek-v4-flash"
+export HYATLAS_LLM_KEY="your-key"
 
-git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
-cd HyAtlas-Memory
-go build -tags embedded -o hyatlas-go.exe .
-HYATLAS_LLM_BASE=http://127.0.0.1:49200/v1 \
-HYATLAS_LLM_MODEL=deepseek:deepseek-v4-flash \
-HYATLAS_LLM_KEY=your-key \
-./hyatlas-go.exe
+./hyatlas-go
 ```
 
-> **Linux / macOS:** replace `winget install ...` with your distro's MinGW package (e.g. `apt install gcc-mingw-w64-x86-64` for cross-compile, or just use the system Go toolchain — cgo works on Linux/macOS with `gcc`/`clang`).
+The server listens on `127.0.0.1:19528` (loopback only — no external surface).
+
+**Windows batch runner** (reads AI2API key from Hermes `.env`):
+```bash
+hyatlas-v4-start.bat
+```
 
 ---
-
-## Hermes Integration
-
-HyAtlas v4 is the **backend HTTP server** (`127.0.0.1:19528`) that backs the existing Hermes `hy_memory` memory provider plugin. It is **not** a native Hermes `MemoryProvider` ABC plugin — those are Python classes that subclass `agent.memory_provider.MemoryProvider` and live in `~/.hermes/plugins/memory/<name>/`.
-
-### How it works
-
-```
-┌─────────────────────┐     HTTP/JSON      ┌──────────────────────┐
-│  Hermes Agent       │ ─────────────────► │  hyatlas-go (v4)     │
-│  (Python)           │   /api/v1/*        │  127.0.0.1:19528     │
-│                     │ ◄───────────────── │  Pure Go binary      │
-│  hy_memory plugin   │   JSON responses   │  (this release)      │
-│  (~/.hermes/plugins/                        │  chromem-go + BGE    │
-│   memory/hy_memory/                          │  in-process          │
-│   client.py)                                └──────────────────────┘
-└─────────────────────┘
-```
-
-The `hy_memory` plugin (Python, in your Hermes install) calls HyAtlas v4's HTTP API. Switching from the v3.5 Python floor to v4 is a port change — same client, new backend.
-
-### Wire it up
-
-**1. Run HyAtlas v4** (see Install above).
-
-**2. Configure Hermes to use the v4 port** in `~/.hermes/config.yaml`:
-
-```yaml
-memory:
-  enabled: true
-  provider: hy_memory
-  providers:
-    hy_memory:
-      provider: hy_memory
-      server_port: 19528
-      auto_start: false
-```
-
-> If you previously pointed at v3.5, just change `server_port: 19527` → `server_port: 19528`.
-
-**3. Restart Hermes.**
-
-The `hy_memory` plugin (Python client) is already wire-compatible with v4. Verified against the real v3.5 `HyMemoryClient` — all four operations (reachable / add / list / search) pass cleanly.
-
-### Building a native `MemoryProvider` plugin
-
-If you want a **true native** Hermes memory plugin (Python, subclasses `MemoryProvider`, lives in `~/.hermes/plugins/memory/`), you can write a thin wrapper that calls HyAtlas v4 over HTTP. This is a future-work item — it would let `memory.provider: hyatlas` work directly. For now, the `hy_memory` plugin is the path of least resistance.
 
 ## Architecture
 
@@ -103,25 +60,54 @@ If you want a **true native** Hermes memory plugin (Python, subclasses `MemoryPr
 | **L2 Raw** | Every incoming memory as-is |
 | **L3 Fact** | LLM-extracted factual atoms |
 | **L4 Summary** | LLM-extracted session summaries (**enabled in v4; was dormant in v3.5**) |
-| **L5 Knowledge** | LLM-extracted entity/relation graph nodes |
-| **L6 Schema** | LLM-extracted structured schemas |
-| **L7 Intention** | LLM-extracted goals and next steps |
+| **L5 Knowledge** | LLM-extracted entity/relation graph nodes (JSON-persisted) |
+| **L6 Schema** | LLM-extracted recurring patterns |
+| **L7 Intention** | LLM-extracted current goal / next step |
 
 ### Stack
 
-- **Vector store:** [Chromem-go](https://github.com/philipjkim/chromem-go) v0.7.0 — embedded, disk-persisted, no server process
-- **Embeddings:** `bge/bge.go` — BGE-small-en-v1.5 (33 M params, 384-dim) via onnxruntime-go (cgo → `onnxruntime.dll`). WordPiece tokenizer, mean-pool, L2-normalize. Cross-path cosine vs. ground-truth BGE: **0.93**. No Python.
-- **LLM extraction:** Async via ai2api loopback proxy (port 49200). Promotes L1 Raw → L3 Fact → L4 Summary → L5/L6/L7.
-- **HTTP:** Standard Go `net/http`. No FastAPI.
+- **Vector store:** [Chromem-go](https://github.com/philippgille/chromem-go) v0.7.0 — embedded, disk-persisted, no server process
+- **Embeddings:** `bge/bge.go` — BGE-small-en-v1.5 (33M params, 384-dim) via onnxruntime-go (cgo). WordPiece tokenizer, mean-pool, L2-normalize. Cross-path cosine vs ground-truth BGE: **0.93**. No Python.
+- **LLM extraction:** Async via OpenAI-compatible endpoint. Promotes L1 Raw → L3 Fact → L4 Summary → L5/L6/L7 in a single structured call.
+- **HTTP:** Standard Go `net/http`. No framework.
 
-### Model assets
+### Headline metrics
 
-The ~133 MB BGE `.data` weights + ~15 MB `onnxruntime.dll` are **not committed** (`.gitignore` excludes `models/`). The `-tags embedded` build embeds them at compile time via `go:embed`. To regenerate the ONNX from the HuggingFace model, see `export_bge_onnx.py`.
+| | v3.5 (Python) | v4.0 (Pure Go) |
+|---|---|---|
+| Retrieval quality | 0.33 | **0.80** |
+| Processes | 5+ (venv, zvec, Kuzu, FastAPI, embed) | **1** |
+| Binary size | ~1 GB (Python venv) | **17.6 MB** |
+| Ports | 3 (19527, 19526, 19525) | **1** (19528) |
+| L4 Summary | Dormant | **Active** |
+| Linux/macOS support | Same (Python) | **Yes** (Go binary, no Python) |
+| Restart-safe | No | **Yes** |
+
+---
+
+## Model assets
+
+The BGE-small model + the platform-matching onnxruntime shared library live in `models/` (gitignored). For a plain build, the server reads them at runtime. For an embedded build, `go:embed` bundles them into the binary at compile time.
+
+**Directory layout (per platform):**
+
+| OS | Models dir contents |
+|---|---|
+| Windows | `bge-small-en-v1.5.onnx` + `.onnx.data` + `vocab.txt` + `onnxruntime.dll` |
+| Linux | `bge-small-en-v1.5.onnx` + `.onnx.data` + `vocab.txt` + `libonnxruntime.so` |
+| macOS | `bge-small-en-v1.5.onnx` + `.onnx.data` + `vocab.txt` + `libonnxruntime.dylib` |
+
+**Where to get the onnxruntime library:**
+- Windows: `pip install onnxruntime` then copy `onnxruntime.dll` out of the venv, OR download from [microsoft/onnxruntime releases](https://github.com/microsoft/onnxruntime/releases) (v1.28.1 to match `onnxruntime_go` v1.32.0)
+- Linux: `apt install libonnxruntime-dev` (Ubuntu 22.04+), or download from the same release page
+- macOS: `brew install onnxruntime`, or download from the same release page
+
+**To regenerate the ONNX from the HuggingFace model**, see `export_bge_onnx.py`.
 
 ### Version pins (critical)
 
 - `onnxruntime_go` **v1.32.0** — declares ONNX API 28
-- `onnxruntime` **1.28.1** `onnxruntime.dll` — must expose API 28
+- `onnxruntime` **1.28.1** shared library — must expose API 28
 - The `.data` external weights resolve relative to the process **CWD** — the embedder `chdir`s to the model dir on load
 
 ---
@@ -183,13 +169,62 @@ Response shape:
 
 ## Hermes Integration
 
+HyAtlas v4 is the **backend HTTP server** (`127.0.0.1:19528`) that backs the existing Hermes `hy_memory` memory provider plugin. It is **not** a native Hermes `MemoryProvider` ABC plugin — those are Python classes that subclass `agent.memory_provider.MemoryProvider` and live in `~/.hermes/plugins/memory/<name>/`.
+
+### How it works
+
+```
+┌─────────────────────┐     HTTP/JSON      ┌──────────────────────┐
+│  Hermes Agent       │ ─────────────────► │  hyatlas-go (v4)     │
+│  (Python)           │   /api/v1/*        │  127.0.0.1:19528     │
+│                     │ ◄───────────────── │  Pure Go binary      │
+│  hy_memory plugin   │   JSON responses   │  (this release)      │
+│  (~/.hermes/plugins/                        │  chromem-go + BGE    │
+│   memory/hy_memory/                          │  in-process          │
+│   client.py)                                └──────────────────────┘
+└─────────────────────┘
+```
+
+The `hy_memory` plugin (Python, in your Hermes install) calls HyAtlas v4's HTTP API. Switching from the v3.5 Python floor to v4 is a port change — same client, new backend.
+
+### Wire it up
+
+**1. Run HyAtlas v4** (see Quick start above).
+
+**2. Configure Hermes to use the v4 port** in `~/.hermes/config.yaml`:
+
+```yaml
+memory:
+  enabled: true
+  provider: hy_memory
+  providers:
+    hy_memory:
+      provider: hy_memory
+      server_port: 19528
+      auto_start: false
+```
+
+> If you previously pointed at v3.5, just change `server_port: 19527` → `server_port: 19528`.
+
+**3. Restart Hermes.**
+
+The `hy_memory` plugin (Python client) is already wire-compatible with v4. Verified against the real v3.5 `HyMemoryClient` — all four operations (reachable / add / list / search) pass cleanly.
+
+### Building a native `MemoryProvider` plugin
+
+If you want a **true native** Hermes memory plugin (Python, subclasses `MemoryProvider`, lives in `~/.hermes/plugins/memory/`), you can write a thin wrapper that calls HyAtlas v4 over HTTP. This is a future-work item — it would let `memory.provider: hyatlas` work directly. For now, the `hy_memory` plugin is the path of least resistance.
+
+---
+
+## Migration from v3.5
+
 HyAtlas v4 is a **binary replacement** for the Python v3.5 floor. The memory data formats are incompatible (zvec → Chromem, Kuzu → JSON graph), but the HTTP API surface is identical.
 
 **If you need to keep v3.5 running while testing v4**, they use different ports:
 - v3.5: `localhost:19527`
 - v4: `localhost:19528`
 
-The full v3.5 → v4 side-by-side (architecture, performance, reliability, API compatibility) lives in [V3_V4_COMPARISON.md](V3_V4_COMPARISON.md).
+The full v3.5 → v4 side-by-side (architecture, performance, reliability, API compatibility) is in [V3_V4_COMPARISON.md](V3_V4_COMPARISON.md).
 
 ---
 

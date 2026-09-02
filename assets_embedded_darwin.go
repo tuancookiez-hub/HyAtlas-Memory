@@ -1,18 +1,16 @@
-// Package main — single-file embedded assets.
+// Package main — single-file embedded assets (macOS).
 //
-// This file is compiled with go:embed to bundle the BGE model, vocab, and
-// onnxruntime DLL INSIDE the binary. At startup the embedded assets are written
-// to a cache dir, then the BGE embedder loads them from there. Result: one .exe
-// that runs anywhere with no external files.
+// This file is compiled with go:build embedded && darwin to bundle the BGE
+// model, vocab, and libonnxruntime.dylib INSIDE the binary. At startup the
+// embedded assets are written to a cache dir, then the BGE embedder loads
+// them from there. Result: one binary that runs anywhere on macOS with no
+// external files.
 //
-// Build the embedded variant (true single-file binary):
-//   go build -tags embedded -o hyatlas-go.exe .
-// when models/ sits next to the source. Without the tag, the server reads
-// ./models at runtime (no embedding; faster, smaller, but needs the folder).
-//
-// The 133MB .data weights make the embedded binary ~160MB. If that's too big,
-// ship the binary + models/ folder instead and drop the embedded tag.
-//go:build embedded
+// Build the embedded variant:
+//   go build -tags embedded -o hyatlas-go .
+// when models/ (with libonnxruntime.dylib alongside the onnx file) sits next
+// to the source. Without the tag, the server reads ./models at runtime.
+//go:build embedded && darwin
 
 package main
 
@@ -33,8 +31,8 @@ var embeddedModelData []byte
 //go:embed models/vocab.txt
 var embeddedVocab []byte
 
-//go:embed models/onnxruntime.dll
-var embeddedDLL []byte
+//go:embed models/libonnxruntime.dylib
+var embeddedMacDylib []byte
 
 var (
 	extractOnce sync.Once
@@ -55,7 +53,7 @@ func materializeAssets() string {
 			"bge-small-en-v1.5.onnx":      embeddedModel,
 			"bge-small-en-v1.5.onnx.data": embeddedModelData,
 			"vocab.txt":                   embeddedVocab,
-			"onnxruntime.dll":             embeddedDLL,
+			"libonnxruntime.dylib":        embeddedMacDylib,
 		}
 		for name, data := range files {
 			p := filepath.Join(dir, name)

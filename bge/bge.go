@@ -1,13 +1,22 @@
 // Package bgeemb implements a self-contained BGE-small-en-v1.5 embedder in Go.
 //
-// It loads the ONNX model via onnxruntime_go (cgo -> onnxruntime.dll), tokenizes
-// text with the BERT WordPiece vocab, runs inference, mean-pools with the BGE
-// attention mask, and normalizes. This is the in-Go embedder that removes the
-// Python embed_server dependency from the v4 server.
+// It loads the ONNX model via onnxruntime_go (cgo -> onnxruntime shared library),
+// tokenizes text with the BERT WordPiece vocab, runs inference, mean-pools with
+// the BGE attention mask, and normalizes. This is the in-Go embedder that
+// removes the Python embed_server dependency from the v4 server.
 //
-// File layout (runtime, gitignored): models/bge-small-en-v1.5.onnx(.data),
-// models/vocab.txt, models/onnxruntime.dll. Production single-EXE builds
-// go:embed these so no external files are needed.
+// File layout (runtime, gitignored):
+//
+//	Windows: models/bge-small-en-v1.5.onnx(.data), vocab.txt, onnxruntime.dll
+//	Linux:   models/bge-small-en-v1.5.onnx(.data), vocab.txt, libonnxruntime.so
+//	macOS:   models/bge-small-en-v1.5.onnx(.data), vocab.txt, libonnxruntime.dylib
+//
+// Production single-EXE builds go:embed the model/vocab AND the right shared
+// library for the target OS (one set per platform — Windows DLL on Windows,
+// Linux .so on Linux, macOS .dylib on macOS). The build embeds whichever
+// set the model/ directory contains at compile time. Cross-compile (e.g.
+// from Linux to Windows) needs the target's library in models/ before
+// `go build -tags embedded`.
 package bgeemb
 
 import (
@@ -17,6 +26,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -44,14 +54,43 @@ type BGE struct {
 	embedFuncr func(ctx context.Context, text string) ([]float32, error)
 }
 
+// runtimeLibName returns the platform-appropriate onnxruntime shared library
+// name. Production builds go:embed whichever one is present in models/ at
+// compile time. Cross-compile sets up the right library per target OS.
+func runtimeLibName() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "onnxruntime.dll"
+	case "darwin":
+		return "libonnxruntime.dylib"
+	default:
+		// linux, freebsd, etc.
+		return "libonnxruntime.so"
+	}
+}
+
 // New loads the model + vocab + sets the onnxruntime shared library path.
-// baseDir should contain bge-small-en-v1.5.onnx(.data), vocab.txt, onnxruntime.dll.
+// baseDir should contain the model files and the platform's onnxruntime
+// shared library (see package comment for the per-OS file layout).
 func New(baseDir string) (*BGE, error) {
-	dll := filepath.Join(baseDir, "onnxruntime.dll")
+	libName := runtimeLibName()
+	lib := filepath.Join(baseDir, libName)
 	modelPath := filepath.Join(baseDir, "bge-small-en-v1.5.onnx")
 	vocabPath := filepath.Join(baseDir, "vocab.txt")
 
-	ort.SetSharedLibraryPath(dll)
+	// If the platform-correct library isn't present, fall back to whichever
+	// onnxruntime* file IS present in baseDir. This makes single-binary
+	// releases (which embed one library) work regardless of where the
+	// binary is run, as long as the runtime OS matches the build target.
+	if _, err := os.Stat(lib); err != nil {
+		if fallback, ferr := findLibFallback(baseDir); ferr == nil {
+			lib = fallback
+		} else {
+			return nil, fmt.Errorf("onnxruntime library %s not found in %s (and no fallback present): %w", libName, baseDir, err)
+		}
+	}
+
+	ort.SetSharedLibraryPath(lib)
 	if err := ort.InitializeEnvironment(); err != nil {
 		return nil, fmt.Errorf("ort init: %w", err)
 	}
@@ -77,6 +116,23 @@ func New(baseDir string) (*BGE, error) {
 	}
 
 	return &BGE{sess: sess, vocab: vocab, path: baseDir}, nil
+}
+
+// findLibFallback looks in baseDir for any onnxruntime* shared library and
+// returns its full path. Used when the platform-default name isn't present
+// (e.g. someone renamed onnxruntime.so to libonnxruntime.so.1.20.0).
+func findLibFallback(baseDir string) (string, error) {
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, "onnxruntime") || strings.HasPrefix(name, "libonnxruntime") {
+			return filepath.Join(baseDir, name), nil
+		}
+	}
+	return "", fmt.Errorf("no onnxruntime* file found in %s", baseDir)
 }
 
 // Destroy frees the onnxruntime environment. Call once at shutdown.
