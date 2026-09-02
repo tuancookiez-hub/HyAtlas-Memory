@@ -8,6 +8,8 @@ HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It r
 
 **Previous floor:** [HyAtlas v3.5.0](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.5.0) — Python/Zvec/Kuzu. See [V3_V4_COMPARISON.md](V3_V4_COMPARISON.md) for the full side-by-side and [CHANGELOG.md](CHANGELOG.md) for the migration history.
 
+![v3.5 → v4.0.1](assets/hyatlas-v3.5-to-v4.0.1.png)
+
 ---
 
 ## Quick start (Linux / macOS / Windows)

@@ -4,6 +4,8 @@
 
 > **Stable floor.** Aligns the GitHub tag with the code you actually run: one-line installer, desktop pane, Hermes plugin, and a graph snapshot that never returns dangling edges.
 
+![v3.5 → v4.0.1](assets/hyatlas-v3.5-to-v4.0.1.png)
+
 ### Added
 - One-line installer (`scripts/install.sh`) + GitHub Actions release pipeline for linux-amd64 / macos-arm64 / windows-amd64.
 - v4-native Hermes `hy_memory` plugin (provider + desktop pane at `/hyatlas`, shortcut Mod+Shift+H).
