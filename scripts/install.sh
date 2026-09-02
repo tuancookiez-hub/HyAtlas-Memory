@@ -232,7 +232,7 @@ download_onnxruntime() {
     local pkg base url
     case "$PLATFORM_OS" in
         windows) pkg="win-x64" ;;
-        macos)   pkg="osx-universal" ;;
+        macos)   pkg="osx-arm64" ;;
         linux)   pkg="linux-x64" ;;
     esac
     base="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-${pkg}-${ORT_VERSION}"

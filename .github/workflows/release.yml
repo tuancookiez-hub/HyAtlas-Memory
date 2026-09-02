@@ -31,7 +31,7 @@ jobs:
             asset_os: macos
             goarch: arm64
             lib: libonnxruntime.dylib
-            ort_pkg: osx-universal
+            ort_pkg: osx-arm64
             ext: ""
           - os: windows-latest
             asset_os: windows
