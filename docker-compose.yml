@@ -13,7 +13,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: hyatlas-memory:4.0.0
+    image: hyatlas-memory:4.0.1
     container_name: hyatlas-memory
     ports:
       - "19528:19528"

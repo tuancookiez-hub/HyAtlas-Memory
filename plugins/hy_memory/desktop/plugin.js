@@ -434,7 +434,7 @@ function Overview({ status, layers, maxLayer, connecting }) {
       jsxs('div', {
         className: 'grid grid-cols-2 gap-3 md:grid-cols-4',
         children: [
-          jsx(Stat, { label: 'Graph nodes', value: status && status.graph_nodes, hint: 'L5 store, not layer docs' }),
+          jsx(Stat, { label: 'Graph nodes', value: status && status.graph_nodes, hint: 'L5 JSON graph (layer docs stay 0)' }),
           jsx(Stat, { label: 'Graph edges', value: status && status.graph_edges }),
           jsx(Stat, { label: 'VDB points', value: status && status.vdb_points }),
           jsx(Stat, { label: 'Embed dims', value: status && status.embed_dims }),

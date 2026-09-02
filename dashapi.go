@@ -60,7 +60,7 @@ func (s *Server) handleDashStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDashInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"name":           "HyAtlas v4 (Go)",
-		"version":        "4.0.0",
+		"version":        "4.0.1",
 		"mode":           "ultra",
 		"uptime_seconds": int64(time.Since(s.start).Seconds()),
 	})

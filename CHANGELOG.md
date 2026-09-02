@@ -1,5 +1,24 @@
 # Changelog
 
+## [4.0.1] — 2026-09-02
+
+> **Stable floor.** Aligns the GitHub tag with the code you actually run: one-line installer, desktop pane, Hermes plugin, and a graph snapshot that never returns dangling edges.
+
+### Added
+- One-line installer (`scripts/install.sh`) + GitHub Actions release pipeline for linux-amd64 / macos-arm64 / windows-amd64.
+- v4-native Hermes `hy_memory` plugin (provider + desktop pane at `/hyatlas`, shortcut Mod+Shift+H).
+- Desktop Graph tab: Three.js L5 constellation (hover neighborhood, Field Note).
+- `graph.Store.Snapshot` tests (dangling-edge filter, edge dedupe, persist round-trip).
+
+### Fixed
+- Bounded graph snapshots dropped nodes but kept all edges — clients saw dangling `from`/`to`. Snapshot now filters relations to the returned node set.
+- Release CI: macOS onnxruntime asset is `osx-arm64` (not `osx-universal`); tag resolution on `workflow_dispatch`.
+- Desktop pane backend: `dashboard/manifest.json` `api` must be `plugin_api.py` (relative to `dashboard/`).
+
+### Changed
+- Installer default tag is `v4.0.1`.
+- Dependabot alerts on `uv.lock` / `transformers` are stale Python-floor leftovers; v4 has no Python runtime.
+
 ## [3.5.0] — 2026-08-17
 
 > **v3.5.0 floor refresh (2026-08-17).** Same `3.5.0` tag, new floor. Live compaction wired into the single-memory write path, configurable LLM primary + fallback chain, autostart flipped off-by-default upstream, and the shadow `LLMConfig` class finally aligned with `core.config.LLMConfig`. This is the new stable floor before the planned memory-system overhaul.

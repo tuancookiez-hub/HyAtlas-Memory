@@ -1,7 +1,7 @@
 # HyAtlas v4.0 — Current State
 
-**Date:** 2026-09-01
-**Status:** v4.0.0 ready for release
+**Date:** 2026-09-02
+**Status:** v4.0.1 stable floor
 
 ## What v4 is
 

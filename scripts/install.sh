@@ -15,7 +15,7 @@
 #   6. Verifies the install by starting the server and hitting /healthz
 #
 # Environment variables (all optional):
-#   HYATLAS_VERSION   — release tag to install (default: v4.0.0)
+#   HYATLAS_VERSION   — release tag to install (default: v4.0.1)
 #   HYATLAS_INSTALL_DIR — where to put the binary (default: ~/.local/bin, or
 #                         %LOCALAPPDATA%\hyatlas on Windows)
 #   HYATLAS_MODEL_DIR — where to cache the model (default: ~/.hyatlas/models)
@@ -25,7 +25,7 @@
 set -euo pipefail
 
 REPO="tuancookiez-hub/HyAtlas-Memory"
-VERSION="${HYATLAS_VERSION:-v4.0.0}"
+VERSION="${HYATLAS_VERSION:-v4.0.1}"
 INSTALL_DIR="${HYATLAS_INSTALL_DIR:-}"
 MODEL_DIR="${HYATLAS_MODEL_DIR:-}"
 NO_MODEL="${HYATLAS_NO_MODEL:-0}"

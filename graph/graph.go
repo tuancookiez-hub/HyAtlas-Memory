@@ -174,6 +174,8 @@ func (s *Store) EdgeCount() int {
 }
 
 // Snapshot returns bounded node + relation lists for the dashboard graph view.
+// Edges that point at a node outside the bound are dropped so the client never
+// receives dangling from/to ids.
 func (s *Store) Snapshot(maxNodes int) ([]Node, []Edge) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -185,8 +187,20 @@ func (s *Store) Snapshot(maxNodes int) ([]Node, []Edge) {
 	if maxNodes > 0 && len(nodes) > maxNodes {
 		nodes = nodes[:maxNodes]
 	}
-	rels := make([]Edge, len(s.edges))
-	copy(rels, s.edges)
+	keep := make(map[string]struct{}, len(nodes))
+	for _, n := range nodes {
+		keep[n.ID] = struct{}{}
+	}
+	rels := make([]Edge, 0, len(s.edges))
+	for _, e := range s.edges {
+		if _, ok := keep[e.From]; !ok {
+			continue
+		}
+		if _, ok := keep[e.To]; !ok {
+			continue
+		}
+		rels = append(rels, e)
+	}
 	return nodes, rels
 }
 

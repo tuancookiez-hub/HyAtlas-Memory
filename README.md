@@ -27,7 +27,7 @@ Useful env vars:
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `HYATLAS_VERSION` | Release tag to install | `v4.0.0` |
+| `HYATLAS_VERSION` | Release tag to install | `v4.0.1` |
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the BGE model is cached | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
 | `HYATLAS_NO_MODEL=1` | Skip the model download | (downloads) |

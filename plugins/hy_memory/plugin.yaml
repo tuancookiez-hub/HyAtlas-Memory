@@ -1,5 +1,5 @@
 name: hy_memory
-version: 4.0.0
+version: 4.0.1
 description: "HyAtlas v4.0 — pure-Go 7-layer memory backend (chromem-go + in-process BGE-small via onnxruntime-go). Wire-compatible with the v3.5 HyMemoryClient; runs against the Go binary at 127.0.0.1:19528."
 author: Tuna
 license: Apache-2.0

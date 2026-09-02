@@ -20,6 +20,8 @@ jobs:
         run: go mod download
       - name: go vet
         run: go vet ./...
+      - name: go test
+        run: go test ./...
       - name: Build (plain — no embedded tag)
         run: go build -o /tmp/hyatlas-go-plain .
       - name: Smoke test (server boots and serves /healthz)
