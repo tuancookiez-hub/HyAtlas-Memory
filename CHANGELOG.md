@@ -21,6 +21,8 @@
 - Installer default tag is `v4.0.1`.
 - Dependabot alerts on `uv.lock` / `transformers` are stale Python-floor leftovers; v4 has no Python runtime.
 - Extraction LLM default is a Nous Portal `:free` model (`poolside/laguna-s-2.1:free`), not DeepSeek.
+- `/api/v1/status` and `/api/info` now expose `llm_model` and `llm_base` so the desktop pane and dashboard can show the live extraction LLM.
+- Go tests cover the new status / info fields (`server_test.go`).
 
 ## [3.5.0] — 2026-08-17
 

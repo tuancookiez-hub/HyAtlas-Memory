@@ -19,6 +19,8 @@ import (
 type Server struct {
 	store          *MemoryStore
 	llm            *LLMClient
+	llmModel       string
+	llmBase        string
 	start          time.Time
 	lastExtractErr string
 	dataDir        string
@@ -29,6 +31,8 @@ type Status struct {
 	VDB           string `json:"vdb"`
 	Embed         string `json:"embed"`
 	LLM           string `json:"llm"`
+	LLMModel      string `json:"llm_model"`
+	LLMBase       string `json:"llm_base"`
 	VDBProvider   string `json:"vdb_provider"`
 	VDBCollection string `json:"vdb_collection"`
 	VDBPoints     int    `json:"vdb_points"`
@@ -47,6 +51,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		VDB:           "ok",
 		Embed:         "ok",
 		LLM:           "ok",
+		LLMModel:      s.llmModel,
+		LLMBase:       s.llmBase,
 		VDBProvider:   "chromem",
 		VDBCollection: "layers",
 		VDBPoints:     s.store.TotalMemories(),
@@ -58,6 +64,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"vdb":            status.VDB,
 		"embed":          status.Embed,
 		"llm":            status.LLM,
+		"llm_model":      status.LLMModel,
+		"llm_base":       status.LLMBase,
 		"vdb_provider":   status.VDBProvider,
 		"vdb_collection": status.VDBCollection,
 		"vdb_points":     status.VDBPoints,
@@ -439,7 +447,7 @@ func main() {
 		log.Fatal("store: ", err)
 	}
 	llm := NewLLMClient(llmBase, llmKey, llmModel)
-	srv := &Server{store: store, llm: llm, start: time.Now(), dataDir: dir}
+	srv := &Server{store: store, llm: llm, llmModel: llmModel, llmBase: llmBase, start: time.Now(), dataDir: dir}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", srv.handleHealthz)
