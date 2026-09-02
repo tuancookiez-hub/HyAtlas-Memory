@@ -246,11 +246,20 @@ download_onnxruntime() {
             url="${base}.zip"
             curl -fsSL --retry 3 -o "$payload/ort.zip" "$url" \
                 || err "onnxruntime download failed: $url"
-            command -v unzip >/dev/null 2>&1 \
-                || err "'unzip' is required to extract onnxruntime on Windows.
-    Install it (Git Bash usually ships it) or download onnxruntime.dll manually
-    from $url and place it in $MODEL_DIR/"
-            unzip -o -q "$payload/ort.zip" -d "$payload"
+            # Extraction fallback chain: bsdtar (ships with Windows 10+ and
+            # reads zip natively) -> unzip -> PowerShell Expand-Archive.
+            if tar -xzf "$payload/ort.zip" -C "$payload" 2>/dev/null; then
+                :
+            elif command -v unzip >/dev/null 2>&1; then
+                unzip -o -q "$payload/ort.zip" -d "$payload"
+            elif command -v powershell >/dev/null 2>&1; then
+                powershell -NoProfile -Command \
+                    "Expand-Archive -Force '$(cygpath -w "$payload/ort.zip" 2>/dev/null || echo "$payload/ort.zip")' '$(cygpath -w "$payload" 2>/dev/null || echo "$payload")'"
+            else
+                err "No unzip tool found (tried tar, unzip, powershell).
+    Download onnxruntime.dll manually from $url
+    and place it in $MODEL_DIR/"
+            fi
             cp "$payload/onnxruntime-${pkg}-${ORT_VERSION}/lib/onnxruntime.dll" "$MODEL_DIR/"
             ;;
         *)
