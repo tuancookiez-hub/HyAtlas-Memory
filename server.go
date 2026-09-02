@@ -46,6 +46,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if s.lastExtractErr != "" {
 		write = "degraded: " + s.lastExtractErr
 	}
+	writesCount, searchesCount := s.store.Usage()
 	status := Status{
 		Status:        "ok",
 		VDB:           "ok",
@@ -71,6 +72,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"vdb_points":     status.VDBPoints,
 		"embed_dims":     status.EmbedDims,
 		"write_pipeline": status.WritePipeline,
+		"writes":         writesCount,
+		"searches":       searchesCount,
 		"layers":         counts,
 		"graph_nodes":    s.store.Graph().NodeCount(),
 		"graph_edges":    s.store.Graph().EdgeCount(),

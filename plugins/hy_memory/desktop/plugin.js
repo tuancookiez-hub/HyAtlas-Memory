@@ -159,8 +159,8 @@ function Overview({ status, layers, maxLayer, connecting }) {
       jsxs('div', {
         className: 'grid grid-cols-2 gap-3 md:grid-cols-4',
         children: [
-          jsx(Stat, { label: 'Graph nodes', value: status && status.graph_nodes, hint: 'L5 JSON graph (layer docs stay 0)' }),
-          jsx(Stat, { label: 'Graph edges', value: status && status.graph_edges }),
+          jsx(Stat, { label: 'Used — writes', value: status && status.writes, hint: 'memories added (all-time)' }),
+          jsx(Stat, { label: 'Used — searches', value: status && status.searches, hint: 'recalls by agents (all-time)' }),
           jsx(Stat, { label: 'VDB points', value: status && status.vdb_points }),
           jsx(Stat, { label: 'Embed dims', value: status && status.embed_dims }),
         ],
@@ -332,7 +332,7 @@ function HyAtlasPage() {
                 children: connecting
                   ? 'v4 · chromem-go · connecting…'
                   : status
-                    ? `v4 · chromem-go · ${status.vdb_points} memories · ${status.graph_nodes} graph nodes`
+                    ? `v4 · ${status.vdb_points} memories · ${status.writes || 0} writes · ${status.searches || 0} recalls`
                     : 'v4 · chromem-go',
               }),
             ],

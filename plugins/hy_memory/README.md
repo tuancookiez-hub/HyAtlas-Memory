@@ -50,9 +50,10 @@ The pane talks to `/api/plugins/hy_memory/*`, which is mounted from
 After changing that list, restart the Desktop backend (⌘K → Restart backend).
 Hot-reloading `plugin.js` is not enough — Python routes mount at backend start.
 
-Tabs: Overview (health + 7-layer bars + graph/vdb counters), Memories
-(layer filter), Search (3-channel semantic hits), Add (write + async extract).
-The 3D Observatory lives on the Go dashboard (`/dashboard/`), not in this pane.
+Tabs: Overview (health + 7-layer bars + write/search usage counters),
+Memories (layer filter), Search (3-channel semantic hits), Add (write +
+async extract). The 3D Observatory lives on the Go dashboard (`/dashboard/`),
+not in this pane.
 
 ## Wire-compat with v3.5
 

@@ -7,11 +7,18 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/philippgille/chromem-go"
 	"github.com/tuancookiez-hub/hyatlas-v4/graph"
 	"github.com/tuancookiez-hub/hyatlas-v4/memory"
 )
+
+// UsageCounters is the JSON shape persisted next to the doc index.
+type UsageCounters struct {
+	Writes   uint64 `json:"writes"`
+	Searches uint64 `json:"searches"`
+}
 
 // DocIndex is an exact-match record for a stored memory doc. It powers list /
 // delete / metrics / scoping without relying on approximate vector search.
@@ -37,6 +44,11 @@ type MemoryStore struct {
 	index map[string]DocIndex
 	// persisted index path (same dir as the chromem DB)
 	indexPath string
+	// usage counters — atomic so reads from /api/v1/status never block writes.
+	// Persisted as JSON next to the doc index so they survive restart.
+	writes     atomic.Uint64
+	searches   atomic.Uint64
+	countsPath string
 }
 
 // NewMemoryStore opens (or creates) the persistent layer DB + graph + doc index.
@@ -54,7 +66,10 @@ func NewMemoryStore(ctx context.Context, dir string, embed Embedder, graphPath s
 	}
 	s := &MemoryStore{db: db, g: g, embed: embed, ctx: ctx,
 		cols: map[memory.Layer]*chromem.Collection{}, index: map[string]DocIndex{},
-		indexPath: filepath.Join(dir, "doc_index.json")}
+		indexPath:  filepath.Join(dir, "doc_index.json"),
+		countsPath: filepath.Join(dir, "usage.json")}
+	// load persisted counters before rebuildIndex so writes/searches survive restart.
+	s.loadUsage()
 	for _, l := range memory.All() {
 		col, err := db.GetOrCreateCollection(string(l), nil, ef)
 		if err != nil {
@@ -85,6 +100,8 @@ func (s *MemoryStore) Add(layer memory.Layer, id, content string, meta map[strin
 	s.mu.Lock()
 	s.index[id] = docIndexFrom(id, string(layer), content, meta)
 	s.mu.Unlock()
+	s.writes.Add(1)
+	s.persistUsageAsync()
 	return s.persistIndex()
 }
 
@@ -134,6 +151,8 @@ func (s *MemoryStore) Search(query string, limit int, layer memory.Layer, userID
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
+	s.searches.Add(1)
+	s.persistUsageAsync()
 	return hits, nil
 }
 
@@ -250,6 +269,61 @@ func (s *MemoryStore) SetExtracted(id string, v bool) error {
 
 // Graph exposes the L5 knowledge graph.
 func (s *MemoryStore) Graph() *graph.Store { return s.g }
+
+// ---- usage counters ----
+
+// Usage returns the current atomic counters (writes, searches) — read-only
+// snapshot for /api/v1/status. Used by the desktop pane to show whether the
+// memory system is actually being read.
+func (s *MemoryStore) Usage() (writes, searches uint64) {
+	return s.writes.Load(), s.searches.Load()
+}
+
+func (s *MemoryStore) loadUsage() {
+	if s.countsPath == "" {
+		return
+	}
+	b, err := os.ReadFile(s.countsPath)
+	if err != nil || len(b) == 0 {
+		return
+	}
+	var c UsageCounters
+	if err := json.Unmarshal(b, &c); err != nil {
+		return
+	}
+	s.writes.Store(c.Writes)
+	s.searches.Store(c.Searches)
+}
+
+// persistUsageAsync writes the counters without blocking the request path.
+// One pending write at a time; the latest call's snapshot wins.
+func (s *MemoryStore) persistUsageAsync() {
+	if s.countsPath == "" {
+		return
+	}
+	go func() {
+		s.persistUsage()
+	}()
+}
+
+func (s *MemoryStore) persistUsage() error {
+	if s.countsPath == "" {
+		return nil
+	}
+	c := UsageCounters{Writes: s.writes.Load(), Searches: s.searches.Load()}
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(s.countsPath), 0o755); err != nil {
+		return err
+	}
+	tmp := s.countsPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.countsPath)
+}
 
 // ---- index persistence ----
 
