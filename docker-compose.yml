@@ -19,8 +19,8 @@ services:
       - "19528:19528"
     environment:
       HYATLAS_PORT: "19528"
-      HYATLAS_LLM_BASE: ${HYATLAS_LLM_BASE:-http://127.0.0.1:49200/v1}
-      HYATLAS_LLM_MODEL: ${HYATLAS_LLM_MODEL:-deepseek:deepseek-v4-flash}
+      HYATLAS_LLM_BASE: ${HYATLAS_LLM_BASE:-https://inference-api.nousresearch.com/v1}
+      HYATLAS_LLM_MODEL: ${HYATLAS_LLM_MODEL:-poolside/laguna-s-2.1:free}
       HYATLAS_LLM_KEY: ${HYATLAS_LLM_KEY:-}
       HYATLAS_EMBED_BASE: bge
     volumes:

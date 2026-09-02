@@ -11,7 +11,7 @@ Pure-Go memory server. Single binary (`hyatlas-go` / `hyatlas-go.exe`), no Pytho
 
 - **Vector store:** Chromem-go v0.7.0 (embedded, disk-persisted)
 - **Embedding:** BGE-small-en-v1.5 in-process via onnxruntime-go (33M params, 384d)
-- **LLM:** any OpenAI-compatible endpoint (e.g. deepseek-v4-flash via ai2api loopback)
+- **LLM:** Nous Portal `:free` model (default `poolside/laguna-s-2.1:free`). Embeddings stay local BGE.
 - **HTTP:** standard `net/http`, no framework
 - **Data dir:** `./data/` (chromem collections + graph.json + doc_index.json)
 
@@ -69,9 +69,9 @@ Requires:
 ## Run
 
 ```bash
-HYATLAS_LLM_BASE=http://127.0.0.1:49200/v1 \
-HYATLAS_LLM_MODEL=deepseek:deepseek-v4-flash \
-HYATLAS_LLM_KEY=your-key \
+HYATLAS_LLM_BASE=https://inference-api.nousresearch.com/v1 \
+HYATLAS_LLM_MODEL=poolside/laguna-s-2.1:free \
+HYATLAS_LLM_KEY=your-nous-agent-key \
 ./hyatlas-go.exe
 ```
 

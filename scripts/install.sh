@@ -351,8 +351,8 @@ $(printf '\033[0;32m' )HyAtlas-Memory v4 installed.$(printf '\033[0m')
       $BINARY_NAME
 
   Then set your LLM endpoint (any OpenAI-compatible API):
-      export HYATLAS_LLM_BASE="http://127.0.0.1:49200/v1"
-      export HYATLAS_LLM_MODEL="deepseek:deepseek-v4-flash"
+      export HYATLAS_LLM_BASE="https://inference-api.nousresearch.com/v1"
+      export HYATLAS_LLM_MODEL="poolside/laguna-s-2.1:free"
       export HYATLAS_LLM_KEY="your-key"
 
   Wire it into Hermes (in ~/.hermes/config.yaml):

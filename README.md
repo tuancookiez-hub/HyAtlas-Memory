@@ -74,9 +74,9 @@ export HYATLAS_EMBED_BASE=bge
 export HYATLAS_MODEL_DIR=/path/to/models
 
 # Required for LLM extraction (any OpenAI-compatible endpoint):
-export HYATLAS_LLM_BASE="http://127.0.0.1:49200/v1"
-export HYATLAS_LLM_MODEL="deepseek:deepseek-v4-flash"
-export HYATLAS_LLM_KEY="your-key"
+export HYATLAS_LLM_BASE="https://inference-api.nousresearch.com/v1"
+export HYATLAS_LLM_MODEL="poolside/laguna-s-2.1:free"
+export HYATLAS_LLM_KEY="your-nous-agent-key"
 
 ./hyatlas-go
 ```
@@ -90,10 +90,10 @@ The server listens on `127.0.0.1:19528` (loopback only — no external surface).
 | `HYATLAS_GO_PORT` | `19528` | HTTP listen port |
 | `HYATLAS_GO_HOST` | `127.0.0.1` | Bind address (loopback only by default) |
 | `HYATLAS_GO_DATA` | `./data` | Where chromem collections + graph.json live |
-| `HYATLAS_EMBED_BASE` | `http://127.0.0.1:49200/v1` | Set to `bge` for the local in-process embedder |
+| `HYATLAS_EMBED_BASE` | `https://inference-api.nousresearch.com/v1` | Set to `bge` for the local in-process embedder |
 | `HYATLAS_MODEL_DIR` | `./models` | Where the BGE model lives |
-| `HYATLAS_LLM_BASE` | `http://127.0.0.1:49200/v1` | OpenAI-compatible LLM endpoint |
-| `HYATLAS_LLM_MODEL` | `deepseek:deepseek-v4-flash` | LLM model name |
+| `HYATLAS_LLM_BASE` | `https://inference-api.nousresearch.com/v1` | OpenAI-compatible LLM endpoint |
+| `HYATLAS_LLM_MODEL` | `poolside/laguna-s-2.1:free` | LLM model name |
 | `HYATLAS_LLM_KEY` | (empty) | LLM bearer token |
 | `HYATLAS_GRAPH_PATH` | `<data>/graph.json` | L5 graph store location |
 

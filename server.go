@@ -406,10 +406,10 @@ func jsonResponse(w http.ResponseWriter, code int, v any) {
 func main() {
 	port := envOr("HYATLAS_GO_PORT", "19528")
 	dir := envOr("HYATLAS_GO_DATA", "./data")
-	// LLM via ai2api loopback (firewall-safe). Embed via same proxy if available.
-	llmBase := envOr("HYATLAS_LLM_BASE", "http://127.0.0.1:49200/v1")
+	// LLM: any OpenAI-compatible endpoint. Default is a Nous Portal :free model.
+	llmBase := envOr("HYATLAS_LLM_BASE", "https://inference-api.nousresearch.com/v1")
 	llmKey := os.Getenv("HYATLAS_LLM_KEY")
-	llmModel := envOr("HYATLAS_LLM_MODEL", "deepseek:deepseek-v4-flash")
+	llmModel := envOr("HYATLAS_LLM_MODEL", "poolside/laguna-s-2.1:free")
 	embedBase := envOr("HYATLAS_EMBED_BASE", "http://127.0.0.1:49200/v1")
 	embedKey := os.Getenv("HYATLAS_EMBED_KEY")
 	embedModel := envOr("HYATLAS_EMBED_MODEL", "text-embedding-3-small")

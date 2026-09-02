@@ -66,7 +66,7 @@ The plugin reads (in priority order):
 
 3. The Go binary itself reads (separately, from the binary's process env):
    - `HYATLAS_LLM_BASE` — OpenAI-compatible endpoint
-   - `HYATLAS_LLM_MODEL` — model name (e.g. `deepseek:deepseek-v4-flash`)
+   - `HYATLAS_LLM_MODEL` — model name (e.g. `poolside/laguna-s-2.1:free`)
    - `HYATLAS_LLM_KEY` — bearer token for the LLM endpoint
 
 ## Switching between v3.5 and v4
