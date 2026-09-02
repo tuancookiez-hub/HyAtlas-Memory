@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to build (e.g. v4.0.1)"
+        description: "Tag to attach assets to (e.g. v4.0.0). Build uses the triggering ref's source."
         required: true
 
 permissions:
@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.os }}
+    name: Build ${{ matrix.asset_os }}-${{ matrix.goarch }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -23,22 +23,26 @@ jobs:
         include:
           - os: ubuntu-latest
             asset_os: linux
-            arch: amd64
+            goarch: amd64
             lib: libonnxruntime.so
             ort_pkg: linux-x64
             ext: ""
           - os: macos-latest
             asset_os: macos
-            arch: amd64
+            goarch: arm64
             lib: libonnxruntime.dylib
             ort_pkg: osx-universal
             ext: ""
           - os: windows-latest
             asset_os: windows
-            arch: amd64
+            goarch: amd64
             lib: onnxruntime.dll
             ort_pkg: win-x64
             ext: ".exe"
+    env:
+      # workflow_dispatch runs on a branch, so github.ref_name is the branch
+      # name, not the tag — the || operator would never reach inputs.tag.
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
     steps:
       - uses: actions/checkout@v4
@@ -98,14 +102,14 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           go build -tags embedded \
-            -o "hyatlas-go-${{ github.ref_name || inputs.tag }}-${{ matrix.asset_os }}-${{ matrix.arch }}${{ matrix.ext }}" .
+            -o "hyatlas-go-${RELEASE_TAG}-${{ matrix.asset_os }}-${{ matrix.goarch }}${{ matrix.ext }}" .
           ls -la
 
       - name: Smoke test the built binary
         shell: bash
         run: |
           set -euo pipefail
-          BIN="hyatlas-go-${{ github.ref_name || inputs.tag }}-${{ matrix.asset_os }}-${{ matrix.arch }}${{ matrix.ext }}"
+          BIN="hyatlas-go-${RELEASE_TAG}-${{ matrix.asset_os }}-${{ matrix.goarch }}${{ matrix.ext }}"
           PORT=19599
           DATA="$(mktemp -d)"
           # Start with a dead LLM endpoint on purpose: server must still boot
@@ -138,7 +142,7 @@ jobs:
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name || inputs.tag }}
-          files: hyatlas-go-${{ github.ref_name || inputs.tag }}-${{ matrix.asset_os }}-${{ matrix.arch }}${{ matrix.ext }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: hyatlas-go-${{ env.RELEASE_TAG }}-${{ matrix.asset_os }}-${{ matrix.goarch }}${{ matrix.ext }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
