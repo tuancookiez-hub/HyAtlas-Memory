@@ -22,13 +22,14 @@ import {
   useQuery,
   useQueryClient,
 } from '@hermes/plugin-sdk'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 let api = null
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
+  { id: 'graph', label: 'Graph' },
   { id: 'memories', label: 'Memories' },
   { id: 'search', label: 'Search' },
   { id: 'add', label: 'Add' },
@@ -132,6 +133,280 @@ function MemoryCard({ item, meta }) {
       }),
     ],
   })
+}
+
+function Observatory({ graphQ, picked, setPicked }) {
+  const hostRef = useRef(null)
+  const data = graphQ.data
+  const nodes = (data && data.nodes) || []
+  const rels = (data && data.relations) || []
+
+  useEffect(() => {
+    const el = hostRef.current
+    if (!el) return undefined
+    let stop = false
+    let frame = 0
+    let renderer = null
+    let onMove = null
+    let onLeave = null
+    let onClick = null
+    let onResize = null
+
+    const run = async () => {
+      const THREE = await loadThree()
+      if (stop || !hostRef.current) return
+      const box = hostRef.current
+      const w = Math.max(box.clientWidth, 320)
+      const h = Math.max(box.clientHeight, 280)
+      const scene = new THREE.Scene()
+      const camera = new THREE.PerspectiveCamera(42, w / h, 0.1, 4000)
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+      renderer.setSize(w, h)
+      box.replaceChildren(renderer.domElement)
+
+      const placed = layout(nodes)
+      const byId = Object.fromEntries(placed.map((n) => [n.id, n]))
+      const groups = []
+      placed.forEach((n) => {
+        const color = new THREE.Color(n.color)
+        const grp = new THREE.Group()
+        const size = 3.4
+        ;[
+          { mul: 1, op: 0.95, side: THREE.FrontSide, depth: true },
+          { mul: 1.8, op: 0.22, side: THREE.BackSide, depth: true },
+          { mul: 3.1, op: 0.08, side: THREE.BackSide, depth: false },
+        ].forEach((layer) => {
+          grp.add(new THREE.Mesh(
+            new THREE.SphereGeometry(size * layer.mul, 18, 18),
+            new THREE.MeshBasicMaterial({
+              color,
+              transparent: true,
+              opacity: layer.op,
+              side: layer.side,
+              depthWrite: layer.depth,
+            }),
+          ))
+        })
+        grp.position.set(n.x, n.y, n.z)
+        grp.userData.node = n
+        scene.add(grp)
+        groups.push(grp)
+      })
+
+      const edges = []
+      rels.forEach((rel) => {
+        const a = byId[rel.from]
+        const b = byId[rel.to]
+        if (!a || !b) return
+        const mid = new THREE.Vector3((a.x + b.x) / 2, (a.y + b.y) / 2 + 10, (a.z + b.z) / 2 - 6)
+        const curve = new THREE.QuadraticBezierCurve3(
+          new THREE.Vector3(a.x, a.y, a.z),
+          mid,
+          new THREE.Vector3(b.x, b.y, b.z),
+        )
+        const line = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints(curve.getPoints(16)),
+          new THREE.LineBasicMaterial({ color: 0x8a8274, transparent: true, opacity: 0.18, depthWrite: false }),
+        )
+        line.userData = { from: rel.from, to: rel.to, relation: rel.relation }
+        scene.add(line)
+        edges.push(line)
+      })
+
+      const starGeo = new THREE.BufferGeometry()
+      const starPos = new Float32Array(480 * 3)
+      for (let i = 0; i < 480; i += 1) {
+        starPos[i * 3] = (hash(`${i}x`) - 0.5) * 520
+        starPos[i * 3 + 1] = (hash(`${i}y`) - 0.5) * 360
+        starPos[i * 3 + 2] = -220 + (hash(`${i}z`) - 0.5) * 180
+      }
+      starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3))
+      const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({
+        color: 0x9a927f, size: 0.7, transparent: true, opacity: 0.18, depthWrite: false,
+      }))
+      scene.add(stars)
+
+      let pan = { x: 0, y: 0 }
+      let zoom = 1.15
+      let hover = null
+      const raycaster = new THREE.Raycaster()
+      const pointer = new THREE.Vector2()
+
+      const updateCam = () => {
+        camera.aspect = box.clientWidth / Math.max(box.clientHeight, 1)
+        camera.updateProjectionMatrix()
+        camera.position.set(pan.x, pan.y + 28 * zoom, 360 * zoom)
+        camera.lookAt(new THREE.Vector3(pan.x, pan.y, 0))
+      }
+
+      const pick = (event) => {
+        const r = box.getBoundingClientRect()
+        pointer.x = ((event.clientX - r.left) / r.width) * 2 - 1
+        pointer.y = -((event.clientY - r.top) / r.height) * 2 + 1
+        raycaster.setFromCamera(pointer, camera)
+        const hits = raycaster.intersectObjects(groups, true)
+        if (!hits.length) return null
+        let obj = hits[0].object
+        while (obj && !obj.userData.node) obj = obj.parent
+        return obj && obj.userData.node ? obj.userData.node : null
+      }
+
+      const paint = (focus) => {
+        const connected = new Set()
+        if (focus) {
+          connected.add(focus.id)
+          edges.forEach((e) => {
+            if (e.userData.from === focus.id) connected.add(e.userData.to)
+            if (e.userData.to === focus.id) connected.add(e.userData.from)
+          })
+        }
+        groups.forEach((grp) => {
+          const on = !focus || connected.has(grp.userData.node.id)
+          grp.traverse((ch) => {
+            if (ch.material) ch.material.opacity = on ? (ch.userData.base || ch.material.opacity) : 0.08
+          })
+        })
+        edges.forEach((e) => {
+          const hit = focus && (e.userData.from === focus.id || e.userData.to === focus.id)
+          e.material.opacity = focus ? (hit ? 0.55 : 0.03) : 0.18
+        })
+      }
+
+      groups.forEach((grp) => {
+        grp.traverse((ch) => {
+          if (ch.material) ch.userData.base = ch.material.opacity
+        })
+      })
+
+      onMove = (event) => {
+        hover = pick(event)
+        paint(hover || picked)
+      }
+      onLeave = () => {
+        hover = null
+        paint(picked)
+      }
+      onClick = (event) => {
+        const node = pick(event)
+        setPicked((cur) => (node && cur && cur.id === node.id ? null : node))
+      }
+      onResize = () => {
+        if (!renderer) return
+        renderer.setSize(box.clientWidth, Math.max(box.clientHeight, 1))
+        updateCam()
+      }
+
+      box.addEventListener('pointermove', onMove)
+      box.addEventListener('pointerleave', onLeave)
+      box.addEventListener('click', onClick)
+      window.addEventListener('resize', onResize)
+      updateCam()
+
+      const tick = () => {
+        if (stop) return
+        stars.rotation.y += 0.00008
+        paint(hover || picked)
+        renderer.render(scene, camera)
+        frame = requestAnimationFrame(tick)
+      }
+      tick()
+    }
+
+    run()
+    return () => {
+      stop = true
+      cancelAnimationFrame(frame)
+      if (onMove) hostRef.current?.removeEventListener('pointermove', onMove)
+      if (onLeave) hostRef.current?.removeEventListener('pointerleave', onLeave)
+      if (onClick) hostRef.current?.removeEventListener('click', onClick)
+      if (onResize) window.removeEventListener('resize', onResize)
+      renderer?.dispose()
+      if (hostRef.current) hostRef.current.replaceChildren()
+    }
+  }, [nodes, rels, picked, setPicked])
+
+  if (graphQ.isLoading) {
+    return jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: 'Loading observatory…' })
+  }
+  if (!nodes.length) {
+    return jsx(EmptyState, { title: 'Empty graph', description: 'No L5 entities yet. Add memories and wait for extraction.' })
+  }
+
+  return jsxs('div', {
+    className: 'grid gap-3 lg:grid-cols-[1fr_240px]',
+    children: [
+      jsx('div', {
+        ref: hostRef,
+        className: 'h-[420px] overflow-hidden rounded-md border border-(--ui-stroke-secondary) bg-black/20',
+      }),
+      jsxs('div', {
+        className: 'rounded-md border border-(--ui-stroke-secondary) p-3 text-xs',
+        children: [
+          jsx('div', { className: 'text-[0.65rem] tracking-wide text-(--ui-text-tertiary)', children: 'FIELD NOTE' }),
+          picked
+            ? jsxs('div', {
+                className: 'mt-2 flex flex-col gap-2',
+                children: [
+                  jsx('div', { className: 'text-sm text-(--ui-text-primary)', children: picked.label }),
+                  jsx(Badge, { variant: 'muted', size: 'xs', children: picked.type || 'entity' }),
+                  jsx('div', { className: 'text-(--ui-text-tertiary)', children: `${nodes.length} nodes · ${rels.length} relations in view` }),
+                ],
+              })
+            : jsx('div', { className: 'mt-2 text-(--ui-text-tertiary)', children: 'Click a node. Drag is pan-free — hover lights its neighborhood.' }),
+        ],
+      }),
+    ],
+  })
+}
+
+function hash(s) {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return ((h >>> 0) % 100000) / 100000
+}
+
+function layout(nodes) {
+  const n = Math.max(nodes.length, 1)
+  return nodes.map((node, i) => {
+    const ang = (i / n) * Math.PI * 2
+    const ring = 1 + (hash(node.id + 'r') * 2)
+    const rx = 70 * ring
+    const rz = 42 * ring
+    const y = (hash(node.id + 'y') - 0.5) * 70
+    return {
+      ...node,
+      color: COLOR[node.type] || COLOR.default,
+      x: Math.cos(ang) * rx,
+      y,
+      z: Math.sin(ang) * rz,
+    }
+  })
+}
+
+const COLOR = {
+  default: '#5e9b8a',
+  entity: '#5e9b8a',
+  domain: '#8b7aa0',
+  artifact: '#5e7b9b',
+  person: '#d4c5a3',
+}
+
+let threePromise = null
+function loadThree() {
+  if (window.THREE) return Promise.resolve(window.THREE)
+  if (threePromise) return threePromise
+  threePromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js'
+    script.onload = () => resolve(window.THREE)
+    script.onerror = () => reject(new Error('Failed to load Three.js'))
+    document.head.appendChild(script)
+  })
+  return threePromise
 }
 
 function Overview({ status, layers, maxLayer, connecting }) {
@@ -269,6 +544,7 @@ function HyAtlasPage() {
   const [query, setQuery] = useState('')
   const [draft, setDraft] = useState('')
   const [submitted, setSubmitted] = useState('')
+  const [picked, setPicked] = useState(null)
 
   const statusQ = useQuery({
     queryKey: ['hyatlas', 'status'],
@@ -281,6 +557,13 @@ function HyAtlasPage() {
     queryFn: () => api.rest(`/memories?limit=30${layer === 'all' ? '' : `&layer=${layer}`}`),
     refetchInterval: 8000,
     enabled: tab === 'memories' || tab === 'overview',
+  })
+
+  const graphQ = useQuery({
+    queryKey: ['hyatlas', 'graph'],
+    queryFn: () => api.rest('/graph?n=120'),
+    refetchInterval: 15000,
+    enabled: tab === 'graph' || tab === 'overview',
   })
 
   const searchQ = useQuery({
@@ -313,11 +596,13 @@ function HyAtlasPage() {
 
   const body = tab === 'overview'
     ? jsx(Overview, { status, layers, maxLayer, connecting })
-    : tab === 'memories'
-      ? jsx(Memories, { layer, setLayer, listQ, rows })
-      : tab === 'search'
-        ? jsx(Search, { query, setQuery, submitted, setSubmitted, searchQ, hits })
-        : jsx(Add, { draft, setDraft, addM })
+    : tab === 'graph'
+      ? jsx(Observatory, { graphQ, picked, setPicked })
+      : tab === 'memories'
+        ? jsx(Memories, { layer, setLayer, listQ, rows })
+        : tab === 'search'
+          ? jsx(Search, { query, setQuery, submitted, setSubmitted, searchQ, hits })
+          : jsx(Add, { draft, setDraft, addM })
 
   return jsxs('div', {
     className: 'flex h-full flex-col gap-4 overflow-auto p-5 text-sm',
