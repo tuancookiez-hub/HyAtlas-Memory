@@ -105,9 +105,9 @@ def add(payload: dict[str, Any]) -> Any:
 
 
 @router.get("/graph")
-def graph(n: int = 120) -> Any:
-    """L5 knowledge-graph snapshot (nodes + relations) for the Observatory pane."""
-    return _forward("GET", f"/api/l5/graph?n={max(10, min(n, 500))}")
+def graph() -> Any:
+    """L5 knowledge graph counts (nodes/edges). Full snapshot stays on the Go dashboard."""
+    return _forward("GET", "/api/v1/graph")
 
 
 @router.get("/metrics")
