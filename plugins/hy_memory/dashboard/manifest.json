@@ -4,5 +4,5 @@
   "description": "HyAtlas v4 memory server status, memories, search, and add",
   "icon": "Database",
   "version": "4.0.0",
-  "api": "dashboard/plugin_api.py"
+  "api": "plugin_api.py"
 }

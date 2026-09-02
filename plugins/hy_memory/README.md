@@ -1,7 +1,6 @@
 # HyAtlas v4 — Native Hermes memory plugin (user install)
 
-This is the user-side plugin directory. Copy the entire `hy_memory/`
-folder into `~/.hermes/plugins/hy_memory/` to install:
+Copy the entire `hy_memory/` folder into `~/.hermes/plugins/hy_memory/` to install:
 
 ```bash
 cp -r plugins/hy_memory ~/.hermes/plugins/
@@ -20,6 +19,10 @@ memory:
       server_host: 127.0.0.1
       server_port: 19528
       auto_start: false
+
+plugins:
+  enabled:
+    - hy_memory   # required for the desktop pane backend
 ```
 
 This plugin talks to the **HyAtlas v4.0** Go backend
@@ -27,7 +30,28 @@ This plugin talks to the **HyAtlas v4.0** Go backend
 canonical user-facing integration; the v3.5 Python floor's `pip
 install hyatlas-memory` path is no longer maintained.
 
-See `plugins/hy_memory/README.md` for full setup details.
+## Desktop pane
+
+The plugin ships a Hermes Desktop page at `/hyatlas`:
+
+- Sidebar nav row: **HyAtlas Memory** (database icon), same cluster as Turbofit
+- Palette: **Open HyAtlas Memory**
+- Shortcut: `Mod+Shift+H` (rebindable in Settings → Keybinds)
+
+Install the desktop door as well:
+
+```bash
+mkdir -p ~/.hermes/desktop-plugins/hy_memory
+cp plugins/hy_memory/desktop/plugin.js ~/.hermes/desktop-plugins/hy_memory/plugin.js
+```
+
+The pane talks to `/api/plugins/hy_memory/*`, which is mounted from
+`dashboard/plugin_api.py` **only if** `hy_memory` is in `plugins.enabled`.
+After changing that list, restart the Desktop backend (⌘K → Restart backend).
+Hot-reloading `plugin.js` is not enough — Python routes mount at backend start.
+
+Tabs: Overview (health + 7-layer bars + graph/vdb counters), Memories
+(layer filter), Search (3-channel semantic hits), Add (write + async extract).
 
 ## Wire-compat with v3.5
 
