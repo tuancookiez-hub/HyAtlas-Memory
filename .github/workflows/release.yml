@@ -1,0 +1,144 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v4.0.1)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset_os: linux
+            arch: amd64
+            lib: libonnxruntime.so
+            ort_pkg: linux-x64
+            ext: ""
+          - os: macos-latest
+            asset_os: macos
+            arch: amd64
+            lib: libonnxruntime.dylib
+            ort_pkg: osx-universal
+            ext: ""
+          - os: windows-latest
+            asset_os: windows
+            arch: amd64
+            lib: onnxruntime.dll
+            ort_pkg: win-x64
+            ext: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Fetch BGE-small ONNX model (~133 MB)
+        shell: bash
+        run: |
+          mkdir -p models
+          # Xenova/bge-small-en-v1.5 ships a self-contained ONNX model.
+          curl -fsSL --retry 3 -o models/bge-small-en-v1.5.onnx \
+            "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model.onnx"
+          curl -fsSL --retry 3 -o models/vocab.txt \
+            "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/vocab.txt"
+          # Empty .data sidecar — self-contained ONNX exports don't need it,
+          # but the embedded build's go:embed directive requires the file.
+          : > models/bge-small-en-v1.5.onnx.data
+          ls -la models/
+
+      - name: Fetch onnxruntime shared library (${{ matrix.asset_os }})
+        shell: bash
+        env:
+          ORT_VERSION: "1.28.1"
+          ORT_PKG: ${{ matrix.ort_pkg }}
+        run: |
+          set -euo pipefail
+          url="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-${ORT_PKG}-${ORT_VERSION}"
+          case "${{ matrix.asset_os }}" in
+            windows)
+              curl -fsSL --retry 3 -o ort.zip "${url}.zip"
+              unzip -o -q ort.zip
+              cp "onnxruntime-${ORT_PKG}-${ORT_VERSION}/lib/onnxruntime.dll" models/
+              ;;
+            macos)
+              curl -fsSL --retry 3 -o ort.tgz "${url}.tgz"
+              tar -xzf ort.tgz
+              cp "onnxruntime-${ORT_PKG}-${ORT_VERSION}/lib/libonnxruntime.dylib" models/
+              ;;
+            linux)
+              curl -fsSL --retry 3 -o ort.tgz "${url}.tgz"
+              tar -xzf ort.tgz
+              cp "onnxruntime-${ORT_PKG}-${ORT_VERSION}/lib/libonnxruntime.so" models/
+              ;;
+          esac
+          ls -la models/
+
+      - name: Build (embedded, platform-native)
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go build -tags embedded \
+            -o "hyatlas-go-${{ github.ref_name || inputs.tag }}-${{ matrix.asset_os }}-${{ matrix.arch }}${{ matrix.ext }}" .
+          ls -la
+
+      - name: Smoke test the built binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="hyatlas-go-${{ github.ref_name || inputs.tag }}-${{ matrix.asset_os }}-${{ matrix.arch }}${{ matrix.ext }}"
+          PORT=19599
+          DATA="$(mktemp -d)"
+          # Start with a dead LLM endpoint on purpose: server must still boot
+          # and serve /healthz (vdb + embed healthy, llm degraded).
+          HYATLAS_GO_PORT="$PORT" \
+          HYATLAS_GO_DATA="$DATA" \
+          HYATLAS_EMBED_BASE=bge \
+          HYATLAS_MODEL_DIR="$PWD/models" \
+          HYATLAS_LLM_BASE="http://127.0.0.1:1/v1" \
+          HYATLAS_LLM_MODEL=probe \
+          HYATLAS_LLM_KEY=probe \
+            "./$BIN" >/dev/null 2>&1 &
+          PID=$!
+          trap 'kill $PID 2>/dev/null || true; rm -rf "$DATA"' EXIT
+          for i in $(seq 1 40); do
+            if curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then
+              echo "healthz OK after ${i} tries"
+              STATUS="$(curl -fsS "http://127.0.0.1:$PORT/api/v1/status")"
+              echo "status: $STATUS"
+              kill $PID 2>/dev/null || true
+              rm -rf "$DATA"
+              trap - EXIT
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "::error::binary did not become healthy within 20s"
+          exit 1
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || inputs.tag }}
+          files: hyatlas-go-${{ github.ref_name || inputs.tag }}-${{ matrix.asset_os }}-${{ matrix.arch }}${{ matrix.ext }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

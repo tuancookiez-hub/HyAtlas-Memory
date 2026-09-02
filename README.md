@@ -12,7 +12,32 @@ HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It r
 
 ## Quick start (Linux / macOS / Windows)
 
-### 1. Prereqs
+### The one-liner (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/scripts/install.sh | bash
+```
+
+That script detects your OS, downloads a prebuilt binary for your platform
+(falling back to building from source if none exists yet), fetches the
+BGE-small embedding model (~133 MB), installs to a directory on your `PATH`,
+and verifies the install by starting the server and probing `/healthz`.
+
+Useful env vars:
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `HYATLAS_VERSION` | Release tag to install | `v4.0.0` |
+| `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
+| `HYATLAS_MODEL_DIR` | Where the BGE model is cached | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
+| `HYATLAS_NO_MODEL=1` | Skip the model download | (downloads) |
+
+---
+
+### Manual install (3 steps)
+
+<details>
+<summary><strong>Step 1 — Prerequisites</strong> (click to expand)</summary>
 
 | OS | What's needed | Install command |
 |---|---|---|
@@ -22,7 +47,10 @@ HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It r
 
 > **cgo is required** — onnxruntime-go links against the platform's C runtime via cgo. Every platform has a free toolchain; you just need one.
 
-### 2. Clone + build
+</details>
+
+<details>
+<summary><strong>Step 2 — Build</strong></summary>
 
 ```bash
 git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
@@ -33,10 +61,18 @@ go build -tags embedded -o hyatlas-go .       # embedded build (one binary, mode
 
 > **For the embedded build to work**, drop the platform-matching onnxruntime library into `./models/` before compiling (see [Model assets](#model-assets) below). The `go:embed` directives are platform-aware: Windows expects `models/onnxruntime.dll`, Linux expects `models/libonnxruntime.so`, macOS expects `models/libonnxruntime.dylib`.
 
-### 3. Run
+</details>
+
+<details>
+<summary><strong>Step 3 — Run</strong></summary>
 
 ```bash
-export HYATLAS_LLM_BASE="http://127.0.0.1:49200/v1"   # or any OpenAI-compatible endpoint
+# Required for the local BGE embeddings (the "no Python" path):
+export HYATLAS_EMBED_BASE=bge
+export HYATLAS_MODEL_DIR=/path/to/models
+
+# Required for LLM extraction (any OpenAI-compatible endpoint):
+export HYATLAS_LLM_BASE="http://127.0.0.1:49200/v1"
 export HYATLAS_LLM_MODEL="deepseek:deepseek-v4-flash"
 export HYATLAS_LLM_KEY="your-key"
 
@@ -45,10 +81,26 @@ export HYATLAS_LLM_KEY="your-key"
 
 The server listens on `127.0.0.1:19528` (loopback only — no external surface).
 
-**Windows batch runner** (reads AI2API key from Hermes `.env`):
+**All configuration is via environment variables** — the binary takes no CLI flags:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `HYATLAS_GO_PORT` | `19528` | HTTP listen port |
+| `HYATLAS_GO_HOST` | `127.0.0.1` | Bind address (loopback only by default) |
+| `HYATLAS_GO_DATA` | `./data` | Where chromem collections + graph.json live |
+| `HYATLAS_EMBED_BASE` | `http://127.0.0.1:49200/v1` | Set to `bge` for the local in-process embedder |
+| `HYATLAS_MODEL_DIR` | `./models` | Where the BGE model lives |
+| `HYATLAS_LLM_BASE` | `http://127.0.0.1:49200/v1` | OpenAI-compatible LLM endpoint |
+| `HYATLAS_LLM_MODEL` | `deepseek:deepseek-v4-flash` | LLM model name |
+| `HYATLAS_LLM_KEY` | (empty) | LLM bearer token |
+| `HYATLAS_GRAPH_PATH` | `<data>/graph.json` | L5 graph store location |
+
+**Windows batch runner** (reads the AI2API key from Hermes `.env`):
 ```bash
 hyatlas-v4-start.bat
 ```
+
+</details>
 
 ---
 
