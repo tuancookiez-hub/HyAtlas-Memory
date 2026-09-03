@@ -279,6 +279,14 @@ func (s *MemoryStore) Usage() (writes, searches uint64) {
 	return s.writes.Load(), s.searches.Load()
 }
 
+// UsageForJSON flattens Usage into a single map for embedding in
+// /api/v1/status, /api/info, and /api/layer-counts. JSON must serialize
+// uint64 as a number, and (w, s) tuples do not.
+func (s *MemoryStore) UsageForJSON() map[string]uint64 {
+	w, q := s.Usage()
+	return map[string]uint64{"writes": w, "searches": q}
+}
+
 func (s *MemoryStore) loadUsage() {
 	if s.countsPath == "" {
 		return

@@ -496,6 +496,9 @@ function renderOverview() {
   const lc = (layerCountsData && (layerCountsData.display_counts || layerCountsData.counts))
     ? (layerCountsData.display_counts || layerCountsData.counts)
     : {};
+  // reads = searches counter; writes = write counter — from layer-counts endpoint
+  const reads    = layerCountsData?.searches ?? statusData?.searches ?? 0;
+  const memWrites = layerCountsData?.writes   ?? statusData?.writes   ?? 0;
   // 7-layer model (L1-L7); skip any stray legacy l4_identity key defensively.
   const coverageKeys = Object.keys(lc).filter(k => k !== 'l4_identity');
   const activeLayers = coverageKeys.filter(k => Number(lc[k]) > 0).length;
@@ -504,14 +507,24 @@ function renderOverview() {
   // Stat cards
   const statsHtml = `
     <div class="stat-card">
+      <div class="stat-label">WRITES</div>
+      <div class="stat-value">${fmtCount(memWrites)}</div>
+      <div class="text-xs text-muted mt-1">memories added by agents</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">RECALLS</div>
+      <div class="stat-value">${fmtCount(reads)}</div>
+      <div class="text-xs text-muted mt-1">searches by agents</div>
+    </div>
+    <div class="stat-card">
       <div class="stat-label">VDB POINTS</div>
       <div class="stat-value">${fmtCount(vdbPoints)}</div>
-      <div class="text-xs text-muted mt-1">zvec raw points</div>
+      <div class="text-xs text-muted mt-1">chroma vectors (L1-L4, L6-L7)</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">GRAPH RELATIONS</div>
       <div class="stat-value">${fmtCount(totalLinks)}</div>
-      <div class="text-xs text-muted mt-1">Kuzu edges</div>
+      <div class="text-xs text-muted mt-1">L5 knowledge graph edges</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">DISPLAY TOTAL</div>

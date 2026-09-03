@@ -47,6 +47,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		write = "degraded: " + s.lastExtractErr
 	}
 	writesCount, searchesCount := s.store.Usage()
+	// L5 lives in the graph store; LayerCounts() returns 0 for it from chromem.
+	counts = s.store.LayerCounts()
+	counts["l5_knowledge"] = s.store.Graph().NodeCount()
 	status := Status{
 		Status:        "ok",
 		VDB:           "ok",
