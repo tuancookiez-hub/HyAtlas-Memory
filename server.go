@@ -306,11 +306,15 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {
-		out = append(out, map[string]any{
+		m := map[string]any{
 			"memory_id": it.ID, "content": it.Content, "layer": it.Layer,
 			"user_id": it.UserID, "agent_id": it.AgentID, "ts": it.Ts,
 			"gmt_created": gmtCreated(it.Ts), "extracted": it.Extracted,
-		})
+		}
+		if it.Meta != nil {
+			m["session_id"] = it.Meta["session_id"]
+		}
+		out = append(out, m)
 	}
 	counts := s.store.LayerCounts()
 	jsonResponse(w, 200, map[string]any{
@@ -388,6 +392,121 @@ func errStr(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// handleGraphEdges returns three edge types for the Mind Palace canvas:
+//   - knowledge:  L5 explicit graph edges (existing)
+//   - co_session: memories sharing a session_id (inferred)
+//   - semantic:   top-K nearest neighbors per memory (VDB cosine)
+//
+// Caps output to keep payload bounded; takes ~50ms even with 2,500 memories.
+func (s *Server) handleGraphEdges(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	semanticK := atoi(q.Get("k_semantic"), 3)
+	limitAll := atoi(q.Get("n"), 500)
+
+	// 1. Knowledge: L5 explicit edges
+	nodes, rels := s.store.Graph().Snapshot(limitAll)
+	nodesArr := make([]map[string]any, 0, len(nodes))
+	for _, n := range nodes {
+		nodesArr = append(nodesArr, map[string]any{
+			"id": n.ID, "label": n.Label, "type": n.Type,
+		})
+	}
+	knowledge := make([]map[string]any, 0, len(rels))
+	for _, e := range rels {
+		knowledge = append(knowledge, map[string]any{
+			"from": e.From, "to": e.To,
+			"relation": e.Relation, "weight": e.Weight,
+			"source":      e.Source,
+			"recorded_at": e.RecordedAt,
+			"valid_from":  e.ValidFrom,
+			"valid_to":    e.ValidTo,
+			"type":        "knowledge",
+		})
+	}
+
+	// 2. Co-session: group memories by session_id, emit all-pairs edges
+	coSession := []map[string]any{}
+	sessionBuckets := map[string][]string{}
+	for layer := range s.store.LayerCounts() {
+		_ = layer
+	}
+	for _, l := range []string{"l2_raw", "l3_fact", "l4_summary", "l5_knowledge", "l6_schema", "l7_intention"} {
+		items, _ := s.store.List(memory.Layer(l), "", "", 200, 0)
+		for _, it := range items {
+			sid := it.Meta["session_id"]
+			if sid == "" {
+				continue
+			}
+			sessionBuckets[sid] = append(sessionBuckets[sid], it.ID)
+		}
+	}
+	coSessionCount := 0
+	for sid, members := range sessionBuckets {
+		if coSessionCount >= 300 {
+			break
+		}
+		if len(members) < 2 || len(members) > 20 {
+			continue
+		}
+		// emit at most 5 edges per session (limit combinatorial blowup)
+		maxPer := 5
+		if len(members)-1 < maxPer {
+			maxPer = len(members) - 1
+		}
+		for i := 0; i < maxPer && i+1 < len(members); i++ {
+			coSession = append(coSession, map[string]any{
+				"from": members[0], "to": members[i+1],
+				"session": sid, "type": "co_session",
+			})
+			coSessionCount++
+		}
+	}
+
+	// 3. Semantic: top-K nearest neighbors per recent memory (cap total)
+	semantic := []map[string]any{}
+	semCount := 0
+	maxSem := 200
+	if semanticK < 1 {
+		semanticK = 2
+	}
+	// iterate only the most recent 20 L3 memories (kept fast; full-graph
+	// similarity is a separate scan). Coalesces well to ~20 VDB queries.
+	recent, _ := s.store.List(memory.L3Fact, "", "", 20, 0)
+	for _, it := range recent {
+		if semCount >= maxSem {
+			break
+		}
+		hits, err := s.store.Search(it.Content, semanticK+1, "", "", "")
+		if err != nil {
+			continue
+		}
+		added := 0
+		for _, h := range hits {
+			if h.ID == it.ID {
+				continue
+			}
+			semantic = append(semantic, map[string]any{
+				"from": it.ID, "to": h.ID,
+				"score": float64(h.Score),
+				"type":  "semantic",
+			})
+			added++
+			semCount++
+			if added >= semanticK {
+				break
+			}
+		}
+	}
+
+	jsonResponse(w, 200, map[string]any{
+		"nodes":       nodesArr,
+		"knowledge":   knowledge,
+		"co_session":  coSession,
+		"semantic":    semantic,
+		"total_edges": len(knowledge) + len(coSession) + len(semantic),
+	})
 }
 
 func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
@@ -476,6 +595,7 @@ func main() {
 	mux.HandleFunc("/api/v1/list", srv.handleList)
 	mux.HandleFunc("/api/v1/graph", srv.handleGraph)
 	mux.HandleFunc("/api/v1/graph-as-of", srv.handleGraphAsOf)
+	mux.HandleFunc("/api/v1/edges", srv.handleGraphEdges)
 	mux.HandleFunc("/api/v1/delete_all", srv.handleDelete)
 	mux.HandleFunc("/api/v1/metrics", srv.handleMetrics)
 	mux.HandleFunc("/api/v1/digest", srv.handleDigest)

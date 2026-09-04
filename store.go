@@ -30,6 +30,10 @@ type DocIndex struct {
 	AgentID   string `json:"agent_id"`
 	Ts        string `json:"ts"`
 	Extracted bool   `json:"extracted"`
+	// Meta carries the full metadata bag at index-write time. Lets list
+	// endpoints surface session_id, source_layer_label, etc. without a
+	// second lookup. May be nil for older index files.
+	Meta map[string]string `json:"meta,omitempty"`
 }
 
 // MemoryStore holds layer collections (vectors) + a doc index (exact) + the L5 graph.
@@ -342,6 +346,7 @@ func docIndexFrom(id, layer, content string, meta map[string]string) DocIndex {
 		d.AgentID = meta["agent_id"]
 		d.Ts = meta["ts"]
 		d.Extracted = meta["extracted"] == "true"
+		d.Meta = meta
 	}
 	return d
 }
