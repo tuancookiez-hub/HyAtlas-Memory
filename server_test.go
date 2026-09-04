@@ -67,3 +67,38 @@ func TestHandleDashInfoReportsLiveLLMModel(t *testing.T) {
 		t.Errorf("llm_base: got %q", got)
 	}
 }
+
+// TestPromoteExtractionThreadsSource asserts that L5 edges are anchored to the
+// L2 memory id passed in. This is the evidence-citation contract.
+func TestPromoteExtractionThreadsSource(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	ex := &Extraction{
+		Facts: []Fact{{Data: "Apple is in Cupertino", Layer: "project_state"}},
+		Knowledge: []Relation{
+			{From: "Apple", Relation: "based_in", To: "Cupertino"},
+		},
+	}
+	sourceID := "mem-test-source-abc"
+	promoteExtraction(srv.store, ex, "default", "default", sourceID)
+
+	_, rels := srv.store.Graph().Snapshot(50)
+	if len(rels) == 0 {
+		t.Fatal("expected L5 edge to be created, got 0")
+	}
+	// Find our edge (we can't be sure of order with other tests writing here)
+	found := false
+	for _, r := range rels {
+		if r.Source == sourceID {
+			found = true
+			if r.RecordedAt == 0 {
+				t.Errorf("RecordedAt should be set, got 0")
+			}
+			if r.Relation != "based_in" {
+				t.Errorf("relation: want based_in, got %q", r.Relation)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no L5 edge with source %q found in %d edges", sourceID, len(rels))
+	}
+}

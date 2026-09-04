@@ -84,7 +84,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // promoteExtraction writes one LLM extraction result to its 7 layers.
-func promoteExtraction(store *MemoryStore, ex *Extraction, userID, agentID string) {
+// sourceID is the L2 raw memory id — used to anchor L5 edges back to their origin.
+func promoteExtraction(store *MemoryStore, ex *Extraction, userID, agentID, sourceID string) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	// L3 Facts
 	for _, f := range ex.Facts {
@@ -108,12 +109,12 @@ func promoteExtraction(store *MemoryStore, ex *Extraction, userID, agentID strin
 			"user_id": userID, "agent_id": agentID, "ts": now,
 		})
 	}
-	// L5 Knowledge graph
+	// L5 Knowledge graph — every edge is anchored to its L2 source memory.
 	for _, rel := range ex.Knowledge {
 		if rel.From == "" || rel.Relation == "" || rel.To == "" {
 			continue
 		}
-		_ = store.Graph().AddEdge(rel.From, rel.Relation, rel.To)
+		_ = store.Graph().AddEdgeWithSource(rel.From, rel.Relation, rel.To, sourceID)
 	}
 	// L6 Schema
 	for _, sc := range ex.Schemas {
@@ -190,7 +191,7 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 			s.lastExtractErr = err.Error()
 			return
 		}
-		promoteExtraction(s.store, ex, userID, agentID)
+		promoteExtraction(s.store, ex, userID, agentID, id)
 		_ = s.store.SetExtracted(id, true)
 		s.lastExtractErr = ""
 	}()
@@ -373,7 +374,7 @@ func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 		if s.llm != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 			if ex, err := s.llm.Complete(ctx, it.Content); err == nil {
-				promoteExtraction(s.store, ex, it.UserID, it.AgentID)
+				promoteExtraction(s.store, ex, it.UserID, it.AgentID, it.ID)
 				reprocessed++
 			}
 			cancel()
