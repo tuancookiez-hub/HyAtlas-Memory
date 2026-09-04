@@ -394,6 +394,142 @@ func errStr(err error) string {
 	return err.Error()
 }
 
+// handleStarmapGraph returns a Hermes-Desktop-style StarmapGraph payload
+// (nodes, edges, memory) so the hy_memory plugin can render the exact same
+// view the built-in starmap shows. Designed for desktop pane "Graph" tab.
+//
+// The shape mirrors apps/desktop/src/types/hermes.ts::StarmapGraph:
+//
+//	{ nodes: StarmapNode[], edges: StarmapEdge[], memory: StarmapMemoryCard[] }
+func (s *Server) handleStarmapGraph(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit := atoi(q.Get("n"), 500)
+	kSem := atoi(q.Get("k_semantic"), 2)
+
+	// 1. Nodes: all L3 facts + a sampled set of L2 raw entries. Layer type
+	//    becomes the visual "kind" (memory in the starmap sense).
+	items, _ := s.store.List("", "", "", limit, 0)
+	nodes := make([]map[string]any, 0, len(items))
+	memCards := make([]map[string]any, 0, len(items))
+	for _, it := range items {
+		ts := gmtCreated(it.Ts)
+		// strip long content for the node label; keep full body in `memory`
+		label := it.Content
+		if len(label) > 80 {
+			label = label[:80] + "…"
+		}
+		nodes = append(nodes, map[string]any{
+			"id":         it.ID,
+			"label":      label,
+			"kind":       "memory",
+			"timestamp":  ts,
+			"category":   it.Layer,
+			"use_count":  0,
+			"state":      "active",
+			"created_by": "agent",
+			"pinned":     false,
+		})
+		memCards = append(memCards, map[string]any{
+			"source":    "memory",
+			"timestamp": ts,
+			"title":     label,
+			"body":      it.Content,
+		})
+	}
+
+	// 2. Edges: knowledge (L5) + co_session + semantic. All unified into
+	//    { source, target } pairs like the starmap expects.
+	edges := []map[string]any{}
+
+	// knowledge
+	graphNodes, graphRels := s.store.Graph().Snapshot(limit)
+	_ = graphNodes
+	for _, e := range graphRels {
+		edges = append(edges, map[string]any{
+			"source":   e.From,
+			"target":   e.To,
+			"type":     "knowledge",
+			"relation": e.Relation,
+		})
+	}
+
+	// co_session
+	sessionBuckets := map[string][]string{}
+	for _, l := range []string{"l2_raw", "l3_fact", "l4_summary", "l5_knowledge", "l6_schema", "l7_intention"} {
+		lItems, _ := s.store.List(memory.Layer(l), "", "", 200, 0)
+		for _, it := range lItems {
+			sid := ""
+			if it.Meta != nil {
+				sid = it.Meta["session_id"]
+			}
+			if sid == "" {
+				continue
+			}
+			sessionBuckets[sid] = append(sessionBuckets[sid], it.ID)
+		}
+	}
+	coCount := 0
+	for _, members := range sessionBuckets {
+		if coCount >= 300 {
+			break
+		}
+		if len(members) < 2 || len(members) > 20 {
+			continue
+		}
+		for i := 1; i < 6 && i < len(members); i++ {
+			edges = append(edges, map[string]any{
+				"source": members[0], "target": members[i],
+				"type": "co_session",
+			})
+			coCount++
+		}
+	}
+
+	// semantic
+	semCount := 0
+	maxSem := 200
+	if kSem < 1 {
+		kSem = 2
+	}
+	recent, _ := s.store.List(memory.L3Fact, "", "", 20, 0)
+	for _, it := range recent {
+		if semCount >= maxSem {
+			break
+		}
+		hits, err := s.store.Search(it.Content, kSem+1, "", "", "")
+		if err != nil {
+			continue
+		}
+		added := 0
+		for _, h := range hits {
+			if h.ID == it.ID {
+				continue
+			}
+			edges = append(edges, map[string]any{
+				"source": it.ID, "target": h.ID,
+				"score": float64(h.Score),
+				"type":  "semantic",
+			})
+			added++
+			semCount++
+			if added >= kSem {
+				break
+			}
+		}
+	}
+
+	jsonResponse(w, 200, map[string]any{
+		"nodes":  nodes,
+		"edges":  edges,
+		"memory": memCards,
+		"stats": map[string]any{
+			"node_count":   len(nodes),
+			"edge_count":   len(edges),
+			"memory_count": len(memCards),
+		},
+	})
+}
+
 // handleGraphEdges returns three edge types for the Mind Palace canvas:
 //   - knowledge:  L5 explicit graph edges (existing)
 //   - co_session: memories sharing a session_id (inferred)
@@ -596,6 +732,7 @@ func main() {
 	mux.HandleFunc("/api/v1/graph", srv.handleGraph)
 	mux.HandleFunc("/api/v1/graph-as-of", srv.handleGraphAsOf)
 	mux.HandleFunc("/api/v1/edges", srv.handleGraphEdges)
+	mux.HandleFunc("/api/v1/learning/graph", srv.handleStarmapGraph)
 	mux.HandleFunc("/api/v1/delete_all", srv.handleDelete)
 	mux.HandleFunc("/api/v1/metrics", srv.handleMetrics)
 	mux.HandleFunc("/api/v1/digest", srv.handleDigest)
