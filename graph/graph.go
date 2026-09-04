@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Node is an L5 knowledge entity.
@@ -24,10 +25,12 @@ type Node struct {
 
 // Edge is a directed relation between two nodes.
 type Edge struct {
-	From     string  `json:"from"`
-	To       string  `json:"to"`
-	Relation string  `json:"relation"` // e.g. "depends_on", "fixed_by", "part_of"
-	Weight   float64 `json:"weight"`
+	From       string  `json:"from"`
+	To         string  `json:"to"`
+	Relation   string  `json:"relation"` // e.g. "depends_on", "fixed_by", "part_of"
+	Weight     float64 `json:"weight"`
+	Source     string  `json:"source,omitempty"`       // source_memory_id (L2) — evidence citation
+	RecordedAt int64   `json:"recorded_at,omitempty"` // unix seconds — when the system learned this
 }
 
 // Store holds the graph and persists to a JSON file.
@@ -96,6 +99,34 @@ func (s *Store) UpsertNode(node Node) (string, error) {
 	}
 	s.nodes[node.ID] = node
 	return node.ID, s.persistLocked()
+}
+
+// AddEdgeWithSource adds or updates a directed relation with a source citation.
+// Source is the L2 memory id that produced the L5 triple. RecordedAt is the
+// unix-second timestamp the system learned the relation.
+func (s *Store) AddEdgeWithSource(fromLabel, rel, toLabel, sourceID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	fromID := s.ensureNodeLocked(fromLabel, "")
+	toID := s.ensureNodeLocked(toLabel, "")
+	now := time.Now().Unix()
+
+	// If edge exists, only update source if the new one is non-empty.
+	for i, e := range s.edges {
+		if e.From == fromID && e.To == toID && e.Relation == rel {
+			if sourceID != "" {
+				s.edges[i].Source = sourceID
+				s.edges[i].RecordedAt = now
+			}
+			return s.persistLocked()
+		}
+	}
+	s.edges = append(s.edges, Edge{
+		From: fromID, To: toID, Relation: rel, Weight: 1.0,
+		Source: sourceID, RecordedAt: now,
+	})
+	return s.persistLocked()
 }
 
 // AddEdge adds a directed relation between two node labels (auto-creating nodes).

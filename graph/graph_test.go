@@ -84,3 +84,44 @@ func TestPersistRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestAddEdgeWithSource(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(filepath.Join(dir, "g.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// New edge with a source citation
+	if err := s.AddEdgeWithSource("alice", "knows", "bob", "mem-abc123"); err != nil {
+		t.Fatal(err)
+	}
+	_, rels := s.Snapshot(10)
+	if len(rels) != 1 {
+		t.Fatalf("want 1 edge, got %d", len(rels))
+	}
+	if rels[0].Source != "mem-abc123" {
+		t.Fatalf("want source=mem-abc123, got %q", rels[0].Source)
+	}
+	if rels[0].RecordedAt == 0 {
+		t.Fatalf("want RecordedAt > 0, got %d", rels[0].RecordedAt)
+	}
+	// AddEdge without source on the same triple should NOT clobber the existing source
+	if err := s.AddEdge("alice", "knows", "bob"); err != nil {
+		t.Fatal(err)
+	}
+	_, rels = s.Snapshot(10)
+	if len(rels) != 1 {
+		t.Fatalf("want 1 edge after dup, got %d", len(rels))
+	}
+	if rels[0].Source != "mem-abc123" {
+		t.Fatalf("source clobbered: want mem-abc123, got %q", rels[0].Source)
+	}
+	// AddEdgeWithSource on existing edge with a different source — should update
+	if err := s.AddEdgeWithSource("alice", "knows", "bob", "mem-xyz789"); err != nil {
+		t.Fatal(err)
+	}
+	_, rels = s.Snapshot(10)
+	if rels[0].Source != "mem-xyz789" {
+		t.Fatalf("want updated source=mem-xyz789, got %q", rels[0].Source)
+	}
+}
