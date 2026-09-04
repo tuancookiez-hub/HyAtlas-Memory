@@ -16,6 +16,7 @@ func newTestServer(t *testing.T, model, base string) *Server {
 	if err != nil {
 		t.Skipf("MemoryStore unavailable in test env: %v", err)
 	}
+	t.Cleanup(func() { store.Close() })
 	return &Server{
 		store:    store,
 		llmModel: model,

@@ -318,6 +318,12 @@ func (s *MemoryStore) persistUsageAsync() {
 	}()
 }
 
+// Close drains any pending async persistence before the store is discarded.
+// Safe to call multiple times.
+func (s *MemoryStore) Close() {
+	s.persistUsage() // sync; wait for any in-flight goroutine
+}
+
 func (s *MemoryStore) persistUsage() error {
 	if s.countsPath == "" {
 		return nil
