@@ -29,10 +29,10 @@ type Edge struct {
 	To            string  `json:"to"`
 	Relation      string  `json:"relation"` // e.g. "depends_on", "fixed_by", "part_of"
 	Weight        float64 `json:"weight"`
-	Source        string  `json:"source,omitempty"`        // source_memory_id (L2) — evidence citation
-	RecordedAt    int64   `json:"recorded_at,omitempty"`  // unix seconds — when the system learned this
-	ValidFrom     int64   `json:"valid_from,omitempty"`    // unix seconds — when it became true in the world
-	ValidTo       int64   `json:"valid_to,omitempty"`      // unix seconds — when it stopped being true (0 = ongoing)
+	Source        string  `json:"source,omitempty"`         // source_memory_id (L2) — evidence citation
+	RecordedAt    int64   `json:"recorded_at,omitempty"`    // unix seconds — when the system learned this
+	ValidFrom     int64   `json:"valid_from,omitempty"`     // unix seconds — when it became true in the world
+	ValidTo       int64   `json:"valid_to,omitempty"`       // unix seconds — when it stopped being true (0 = ongoing)
 	InvalidatedAt int64   `json:"invalidated_at,omitempty"` // unix seconds — when a correction superseded this edge
 }
 
@@ -215,8 +215,9 @@ func (s *Store) EdgeCount() int {
 
 // SnapshotAsOf returns nodes + edges that were true at unix time t.
 // "True at t" means both axes:
-//   world:     valid_from <= t  AND (valid_to == 0 OR valid_to > t)
-//   recorded:  recorded_at <= t AND (invalidated_at == 0 OR invalidated_at > t)
+//
+//	world:     valid_from <= t  AND (valid_to == 0 OR valid_to > t)
+//	recorded:  recorded_at <= t AND (invalidated_at == 0 OR invalidated_at > t)
 func (s *Store) SnapshotAsOf(t int64, maxNodes int) ([]Node, []Edge) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
