@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSnapshotDropsDanglingEdges(t *testing.T) {
@@ -82,6 +83,60 @@ func TestPersistRoundTrip(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSnapshotAsOfFiltersByBothAxes(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(filepath.Join(dir, "g.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range []string{"a", "b", "c"} {
+		if _, err := s.UpsertNode(Node{Label: l}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	now := time.Now().Unix()
+	// Edge 1: a-b ongoing, recorded in the past
+	if err := s.AddEdge("a", "r1", "b"); err != nil {
+		t.Fatal(err)
+	}
+	// Edge 2: b-c with closed validity window (valid_to in the past)
+	if err := s.AddEdge("b", "r2", "c"); err != nil {
+		t.Fatal(err)
+	}
+	// Force b-c's valid_to to a past timestamp by direct field mutation
+	// (no public CloseEdge yet — that's Phase 2.4)
+	s.mu.Lock()
+	for i, e := range s.edges {
+		if e.Relation == "r2" {
+			s.edges[i].RecordedAt = now - 200
+			s.edges[i].ValidFrom = now - 200
+			s.edges[i].ValidTo = now - 100
+		} else {
+			s.edges[i].RecordedAt = now - 200
+		}
+	}
+	s.mu.Unlock()
+
+	// t=now-50 should return both (validity window is open for a-b; b-c's
+	// valid_from=now-200 <= now-50 and valid_to=now-100 > now-50... wait, that's
+	// not right either. The window is [now-200, now-100] so now-50 is AFTER the
+	// close. Use a probe at now-150 (inside the window for b-c).
+	_, rels := s.SnapshotAsOf(now-150, 10)
+	if len(rels) != 2 {
+		t.Errorf("t=now-150 (inside b-c window) want 2 edges, got %d", len(rels))
+	}
+
+	// t=now+100: b-c is closed (valid_to=now-100 < t)
+	_, rels = s.SnapshotAsOf(now+100, 10)
+	if len(rels) != 1 {
+		t.Errorf("t=now+100 want 1 edge (a-b only), got %d", len(rels))
+	}
+	if len(rels) > 0 && rels[0].Relation != "r1" {
+		t.Errorf("wrong edge returned: %s", rels[0].Relation)
 	}
 }
 

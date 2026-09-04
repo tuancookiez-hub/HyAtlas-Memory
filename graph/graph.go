@@ -25,12 +25,15 @@ type Node struct {
 
 // Edge is a directed relation between two nodes.
 type Edge struct {
-	From       string  `json:"from"`
-	To         string  `json:"to"`
-	Relation   string  `json:"relation"` // e.g. "depends_on", "fixed_by", "part_of"
-	Weight     float64 `json:"weight"`
-	Source     string  `json:"source,omitempty"`       // source_memory_id (L2) — evidence citation
-	RecordedAt int64   `json:"recorded_at,omitempty"` // unix seconds — when the system learned this
+	From          string  `json:"from"`
+	To            string  `json:"to"`
+	Relation      string  `json:"relation"` // e.g. "depends_on", "fixed_by", "part_of"
+	Weight        float64 `json:"weight"`
+	Source        string  `json:"source,omitempty"`        // source_memory_id (L2) — evidence citation
+	RecordedAt    int64   `json:"recorded_at,omitempty"`  // unix seconds — when the system learned this
+	ValidFrom     int64   `json:"valid_from,omitempty"`    // unix seconds — when it became true in the world
+	ValidTo       int64   `json:"valid_to,omitempty"`      // unix seconds — when it stopped being true (0 = ongoing)
+	InvalidatedAt int64   `json:"invalidated_at,omitempty"` // unix seconds — when a correction superseded this edge
 }
 
 // Store holds the graph and persists to a JSON file.
@@ -103,7 +106,8 @@ func (s *Store) UpsertNode(node Node) (string, error) {
 
 // AddEdgeWithSource adds or updates a directed relation with a source citation.
 // Source is the L2 memory id that produced the L5 triple. RecordedAt is the
-// unix-second timestamp the system learned the relation.
+// unix-second timestamp the system learned the relation. ValidFrom defaults
+// to RecordedAt (a new fact is valid from when we learned it).
 func (s *Store) AddEdgeWithSource(fromLabel, rel, toLabel, sourceID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -113,18 +117,23 @@ func (s *Store) AddEdgeWithSource(fromLabel, rel, toLabel, sourceID string) erro
 	now := time.Now().Unix()
 
 	// If edge exists, only update source if the new one is non-empty.
+	// Don't change ValidFrom/ValidTo/InvalidatedAt on update — those are
+	// bitemporal anchors that move only via the dedicated mutation path.
 	for i, e := range s.edges {
 		if e.From == fromID && e.To == toID && e.Relation == rel {
 			if sourceID != "" {
 				s.edges[i].Source = sourceID
 				s.edges[i].RecordedAt = now
+				if s.edges[i].ValidFrom == 0 {
+					s.edges[i].ValidFrom = now
+				}
 			}
 			return s.persistLocked()
 		}
 	}
 	s.edges = append(s.edges, Edge{
 		From: fromID, To: toID, Relation: rel, Weight: 1.0,
-		Source: sourceID, RecordedAt: now,
+		Source: sourceID, RecordedAt: now, ValidFrom: now,
 	})
 	return s.persistLocked()
 }
@@ -202,6 +211,43 @@ func (s *Store) EdgeCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.edges)
+}
+
+// SnapshotAsOf returns nodes + edges that were true at unix time t.
+// "True at t" means both axes:
+//   world:     valid_from <= t  AND (valid_to == 0 OR valid_to > t)
+//   recorded:  recorded_at <= t AND (invalidated_at == 0 OR invalidated_at > t)
+func (s *Store) SnapshotAsOf(t int64, maxNodes int) ([]Node, []Edge) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	nodes := make([]Node, 0, len(s.nodes))
+	for _, n := range s.nodes {
+		nodes = append(nodes, n)
+	}
+	if maxNodes > 0 && len(nodes) > maxNodes {
+		nodes = nodes[:maxNodes]
+	}
+	keep := make(map[string]struct{}, len(nodes))
+	for _, n := range nodes {
+		keep[n.ID] = struct{}{}
+	}
+	rels := make([]Edge, 0, len(s.edges))
+	for _, e := range s.edges {
+		if e.RecordedAt > t || (e.InvalidatedAt != 0 && e.InvalidatedAt <= t) {
+			continue
+		}
+		if e.ValidFrom > t || (e.ValidTo != 0 && e.ValidTo <= t) {
+			continue
+		}
+		if _, ok := keep[e.From]; !ok {
+			continue
+		}
+		if _, ok := keep[e.To]; !ok {
+			continue
+		}
+		rels = append(rels, e)
+	}
+	return nodes, rels
 }
 
 // Snapshot returns bounded node + relation lists for the dashboard graph view.

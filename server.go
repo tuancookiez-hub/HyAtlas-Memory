@@ -408,6 +408,18 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleGraphAsOf(w http.ResponseWriter, r *http.Request) {
+	ts := atoi(r.URL.Query().Get("ts"), int(time.Now().Unix()))
+	n := atoi(r.URL.Query().Get("n"), 500)
+	nodes, rels := s.store.Graph().SnapshotAsOf(int64(ts), n)
+	jsonResponse(w, 200, map[string]any{
+		"nodes":     nodes,
+		"relations": rels,
+		"as_of":     ts,
+		"total":     len(nodes),
+	})
+}
+
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, 200, map[string]string{"status": "ok"})
 }
@@ -463,6 +475,7 @@ func main() {
 	mux.HandleFunc("/api/v1/search", srv.handleSearch)
 	mux.HandleFunc("/api/v1/list", srv.handleList)
 	mux.HandleFunc("/api/v1/graph", srv.handleGraph)
+	mux.HandleFunc("/api/v1/graph-as-of", srv.handleGraphAsOf)
 	mux.HandleFunc("/api/v1/delete_all", srv.handleDelete)
 	mux.HandleFunc("/api/v1/metrics", srv.handleMetrics)
 	mux.HandleFunc("/api/v1/digest", srv.handleDigest)
