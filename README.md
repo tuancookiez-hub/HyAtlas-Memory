@@ -1,6 +1,6 @@
 ![HyAtlas v4.0 — Pure-Go Memory Core](https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/assets/hyatlas-v4.0-banner.png)
 
-# HyAtlas v4.0 — Pure-Go Memory Core
+# HyAtlas v4 — Pure-Go Memory Core
 
 > **One binary. Seven layers. Cross-platform.** Single 17.6 MB Go binary, no Python at runtime, in-process BGE embeddings, 7-layer memory model fully active. **Linux ✅ · macOS ✅ · Windows ✅.**
 
@@ -19,8 +19,6 @@ HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It r
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/scripts/install.sh | bash
 ```
-
-That script detects your OS, downloads a prebuilt binary for your platform
 (falling back to building from source if none exists yet), fetches the
 BGE-small embedding model (~133 MB), installs to a directory on your `PATH`,
 and verifies the install by starting the server and probing `/healthz`.
@@ -166,6 +164,14 @@ The BGE-small model + the platform-matching onnxruntime shared library live in `
 
 ---
 
+## What changed since v3.5.0
+
+- **Pure Go rewrite** — single 17.6 MB binary, no Python venv, no zvec, no Kuzu, no FastAPI
+- **In-process BGE embeddings** via onnxruntime-go (cgo) — no HTTP embed subprocess
+- **L4 Summary enabled** — was dormant in v3.5
+- **L5 bitemporal graph (v4.1.0+)** — every fact carries a citation back to its source L2 memory plus a bitemporal timestamp; the new `/api/v1/graph-as-of?ts=<unix>` endpoint lets you rewind the graph to any past moment.
+- **Mind Palace (v4.1.0+)** — a temporal visualization of the L5 knowledge graph in the Hermes Desktop `hy_memory` pane. Toggle List / Spatial on the Memories tab; drag-to-pan, click-to-select, bitemporal mode. See [`desktop-plugins/hy_memory/SPEC.md`](desktop-plugins/hy_memory/SPEC.md) for the design.
+
 ## API Reference
 
 Base URL: `http://127.0.0.1:19528`
@@ -183,6 +189,7 @@ Base URL: `http://127.0.0.1:19528`
 | `POST` | `/api/v1/reprocess` | Re-run extraction on unprocessed raw entries |
 | `POST` | `/api/v1/digest` | Trigger L5/L6/L7 synthesis pass |
 | `GET` | `/api/v1/graph` | L5 knowledge graph (nodes + edges) |
+| `GET` | `/api/v1/graph-as-of?ts=<unix>&n=500` | Bitemporal query — returns graph as it was at unix time `ts` (world validity + recording axes) |
 
 ### Add a memory
 
