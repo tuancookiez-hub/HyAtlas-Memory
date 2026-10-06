@@ -1,7 +1,7 @@
 """Backend API for the HyAtlas v4 desktop pane.
 
 Thin proxy: the desktop renderer cannot reach arbitrary localhost ports,
-so the pane calls this namespace (`/api/plugins/hy_memory/...`) and this
+so the pane calls this namespace (`/api/plugins/hyatlas/...`) and this
 module forwards to the HyAtlas v4 Go server at 127.0.0.1:19528.
 
 Follows the Turbofit dashboard-plugin pattern (FastAPI APIRouter mounted
@@ -112,7 +112,7 @@ def graph() -> Any:
 
 @router.get("/learning/graph")
 def learning_graph(n: int = 500, k_semantic: int = 2) -> Any:
-    """StarmapGraph-shape payload for the hy_memory plugin's Graph tab.
+    """StarmapGraph-shape payload for the hyatlas plugin's Graph tab.
 
     Matches the Hermes Desktop built-in Memory Graph shape (nodes with
     timestamp/category/label, edges with source/target/type), so the same

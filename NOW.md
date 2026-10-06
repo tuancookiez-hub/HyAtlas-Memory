@@ -1,18 +1,22 @@
 # HyAtlas v4 — NOW
 
-**v4.1.4** | 2026-10-07 | Release: tuancookiez-hub/HyAtlas-Memory
+**v4.2.0** | 2026-10-07 | Release: tuancookiez-hub/HyAtlas-Memory
 
 ## Running
 - hyatlas-go v4.1.4 build listening :19528 (extraction verified; outage backfill complete)
-- Plugin: `hy_memory` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hy_memory\` + Hermes Desktop pane
+- Plugin: `hyatlas` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hyatlas\` + Hermes Desktop pane
 - Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`)
+
+## Done (v4.2.0 — rename)
+- Plugin renamed `hy_memory` → `hyatlas` everywhere: manifest, provider name, `hermes hyatlas` CLI, dashboard, desktop pane id, docs, installer snippet
+- Catalog entry drafted as `plugin-catalog/hyatlas.yaml` (passes scripts/validate_plugin_catalog.py)
 
 ## Done (v4.1.4)
 - Plugin catalog readiness: manifest v2 + config_schema (Desktop settings form), requires_env removed (was install-blocking), provides_tools/hooks misdeclarations removed
-- `_load_config` reads `plugins.entries.hy_memory.settings` (settings-form writer) — env still wins
+- `_load_config` reads `plugins.entries.hyatlas.settings` (settings-form writer) — env still wins
 - Plugin README rewritten with rule-13 disclosures (network, subprocess, data, no telemetry)
 - `hermes plugins validate --install-deps`: ALL GREEN incl. security scan + desktop surface
-- Catalog name check: `hy_memory` free; category=memory; 49 memory entries, no lineage collision
+- Catalog name check: `hyatlas` free; category=memory; 49 memory entries, no lineage collision
 
 ## Done (v4.1.3)
 - delete_all data-safety fix: body+query scoping, confirm=wipe-all guard (plugin body scoping was silently ignored → full-store wipe)
@@ -29,5 +33,6 @@
 - CI: actions bumped to node24 majors; windows embedded artifact fixed
 
 ## Next
-- [ ] Catalog submission PR to NousResearch/hermes-agent (`plugin-catalog/hy_memory.yaml`, sha pinned to v4.1.4 commit) — awaiting Tuna review of the PR diff
+- [ ] Catalog submission PR to NousResearch/hermes-agent (`plugin-catalog/hyatlas.yaml`, sha pinned to v4.2.0 commit) — awaiting Tuna go-ahead
+- [ ] Live migration on this machine: ~/.hermes/plugins/hyatlas + config.yaml (provider/enabled/entries) + desktop-plugins — needs Hermes restart
 - [ ] Backups: `backup_paths` absolute + a daily data snapshot (parked by Tuna 2026-10-06)

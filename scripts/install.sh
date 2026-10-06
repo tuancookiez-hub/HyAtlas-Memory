@@ -15,7 +15,7 @@
 #   6. Verifies the install by starting the server and hitting /healthz
 #
 # Environment variables (all optional):
-#   HYATLAS_VERSION   — release tag to install (default: v4.1.4)
+#   HYATLAS_VERSION   — release tag to install (default: v4.2.0)
 #   HYATLAS_INSTALL_DIR — where to put the binary (default: ~/.local/bin, or
 #                         %LOCALAPPDATA%\hyatlas on Windows)
 #   HYATLAS_MODEL_DIR — where to cache the model (default: ~/.hyatlas/models)
@@ -25,7 +25,7 @@
 set -euo pipefail
 
 REPO="tuancookiez-hub/HyAtlas-Memory"
-VERSION="${HYATLAS_VERSION:-v4.1.4}"
+VERSION="${HYATLAS_VERSION:-v4.2.0}"
 INSTALL_DIR="${HYATLAS_INSTALL_DIR:-}"
 MODEL_DIR="${HYATLAS_MODEL_DIR:-}"
 NO_MODEL="${HYATLAS_NO_MODEL:-0}"
@@ -357,9 +357,9 @@ $(printf '\033[0;32m' )HyAtlas-Memory v4 installed.$(printf '\033[0m')
 
   Wire it into Hermes (in ~/.hermes/config.yaml):
       memory:
-        provider: hy_memory
+        provider: hyatlas
         providers:
-          hy_memory:
+          hyatlas:
             server_port: 19528
 
   Docs: https://github.com/$REPO#readme

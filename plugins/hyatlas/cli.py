@@ -1,4 +1,4 @@
-"""``hermes hy_memory`` subcommand — health, search, add, recent, start, stop.
+"""``hermes hyatlas`` subcommand — health, search, add, recent, start, stop.
 
 Hermes wires this file in as the active memory provider's CLI (see
 ``plugins.memory.discover_plugin_cli_commands``): it imports this module under
@@ -37,7 +37,7 @@ def _load_root() -> Any:
     parent package has no executed ``__init__``, so relative access to the
     package itself is unavailable.
     """
-    pkg = __package__ or "hy_memory"
+    pkg = __package__ or "hyatlas"
     mod = sys.modules.get(pkg)
     if mod is not None and hasattr(mod, "HyatlasMemoryProvider"):
         return mod
@@ -46,7 +46,7 @@ def _load_root() -> Any:
     if mod is None:
         spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / "__init__.py")
         if spec is None or spec.loader is None:
-            raise RuntimeError("could not load the hy_memory provider module")
+            raise RuntimeError("could not load the hyatlas provider module")
         mod = importlib.util.module_from_spec(spec)
         sys.modules[name] = mod
         spec.loader.exec_module(mod)
@@ -58,8 +58,8 @@ def _provider() -> Any:
 
 
 def register_cli(plugin_parser: argparse.ArgumentParser) -> None:
-    """Register ``hermes hy_memory <subcommand>`` subcommands."""
-    sub = plugin_parser.add_subparsers(dest="hy_memory_cmd", required=True)
+    """Register ``hermes hyatlas <subcommand>`` subcommands."""
+    sub = plugin_parser.add_subparsers(dest="hyatlas_cmd", required=True)
 
     p_status = sub.add_parser("status", help="Show v4 server health + layer counts")
     p_status.set_defaults(func=_cmd_status)
@@ -157,7 +157,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
         client = _client_from_args(args)
         if not client.is_reachable():
             _print({"error": "server unreachable",
-                    "hint": "Start it with `hyatlas start` or `hermes hy_memory start`"})
+                    "hint": "Start it with `hyatlas start` or `hermes hyatlas start`"})
             return 1
         _print(client.status())
         return 0
@@ -257,8 +257,8 @@ def _cmd_stop(args: argparse.Namespace) -> int:
 
 
 def _main_standalone(argv: Any = None) -> int:
-    """For ``python -m plugins.memory.hy_memory`` standalone usage."""
-    parser = argparse.ArgumentParser(prog="hy_memory", description=__doc__)
+    """For ``python -m plugins.memory.hyatlas`` standalone usage."""
+    parser = argparse.ArgumentParser(prog="hyatlas", description=__doc__)
     register_cli(parser)
     args = parser.parse_args(argv)
     return args.func(args) or 0

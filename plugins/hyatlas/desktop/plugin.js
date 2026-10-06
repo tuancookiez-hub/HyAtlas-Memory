@@ -4622,7 +4622,7 @@ function HyAtlasPage() {
   ] });
 }
 var entry_default = {
-  id: "hy_memory",
+  id: "hyatlas",
   name: "HyAtlas Memory",
   register(ctx) {
     _rest = ctx.rest;

@@ -1,12 +1,12 @@
 # After install
 
-After copying this directory to `~/.hermes/plugins/hy_memory/` and
+After copying this directory to `~/.hermes/plugins/hyatlas/` and
 restarting the gateway, verify the plugin loaded:
 
 ```bash
 # 1. Check the plugin is discoverable
 hermes memory status
-# Should show: provider: hy_memory
+# Should show: provider: hyatlas
 
 # 2. Verify the v4 server is reachable
 hermes hyatlas status
@@ -30,7 +30,7 @@ starts (instead of you running `hyatlas-go` in another terminal):
 ```yaml
 # ~/.hermes/config.yaml
 plugins:
-  hy_memory:
+  hyatlas:
     server_host: 127.0.0.1
     server_port: 19528
     auto_start: true
@@ -45,7 +45,7 @@ the port isn't already bound.
 
 The plugin reads (in priority order):
 
-1. Per-profile JSON at `~/.hermes/hy_memory.json`:
+1. Per-profile JSON at `~/.hermes/hyatlas.json`:
    ```json
    {
      "server_host": "127.0.0.1",
@@ -77,12 +77,12 @@ and v4 (port 19528). To switch:
 ```yaml
 # Use v4 (current)
 plugins:
-  hy_memory:
+  hyatlas:
     server_port: 19528
 
 # Use v3.5 (legacy)
 plugins:
-  hy_memory:
+  hyatlas:
     server_port: 19527
 ```
 
@@ -97,4 +97,4 @@ prefetched context should appear in the agent's first turn.
 ## Logs
 
 - v4 server logs: `~/.hermes/logs/hyatlas.log` (when auto-started)
-- Plugin errors: see `~/.hermes/logs/errors.log` filtered for `hy_memory`
+- Plugin errors: see `~/.hermes/logs/errors.log` filtered for `hyatlas`

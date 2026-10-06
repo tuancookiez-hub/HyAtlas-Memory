@@ -1,5 +1,5 @@
-name: hy_memory
-version: 4.1.4
+name: hyatlas
+version: 4.2.0
 manifest_version: 2
 api_version: 1
 description: "HyAtlas v4 — pure-Go 7-layer memory backend (chromem-go vector store + in-process BGE-small embeddings via onnxruntime-go, async LLM extraction, bitemporal knowledge graph). Talks to the hyatlas-go binary at 127.0.0.1:19528; ships a Desktop pane with a starmap graph view and a web dashboard. Tools (hyatlas_status/search/recent/add) and memory hooks are provided through the MemoryProvider interface."

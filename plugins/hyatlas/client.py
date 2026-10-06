@@ -43,7 +43,7 @@ class HyatlasClient:
     ) -> Any:
         url = f"{self.base_url}{path}"
         data = None
-        headers = {"Accept": "application/json", "User-Agent": "hermes-hy_memory/4.0"}
+        headers = {"Accept": "application/json", "User-Agent": "hermes-hyatlas/4.0"}
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"

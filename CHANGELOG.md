@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.2.0] — 2026-10-07
+
+> **Plugin renamed `hy_memory` → `hyatlas`** for the Hermes Plugin Catalog submission — the catalog key, manifest name, provider name, CLI command, and Desktop pane id now all read `hyatlas`. Breaking for existing installs: update `memory.provider: hyatlas` and re-enable the plugin under the new name.
+
+### Changed
+- Plugin directory, manifest `name`, `MemoryProvider.name`, `hermes hyatlas` CLI command, dashboard manifest, and desktop pane id all renamed `hy_memory` → `hyatlas`.
+- Config reads `plugins.entries.hyatlas.settings`; env overrides unchanged (`HYATLAS_SERVER_*`).
+- Catalog submission: `plugin-catalog/hyatlas.yaml` entry prepared (category memory, tier community, sha pinned).
+
 ## [4.1.4] — 2026-10-07
 
 > **Hermes plugin catalog readiness.** The `hy_memory` plugin now passes catalog admission (`hermes plugins validate` clean: manifest v2, security scan safe, no core override, desktop surface inside the SDK) and gains a Desktop settings form.

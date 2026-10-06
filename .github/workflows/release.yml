@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to attach assets to (e.g. v4.1.4). Build uses the triggering ref's source."
+        description: "Tag to attach assets to (e.g. v4.2.0). Build uses the triggering ref's source."
         required: true
 
 permissions:

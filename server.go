@@ -345,7 +345,7 @@ func atoi(s string, def int) int {
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	// Scoping may arrive as query params (curl style) OR as a JSON body
-	// (the hy_memory plugin's client style). Read both, query wins.
+	// (the hyatlas plugin's client style). Read both, query wins.
 	var body struct {
 		ID      string `json:"id"`
 		Layer   string `json:"layer"`
@@ -460,7 +460,7 @@ func errStr(err error) string {
 }
 
 // handleStarmapGraph returns a Hermes-Desktop-style StarmapGraph payload
-// (nodes, edges, memory) so the hy_memory plugin can render the exact same
+// (nodes, edges, memory) so the hyatlas plugin can render the exact same
 // view the built-in starmap shows. Designed for desktop pane "Graph" tab.
 //
 // The shape mirrors apps/desktop/src/types/hermes.ts::StarmapGraph:

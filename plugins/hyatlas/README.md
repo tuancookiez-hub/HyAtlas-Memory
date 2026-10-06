@@ -1,4 +1,4 @@
-# hy_memory — HyAtlas v4 memory provider for Hermes Agent
+# hyatlas — HyAtlas v4 memory provider for Hermes Agent
 
 Persistent 7-layer memory for Hermes backed by **HyAtlas v4**: a pure-Go,
 single-binary, local-first memory server (Apache-2.0). Chromem-go embedded
@@ -7,7 +7,7 @@ no GPU, no external embedding service), async LLM fact extraction, and a
 bitemporal knowledge graph with source citations.
 
 This plugin is the Hermes-side integration: a `MemoryProvider` implementation
-(thin HTTP client), four agent tools, a `hermes hy_memory` CLI, a Desktop pane
+(thin HTTP client), four agent tools, a `hermes hyatlas` CLI, a Desktop pane
 with a starmap graph view, and a web dashboard.
 
 ## What you get
@@ -20,7 +20,7 @@ with a starmap graph view, and a web dashboard.
   automatically each turn
 - **Desktop pane** — Overview (health + layer bars), Memories, Search, Add,
   and a Graph tab with a starmap visualization of the knowledge layers
-- **CLI** — `hermes hy_memory status|search|add|recent|start|stop`
+- **CLI** — `hermes hyatlas status|search|add|recent|start|stop`
 
 ## Install
 
@@ -38,7 +38,7 @@ Then install and enable the plugin:
 
 ```bash
 hermes plugins install tuancookiez-hub/HyAtlas-Memory   # or from the catalog by name
-hermes plugins enable hy_memory
+hermes plugins enable hyatlas
 ```
 
 And select it as the memory provider (`hermes memory setup` or in
@@ -46,12 +46,12 @@ And select it as the memory provider (`hermes memory setup` or in
 
 ```yaml
 memory:
-  provider: hy_memory
+  provider: hyatlas
 ```
 
 Settings (server host/port, user/agent id, auto-start, binary path, timeout)
-are editable in **Desktop → Settings → Plugins → hy_memory**, or via
-`plugins.entries.hy_memory.settings` in `config.yaml`, or the
+are editable in **Desktop → Settings → Plugins → hyatlas**, or via
+`plugins.entries.hyatlas.settings` in `config.yaml`, or the
 `HYATLAS_SERVER_HOST` / `HYATLAS_SERVER_PORT` / `HYATLAS_USER_ID` /
 `HYATLAS_AGENT_ID` / `HYATLAS_AUTO_START` / `HYATLAS_BINARY_PATH` env vars
 (env wins). Defaults work out of the box for a local server on port 19528.

@@ -16,7 +16,7 @@ This plugin follows the canonical Hermes memory-provider pattern
 * ``__init__.py`` — MemoryProvider subclass + register(ctx)
 * ``client.py`` — HTTP client to the v4 server
 * ``process.py`` — optional auto-start of the Go binary as a subprocess
-* ``cli.py`` — ``hermes hy_memory`` subcommands (status, search, add, recent, start, stop)
+* ``cli.py`` — ``hermes hyatlas`` subcommands (status, search, add, recent, start, stop)
 * ``schemas.py`` — tool schemas (status / search / recent / add)
 * ``__main__.py`` — standalone ``python -m`` entry point
 * ``plugin.yaml`` — metadata + config_schema (Desktop settings form)
@@ -58,7 +58,7 @@ from .schemas import (  # noqa: E402
 def _load_config() -> Dict[str, Any]:
     """Load config from env vars, config.yaml settings, and per-profile JSON.
 
-    Priority: env > ``plugins.entries.hy_memory.settings`` in config.yaml
+    Priority: env > ``plugins.entries.hyatlas.settings`` in config.yaml
     (the location the Desktop settings form writes) > per-profile JSON.
     Accepted keys: ``server_host``, ``server_port``, ``user_id``,
     ``agent_id``, ``auto_start``, ``binary_path``, ``request_timeout``.
@@ -81,7 +81,7 @@ def _load_config() -> Dict[str, Any]:
     #    silently dropped — they configure the v3.5 Python server, not
     #    the v4 Go binary. The v4 binary reads env vars directly.
     for json_path in (
-        Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "hy_memory.json",
+        Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "hyatlas.json",
     ):
         if json_path.exists():
             try:
@@ -92,8 +92,8 @@ def _load_config() -> Dict[str, Any]:
             except (json.JSONDecodeError, OSError) as e:
                 logger.debug("ignoring %s: %s", json_path, e)
 
-    # 2. config.yaml — plugins.entries.hy_memory.settings (Desktop settings
-    #    form + ctx.set_config writer), with the legacy plugins.hy_memory
+    # 2. config.yaml — plugins.entries.hyatlas.settings (Desktop settings
+    #    form + ctx.set_config writer), with the legacy plugins.hyatlas
     #    block as fallback.
     try:
         import yaml  # hermes core dependency
@@ -103,8 +103,8 @@ def _load_config() -> Dict[str, Any]:
             data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
             plugins = data.get("plugins") or {}
             settings = (
-                ((plugins.get("entries") or {}).get("hy_memory") or {}).get("settings")
-                or (plugins.get("hy_memory") or {})
+                ((plugins.get("entries") or {}).get("hyatlas") or {}).get("settings")
+                or (plugins.get("hyatlas") or {})
             )
             if isinstance(settings, dict):
                 for k in _V4_KEYS:
@@ -170,13 +170,13 @@ class HyatlasMemoryProvider(MemoryProvider):
         self._prefetch_lock = threading.Lock()
         self._prefetch_result: str = ""
         self._process: Optional[Any] = None  # lazy import to keep _load_config cheap
-        self._version = "4.1.4"
+        self._version = "4.2.0"
 
     # --- Required ABC methods ---
 
     @property
     def name(self) -> str:
-        return "hy_memory"
+        return "hyatlas"
 
     def backup_paths(self) -> List[str]:
         """Data directory paths this provider owns (for `hermes backup`)."""
@@ -192,7 +192,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         """True iff the v4 server is reachable on the configured port.
 
         Does NOT auto-start the server — that's a separate decision
-        via ``hyatlas start`` / ``hermes hy_memory start`` (or the
+        via ``hyatlas start`` / ``hermes hyatlas start`` (or the
         plugin's auto_start config flag, honored at initialize() time).
         """
         try:
@@ -210,7 +210,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         return (
             f"HyAtlas v4 not reachable at "
             f"{self._config.get('server_host')}:{port}. "
-            f"Start it with `hyatlas start` (or `hermes hy_memory start`)."
+            f"Start it with `hyatlas start` (or `hermes hyatlas start`)."
         )
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
@@ -222,7 +222,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         # Cron / flush guard — don't pollute memory from synthetic contexts
         agent_context = kwargs.get("agent_context", "")
         if agent_context in ("cron", "flush"):
-            logger.debug("hy_memory skipping init for context=%s", agent_context)
+            logger.debug("hyatlas skipping init for context=%s", agent_context)
             return
 
         # Auto-start the server if configured
@@ -324,7 +324,7 @@ class HyatlasMemoryProvider(MemoryProvider):
             f"(server: 127.0.0.1:{port}). "
             "Use the `hyatlas_search` tool to recall relevant past context, "
             "`hyatlas_recent` to see the latest memories, and `hyatlas_add` "
-            "to record durable facts. The `hy_memory_save` tool (the standard "
+            "to record durable facts. The `hyatlas_save` tool (the standard "
             "Hermes memory tool) is mirrored automatically to v4's L1 Profile "
             "layer."
         )
@@ -491,7 +491,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         ]
 
     def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
-        """Persist non-secret config to ``$HERMES_HOME/hy_memory.json``.
+        """Persist non-secret config to ``$HERMES_HOME/hyatlas.json``.
 
         Only v4-relevant keys are written. Legacy v3.5 fields (llm,
         vector_store, api_keys, etc.) are NOT written here — those
@@ -500,7 +500,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         (HYATLAS_LLM_BASE, etc.) directly, so no LLM creds belong
         in this JSON.
         """
-        path = Path(hermes_home) / "hy_memory.json"
+        path = Path(hermes_home) / "hyatlas.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         merged = {**self._config, **values}
         for k in ("request_timeout",):

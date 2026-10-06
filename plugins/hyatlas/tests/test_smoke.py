@@ -1,9 +1,9 @@
 """Smoke tests for the HyAtlas v4 plugin.
 
 Run these with:
-    cd ~/.hermes/plugins && python hy_memory/tests/test_smoke.py
+    cd ~/.hermes/plugins && python hyatlas/tests/test_smoke.py
 or directly from the v4 repo root:
-    python plugins/hy_memory/tests/test_smoke.py
+    python plugins/hyatlas/tests/test_smoke.py
 
 These tests verify the plugin's HTTP wire contract against a live v4
 server on 127.0.0.1:19528. They do NOT spin up the server; assume
@@ -20,23 +20,23 @@ import sys
 import time
 import traceback
 
-# Make `hy_memory` importable when this file is run directly.
-# _HERE = .../hy_memory/tests/
-# _PARENT = .../hy_memory/  (the package root where __init__.py lives)
+# Make `hyatlas` importable when this file is run directly.
+# _HERE = .../hyatlas/tests/
+# _PARENT = .../hyatlas/  (the package root where __init__.py lives)
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_PARENT = os.path.dirname(_HERE)  # the hy_memory/ package root
+_PARENT = os.path.dirname(_HERE)  # the hyatlas/ package root
 _PKG = _PARENT
 
 
 def _load_plugin_module():
-    """Load hy_memory/__init__.py as a package with relative imports."""
+    """Load hyatlas/__init__.py as a package with relative imports."""
     spec = importlib.util.spec_from_file_location(
-        "hy_memory",
+        "hyatlas",
         os.path.join(_PKG, "__init__.py"),
         submodule_search_locations=[_PKG],
     )
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["hy_memory"] = mod
+    sys.modules["hyatlas"] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -62,7 +62,7 @@ def test_provider_metadata() -> tuple[bool, str]:
     try:
         mod = _load_plugin_module()
         provider = mod.HyatlasMemoryProvider()
-        if provider.name != "hy_memory":
+        if provider.name != "hyatlas":
             return False, f"wrong name: {provider.name}"
         tools = [s["name"] for s in provider.get_tool_schemas()]
         expected = {"hyatlas_status", "hyatlas_search", "hyatlas_recent", "hyatlas_add"}

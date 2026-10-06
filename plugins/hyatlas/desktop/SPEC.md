@@ -3,7 +3,7 @@
 **Spec version:** 2.0
 **Date:** 2026-09-04
 **Status:** Draft — awaiting Tuna's review and approval before implementation
-**Target:** Hermes Desktop pane (`hy_memory` plugin)
+**Target:** Hermes Desktop pane (`hyatlas` plugin)
 **References:**
 - [Hermes Desktop starmap](https://github.com/tuancookiez-hub/hermes-agent/tree/main/apps/desktop/src/app/starmap) — the proven implementation we are adapting
 - [Utopia](https://github.com/deeplethe/utopia) — bitemporal world model (data layer only)
@@ -228,7 +228,7 @@ This is optional for v1 — the radial placement of L5 nodes by timestamp alread
 
 ## 7. Component Inventory (adapted from starmap)
 
-### Files to create in hy_memory plugin
+### Files to create in hyatlas plugin
 
 | Component | File | Source in starmap | Notes |
 |---|---|---|---|
@@ -280,7 +280,7 @@ This is optional for v1 — the radial placement of L5 nodes by timestamp alread
 
 ### Plugin file layout
 ```
-desktop-plugins/hy_memory/
+desktop-plugins/hyatlas/
   plugin.js                          ← add spatial toggle, new tab
   src/mind-palace/
     mind-palace.tsx                   ← root

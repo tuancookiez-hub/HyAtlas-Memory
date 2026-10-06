@@ -27,7 +27,7 @@ Useful env vars:
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `HYATLAS_VERSION` | Release tag to install | `v4.1.4` |
+| `HYATLAS_VERSION` | Release tag to install | `v4.2.0` |
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the BGE model is cached | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
 | `HYATLAS_NO_MODEL=1` | Skip the model download | (downloads) |
@@ -170,7 +170,7 @@ The BGE-small model + the platform-matching onnxruntime shared library live in `
 - **In-process BGE embeddings** via onnxruntime-go (cgo) — no HTTP embed subprocess
 - **L4 Summary enabled** — was dormant in v3.5
 - **L5 bitemporal graph (v4.1.0+)** — every fact carries a citation back to its source L2 memory plus a bitemporal timestamp; the new `/api/v1/graph-as-of?ts=<unix>` endpoint lets you rewind the graph to any past moment.
-- **Mind Palace (v4.1.0+)** — a temporal visualization of the L5 knowledge graph in the Hermes Desktop `hy_memory` pane. Toggle List / Spatial on the Memories tab; drag-to-pan, click-to-select, bitemporal mode. See [`plugins/hy_memory/desktop/SPEC.md`](plugins/hy_memory/desktop/SPEC.md) for the design.
+- **Mind Palace (v4.1.0+)** — a temporal visualization of the L5 knowledge graph in the Hermes Desktop `hyatlas` pane. Toggle List / Spatial on the Memories tab; drag-to-pan, click-to-select, bitemporal mode. See [`plugins/hyatlas/desktop/SPEC.md`](plugins/hyatlas/desktop/SPEC.md) for the design.
 
 ## API Reference
 
@@ -230,7 +230,7 @@ Response shape:
 
 ## Hermes Integration
 
-HyAtlas v4 is the **backend HTTP server** (`127.0.0.1:19528`) that backs the existing Hermes `hy_memory` memory provider plugin. It is **not** a native Hermes `MemoryProvider` ABC plugin — those are Python classes that subclass `agent.memory_provider.MemoryProvider` and live in `~/.hermes/plugins/memory/<name>/`.
+HyAtlas v4 is the **backend HTTP server** (`127.0.0.1:19528`) that backs the existing Hermes `hyatlas` memory provider plugin. It is **not** a native Hermes `MemoryProvider` ABC plugin — those are Python classes that subclass `agent.memory_provider.MemoryProvider` and live in `~/.hermes/plugins/memory/<name>/`.
 
 ### How it works
 
@@ -239,14 +239,14 @@ HyAtlas v4 is the **backend HTTP server** (`127.0.0.1:19528`) that backs the exi
 │  Hermes Agent       │ ─────────────────► │  hyatlas-go (v4)     │
 │  (Python)           │   /api/v1/*        │  127.0.0.1:19528     │
 │                     │ ◄───────────────── │  Pure Go binary      │
-│  hy_memory plugin   │   JSON responses   │  (this release)      │
+│  hyatlas plugin   │   JSON responses   │  (this release)      │
 │  (~/.hermes/plugins/                        │  chromem-go + BGE    │
-│   memory/hy_memory/                          │  in-process          │
+│   memory/hyatlas/                          │  in-process          │
 │   client.py)                                └──────────────────────┘
 └─────────────────────┘
 ```
 
-The `hy_memory` plugin (Python, in your Hermes install) calls HyAtlas v4's HTTP API. Switching from the v3.5 Python floor to v4 is a port change — same client, new backend.
+The `hyatlas` plugin (Python, in your Hermes install) calls HyAtlas v4's HTTP API. Switching from the v3.5 Python floor to v4 is a port change — same client, new backend.
 
 ### Wire it up
 
@@ -257,10 +257,10 @@ The `hy_memory` plugin (Python, in your Hermes install) calls HyAtlas v4's HTTP 
 ```yaml
 memory:
   enabled: true
-  provider: hy_memory
+  provider: hyatlas
   providers:
-    hy_memory:
-      provider: hy_memory
+    hyatlas:
+      provider: hyatlas
       server_port: 19528
       auto_start: false
 ```
@@ -269,11 +269,11 @@ memory:
 
 **3. Restart Hermes.**
 
-The `hy_memory` plugin (Python client) is already wire-compatible with v4. Verified against the real v3.5 `HyMemoryClient` — all four operations (reachable / add / list / search) pass cleanly.
+The `hyatlas` plugin (Python client) is already wire-compatible with v4. Verified against the real v3.5 `HyMemoryClient` — all four operations (reachable / add / list / search) pass cleanly.
 
 ### Building a native `MemoryProvider` plugin
 
-If you want a **true native** Hermes memory plugin (Python, subclasses `MemoryProvider`, lives in `~/.hermes/plugins/memory/`), you can write a thin wrapper that calls HyAtlas v4 over HTTP. This is a future-work item — it would let `memory.provider: hyatlas` work directly. For now, the `hy_memory` plugin is the path of least resistance.
+If you want a **true native** Hermes memory plugin (Python, subclasses `MemoryProvider`, lives in `~/.hermes/plugins/memory/`), you can write a thin wrapper that calls HyAtlas v4 over HTTP. This is a future-work item — it would let `memory.provider: hyatlas` work directly. For now, the `hyatlas` plugin is the path of least resistance.
 
 ---
 

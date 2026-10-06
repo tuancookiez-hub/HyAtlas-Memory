@@ -1,4 +1,4 @@
-"""Standalone ``python -m plugins.memory.hy_memory`` entry point.
+"""Standalone ``python -m plugins.memory.hyatlas`` entry point.
 
 Mirrors the pattern Hindsight uses for hermes_hindsight.memory —
 runs the plugin's CLI without needing the parent Hermes binary on PATH.
