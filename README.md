@@ -27,7 +27,7 @@ Useful env vars:
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `HYATLAS_VERSION` | Release tag to install | `v4.0.1` |
+| `HYATLAS_VERSION` | Release tag to install | `v4.1.2` |
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the BGE model is cached | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
 | `HYATLAS_NO_MODEL=1` | Skip the model download | (downloads) |
@@ -170,7 +170,7 @@ The BGE-small model + the platform-matching onnxruntime shared library live in `
 - **In-process BGE embeddings** via onnxruntime-go (cgo) — no HTTP embed subprocess
 - **L4 Summary enabled** — was dormant in v3.5
 - **L5 bitemporal graph (v4.1.0+)** — every fact carries a citation back to its source L2 memory plus a bitemporal timestamp; the new `/api/v1/graph-as-of?ts=<unix>` endpoint lets you rewind the graph to any past moment.
-- **Mind Palace (v4.1.0+)** — a temporal visualization of the L5 knowledge graph in the Hermes Desktop `hy_memory` pane. Toggle List / Spatial on the Memories tab; drag-to-pan, click-to-select, bitemporal mode. See [`desktop-plugins/hy_memory/SPEC.md`](desktop-plugins/hy_memory/SPEC.md) for the design.
+- **Mind Palace (v4.1.0+)** — a temporal visualization of the L5 knowledge graph in the Hermes Desktop `hy_memory` pane. Toggle List / Spatial on the Memories tab; drag-to-pan, click-to-select, bitemporal mode. See [`plugins/hy_memory/desktop/SPEC.md`](plugins/hy_memory/desktop/SPEC.md) for the design.
 
 ## API Reference
 

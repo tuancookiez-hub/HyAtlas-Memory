@@ -1,5 +1,33 @@
 # Changelog
 
+## [4.1.2] — 2026-10-06
+
+> **Extraction resilience.** Restores the memory write pipeline after a silent extraction outage (2026-09-05 → 2026-10-06) and hardens it against both failure classes found during recovery.
+
+### Fixed
+- **Extraction stalled by a WAF (silent for a month):** the Nous Portal sits behind Cloudflare, which rejects Go's default `Go-http-client` User-Agent with HTTP 403. `llm.Complete` now identifies honestly (`HyAtlas/4.1 (+repo URL)`).
+- **Conversational-reply extraction failures:** on some personal-style input the extraction model replied with prose instead of JSON, failing the parse. `Complete` now performs one reinforced retry before giving up — recovered ~95% of previously-failing rows in the outage backfill.
+- **`/api/v1/list` raw filtering:** `include_raw=false` is applied before pagination (and to `total`), so `recent`-style queries no longer return empty pages when the newest page is all raw rows.
+- **Hermes plugin CLI:** `hermes hy_memory …` boots cleanly (synthetic-package import fix); `start`/`stop` delegate to the canonical `hyatlas` launcher; the unavailable warning cites the real command.
+- **Plugin launcher:** spawning no longer hangs when the caller captures stdout (file-sink + bounded wait + health fallback).
+
+### Added
+- **`/api/v1/reprocess` by ids:** accepts `{"ids": [...]}` to re-extract exact rows (extracted-skip bypassed) alongside `{"max": N}`; response reports `reprocessed` / `failed` / `skipped`.
+- **Starmap learning graph:** `/api/v1/learning/graph` returns the Hermes-Desktop StarmapGraph shape (knowledge + co_session + semantic edges), proxied by the plugin's `plugin_api.py`.
+- **Mind Palace dashboard updates:** new starmap assets + `desktop/plugin.js` observatory work.
+
+### Changed
+- `reprocess` marks rows extracted after a successful promotion.
+- Version metadata bumped to **4.1.2** across installer, `plugin.yaml`, dashboard manifest, `/api/info`, docker-compose.
+
+## [4.1.1] — 2026-09-04
+
+> Edges + CI hardening. `/api/v1/edges` (knowledge / co_session / semantic edge types), `DocIndex.Meta` (session_id in list endpoints), Linux CI tempDir race fix (`store.Close()` + `t.Cleanup`), plugin Graph tab with type-colored edges.
+
+## [4.1.0] — 2026-09-04
+
+> Mind Palace. Bitemporal L5 graph with evidence citations (`Source` / `RecordedAt` on edges), `/api/v1/graph-as-of` time-travel endpoint, and the Hermes Desktop `hy_memory` Mind Palace visualization.
+
 ## [4.0.1] — 2026-09-02
 
 > **Stable floor.** Aligns the GitHub tag with the code you actually run: one-line installer, desktop pane, Hermes plugin, and a graph snapshot that never returns dangling edges.
