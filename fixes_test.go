@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/tuancookiez-hub/hyatlas-v4/memory"
@@ -171,4 +172,55 @@ func TestExtractErrConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestReprocessByIds covers the backfill contract: explicit ids are processed
+// even when the extracted flag says otherwise (caller already chose the rows),
+// and the response reports reprocessed/failed/skipped.
+func TestReprocessByIds(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	var calls atomic.Int32
+	mock := mockExtractionServer(t, &calls)
+	defer mock.Close()
+	srv.llm = NewLLMClient(mock.URL, "test-key", "mock-model")
+
+	for _, id := range []string{"raw-1", "raw-2"} {
+		if err := srv.store.Add(memory.L2Raw, id, "text "+id, map[string]string{
+			"user_id": "u", "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
+		}); err != nil {
+			t.Fatalf("add: %v", err)
+		}
+	}
+	// Mark one extracted — with explicit ids it must still be reprocessed.
+	if err := srv.store.SetExtracted("raw-1", true); err != nil {
+		t.Fatalf("set extracted: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	srv.handleReprocess(w, httptest.NewRequest("POST", "/api/v1/reprocess",
+		strings.NewReader(`{"ids":["raw-1","raw-2"]}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("reprocess: want 200, got %d", w.Code)
+	}
+	var res map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res["reprocessed"] != float64(2) {
+		t.Errorf("reprocessed: want 2 (ids bypass the extracted skip), got %v", res["reprocessed"])
+	}
+	if res["skipped"] != float64(0) {
+		t.Errorf("skipped: want 0 for explicit ids, got %v", res["skipped"])
+	}
+	// Promoted facts landed in L3.
+	docs, _ := srv.store.List(memory.L3Fact, "", "", 10, 0, false)
+	if len(docs) != 2 {
+		t.Errorf("l3 facts after reprocess: want 2, got %d", len(docs))
+	}
+	// And the rows are now flagged extracted.
+	for _, id := range []string{"raw-1", "raw-2"} {
+		if d := srv.store.GetMany([]string{id}); len(d) != 1 || !d[0].Extracted {
+			t.Errorf("%s: extracted flag not set after reprocess", id)
+		}
+	}
 }
