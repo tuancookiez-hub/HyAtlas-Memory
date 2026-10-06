@@ -1,27 +1,65 @@
-"""``hermes hyatlas`` subcommand — health, search, add, recent.
+"""``hermes hy_memory`` subcommand — health, search, add, recent, start, stop.
 
-Hermes auto-calls ``register_cli(parser)`` with an already-created
-``ArgumentParser`` for the ``hyatlas`` command. We add subcommands
-to that parser.
+Hermes wires this file in as the active memory provider's CLI (see
+``plugins.memory.discover_plugin_cli_commands``): it imports this module under
+a synthetic parent package and calls ``register_cli(parser)``. Because that
+parent is synthetic (``__init__.py`` is never executed), the provider module
+is loaded from disk explicitly via ``_load_root()`` — a plain
+``from . import __init__`` binds a method-wrapper, not the module.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import logging
+import subprocess
 import sys
+import tempfile
+from pathlib import Path
 from typing import Any
 
-from . import __init__ as plugin_root
 from .client import HyatlasClient, HyatlasClientError, HyatlasUnreachable
 
 logger = logging.getLogger(__name__)
 
+# Canonical Windows launcher (owns the full env: data dir, LLM key, logs).
+# Only consulted when no launcher sits beside the configured binary_path.
+_WIN_LAUNCHER_FALLBACK = Path("F:/HyAtlas-Memory-Go/hyatlas-go.ps1")
+
+
+def _load_root() -> Any:
+    """Provider module (the package ``__init__.py``).
+
+    In a full session the package may already be imported under its real name;
+    reuse that. Otherwise load the file explicitly — the CLI's synthetic
+    parent package has no executed ``__init__``, so relative access to the
+    package itself is unavailable.
+    """
+    pkg = __package__ or "hy_memory"
+    mod = sys.modules.get(pkg)
+    if mod is not None and hasattr(mod, "HyatlasMemoryProvider"):
+        return mod
+    name = f"{pkg}._root"
+    mod = sys.modules.get(name)
+    if mod is None:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / "__init__.py")
+        if spec is None or spec.loader is None:
+            raise RuntimeError("could not load the hy_memory provider module")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
+def _provider() -> Any:
+    return _load_root().HyatlasMemoryProvider()
+
 
 def register_cli(plugin_parser: argparse.ArgumentParser) -> None:
-    """Register ``hermes hyatlas <subcommand>`` subcommands."""
-    sub = plugin_parser.add_subparsers(dest="hyatlas_cmd", required=True)
+    """Register ``hermes hy_memory <subcommand>`` subcommands."""
+    sub = plugin_parser.add_subparsers(dest="hy_memory_cmd", required=True)
 
     p_status = sub.add_parser("status", help="Show v4 server health + layer counts")
     p_status.set_defaults(func=_cmd_status)
@@ -44,17 +82,70 @@ def register_cli(plugin_parser: argparse.ArgumentParser) -> None:
     p_recent.add_argument("--include-raw", action="store_true")
     p_recent.set_defaults(func=_cmd_recent)
 
-    p_start = sub.add_parser("start", help="Start the v4 Go binary as a subprocess")
+    p_start = sub.add_parser("start", help="Start the v4 Go server (canonical launcher when present)")
     p_start.set_defaults(func=_cmd_start)
 
-    p_stop = sub.add_parser("stop", help="Stop the v4 Go binary")
+    p_stop = sub.add_parser("stop", help="Stop the v4 Go server")
     p_stop.set_defaults(func=_cmd_stop)
 
 
 def _client_from_args(args: argparse.Namespace) -> HyatlasClient:
     """Build a client from the plugin's loaded config."""
-    provider = plugin_root.HyatlasMemoryProvider()
-    return provider._ensure_client()
+    return _provider()._ensure_client()
+
+
+def _identity(provider: Any) -> "tuple[str, str]":
+    """Resolved (user_id, agent_id) — same order the provider uses at init."""
+    return provider._resolve_user_id({}), provider._resolve_agent_id({})
+
+
+def _launcher(cfg: dict) -> "Path | None":
+    """Canonical Windows launcher script, when one exists.
+
+    ``hyatlas-go.ps1`` owns the full server env (data dir, LLM key from
+    auth.json, log redirect), so starting through it keeps a CLI-started
+    server identical to the ``hyatlas start`` shim.
+    """
+    if sys.platform != "win32":
+        return None
+    candidates = []
+    bp = str(cfg.get("binary_path") or "")
+    if bp:
+        candidates.append(Path(bp).parent / "hyatlas-go.ps1")
+    candidates.append(_WIN_LAUNCHER_FALLBACK)
+    for cand in candidates:
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _run_launcher(ps1: Path, action: str, timeout: int = 90) -> int:
+    """Run the canonical launcher, tolerant of its detached child holding handles.
+
+    The server the launcher spawns inherits the launcher's stdio pipe handles,
+    so a captured PIPE stays open long after powershell exits — and
+    ``subprocess.run(capture_output=True)`` then hangs forever re-waiting on
+    it. Redirect to a temp FILE instead and wait on the process itself, with a
+    health check as the final arbiter.
+    """
+    out_path = Path(tempfile.gettempdir()) / "hyatlas-launcher.out"
+    with open(out_path, "w", encoding="utf-8", errors="replace") as sink:
+        proc = subprocess.Popen(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1), action],
+            stdout=sink, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        )
+        try:
+            rc = proc.wait(timeout=timeout)
+            out = out_path.read_text(encoding="utf-8", errors="replace").strip()
+            _print({"ok": rc == 0, "via": str(ps1), "output": out})
+            return 0 if rc == 0 else 1
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out = out_path.read_text(encoding="utf-8", errors="replace").strip()
+            ok = _provider()._ensure_client().wait_until_reachable(timeout=20.0)
+            _print({"ok": ok, "via": str(ps1), "output": out,
+                    "note": "launcher did not return; health-checked directly"})
+            return 0 if ok else 1
 
 
 def _print(obj: Any) -> None:
@@ -66,7 +157,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
         client = _client_from_args(args)
         if not client.is_reachable():
             _print({"error": "server unreachable",
-                    "hint": "Start it with `hermes hyatlas start` or run `hyatlas-go` directly"})
+                    "hint": "Start it with `hyatlas start` or `hermes hy_memory start`"})
             return 1
         _print(client.status())
         return 0
@@ -77,12 +168,13 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 def _cmd_search(args: argparse.Namespace) -> int:
     try:
-        client = _client_from_args(args)
-        provider = plugin_root.HyatlasMemoryProvider()
+        provider = _provider()
+        client = provider._ensure_client()
+        user_id, agent_id = _identity(provider)
         results = client.search(
             query=args.query,
-            user_id=provider._user_id,
-            agent_id=provider._agent_id,
+            user_id=user_id,
+            agent_id=agent_id,
             layer=args.layer,
             limit=args.limit,
         )
@@ -95,12 +187,13 @@ def _cmd_search(args: argparse.Namespace) -> int:
 
 def _cmd_add(args: argparse.Namespace) -> int:
     try:
-        client = _client_from_args(args)
-        provider = plugin_root.HyatlasMemoryProvider()
+        provider = _provider()
+        client = provider._ensure_client()
+        user_id, agent_id = _identity(provider)
         resp = client.add(
             text=args.text,
-            user_id=args.user_id or provider._user_id,
-            agent_id=args.agent_id or provider._agent_id,
+            user_id=args.user_id or user_id,
+            agent_id=args.agent_id or agent_id,
         )
         _print(resp)
         return 0
@@ -111,11 +204,12 @@ def _cmd_add(args: argparse.Namespace) -> int:
 
 def _cmd_recent(args: argparse.Namespace) -> int:
     try:
-        client = _client_from_args(args)
-        provider = plugin_root.HyatlasMemoryProvider()
+        provider = _provider()
+        client = provider._ensure_client()
+        user_id, agent_id = _identity(provider)
         items = client.list_memories(
-            user_id=provider._user_id,
-            agent_id=provider._agent_id,
+            user_id=user_id,
+            agent_id=agent_id,
             layer=args.layer,
             limit=args.limit,
             include_raw=args.include_raw,
@@ -128,24 +222,34 @@ def _cmd_recent(args: argparse.Namespace) -> int:
 
 
 def _cmd_start(args: argparse.Namespace) -> int:
+    provider = _provider()
+    ps1 = _launcher(provider._config)
+    if ps1 is not None:
+        return _run_launcher(ps1, "start")
+    # No canonical launcher (non-Windows / custom layout): spawn the binary
+    # directly. Set HYATLAS_GO_DATA when the binary does not sit next to its
+    # data/ dir — the server otherwise creates a fresh store beside itself.
     from . import process as process_mod
-    provider = plugin_root.HyatlasMemoryProvider()
-    process = process_mod.HyatlasProcess(provider._config)
+    proc = process_mod.HyatlasProcess(provider._config)
     try:
-        process.start()
+        proc.start()
     except FileNotFoundError as e:
         _print({"ok": False, "error": str(e)})
         return 1
-    if client := _client_from_args(args):
-        if client.wait_until_reachable(timeout=30.0):
-            _print({"ok": True, "started": True, "reachable": True})
-            return 0
+    client = provider._ensure_client()
+    if client.wait_until_reachable(timeout=30.0):
+        _print({"ok": True, "started": True, "reachable": True})
+        return 0
     _print({"ok": True, "started": True, "reachable": False,
             "hint": "binary started but not reachable on the configured port"})
     return 0
 
 
 def _cmd_stop(args: argparse.Namespace) -> int:
+    provider = _provider()
+    ps1 = _launcher(provider._config)
+    if ps1 is not None:
+        return _run_launcher(ps1, "stop", timeout=60)
     from . import process as process_mod
     process_mod.HyatlasProcess.stop_running()
     _print({"ok": True, "stopped": True})
@@ -154,7 +258,7 @@ def _cmd_stop(args: argparse.Namespace) -> int:
 
 def _main_standalone(argv: Any = None) -> int:
     """For ``python -m plugins.memory.hy_memory`` standalone usage."""
-    parser = argparse.ArgumentParser(prog="hyatlas", description=__doc__)
+    parser = argparse.ArgumentParser(prog="hy_memory", description=__doc__)
     register_cli(parser)
     args = parser.parse_args(argv)
     return args.func(args) or 0

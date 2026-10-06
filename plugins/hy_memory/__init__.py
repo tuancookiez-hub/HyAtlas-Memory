@@ -14,7 +14,7 @@ This plugin follows the canonical Hermes memory-provider pattern
 * ``__init__.py`` — MemoryProvider subclass + register(ctx)
 * ``client.py`` — HTTP client to the v4 server
 * ``process.py`` — auto-start / stop the Go binary as a subprocess
-* ``cli.py`` — ``hermes hyatlas`` subcommands (status, search, add, recent)
+* ``cli.py`` — ``hermes hy_memory`` subcommands (status, search, add, recent, start, stop)
 * ``schemas.py`` — tool schemas (status / search / recent / add)
 * ``__main__.py`` — standalone ``python -m`` entry point
 * ``plugin.yaml`` — metadata
@@ -145,7 +145,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         self._prefetch_lock = threading.Lock()
         self._prefetch_result: str = ""
         self._process: Optional[Any] = None  # lazy import to keep _load_config cheap
-        self._version = "4.0.1"
+        self._version = "4.1.2"
 
     # --- Required ABC methods ---
 
@@ -167,8 +167,8 @@ class HyatlasMemoryProvider(MemoryProvider):
         """True iff the v4 server is reachable on the configured port.
 
         Does NOT auto-start the server — that's a separate decision
-        via ``hermes hyatlas start`` (or the plugin's auto_start
-        config flag, honored at initialize() time).
+        via ``hyatlas start`` / ``hermes hy_memory start`` (or the
+        plugin's auto_start config flag, honored at initialize() time).
         """
         try:
             client = self._ensure_client()
@@ -185,8 +185,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         return (
             f"HyAtlas v4 not reachable at "
             f"{self._config.get('server_host')}:{port}. "
-            f"Start it with `hermes hyatlas start` (auto-starts the Go binary) "
-            f"or run the binary directly: `hyatlas-go`."
+            f"Start it with `hyatlas start` (or `hermes hy_memory start`)."
         )
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
