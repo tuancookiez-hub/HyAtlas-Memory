@@ -33,7 +33,12 @@ function Start-V4 {
     $env:HYATLAS_MODEL_DIR  = (Join-Path $goDir "models")
     $env:HYATLAS_LLM_BASE   = "https://inference-api.nousresearch.com/v1"
     $env:HYATLAS_LLM_MODEL  = "poolside/laguna-s-2.1:free"
-    $env:HYATLAS_LLM_KEY    = $llmKey
+    # The Nous Portal key is a 1-hour JWT that Hermes keeps fresh in auth.json.
+    # Point the server at the file so it reads the current key per call, instead
+    # of freezing today's JWT for the whole process lifetime. $llmKey stays as
+    # the bootstrap/fallback for any moment the file is mid-rewrite.
+    $env:HYATLAS_LLM_KEY      = $llmKey
+    $env:HYATLAS_LLM_KEY_FILE = $authPath
 
     Set-Location $goDir
     $proc = Start-Process -FilePath ".\hyatlas-go.exe" -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError "$log.err" -PassThru

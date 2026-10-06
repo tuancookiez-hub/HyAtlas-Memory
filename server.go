@@ -767,6 +767,10 @@ func main() {
 	// LLM: any OpenAI-compatible endpoint. Default is a Nous Portal :free model.
 	llmBase := envOr("HYATLAS_LLM_BASE", "https://inference-api.nousresearch.com/v1")
 	llmKey := os.Getenv("HYATLAS_LLM_KEY")
+	// Optional: read the key live from a file each call, for rotating
+	// credentials (e.g. Hermes keeps a fresh 1-hour JWT in auth.json).
+	// When set, this wins over the frozen HYATLAS_LLM_KEY value.
+	llmKeyFile := os.Getenv("HYATLAS_LLM_KEY_FILE")
 	llmModel := envOr("HYATLAS_LLM_MODEL", "poolside/laguna-s-2.1:free")
 	embedBase := envOr("HYATLAS_EMBED_BASE", "http://127.0.0.1:49200/v1")
 	embedKey := os.Getenv("HYATLAS_EMBED_KEY")
@@ -797,6 +801,7 @@ func main() {
 		log.Fatal("store: ", err)
 	}
 	llm := NewLLMClient(llmBase, llmKey, llmModel)
+	llm.KeyFile = llmKeyFile
 	srv := &Server{store: store, llm: llm, llmModel: llmModel, llmBase: llmBase, start: time.Now(), dataDir: dir}
 
 	mux := http.NewServeMux()

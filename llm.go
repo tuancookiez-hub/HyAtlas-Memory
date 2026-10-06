@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -15,7 +16,8 @@ import (
 // Routes through ai2api loopback by default (firewall-safe external calls).
 type LLMClient struct {
 	BaseURL string
-	APIKey  string
+	APIKey  string // static key (HYATLAS_LLM_KEY); used when KeyFile is empty
+	KeyFile string // when set, the key is read live from this file each call
 	Model   string
 	Client  *http.Client
 }
@@ -23,6 +25,47 @@ type LLMClient struct {
 func NewLLMClient(baseURL, key, model string) *LLMClient {
 	return &LLMClient{BaseURL: baseURL, APIKey: key, Model: model,
 		Client: &http.Client{Timeout: 180 * time.Second}}
+}
+
+// resolveKey returns the bearer key to use for this request. When KeyFile is
+// set it is read live, so a rotating credential — e.g. the 1-hour JWT Hermes
+// keeps fresh in auth.json — never goes stale the way a startup-frozen env
+// value does. Any read/parse failure falls back to the static APIKey.
+func (l *LLMClient) resolveKey() string {
+	if l.KeyFile == "" {
+		return l.APIKey
+	}
+	b, err := os.ReadFile(l.KeyFile)
+	if err != nil || len(b) == 0 {
+		return l.APIKey
+	}
+	if k := extractKey(b); k != "" {
+		return k
+	}
+	return l.APIKey
+}
+
+// extractKey reads a bearer key from either a JSON auth file (Hermes auth.json
+// shape: providers.nous.agent_key, falling back to access_token) or a
+// plain-text file whose trimmed contents are the key.
+func extractKey(b []byte) string {
+	var auth struct {
+		Providers map[string]struct {
+			AgentKey    string `json:"agent_key"`
+			AccessToken string `json:"access_token"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(b, &auth); err == nil {
+		if n := auth.Providers["nous"]; n.AgentKey != "" {
+			return n.AgentKey
+		} else if n := auth.Providers["nous"]; n.AccessToken != "" {
+			return n.AccessToken
+		}
+	}
+	if s := strings.TrimSpace(string(b)); s != "" && !strings.HasPrefix(s, "{") {
+		return s
+	}
+	return ""
 }
 
 // Facts, Summary, Knowledge, Schema, Intention is the structured output the LLM
@@ -157,8 +200,10 @@ Return ONLY valid JSON, no prose, no markdown fences.`
 	// "Go-http-client" User-Agent; identify honestly so the WAF lets the
 	// extraction call through.
 	req.Header.Set("User-Agent", "HyAtlas/4.1 (+https://github.com/tuancookiez-hub/HyAtlas-Memory)")
-	if l.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+l.APIKey)
+	// Resolve the key per request so a rotating credential (KeyFile) never
+	// goes stale the way a startup-frozen env value does.
+	if k := l.resolveKey(); k != "" {
+		req.Header.Set("Authorization", "Bearer "+k)
 	}
 	resp, err := l.Client.Do(req)
 	if err != nil {

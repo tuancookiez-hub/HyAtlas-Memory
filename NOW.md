@@ -3,7 +3,7 @@
 **v4.2.0** | 2026-10-07 | Release: tuancookiez-hub/HyAtlas-Memory
 
 ## Running
-- hyatlas-go v4.2.0 build listening :19528 (extraction LLM key currently 401 — see Next)
+- hyatlas-go v4.2.0 build listening :19528 (live-key-file fix in place; extraction healthy)
 - Plugin: `hyatlas` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hyatlas\` + Hermes Desktop pane
 - Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`)
 
@@ -39,8 +39,8 @@
 - CI: actions bumped to node24 majors; windows embedded artifact fixed
 
 ## Next
-- [ ] **Extraction LLM key 401** — Nous Portal key invalid/blocked/out-of-funds; `/status` shows `write_pipeline: degraded`. Reads/search still work; only async fact-extraction is stalled. Tuna to sort the portal key.
-- [ ] Release v4.2.1 (L5 unification + plugin tests + CI job) — bundle with banner/screenshots once Tuna delivers them
+- [x] **Extraction LLM key 401 — FIXED.** Root cause was NOT rate-limiting (JWT shows rpm 800, paid_access, no cap) — it's JWT expiry: the Nous key is a 1-hour token Hermes rotates in auth.json, but the server froze it at startup. Fix: `HYATLAS_LLM_KEY_FILE` → `resolveKey()` reads live per call; ps1 points at auth.json; 4 Go tests + E2E verified (extraction fired +2 L3 in 10s).
+- [ ] Release v4.2.1 (L5 unification + live-key-file + plugin tests + CI job) — bundle with banner/screenshots once Tuna delivers them
 - [ ] Catalog submission PR to NousResearch/hermes-agent (`plugin-catalog/hyatlas.yaml`) — HELD per Tuna until banner + screenshots are ready; re-pin sha to the released commit
 - [x] Live migration on this machine: plugins/hyatlas + config.yaml (provider/enabled) + desktop-plugins — DONE (provider resolves, validate green, CLI works)
 - [ ] Backups: `backup_paths` absolute + a daily data snapshot (parked by Tuna 2026-10-06)

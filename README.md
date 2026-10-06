@@ -93,6 +93,7 @@ The server listens on `127.0.0.1:19528` (loopback only — no external surface).
 | `HYATLAS_LLM_BASE` | `https://inference-api.nousresearch.com/v1` | OpenAI-compatible LLM endpoint |
 | `HYATLAS_LLM_MODEL` | `poolside/laguna-s-2.1:free` | LLM model name |
 | `HYATLAS_LLM_KEY` | (empty) | LLM bearer token |
+| `HYATLAS_LLM_KEY_FILE` | (empty) | Read the key live from this file per call (rotating creds, e.g. Hermes auth.json). Accepts `providers.nous.agent_key`/`access_token` JSON or a plain-text token. Wins over `HYATLAS_LLM_KEY`, which becomes the fallback |
 | `HYATLAS_GRAPH_PATH` | `<data>/graph.json` | L5 graph store location |
 
 **Windows batch runner** (reads the AI2API key from Hermes `.env`):
