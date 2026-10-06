@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -18,13 +19,29 @@ import (
 
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {
-	store          *MemoryStore
-	llm            *LLMClient
-	llmModel       string
-	llmBase        string
-	start          time.Time
+	store    *MemoryStore
+	llm      *LLMClient
+	llmModel string
+	llmBase  string
+	start    time.Time
+	dataDir  string
+
+	// mu guards lastExtractErr: the extraction goroutines write it from
+	// background contexts while /api/v1/status reads it on request.
+	mu             sync.RWMutex
 	lastExtractErr string
-	dataDir        string
+}
+
+func (s *Server) setExtractErr(err string) {
+	s.mu.Lock()
+	s.lastExtractErr = err
+	s.mu.Unlock()
+}
+
+func (s *Server) extractErr() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastExtractErr
 }
 
 type Status struct {
@@ -44,8 +61,8 @@ type Status struct {
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	counts := s.store.LayerCounts()
 	write := "ok"
-	if s.lastExtractErr != "" {
-		write = "degraded: " + s.lastExtractErr
+	if errStr2 := s.extractErr(); errStr2 != "" {
+		write = "degraded: " + errStr2
 	}
 	writesCount, searchesCount := s.store.Usage()
 	// L5 lives in the graph store; LayerCounts() returns 0 for it from chromem.
@@ -189,12 +206,12 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 		}
 		ex, err := s.llm.Complete(ctx, text)
 		if err != nil {
-			s.lastExtractErr = err.Error()
+			s.setExtractErr(err.Error())
 			return
 		}
 		promoteExtraction(s.store, ex, userID, agentID, id)
 		_ = s.store.SetExtracted(id, true)
-		s.lastExtractErr = ""
+		s.setExtractErr("")
 	}()
 
 	jsonResponse(w, 200, resp)
@@ -327,13 +344,44 @@ func atoi(s string, def int) int {
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	// Scoping may arrive as query params (curl style) OR as a JSON body
+	// (the hy_memory plugin's client style). Read both, query wins.
+	var body struct {
+		ID      string `json:"id"`
+		Layer   string `json:"layer"`
+		UserID  string `json:"user_id"`
+		AgentID string `json:"agent_id"`
+		Confirm string `json:"confirm"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
 	q := r.URL.Query()
-	layer := q.Get("layer")
-	userID := q.Get("user_id")
-	agentID := q.Get("agent_id")
+	first := func(a, b string) string {
+		if a != "" {
+			return a
+		}
+		return b
+	}
+	layer := first(q.Get("layer"), body.Layer)
+	userID := first(q.Get("user_id"), body.UserID)
+	agentID := first(q.Get("agent_id"), body.AgentID)
+	confirm := first(q.Get("confirm"), body.Confirm) == "wipe-all"
 	ids := []string{}
-	if idStr := q.Get("id"); idStr != "" {
+	if idStr := first(q.Get("id"), body.ID); idStr != "" {
 		ids = append(ids, idStr)
+	}
+	// layer "*" means "everything" — same as an unscoped wipe.
+	if layer == "*" {
+		layer = ""
+	}
+	// Guard: an unscoped call is a full-store wipe. Require an explicit opt-in.
+	if len(ids) == 0 && layer == "" && userID == "" && agentID == "" && !confirm {
+		jsonResponse(w, 400, map[string]any{
+			"deleted_count": 0,
+			"error":         "unscoped delete refused: pass layer/user_id/agent_id/id, or confirm=wipe-all to wipe the entire store",
+		})
+		return
 	}
 	deleted, err := s.store.Delete(ids, memory.Layer(layer), userID, agentID)
 	jsonResponse(w, 200, map[string]any{"deleted_count": deleted, "error": errStr(err)})
@@ -393,7 +441,7 @@ func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 		ex, err := s.llm.Complete(ctx, it.Content)
 		cancel()
 		if err != nil {
-			s.lastExtractErr = err.Error()
+			s.setExtractErr(err.Error())
 			failed++
 			continue
 		}
@@ -690,7 +738,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		"neighbors":   neighbors,
 		"node_count":  s.store.Graph().NodeCount(),
 		"edge_count":  s.store.Graph().EdgeCount(),
-		"extract_err": s.lastExtractErr,
+		"extract_err": s.extractErr(),
 	})
 }
 

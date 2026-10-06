@@ -81,11 +81,41 @@ func NewMemoryStore(ctx context.Context, dir string, embed Embedder, graphPath s
 		}
 		s.cols[l] = col
 	}
-	// rebuild the exact index from chromem's persisted docs
-	if err := s.rebuildIndex(); err != nil {
-		return nil, err
+	// Prefer the persisted doc index (carries exact-match fields chromem
+	// metadata loses, e.g. the extracted flag); rebuild from chromem only when
+	// the file is missing or its size disagrees with the collections.
+	if !s.loadIndex() {
+		if err := s.rebuildIndex(); err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
+}
+
+// loadIndex restores the exact index from doc_index.json. Returns false when
+// the file is absent, corrupt, or out of sync with the chromem collections —
+// the caller then falls back to rebuildIndex.
+func (s *MemoryStore) loadIndex() bool {
+	if s.indexPath == "" {
+		return false
+	}
+	b, err := os.ReadFile(s.indexPath)
+	if err != nil || len(b) == 0 {
+		return false
+	}
+	var idx map[string]DocIndex
+	if err := json.Unmarshal(b, &idx); err != nil {
+		return false
+	}
+	total := 0
+	for _, l := range memory.All() {
+		total += s.cols[l].Count()
+	}
+	if len(idx) != total {
+		return false
+	}
+	s.index = idx
+	return true
 }
 
 // Add writes a doc into a layer collection and updates the exact index.
