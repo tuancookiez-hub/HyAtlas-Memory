@@ -1,5 +1,20 @@
 # Changelog
 
+## [4.1.3] — 2026-10-07
+
+> **Data-safety hardening.** Fixes a latent full-store wipe, makes extracted flags survive restarts, and pins the new extraction paths with tests.
+
+### Fixed
+- **`delete_all` could wipe the entire store:** the endpoint only read scoping from query params, while the `hy_memory` plugin client sends it in the JSON body — a plugin-scoped delete silently became an unscoped wipe. Scoping is now read from both styles, and a truly unscoped call requires `confirm=wipe-all` (400 otherwise).
+- **Extracted flags reset on every restart:** startup always rebuilt the doc index from chromem metadata, which never carries the `extracted` flag. The store now loads the persisted `doc_index.json` first (size-checked against the collections; falls back to rebuild on mismatch), so `/api/v1/reprocess` no longer re-runs already-extracted rows after a restart.
+- **Data race on `lastExtractErr`:** written from extraction goroutines while `/api/v1/status` read it. Now RWMutex-guarded (verified under `-race`).
+
+### Added
+- **Test coverage for the v4.1.2 paths** (`fixes_test.go`, `llm_retry_test.go`): reinforced-retry recovery + give-up (mock LLM), reprocess-by-ids contract, extracted-flag restart persistence, stale-index rebuild fallback, delete-guard matrix, concurrent extract-err. 7 new tests, green under `-race`.
+
+### Changed
+- Version metadata bumped to **4.1.3** across installer, `plugin.yaml`, dashboard manifest, `/api/info`, docker-compose.
+
 ## [4.1.2] — 2026-10-06
 
 > **Extraction resilience.** Restores the memory write pipeline after a silent extraction outage (2026-09-05 → 2026-10-06) and hardens it against both failure classes found during recovery.
