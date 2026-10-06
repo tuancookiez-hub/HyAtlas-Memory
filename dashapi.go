@@ -96,12 +96,9 @@ func (s *Server) handleDashMemories(w http.ResponseWriter, r *http.Request) {
 
 // handleDashLayerCounts serves the split payload the dashboard prefers.
 func (s *Server) handleDashLayerCounts(w http.ResponseWriter, r *http.Request) {
+	// LayerCounts already reports the graph-derived L5 count, so
+	// display_counts includes the real L5 the composition bar must show.
 	counts := s.store.LayerCounts()
-	// v4: layers 1-4 and 6-7 live in chromem (vdb). Layer 5 lives in the JSON
-	// graph (entities/relations are the durable knowledge), so its count is
-	// read from the graph store. display_counts is what the dashboard renders
-	// in the composition bar, so it MUST include the real L5 count.
-	counts["l5_knowledge"] = s.store.Graph().NodeCount()
 	writeJSON(w, 200, map[string]any{
 		"display_counts": counts,
 		"vdb_counts":     counts,

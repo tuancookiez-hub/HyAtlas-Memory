@@ -274,7 +274,10 @@ func (s *MemoryStore) Delete(ids []string, layer memory.Layer, userID, agentID s
 	return deleted, s.persistIndexLocked()
 }
 
-// LayerCounts returns the number of docs per layer (exact).
+// LayerCounts returns the number of docs per layer (exact). L5 is the
+// exception: knowledge lives in the graph store (entities are the durable
+// rows), never in chromem, so its count is the graph node count. Every
+// caller gets the same numbers — no per-handler overrides.
 func (s *MemoryStore) LayerCounts() map[string]int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -285,6 +288,7 @@ func (s *MemoryStore) LayerCounts() map[string]int {
 	for _, d := range s.index {
 		out[d.Layer]++
 	}
+	out[string(memory.L5Knowledge)] = s.g.NodeCount()
 	return out
 }
 

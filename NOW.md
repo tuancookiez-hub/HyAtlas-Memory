@@ -3,9 +3,15 @@
 **v4.2.0** | 2026-10-07 | Release: tuancookiez-hub/HyAtlas-Memory
 
 ## Running
-- hyatlas-go v4.1.4 build listening :19528 (extraction verified; outage backfill complete)
+- hyatlas-go v4.2.0 build listening :19528 (extraction LLM key currently 401 — see Next)
 - Plugin: `hyatlas` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hyatlas\` + Hermes Desktop pane
 - Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`)
+
+## Done (pre-catalog hardening — unreleased, committed local)
+- **L5 count unified:** `store.LayerCounts()` now always reports `l5_knowledge` = graph node count; deleted the hand-applied per-handler overrides so `/api/v1/list`, `/metrics`, `/layer-health` no longer report l5:0 while `/status` reports the real count. Go regression test pins all endpoints agree.
+- **Plugin config precedence fixed:** `_load_config` layers legacy `plugins.hyatlas` + `plugins.entries.hyatlas.settings` per key (was wholesale pick).
+- **Plugin unit tests:** 14 new tests vs a real localhost HTTP server (no mocks) — wire round-trip, typed errors, config precedence, tool dispatch, sync_turn, on_memory_write, delete_all guard. Full plugin suite 17 passed.
+- **CI `plugin-tests` job:** pytest + smoke runner on clean Python using `agent.memory_provider` ABC from the published wheel; verified in a scrubbed venv (17 passed).
 
 ## Done (v4.2.0 — rename)
 - Plugin renamed `hy_memory` → `hyatlas` everywhere: manifest, provider name, `hermes hyatlas` CLI, dashboard, desktop pane id, docs, installer snippet
@@ -33,6 +39,8 @@
 - CI: actions bumped to node24 majors; windows embedded artifact fixed
 
 ## Next
-- [ ] Catalog submission PR to NousResearch/hermes-agent (`plugin-catalog/hyatlas.yaml`, sha pinned to v4.2.0 commit) — awaiting Tuna go-ahead
-- [ ] Live migration on this machine: ~/.hermes/plugins/hyatlas + config.yaml (provider/enabled/entries) + desktop-plugins — needs Hermes restart
+- [ ] **Extraction LLM key 401** — Nous Portal key invalid/blocked/out-of-funds; `/status` shows `write_pipeline: degraded`. Reads/search still work; only async fact-extraction is stalled. Tuna to sort the portal key.
+- [ ] Release v4.2.1 (L5 unification + plugin tests + CI job) — bundle with banner/screenshots once Tuna delivers them
+- [ ] Catalog submission PR to NousResearch/hermes-agent (`plugin-catalog/hyatlas.yaml`) — HELD per Tuna until banner + screenshots are ready; re-pin sha to the released commit
+- [x] Live migration on this machine: plugins/hyatlas + config.yaml (provider/enabled) + desktop-plugins — DONE (provider resolves, validate green, CLI works)
 - [ ] Backups: `backup_paths` absolute + a daily data snapshot (parked by Tuna 2026-10-06)

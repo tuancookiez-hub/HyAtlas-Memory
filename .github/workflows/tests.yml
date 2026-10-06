@@ -133,3 +133,30 @@ jobs:
             git diff -- go.mod go.sum
             exit 1
           fi
+
+  plugin-tests:
+    name: Plugin tests (hyatlas provider — no live server needed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install test deps + hermes-agent wheel (stdlib-only ABC import)
+        run: |
+          python -m pip install -q pytest pyyaml
+          # The plugin imports only `agent.memory_provider` (pure stdlib ABC).
+          # Extract that module from the published wheel instead of installing
+          # the full Hermes dependency tree.
+          python -m pip download -q hermes-agent==0.19.0 --no-deps -d /tmp/ha-wheel
+          python - <<'EOF'
+          import glob, zipfile
+          zipfile.ZipFile(glob.glob('/tmp/ha-wheel/*.whl')[0]).extractall('/tmp/ha-pkg')
+          EOF
+          echo "/tmp/ha-pkg" >> "$GITHUB_PATH"
+          echo "PYTHONPATH=/tmp/ha-pkg" >> "$GITHUB_ENV"
+      - name: pytest plugins/hyatlas
+        run: python -m pytest plugins/hyatlas/tests/ -q
+      - name: Standalone smoke runner
+        run: python plugins/hyatlas/tests/test_smoke.py

@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **L5 count consistency (unified).** `LayerCounts()` now always reports `l5_knowledge` as the graph node count (L5 lives in the graph store, never chromem). Previously the override was hand-applied only in `handleStatus`/`handleDashLayerCounts`, so `/api/v1/list`, `/api/v1/metrics`, `/api/layer-health` and `/api/metrics` reported `l5_knowledge: 0` while `/status` reported the real count. One source of truth in the store; per-handler overrides deleted.
+- **Plugin config precedence.** `_load_config` now layers the legacy `plugins.hyatlas` block and `plugins.entries.hyatlas.settings` **per key** (settings wins key-by-key) instead of picking one dict wholesale — a partially-filled Desktop settings form no longer shadows keys the legacy block sets.
+
+### Added
+- **Plugin unit tests** (`plugins/hyatlas/tests/test_plugin_unit.py`, 14 tests): client wire round-trip against a real localhost HTTP server (no mocks), typed error/unreachable handling, config precedence + legacy-garbage rejection, `save_config` round-trip, `handle_tool_call` dispatch for all 4 tools + unknown + uninitialized, `sync_turn` best-effort/empty-skip, `on_memory_write` add-only mirroring, availability probe, and the `delete_all` unscoped-wipe guard.
+- **Go regression tests** (`l5_counts_test.go`): L5 is graph-derived, and every count-reporting endpoint agrees with `/api/v1/status`.
+- **CI `plugin-tests` job**: runs the plugin pytest + standalone smoke runner on a clean Python using the `agent.memory_provider` ABC extracted from the published hermes-agent wheel (no full Hermes install). Verified locally in a scrubbed venv: 17 passed.
+
 ## [4.2.0] — 2026-10-07
 
 > **Plugin renamed `hy_memory` → `hyatlas`** for the Hermes Plugin Catalog submission — the catalog key, manifest name, provider name, CLI command, and Desktop pane id now all read `hyatlas`. Breaking for existing installs: update `memory.provider: hyatlas` and re-enable the plugin under the new name.

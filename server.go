@@ -59,15 +59,12 @@ type Status struct {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	counts := s.store.LayerCounts()
 	write := "ok"
 	if errStr2 := s.extractErr(); errStr2 != "" {
 		write = "degraded: " + errStr2
 	}
 	writesCount, searchesCount := s.store.Usage()
-	// L5 lives in the graph store; LayerCounts() returns 0 for it from chromem.
-	counts = s.store.LayerCounts()
-	counts["l5_knowledge"] = s.store.Graph().NodeCount()
+	counts := s.store.LayerCounts()
 	status := Status{
 		Status:        "ok",
 		VDB:           "ok",

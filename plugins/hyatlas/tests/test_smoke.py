@@ -41,7 +41,7 @@ def _load_plugin_module():
     return mod
 
 
-def test_config_loads_clean() -> tuple[bool, str]:
+def _check_config_loads_clean() -> tuple[bool, str]:
     """Plugin's _load_config should not pick up v3.5 garbage fields."""
     try:
         mod = _load_plugin_module()
@@ -57,7 +57,7 @@ def test_config_loads_clean() -> tuple[bool, str]:
         return False, f"import/init failed: {e}"
 
 
-def test_provider_metadata() -> tuple[bool, str]:
+def _check_provider_metadata() -> tuple[bool, str]:
     """Provider should expose name, tool schemas, and config schema."""
     try:
         mod = _load_plugin_module()
@@ -77,7 +77,7 @@ def test_provider_metadata() -> tuple[bool, str]:
         return False, f"{e}\n{traceback.format_exc()}"
 
 
-def test_live_server_round_trip() -> tuple[bool, str]:
+def _check_live_server_round_trip() -> tuple[bool, str]:
     """The plugin's client must talk to a live v4 server and round-trip add+search."""
     try:
         mod = _load_plugin_module()
@@ -110,12 +110,30 @@ def test_live_server_round_trip() -> tuple[bool, str]:
         return False, f"{e}"
 
 
-def test_smoke() -> int:
+# pytest wrappers — the _check_* helpers above return (ok, msg) tuples for the
+# standalone runner; under pytest, assert so collection produces no warnings.
+
+def test_config_loads_clean():
+    ok, msg = _check_config_loads_clean()
+    assert ok, msg
+
+
+def test_provider_metadata():
+    ok, msg = _check_provider_metadata()
+    assert ok, msg
+
+
+def test_live_server_round_trip():
+    ok, msg = _check_live_server_round_trip()
+    assert ok, msg
+
+
+def _run_all() -> int:
     """Run all smoke tests. Returns 0 on success, 1 on failure."""
     tests = [
-        ("config_loads_clean", test_config_loads_clean),
-        ("provider_metadata", test_provider_metadata),
-        ("live_server_round_trip", test_live_server_round_trip),
+        ("config_loads_clean", _check_config_loads_clean),
+        ("provider_metadata", _check_provider_metadata),
+        ("live_server_round_trip", _check_live_server_round_trip),
     ]
     failures = 0
     for name, fn in tests:
@@ -132,4 +150,4 @@ def test_smoke() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(test_smoke())
+    sys.exit(_run_all())

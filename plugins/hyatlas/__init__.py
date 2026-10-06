@@ -92,9 +92,10 @@ def _load_config() -> Dict[str, Any]:
             except (json.JSONDecodeError, OSError) as e:
                 logger.debug("ignoring %s: %s", json_path, e)
 
-    # 2. config.yaml — plugins.entries.hyatlas.settings (Desktop settings
-    #    form + ctx.set_config writer), with the legacy plugins.hyatlas
-    #    block as fallback.
+    # 2. config.yaml — per-key layering: the legacy plugins.hyatlas block
+    #    first, then plugins.entries.hyatlas.settings (the Desktop settings
+    #    form + ctx.set_config writer) overriding key by key. A partially
+    #    filled settings form must not shadow keys the legacy block sets.
     try:
         import yaml  # hermes core dependency
 
@@ -102,14 +103,16 @@ def _load_config() -> Dict[str, Any]:
         if cfg_path.exists():
             data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
             plugins = data.get("plugins") or {}
-            settings = (
-                ((plugins.get("entries") or {}).get("hyatlas") or {}).get("settings")
-                or (plugins.get("hyatlas") or {})
+            sources = (
+                (plugins.get("hyatlas") or {}),
+                ((plugins.get("entries") or {}).get("hyatlas") or {}).get("settings") or {},
             )
-            if isinstance(settings, dict):
+            for source in sources:
+                if not isinstance(source, dict):
+                    continue
                 for k in _V4_KEYS:
-                    if k in settings and settings[k] is not None:
-                        cfg[k] = settings[k]
+                    if source.get(k) is not None:
+                        cfg[k] = source[k]
     except Exception as e:  # noqa: BLE001 — config read must never break plugin load
         logger.debug("ignoring config.yaml settings: %s", e)
 
