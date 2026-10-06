@@ -15,6 +15,5 @@
 - Mind Palace starmap updates: learning/graph API + `desktop/plugin.js` + dashboard dist assets
 
 ## Next
-- [ ] Tuna review → push v4.1.2 (tag + GitHub release)
-- [ ] `SetExtracted` meta persistence fix (flags reset on restart)
-- [ ] Review follow-ups: `backup_paths` absolute + real backups; `delete_all` guard; doc-rot sweep
+- [ ] Tuna review → push fix commits (899ae2d + 6b8f419, post-v4.1.2-tag) or fold into v4.1.3
+- [ ] Backups: `backup_paths` absolute + a daily data snapshot (parked by Tuna 2026-10-06)
