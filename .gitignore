@@ -1,6 +1,7 @@
 # Built binaries
 *.exe
 *.exe~
+*.bak-*
 *.dll
 *.so
 *.dylib
