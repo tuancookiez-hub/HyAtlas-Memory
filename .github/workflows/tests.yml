@@ -11,9 +11,9 @@ jobs:
     name: Build (Go 1.26, plain — Linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.26'
       - name: Download modules
@@ -56,7 +56,7 @@ jobs:
           kill $SERVER_PID 2>/dev/null || true
           sleep 1
       - name: Upload artifact (plain)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hyatlas-go-plain
           path: /tmp/hyatlas-go-plain
@@ -69,9 +69,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.26'
       - name: Download modules
@@ -100,20 +100,20 @@ jobs:
         run: go vet ./...
       - name: Build (embedded — verifies go:embed directives are correct)
         shell: bash
-        run: go build -tags embedded -o /tmp/hyatlas-go-embedded .
+        run: go build -tags embedded -o hyatlas-go-embedded .
       - name: Upload artifact (embedded)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hyatlas-go-embedded-${{ matrix.os }}
-          path: /tmp/hyatlas-go-embedded
+          path: hyatlas-go-embedded
 
   lint:
     name: Lint (go vet + formatting)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.26'
       - name: go vet

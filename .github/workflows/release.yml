@@ -45,10 +45,10 @@ jobs:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: "1.26"
 
@@ -140,7 +140,7 @@ jobs:
           exit 1
 
       - name: Upload release asset
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           files: hyatlas-go-${{ env.RELEASE_TAG }}-${{ matrix.asset_os }}-${{ matrix.goarch }}${{ matrix.ext }}
