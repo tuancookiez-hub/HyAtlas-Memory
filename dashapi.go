@@ -61,7 +61,7 @@ func (s *Server) handleDashInfo(w http.ResponseWriter, r *http.Request) {
 	writes, searches := s.store.Usage()
 	writeJSON(w, 200, map[string]any{
 		"name":           "HyAtlas v4 (Go)",
-		"version":        "4.0.1",
+		"version":        "4.1.2",
 		"mode":           "ultra",
 		"llm_model":      s.llmModel,
 		"llm_base":       s.llmBase,
@@ -75,7 +75,7 @@ func (s *Server) handleDashInfo(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDashMemories(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit := atoi(q.Get("limit"), 100)
-	items, _ := s.store.List(memory.Layer(q.Get("layer")), q.Get("user_id"), q.Get("agent_id"), limit, atoi(q.Get("offset"), 0))
+	items, _ := s.store.List(memory.Layer(q.Get("layer")), q.Get("user_id"), q.Get("agent_id"), limit, atoi(q.Get("offset"), 0), false)
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {
 		out = append(out, map[string]any{
@@ -175,7 +175,7 @@ func (s *Server) handleDashLayerHealth(w http.ResponseWriter, r *http.Request) {
 // handleDashL6Schemas lists L6 schema items.
 func (s *Server) handleDashL6Schemas(w http.ResponseWriter, r *http.Request) {
 	n := atoi(r.URL.Query().Get("n"), 6)
-	items, _ := s.store.List(memory.L6Schema, "", "", n, 0)
+	items, _ := s.store.List(memory.L6Schema, "", "", n, 0, false)
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {
 		out = append(out, map[string]any{
@@ -199,7 +199,7 @@ func (s *Server) handleDashL5Graph(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// L6/L7 views render their layer items as pseudo-nodes (real content, real layer)
-	items, _ := s.store.List(memory.Layer(layer), "", "", n, 0)
+	items, _ := s.store.List(memory.Layer(layer), "", "", n, 0, false)
 	type node struct {
 		ID    string `json:"id"`
 		Label string `json:"label"`

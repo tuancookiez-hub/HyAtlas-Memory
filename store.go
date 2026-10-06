@@ -170,12 +170,17 @@ type SearchHit struct {
 }
 
 // List returns exact-match docs, optionally filtered by layer/user/agent, with pagination.
-func (s *MemoryStore) List(layer memory.Layer, userID, agentID string, limit, offset int) ([]DocIndex, int) {
+// excludeRaw drops l2_raw rows BEFORE pagination (and from total), so a raw-heavy
+// head cannot empty a page — that is the include_raw=false contract.
+func (s *MemoryStore) List(layer memory.Layer, userID, agentID string, limit, offset int, excludeRaw bool) ([]DocIndex, int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var all []DocIndex
 	for _, d := range s.index {
 		if layer != "" && d.Layer != string(layer) {
+			continue
+		}
+		if excludeRaw && d.Layer == string(memory.L2Raw) {
 			continue
 		}
 		if userID != "" && d.UserID != userID {
@@ -269,6 +274,19 @@ func (s *MemoryStore) SetExtracted(id string, v bool) error {
 		s.index[id] = d
 	}
 	return s.persistIndexLocked()
+}
+
+// GetMany returns the docs for the given ids in order (missing ids are skipped).
+func (s *MemoryStore) GetMany(ids []string) []DocIndex {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]DocIndex, 0, len(ids))
+	for _, id := range ids {
+		if d, ok := s.index[id]; ok {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // Graph exposes the L5 knowledge graph.

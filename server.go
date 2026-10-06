@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tuancookiez-hub/hyatlas-v4/graph"
 	"github.com/tuancookiez-hub/hyatlas-v4/memory"
@@ -291,18 +292,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	items, total := s.store.List(memory.Layer(layer), userID, agentID, limit, offset)
-
-	// include_raw: if false and no layer filter, drop raw rows (parity with v3.5)
-	if includeRaw == "false" && layer == "" {
-		keep := items[:0]
-		for _, it := range items {
-			if it.Layer != string(memory.L2Raw) {
-				keep = append(keep, it)
-			}
-		}
-		items = keep
-	}
+	items, total := s.store.List(memory.Layer(layer), userID, agentID, limit, offset, includeRaw == "false" && layer == "")
 
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {
@@ -369,22 +359,49 @@ func (s *Server) handleDigest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
-	raw, _ := s.store.List(memory.L2Raw, "", "", 200, 0)
-	reprocessed := 0
+	// Optional body: {"ids": [...], "max": N}. With explicit ids the caller has
+	// already chosen the exact rows (e.g. backfilling an outage window), so the
+	// extracted-skip does not apply; otherwise walk up to `max` (default 200)
+	// oldest unextracted raw rows.
+	var body struct {
+		IDs []string `json:"ids"`
+		Max int      `json:"max"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	var raw []DocIndex
+	if len(body.IDs) > 0 {
+		raw = s.store.GetMany(body.IDs)
+	} else {
+		max := body.Max
+		if max <= 0 {
+			max = 200
+		}
+		raw, _ = s.store.List(memory.L2Raw, "", "", max, 0, false)
+	}
+	reprocessed, failed, skipped := 0, 0, 0
 	for _, it := range raw {
-		if it.Extracted {
+		if len(body.IDs) == 0 && it.Extracted {
+			skipped++
 			continue
 		}
-		if s.llm != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-			if ex, err := s.llm.Complete(ctx, it.Content); err == nil {
-				promoteExtraction(s.store, ex, it.UserID, it.AgentID, it.ID)
-				reprocessed++
-			}
-			cancel()
+		if s.llm == nil {
+			failed++
+			continue
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+		ex, err := s.llm.Complete(ctx, it.Content)
+		cancel()
+		if err != nil {
+			s.lastExtractErr = err.Error()
+			failed++
+			continue
+		}
+		promoteExtraction(s.store, ex, it.UserID, it.AgentID, it.ID)
+		_ = s.store.SetExtracted(it.ID, true)
+		reprocessed++
 	}
-	jsonResponse(w, 200, map[string]any{"reprocessed": reprocessed})
+	jsonResponse(w, 200, map[string]any{"reprocessed": reprocessed, "failed": failed, "skipped": skipped})
 }
 
 func errStr(err error) string {
@@ -401,6 +418,21 @@ func errStr(err error) string {
 // The shape mirrors apps/desktop/src/types/hermes.ts::StarmapGraph:
 //
 //	{ nodes: StarmapNode[], edges: StarmapEdge[], memory: StarmapMemoryCard[] }
+// utf8Trunc caps a string to max bytes without splitting a rune, appending an
+// ellipsis when truncated. Used for starmap payload fields — some raw L2
+// memories carry huge session dumps, and shipping full bodies made the graph
+// payload hundreds of MB.
+func utf8Trunc(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
+}
+
 func (s *Server) handleStarmapGraph(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit := atoi(q.Get("n"), 500)
@@ -408,16 +440,14 @@ func (s *Server) handleStarmapGraph(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Nodes: all L3 facts + a sampled set of L2 raw entries. Layer type
 	//    becomes the visual "kind" (memory in the starmap sense).
-	items, _ := s.store.List("", "", "", limit, 0)
+	items, _ := s.store.List("", "", "", limit, 0, false)
 	nodes := make([]map[string]any, 0, len(items))
 	memCards := make([]map[string]any, 0, len(items))
 	for _, it := range items {
 		ts := gmtCreated(it.Ts)
-		// strip long content for the node label; keep full body in `memory`
-		label := it.Content
-		if len(label) > 80 {
-			label = label[:80] + "…"
-		}
+		// strip long content for the node label; card body capped below — the
+		// hover tooltip only ever previews a snippet
+		label := utf8Trunc(it.Content, 80)
 		nodes = append(nodes, map[string]any{
 			"id":         it.ID,
 			"label":      label,
@@ -433,7 +463,7 @@ func (s *Server) handleStarmapGraph(w http.ResponseWriter, r *http.Request) {
 			"source":    "memory",
 			"timestamp": ts,
 			"title":     label,
-			"body":      it.Content,
+			"body":      utf8Trunc(it.Content, 2048),
 		})
 	}
 
@@ -456,7 +486,7 @@ func (s *Server) handleStarmapGraph(w http.ResponseWriter, r *http.Request) {
 	// co_session
 	sessionBuckets := map[string][]string{}
 	for _, l := range []string{"l2_raw", "l3_fact", "l4_summary", "l5_knowledge", "l6_schema", "l7_intention"} {
-		lItems, _ := s.store.List(memory.Layer(l), "", "", 200, 0)
+		lItems, _ := s.store.List(memory.Layer(l), "", "", 200, 0, false)
 		for _, it := range lItems {
 			sid := ""
 			if it.Meta != nil {
@@ -491,7 +521,7 @@ func (s *Server) handleStarmapGraph(w http.ResponseWriter, r *http.Request) {
 	if kSem < 1 {
 		kSem = 2
 	}
-	recent, _ := s.store.List(memory.L3Fact, "", "", 20, 0)
+	recent, _ := s.store.List(memory.L3Fact, "", "", 20, 0, false)
 	for _, it := range recent {
 		if semCount >= maxSem {
 			break
@@ -569,7 +599,7 @@ func (s *Server) handleGraphEdges(w http.ResponseWriter, r *http.Request) {
 		_ = layer
 	}
 	for _, l := range []string{"l2_raw", "l3_fact", "l4_summary", "l5_knowledge", "l6_schema", "l7_intention"} {
-		items, _ := s.store.List(memory.Layer(l), "", "", 200, 0)
+		items, _ := s.store.List(memory.Layer(l), "", "", 200, 0, false)
 		for _, it := range items {
 			sid := it.Meta["session_id"]
 			if sid == "" {
@@ -609,7 +639,7 @@ func (s *Server) handleGraphEdges(w http.ResponseWriter, r *http.Request) {
 	}
 	// iterate only the most recent 20 L3 memories (kept fast; full-graph
 	// similarity is a separate scan). Coalesces well to ~20 VDB queries.
-	recent, _ := s.store.List(memory.L3Fact, "", "", 20, 0)
+	recent, _ := s.store.List(memory.L3Fact, "", "", 20, 0, false)
 	for _, it := range recent {
 		if semCount >= maxSem {
 			break
