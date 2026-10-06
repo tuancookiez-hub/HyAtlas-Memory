@@ -1,21 +1,20 @@
 name: hy_memory
-version: 4.1.3
-description: "HyAtlas v4.1 — pure-Go 7-layer memory backend (chromem-go + in-process BGE-small via onnxruntime-go). Wire-compatible with the v3.5 HyMemoryClient; runs against the Go binary at 127.0.0.1:19528."
+version: 4.1.4
+manifest_version: 2
+api_version: 1
+description: "HyAtlas v4 — pure-Go 7-layer memory backend (chromem-go vector store + in-process BGE-small embeddings via onnxruntime-go, async LLM extraction, bitemporal knowledge graph). Talks to the hyatlas-go binary at 127.0.0.1:19528; ships a Desktop pane with a starmap graph view and a web dashboard. Tools (hyatlas_status/search/recent/add) and memory hooks are provided through the MemoryProvider interface."
 author: Tuna
 license: Apache-2.0
 homepage: https://github.com/tuancookiez-hub/HyAtlas-Memory
-pip_dependencies: []
-requires_env:
-  - HYATLAS_SERVER_HOST
-  - HYATLAS_SERVER_PORT
-hooks:
-  - on_session_end
-  - on_pre_compress
-  - on_memory_write
-provides_tools:
-  - hyatlas_status
-  - hyatlas_search
-  - hyatlas_recent
-  - hyatlas_add
+tags: [memory, knowledge-graph, local-first, desktop]
+requires_hermes: ">=0.21.4"
 provides_commands:
   - hyatlas
+config_schema:
+  server_host: {type: str, default: "127.0.0.1", label: "Server host", description: "HyAtlas v4 server host"}
+  server_port: {type: int, default: 19528, label: "Server port", description: "HyAtlas v4 server port"}
+  user_id: {type: str, default: "default", label: "User ID", description: "Default user_id for memory scoping"}
+  agent_id: {type: str, default: "default", label: "Agent ID", description: "Default agent_id (overridden by agent identity per session)"}
+  auto_start: {type: bool, default: false, label: "Auto-start server", description: "Spawn the hyatlas-go binary when the server is unreachable"}
+  binary_path: {type: str, default: "", label: "Binary path", description: "Path to hyatlas-go (empty = discover from PATH)"}
+  request_timeout: {type: float, default: 15.0, label: "Request timeout (s)", description: "HTTP timeout for server calls"}

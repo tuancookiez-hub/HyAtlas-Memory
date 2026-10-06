@@ -53,3 +53,4 @@ credentials.json
 handoff.md
 NOW.md
 TUNA_AGENT_OS_TASK_BRIEF.md
+__pycache__/

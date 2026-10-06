@@ -1,65 +1,85 @@
-# HyAtlas v4 — Native Hermes memory plugin (user install)
+# hy_memory — HyAtlas v4 memory provider for Hermes Agent
 
-Copy the entire `hy_memory/` folder into `~/.hermes/plugins/hy_memory/` to install:
+Persistent 7-layer memory for Hermes backed by **HyAtlas v4**: a pure-Go,
+single-binary, local-first memory server (Apache-2.0). Chromem-go embedded
+vector store, in-process BGE-small embeddings via onnxruntime-go (no Python,
+no GPU, no external embedding service), async LLM fact extraction, and a
+bitemporal knowledge graph with source citations.
+
+This plugin is the Hermes-side integration: a `MemoryProvider` implementation
+(thin HTTP client), four agent tools, a `hermes hy_memory` CLI, a Desktop pane
+with a starmap graph view, and a web dashboard.
+
+## What you get
+
+- **Cross-session memory** — conversation turns are persisted and
+  LLM-extracted into facts/summaries/knowledge/intentions (7 layers, L1–L7)
+- **Agent tools** — `hyatlas_status`, `hyatlas_search` (3-channel semantic),
+  `hyatlas_recent`, `hyatlas_add`
+- **Recall injection** — relevant memories are prefetched into context
+  automatically each turn
+- **Desktop pane** — Overview (health + layer bars), Memories, Search, Add,
+  and a Graph tab with a starmap visualization of the knowledge layers
+- **CLI** — `hermes hy_memory status|search|add|recent|start|stop`
+
+## Install
+
+The plugin requires the **HyAtlas v4 Go server** (`hyatlas-go`) running
+locally. The server is *not* bundled and *not* downloaded by this plugin —
+install it once from the project repository (see its README for the
+one-line installer, or grab a release binary from
+[Releases](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases)):
 
 ```bash
-cp -r plugins/hy_memory ~/.hermes/plugins/
-hermes gateway restart
+hyatlas start        # starts hyatlas-go on 127.0.0.1:19528
 ```
 
-Then in `~/.hermes/config.yaml`:
+Then install and enable the plugin:
+
+```bash
+hermes plugins install tuancookiez-hub/HyAtlas-Memory   # or from the catalog by name
+hermes plugins enable hy_memory
+```
+
+And select it as the memory provider (`hermes memory setup` or in
+`~/.hermes/config.yaml`):
 
 ```yaml
 memory:
-  enabled: true
   provider: hy_memory
-  providers:
-    hy_memory:
-      provider: hy_memory
-      server_host: 127.0.0.1
-      server_port: 19528
-      auto_start: false
-
-plugins:
-  enabled:
-    - hy_memory   # required for the desktop pane backend
 ```
 
-This plugin talks to the **HyAtlas v4.0** Go backend
-(`hyatlas-go.exe` or `hyatlas-go`) at `127.0.0.1:19528`. It is the
-canonical user-facing integration; the v3.5 Python floor's `pip
-install hyatlas-memory` path is no longer maintained.
+Settings (server host/port, user/agent id, auto-start, binary path, timeout)
+are editable in **Desktop → Settings → Plugins → hy_memory**, or via
+`plugins.entries.hy_memory.settings` in `config.yaml`, or the
+`HYATLAS_SERVER_HOST` / `HYATLAS_SERVER_PORT` / `HYATLAS_USER_ID` /
+`HYATLAS_AGENT_ID` / `HYATLAS_AUTO_START` / `HYATLAS_BINARY_PATH` env vars
+(env wins). Defaults work out of the box for a local server on port 19528.
 
-## Desktop pane
+The Desktop pane loads automatically from this plugin's `desktop/plugin.js`
+(the unified-package door) — no separate install step.
 
-The plugin ships a Hermes Desktop page at `/hyatlas`:
+## Disclosure (what this plugin does at runtime)
 
-- Sidebar nav row: **HyAtlas Memory** (database icon), same cluster as Turbofit
-- Palette: **Open HyAtlas Memory**
-- Shortcut: `Mod+Shift+H` (rebindable in Settings → Keybinds)
+- **Network calls:** all traffic goes to the HyAtlas server you configure
+  (default `127.0.0.1:19528`). The plugin itself contacts nothing else. The
+  *server* makes LLM API calls for fact extraction to the endpoint configured
+  on the server side (`HYATLAS_LLM_*` env vars) — no LLM credentials live in
+  or flow through this plugin.
+- **Subprocess spawning:** only when you enable `auto_start` (default
+  **off**); it then spawns the `hyatlas-go` binary you point it at.
+- **Data written:** conversation turns and memories are stored by the server
+  in its own data directory (default alongside the binary). Nothing is sent
+  to the plugin author; there is no telemetry.
+- **Reads outside its own data:** none.
 
-Install the desktop door as well:
+## Requirements
 
-```bash
-mkdir -p ~/.hermes/desktop-plugins/hy_memory
-cp plugins/hy_memory/desktop/plugin.js ~/.hermes/desktop-plugins/hy_memory/plugin.js
-```
+- Hermes Agent >= 0.21.4
+- HyAtlas v4 Go server (see Install above); Linux, macOS (arm64), Windows (amd64)
+- No Python dependencies beyond Hermes core
 
-The pane talks to `/api/plugins/hy_memory/*`, which is mounted from
-`dashboard/plugin_api.py` **only if** `hy_memory` is in `plugins.enabled`.
-After changing that list, restart the Desktop backend (⌘K → Restart backend).
-Hot-reloading `plugin.js` is not enough — Python routes mount at backend start.
+## Links
 
-Tabs: Overview (health + 7-layer bars + write/search usage counters),
-Memories (layer filter), Search (3-channel semantic hits), Add (write +
-async extract). The 3D Observatory lives on the Go dashboard (`/dashboard/`),
-not in this pane.
-
-## Wire-compat with v3.5
-
-The plugin works against any HyAtlas v4 server regardless of how it
-was started. The port change (`19527` → `19528`) is the only config
-edit needed. The `HyMemoryClient`-shaped wire contract is identical
-between v3.5 and v4, so the plugin's HTTP path is byte-for-byte the
-same against both backends (with the port pointing at whichever you
-run).
+- Server + full docs: https://github.com/tuancookiez-hub/HyAtlas-Memory
+- License: Apache-2.0

@@ -1,23 +1,25 @@
 """HyAtlas v4 — Hermes memory provider plugin.
 
 Pure-Python client that talks to the HyAtlas v4 Go binary at
-``HYATLAS_SERVER_HOST:HYATLAS_SERVER_PORT`` (default 127.0.0.1:19528).
+``server_host:server_port`` (default 127.0.0.1:19528, configurable via
+the Desktop settings form, config.yaml, env vars, or per-profile JSON).
 
-The v4 wire contract is identical to v3.5's HyMemoryClient — same
-endpoints, same JSON shapes. The only difference is the port: v3.5
-runs on 19527, v4 runs on 19528. Set ``server_port`` in config to
-match whichever backend is running.
+All storage (chromem-go), embedding (in-process BGE-small via
+onnxruntime-go), and LLM extraction happen inside the Go binary — this
+plugin is a thin HTTP client + MemoryProvider implementation. The
+server is a separate install (see the repo README); the plugin does not
+bundle or download it.
 
 This plugin follows the canonical Hermes memory-provider pattern
 (Honcho / Hindsight shape):
 
 * ``__init__.py`` — MemoryProvider subclass + register(ctx)
 * ``client.py`` — HTTP client to the v4 server
-* ``process.py`` — auto-start / stop the Go binary as a subprocess
+* ``process.py`` — optional auto-start of the Go binary as a subprocess
 * ``cli.py`` — ``hermes hy_memory`` subcommands (status, search, add, recent, start, stop)
 * ``schemas.py`` — tool schemas (status / search / recent / add)
 * ``__main__.py`` — standalone ``python -m`` entry point
-* ``plugin.yaml`` — metadata
+* ``plugin.yaml`` — metadata + config_schema (Desktop settings form)
 * ``after-install.md`` — install instructions
 """
 
@@ -54,12 +56,12 @@ from .schemas import (  # noqa: E402
 
 
 def _load_config() -> Dict[str, Any]:
-    """Load config from env vars + per-profile JSON, in priority order.
+    """Load config from env vars, config.yaml settings, and per-profile JSON.
 
-    Priority: env > config.yaml plugin block > per-profile JSON.
-    The plugin block lives at ``plugins.hy_memory`` under Hermes
-    ``config.yaml`` and accepts: ``server_host``, ``server_port``,
-    ``user_id``, ``agent_id``, ``auto_start``, ``binary_path``.
+    Priority: env > ``plugins.entries.hy_memory.settings`` in config.yaml
+    (the location the Desktop settings form writes) > per-profile JSON.
+    Accepted keys: ``server_host``, ``server_port``, ``user_id``,
+    ``agent_id``, ``auto_start``, ``binary_path``, ``request_timeout``.
     """
     cfg: Dict[str, Any] = {
         "server_host": "127.0.0.1",
@@ -71,12 +73,13 @@ def _load_config() -> Dict[str, Any]:
         "request_timeout": 15.0,
     }
 
+    _V4_KEYS = ("server_host", "server_port", "user_id", "agent_id",
+                "auto_start", "binary_path", "request_timeout")
+
     # 1. Per-profile JSON — accept ONLY keys relevant to the v4 client.
     #    Legacy v3.5 fields (llm, vector_store, api_keys, etc.) are
     #    silently dropped — they configure the v3.5 Python server, not
     #    the v4 Go binary. The v4 binary reads env vars directly.
-    _V4_KEYS = ("server_host", "server_port", "user_id", "agent_id",
-                "auto_start", "binary_path", "request_timeout")
     for json_path in (
         Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "hy_memory.json",
     ):
@@ -89,7 +92,28 @@ def _load_config() -> Dict[str, Any]:
             except (json.JSONDecodeError, OSError) as e:
                 logger.debug("ignoring %s: %s", json_path, e)
 
-    # 2. Env-var overrides (canonical 12-factor pattern)
+    # 2. config.yaml — plugins.entries.hy_memory.settings (Desktop settings
+    #    form + ctx.set_config writer), with the legacy plugins.hy_memory
+    #    block as fallback.
+    try:
+        import yaml  # hermes core dependency
+
+        cfg_path = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "config.yaml"
+        if cfg_path.exists():
+            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            plugins = data.get("plugins") or {}
+            settings = (
+                ((plugins.get("entries") or {}).get("hy_memory") or {}).get("settings")
+                or (plugins.get("hy_memory") or {})
+            )
+            if isinstance(settings, dict):
+                for k in _V4_KEYS:
+                    if k in settings and settings[k] is not None:
+                        cfg[k] = settings[k]
+    except Exception as e:  # noqa: BLE001 — config read must never break plugin load
+        logger.debug("ignoring config.yaml settings: %s", e)
+
+    # 3. Env-var overrides (canonical 12-factor pattern)
     for env_key, cfg_key, cast in (
         ("HYATLAS_SERVER_HOST", "server_host", str),
         ("HYATLAS_SERVER_PORT", "server_port", int),
@@ -106,7 +130,7 @@ def _load_config() -> Dict[str, Any]:
             except (TypeError, ValueError) as e:
                 logger.debug("ignoring %s=%r: %s", env_key, v, e)
 
-    # 3. Backward compat: HYATLAS_LLM_KEY etc. don't apply here, but legacy
+    # 4. Backward compat: HYATLAS_LLM_KEY etc. don't apply here, but legacy
     #    v3.5 keys HY_MEMORY_* should not bleed in.
     for legacy in ("HY_MEMORY_HOST", "HY_MEMORY_PORT"):
         if legacy in os.environ:
@@ -125,8 +149,9 @@ class HyatlasMemoryProvider(MemoryProvider):
 
     The provider is a thin HTTP client wrapper. The v4 server handles
     all storage (chromem-go), embedding (in-process BGE-small via
-    onnxruntime-go), and LLM extraction (deepseek-v4-flash via the
-    ai2api loopback). This class is responsible for:
+    onnxruntime-go), and LLM extraction (endpoint + model configured on
+    the server side via HYATLAS_LLM_* env vars — no LLM credentials
+    live in this plugin). This class is responsible for:
 
     * Lifecycle (initialize / shutdown)
     * Per-session identity (user_id, agent_id) resolution
@@ -145,7 +170,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         self._prefetch_lock = threading.Lock()
         self._prefetch_result: str = ""
         self._process: Optional[Any] = None  # lazy import to keep _load_config cheap
-        self._version = "4.1.3"
+        self._version = "4.1.4"
 
     # --- Required ABC methods ---
 

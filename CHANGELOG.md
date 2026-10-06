@@ -1,5 +1,15 @@
 # Changelog
 
+## [4.1.4] — 2026-10-07
+
+> **Hermes plugin catalog readiness.** The `hy_memory` plugin now passes catalog admission (`hermes plugins validate` clean: manifest v2, security scan safe, no core override, desktop surface inside the SDK) and gains a Desktop settings form.
+
+### Changed
+- **`plugin.yaml` → manifest v2:** `config_schema` for all seven settings (renders as the Settings → Plugins form in Hermes Desktop); `requires_hermes: ">=0.21.4"`; honest description. Dropped the misdeclared `requires_env` (the vars are optional overrides — declaring them would have disabled the plugin at install) and the `provides_tools`/`hooks` lists (those come through the MemoryProvider ABC, not `register()`).
+- **`_load_config` reads `plugins.entries.hy_memory.settings`** from `config.yaml` — the location the Desktop settings form writes. Priority: env > settings > legacy `plugins.hy_memory` block > per-profile JSON.
+- **Plugin README rewritten** for the catalog page: what you get, install (server is a separate install — not bundled, not auto-downloaded), settings, and explicit runtime disclosures (network, subprocess, data).
+- Version metadata bumped to **4.1.4** across installer, manifest, dashboard manifest, `/api/info`, docker-compose.
+
 ## [4.1.3] — 2026-10-07
 
 > **Data-safety hardening.** Fixes a latent full-store wipe, makes extracted flags survive restarts, and pins the new extraction paths with tests.
