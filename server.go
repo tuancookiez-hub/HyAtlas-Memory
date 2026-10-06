@@ -17,6 +17,12 @@ import (
 	"github.com/tuancookiez-hub/hyatlas-v4/memory"
 )
 
+// Version is the single source of truth for the server version string.
+// It is exposed on /api/v1/status and /api/info so every client (Desktop pane,
+// web dashboard, CLI) reports the real running version instead of hardcoding
+// a "v4" badge that silently goes stale on each release. Bump in one place.
+const Version = "4.2.1"
+
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {
 	store    *MemoryStore
@@ -44,18 +50,26 @@ func (s *Server) extractErr() string {
 	return s.lastExtractErr
 }
 
+// Status is the /api/v1/status payload. It is marshaled directly, so these
+// json tags are the wire contract — do not restate the shape in a map literal.
 type Status struct {
-	Status        string `json:"status"`
-	VDB           string `json:"vdb"`
-	Embed         string `json:"embed"`
-	LLM           string `json:"llm"`
-	LLMModel      string `json:"llm_model"`
-	LLMBase       string `json:"llm_base"`
-	VDBProvider   string `json:"vdb_provider"`
-	VDBCollection string `json:"vdb_collection"`
-	VDBPoints     int    `json:"vdb_points"`
-	EmbedDims     int    `json:"embed_dims"`
-	WritePipeline string `json:"write_pipeline"`
+	Status        string         `json:"status"`
+	Version       string         `json:"version"`
+	VDB           string         `json:"vdb"`
+	Embed         string         `json:"embed"`
+	LLM           string         `json:"llm"`
+	LLMModel      string         `json:"llm_model"`
+	LLMBase       string         `json:"llm_base"`
+	VDBProvider   string         `json:"vdb_provider"`
+	VDBCollection string         `json:"vdb_collection"`
+	VDBPoints     int            `json:"vdb_points"`
+	EmbedDims     int            `json:"embed_dims"`
+	WritePipeline string         `json:"write_pipeline"`
+	Writes        uint64         `json:"writes"`
+	Searches      uint64         `json:"searches"`
+	Layers        map[string]int `json:"layers"`
+	GraphNodes    int            `json:"graph_nodes"`
+	GraphEdges    int            `json:"graph_edges"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -64,9 +78,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		write = "degraded: " + errStr2
 	}
 	writesCount, searchesCount := s.store.Usage()
-	counts := s.store.LayerCounts()
-	status := Status{
+	jsonResponse(w, 200, Status{
 		Status:        "ok",
+		Version:       Version,
 		VDB:           "ok",
 		Embed:         "ok",
 		LLM:           "ok",
@@ -77,24 +91,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		VDBPoints:     s.store.TotalMemories(),
 		EmbedDims:     384,
 		WritePipeline: write,
-	}
-	jsonResponse(w, 200, map[string]any{
-		"status":         status.Status,
-		"vdb":            status.VDB,
-		"embed":          status.Embed,
-		"llm":            status.LLM,
-		"llm_model":      status.LLMModel,
-		"llm_base":       status.LLMBase,
-		"vdb_provider":   status.VDBProvider,
-		"vdb_collection": status.VDBCollection,
-		"vdb_points":     status.VDBPoints,
-		"embed_dims":     status.EmbedDims,
-		"write_pipeline": status.WritePipeline,
-		"writes":         writesCount,
-		"searches":       searchesCount,
-		"layers":         counts,
-		"graph_nodes":    s.store.Graph().NodeCount(),
-		"graph_edges":    s.store.Graph().EdgeCount(),
+		Writes:        writesCount,
+		Searches:      searchesCount,
+		Layers:        s.store.LayerCounts(),
+		GraphNodes:    s.store.Graph().NodeCount(),
+		GraphEdges:    s.store.Graph().EdgeCount(),
 	})
 }
 

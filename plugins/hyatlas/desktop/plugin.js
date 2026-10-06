@@ -4542,6 +4542,7 @@ function HyAtlasPage() {
       clearInterval(id);
     };
   }, [tick]);
+  const ver = status && status.version ? `v${status.version}` : "v4";
   const [list, setList] = useState5([]);
   const [listLoading, setListLoading] = useState5(true);
   useEffect4(() => {
@@ -4602,7 +4603,7 @@ function HyAtlasPage() {
     _rest("/add", { method: "POST", body: { text: draft.trim() } }).then(() => {
       setDraft("");
       setTick((t) => t + 1);
-      host.notify({ kind: "success", message: "Memory saved to HyAtlas v4" });
+      host.notify({ kind: "success", message: `Memory saved to HyAtlas ${ver}` });
     }).catch((e) => setAddError(e)).finally(() => setAddPending(false));
   };
   const layers = status && status.layers || {};
@@ -4613,7 +4614,7 @@ function HyAtlasPage() {
     jsxs("div", { className: "flex items-start justify-between gap-3", children: [
       jsxs("div", { children: [
         jsx("h1", { className: "text-xl font-semibold", children: "HyAtlas Memory" }),
-        jsx("p", { className: "text-xs text-(--ui-text-tertiary)", children: connecting ? "v4 · chromem-go · connecting…" : status ? `v4 · ${status.vdb_points || 0} memories · ${status.writes || 0} writes · ${status.searches || 0} recalls` : "v4 · chromem-go" })
+        jsx("p", { className: "text-xs text-(--ui-text-tertiary)", children: connecting ? `${ver} · chromem-go · connecting…` : status ? `${ver} · ${status.vdb_points || 0} memories · ${status.writes || 0} writes · ${status.searches || 0} recalls` : `${ver} · chromem-go` })
       ] }),
       jsx(Button2, { type: "button", variant: "outline", size: "sm", onClick: () => setTick((t) => t + 1), children: "Refresh" })
     ] }),

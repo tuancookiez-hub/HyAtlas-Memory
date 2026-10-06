@@ -1,13 +1,18 @@
 # HyAtlas v4 — NOW
 
-**v4.2.0** | 2026-10-07 | Release: tuancookiez-hub/HyAtlas-Memory
+**v4.2.1** | 2026-10-07 | Release: tuancookiez-hub/HyAtlas-Memory
 
 ## Running
-- hyatlas-go v4.2.0 build listening :19528 (live-key-file fix in place; extraction healthy)
+- hyatlas-go v4.2.1 build listening :19528 (live-key-file fix + real version badge; extraction healthy, pipeline ok)
 - Plugin: `hyatlas` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hyatlas\` + Hermes Desktop pane
 - Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`)
 
-## Done (pre-catalog hardening — unreleased, committed local)
+## Done (v4.2.1 — pre-catalog hardening)
+- **Real version badge:** `/api/v1/status` now carries `version` from one canonical `Version` const in server.go; `handleDashInfo` reads the same const (was its own duplicate "4.2.0" literal). Desktop pane derives `const ver` from `status.version` and uses it in both the header subtitle and the save toast — no more frozen hardcoded "v4". Verified live: both endpoints report 4.2.1.
+- **status wire shape defined once:** the handler built a `Status` then restated every field in a `map[string]any`; now it marshals the struct, so its json tags are the real contract. `handleDashLayerCounts` reads `Usage()`/`TotalMemories()` once each (was 2x each — inconsistent snapshots); `UsageForJSON` became dead and was deleted.
+- **Version tests:** `version_test.go` (3) pins status + dash info to the canonical const and asserts the full status wire contract.
+- **Catalog art:** `docs/images/banner.png` (1200x600, the exact documented `image` size; variant A "orrery rings" chosen by Tuna from 8 generated, glyph-artifact-checked clean) + the two live Desktop pane screenshots for `screenshots:`. Retina 2400x1200 variant deleted as unused — docs say follow 1200x600.
+- **Compliance checked before cutting:** rule 11 — the pinned `plugins/hyatlas/` subdir never reads `auth.json`; the live-key-file feature is server-side only (`llm.go`/`server.go`/`hyatlas-go.ps1`), outside the reviewed subtree. Rule 14 — `requires_hermes: ">=0.21.4"` is not newer than the current release (v0.21.5), so the loader won't skip it.
 - **L5 count unified:** `store.LayerCounts()` now always reports `l5_knowledge` = graph node count; deleted the hand-applied per-handler overrides so `/api/v1/list`, `/metrics`, `/layer-health` no longer report l5:0 while `/status` reports the real count. Go regression test pins all endpoints agree.
 - **Plugin config precedence fixed:** `_load_config` layers legacy `plugins.hyatlas` + `plugins.entries.hyatlas.settings` per key (was wholesale pick).
 - **Plugin unit tests:** 14 new tests vs a real localhost HTTP server (no mocks) — wire round-trip, typed errors, config precedence, tool dispatch, sync_turn, on_memory_write, delete_all guard. Full plugin suite 17 passed.

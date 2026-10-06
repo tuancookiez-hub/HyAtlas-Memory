@@ -61,7 +61,7 @@ func (s *Server) handleDashInfo(w http.ResponseWriter, r *http.Request) {
 	writes, searches := s.store.Usage()
 	writeJSON(w, 200, map[string]any{
 		"name":           "HyAtlas v4 (Go)",
-		"version":        "4.2.0",
+		"version":        Version,
 		"mode":           "ultra",
 		"llm_model":      s.llmModel,
 		"llm_base":       s.llmBase,
@@ -99,6 +99,8 @@ func (s *Server) handleDashLayerCounts(w http.ResponseWriter, r *http.Request) {
 	// LayerCounts already reports the graph-derived L5 count, so
 	// display_counts includes the real L5 the composition bar must show.
 	counts := s.store.LayerCounts()
+	total := s.store.TotalMemories()
+	writes, searches := s.store.Usage()
 	writeJSON(w, 200, map[string]any{
 		"display_counts": counts,
 		"vdb_counts":     counts,
@@ -107,11 +109,11 @@ func (s *Server) handleDashLayerCounts(w http.ResponseWriter, r *http.Request) {
 			"l6_schema":    counts["l6_schema"],
 			"l7_intention": counts["l7_intention"],
 		},
-		"total":          s.store.TotalMemories(),
-		"vdb_total":      s.store.TotalMemories(),
+		"total":          total,
+		"vdb_total":      total,
 		"relation_count": s.store.Graph().EdgeCount(),
-		"writes":         s.store.UsageForJSON()["writes"],
-		"searches":       s.store.UsageForJSON()["searches"],
+		"writes":         writes,
+		"searches":       searches,
 	})
 }
 

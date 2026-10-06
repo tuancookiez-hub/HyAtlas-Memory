@@ -173,7 +173,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         self._prefetch_lock = threading.Lock()
         self._prefetch_result: str = ""
         self._process: Optional[Any] = None  # lazy import to keep _load_config cheap
-        self._version = "4.2.0"
+        self._version = "4.2.1"
 
     # --- Required ABC methods ---
 

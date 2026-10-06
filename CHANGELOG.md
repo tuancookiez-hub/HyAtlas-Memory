@@ -1,16 +1,24 @@
 # Changelog
 
-## [Unreleased]
+## [4.2.1] — 2026-10-07
+
+> Catalog-submission hardening. No breaking changes.
 
 ### Fixed
+- **Desktop pane and dashboard showed a frozen `v4` badge.** The pane hardcoded the string `"v4"` in two places (header subtitle and the "Memory saved" toast), so it read v4 forever regardless of the running server. `/api/v1/status` now carries a `version` field sourced from one canonical `Version` const in `server.go`; `handleDashInfo` reads the same const instead of its own duplicate literal. The pane derives `const ver` from `status.version` once and uses it at both sites, falling back to `"v4"` only while connecting. Releasing is now a one-line change.
 - **L5 count consistency (unified).** `LayerCounts()` now always reports `l5_knowledge` as the graph node count (L5 lives in the graph store, never chromem). Previously the override was hand-applied only in `handleStatus`/`handleDashLayerCounts`, so `/api/v1/list`, `/api/v1/metrics`, `/api/layer-health` and `/api/metrics` reported `l5_knowledge: 0` while `/status` reported the real count. One source of truth in the store; per-handler overrides deleted.
 - **Rotating LLM credentials no longer stall extraction.** The server froze `HYATLAS_LLM_KEY` at startup, so a short-lived token — the Nous Portal key is a 1-hour JWT that Hermes keeps fresh in `auth.json` — expired under a long-running server and every extraction call then failed with a generic HTTP 401 (`write_pipeline: degraded`) until a manual restart. New optional `HYATLAS_LLM_KEY_FILE` makes `LLMClient.resolveKey()` read the key live from the file per call (auth.json JSON shape or a plain-text token); the static `HYATLAS_LLM_KEY` stays as the fallback and as the only key for normal static-API-key users. `hyatlas-go.ps1` now sets it to `auth.json`. No timers or refresh goroutines — verified E2E (live extraction fired +2 L3 facts in 10s) and by `llm_keyfile_test.go` (4 tests, incl. rotate-the-file-and-assert-the-new-key-hits-the-wire).
 - **Plugin config precedence.** `_load_config` now layers the legacy `plugins.hyatlas` block and `plugins.entries.hyatlas.settings` **per key** (settings wins key-by-key) instead of picking one dict wholesale — a partially-filled Desktop settings form no longer shadows keys the legacy block sets.
 
+### Changed
+- **`/api/v1/status` is marshaled from the `Status` struct directly.** The handler previously built a `Status` value and then restated every field by hand in a `map[string]any`, defining the wire shape twice — the struct's json tags were dead code. One definition now, so the tags are the contract.
+- **`handleDashLayerCounts` takes one consistent snapshot.** It called `UsageForJSON()` twice (two separate atomic loads — writes and searches could come from different moments) and `TotalMemories()` twice. Now reads each once. `UsageForJSON` became dead and was deleted.
+
 ### Added
 - **Plugin unit tests** (`plugins/hyatlas/tests/test_plugin_unit.py`, 14 tests): client wire round-trip against a real localhost HTTP server (no mocks), typed error/unreachable handling, config precedence + legacy-garbage rejection, `save_config` round-trip, `handle_tool_call` dispatch for all 4 tools + unknown + uninitialized, `sync_turn` best-effort/empty-skip, `on_memory_write` add-only mirroring, availability probe, and the `delete_all` unscoped-wipe guard.
-- **Go regression tests** (`l5_counts_test.go`): L5 is graph-derived, and every count-reporting endpoint agrees with `/api/v1/status`.
+- **Go regression tests**: `l5_counts_test.go` (L5 is graph-derived; every count-reporting endpoint agrees with `/api/v1/status`), `llm_keyfile_test.go` (live key-file resolution, fallbacks, on-the-wire rotation), `version_test.go` (status + dash info report the real version; full status wire contract).
 - **CI `plugin-tests` job**: runs the plugin pytest + standalone smoke runner on a clean Python using the `agent.memory_provider` ABC extracted from the published hermes-agent wheel (no full Hermes install). Verified locally in a scrubbed venv: 17 passed.
+- **Catalog art**: `docs/images/banner.png` (1200×600, the documented `image` size) plus the two live Desktop pane screenshots used for `screenshots:`.
 
 ## [4.2.0] — 2026-10-07
 
