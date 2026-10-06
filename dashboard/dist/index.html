@@ -201,39 +201,11 @@
       <div class="page-header">
         <div class="page-label">02 // MEMORY OBSERVATORY</div>
         <h1 class="page-title">Memory Observatory</h1>
-        <div class="page-subtitle">Explore the structure of memory across layers and relationships.</div>
+        <div class="page-subtitle">Radial time map of every memory — radius is recency, angle is layer (L1 at 12 o'clock, clockwise). Hover to inspect, drag to pan, scroll to zoom, scrub the timeline to replay.</div>
       </div>
-      
-      <div class="graph-controls">
-        <div class="control-group">
-          <button class="control-btn" data-scope="25">Last 25</button>
-          <button class="control-btn" data-scope="50">Last 50</button>
-          <button class="control-btn" data-scope="100">Last 100</button>
-          <button class="control-btn active" data-scope="500">Last 500</button>
-          <button class="control-btn" id="reset-view-btn" title="Reset view (fit all)">&#x21BA; Reset</button>
-        </div>
-      </div>
-      
-      <div class="layer-filters" id="layer-filters"></div>
-      
-      <div class="graph-wrapper">
-        <div class="graph-container" id="graph-container"></div>
-        <div class="seed-overlay" id="obs-seed" style="display:none">
-          <div class="seed-dot"></div>
-          <div class="seed-ring" style="animation-delay:0s"></div>
-          <div class="seed-ring" style="animation-delay:.4s"></div>
-          <div class="seed-ring" style="animation-delay:.8s"></div>
-        </div>
-        <div class="graph-overlay">
-          <div class="obs-layer-rail" id="obs-layer-rail"></div>
-          <div class="obs-note" id="obs-zoom-note">SCROLL TO ZOOM · DRAG TO PAN · +/− KEYS · 0 RESET</div>
-          <div class="obs-tooltip" id="obs-tooltip"></div>
-        </div>
-      </div>
-      <div class="graph-legend" id="obs-legend"></div>
-      
-      <div class="text-xs text-muted mt-4">
-        Drag to pan • Scroll to zoom • Click nodes to inspect
+
+      <div class="graph-wrapper" id="starmap-root">
+        <div class="graph-container hy" id="graph-container"></div>
       </div>
     </div>
     
@@ -504,6 +476,8 @@
 <script>window.REFRESH_S = __REFRESH_S__; window.USER_IDS = __USER_IDS__;</script>
 <script src="app.js"></script>
 <script src="js/l5.js"></script>
-<script src="js/observatory.js"></script>
+<script src="js/observatory-stub.js"></script>
+<link rel="stylesheet" href="starmap.css">
+<script type="module" src="js/starmap.js"></script>
 </body>
 </html>

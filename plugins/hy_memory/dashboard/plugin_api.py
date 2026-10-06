@@ -110,6 +110,22 @@ def graph() -> Any:
     return _forward("GET", "/api/v1/graph")
 
 
+@router.get("/learning/graph")
+def learning_graph(n: int = 500, k_semantic: int = 2) -> Any:
+    """StarmapGraph-shape payload for the hy_memory plugin's Graph tab.
+
+    Matches the Hermes Desktop built-in Memory Graph shape (nodes with
+    timestamp/category/label, edges with source/target/type), so the same
+    polar-radial canvas renders the entire memory system (all 7 layers).
+
+    Edge types in the response:
+      - knowledge:  L5 explicit graph triples
+      - co_session: memories sharing a session_id
+      - semantic:   top-K VDB nearest neighbors
+    """
+    return _forward("GET", f"/api/v1/learning/graph?n={n}&k_semantic={k_semantic}")
+
+
 @router.get("/metrics")
 def metrics() -> Any:
     return _forward("GET", "/api/v1/metrics")
