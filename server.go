@@ -418,6 +418,7 @@ func errStr(err error) string {
 // The shape mirrors apps/desktop/src/types/hermes.ts::StarmapGraph:
 //
 //	{ nodes: StarmapNode[], edges: StarmapEdge[], memory: StarmapMemoryCard[] }
+//
 // utf8Trunc caps a string to max bytes without splitting a rune, appending an
 // ellipsis when truncated. Used for starmap payload fields — some raw L2
 // memories carry huge session dumps, and shipping full bodies made the graph
