@@ -2,7 +2,7 @@
 
 # HyAtlas v4 — Pure-Go Memory Core
 
-> **One binary. Seven layers. Cross-platform.** Single 17.6 MB Go binary, no Python at runtime, in-process BGE embeddings, 7-layer memory model fully active. **Linux ✅ · macOS ✅ · Windows ✅.**
+> **One binary. Seven layers. Three extraction modes. Cross-platform.** Single 17.6 MB Go binary, no Python at runtime, in-process BGE embeddings, 7-layer memory model fully active. **Linux ✅ · macOS ✅ · Windows ✅.**
 
 HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It replaces the Python floor (venv, zvec, Kuzu, FastAPI, HTTP embed subprocess) with a single binary: an embedded Chromem vector store, in-process BGE-small embeddings via onnxruntime-go, and async LLM fact extraction. The 7-layer memory model (Profile · Raw · Fact · Summary · Knowledge · Schema · Intention) is fully active — including L4 Summary extraction which was dormant in v3.5.
 
@@ -27,9 +27,10 @@ Useful env vars:
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `HYATLAS_VERSION` | Release tag to install | `v4.2.5` |
+| `HYATLAS_VERSION` | Release tag to install | `v4.3.0` |
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the BGE model is cached | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
+| `HYATLAS_MODE` | Extraction mode: `lite` \| `pro` \| `ultra` | `ultra` |
 | `HYATLAS_NO_MODEL=1` | Skip the model download | (downloads) |
 
 ---
@@ -81,6 +82,44 @@ export HYATLAS_LLM_KEY="your-nous-agent-key"
 
 The server listens on `127.0.0.1:19528` (loopback only — no external surface).
 
+### Privacy — what leaves your machine
+
+The server binds loopback only, but **loopback is not the whole story**, and the
+default configuration is not fully local:
+
+| What | Goes where | Default | How to keep it local |
+|---|---|---|---|
+| **Memory text** (the turn being extracted) | Sent to the extraction LLM | **`https://inference-api.nousresearch.com/v1`**, model `poolside/laguna-s-2.1:free` — remote, and on with no configuration | Point `HYATLAS_LLM_BASE` at a local OpenAI-compatible server |
+| Embeddings | In-process BGE-small (onnxruntime-go) | **Local** — `HYATLAS_EMBED_BASE=bge`, no network | Already local |
+| Stored memories, vector index, graph | `HYATLAS_GO_DATA` (default `./data`) | **Local** | Already local |
+| Telemetry / usage reporting | — | **None** | — |
+
+So out of the box: **embeddings and storage are local, extraction is not.**
+Every conversation turn the memory system ingests is sent to the configured LLM
+endpoint to derive facts, summaries and intentions. That is the point of the
+feature — but it means the default install transmits conversation text to Nous
+Research's inference API unless you change `HYATLAS_LLM_BASE`.
+
+The extraction endpoint is yours to choose per the tier you are on — set
+`HYATLAS_LLM_BASE`, `HYATLAS_LLM_MODEL` and `HYATLAS_LLM_KEY` to any
+OpenAI-compatible API. To keep conversation text on the machine, set `HYATLAS_MODE=lite`: no LLM
+call is made at all, so only the raw trace and local embeddings are stored.
+`HYATLAS_MODE=pro` extracts synchronously (the write waits), and the default
+`ultra` extracts on a background worker while filling all 7 layers.
+
+Otherwise the endpoint is yours to choose per the tier you are on — set
+`HYATLAS_LLM_BASE`, `HYATLAS_LLM_MODEL` and `HYATLAS_LLM_KEY` to any
+OpenAI-compatible API, or point `HYATLAS_LLM_BASE` at a server you host
+(ollama, vLLM, llama.cpp, LM Studio) and leave `HYATLAS_EMBED_BASE=bge`.
+Extraction fires on every write even with no key set, so in pro and ultra the
+text is transmitted by default until you configure these.
+
+When the Hermes plugin spawns this server it passes an explicitly allowlisted
+environment — OS essentials plus `HYATLAS_*` only — rather than a copy of the
+agent's environment, so provider API keys the agent holds do not reach the
+server process. The plugin sets no `HYATLAS_LLM_*` value and forwards no
+credential.
+
 **All configuration is via environment variables** — the binary takes no CLI flags:
 
 | Variable | Default | Purpose |
@@ -88,9 +127,9 @@ The server listens on `127.0.0.1:19528` (loopback only — no external surface).
 | `HYATLAS_GO_PORT` | `19528` | HTTP listen port |
 | `HYATLAS_GO_HOST` | `127.0.0.1` | Bind address (loopback only by default) |
 | `HYATLAS_GO_DATA` | `./data` | Where chromem collections + graph.json live |
-| `HYATLAS_EMBED_BASE` | `https://inference-api.nousresearch.com/v1` | Set to `bge` for the local in-process embedder |
+| `HYATLAS_EMBED_BASE` | `bge` | `bge` = local in-process BGE embedder (no network). Set to a URL for an OpenAI-compatible embedder, or `local` for a deterministic stub. |
 | `HYATLAS_MODEL_DIR` | `./models` | Where the BGE model lives |
-| `HYATLAS_LLM_BASE` | `https://inference-api.nousresearch.com/v1` | OpenAI-compatible LLM endpoint |
+| `HYATLAS_LLM_BASE` | `https://inference-api.nousresearch.com/v1` | OpenAI-compatible LLM endpoint. **Memory text is sent here** — see *Privacy* above. |
 | `HYATLAS_LLM_MODEL` | `poolside/laguna-s-2.1:free` | LLM model name |
 | `HYATLAS_LLM_KEY` | (empty) | LLM bearer token |
 | `HYATLAS_LLM_KEY_FILE` | (empty) | Read the key live from this file per call (rotating creds, e.g. Hermes auth.json). Accepts `providers.nous.agent_key`/`access_token` JSON or a plain-text token. Wins over `HYATLAS_LLM_KEY`, which becomes the fallback |

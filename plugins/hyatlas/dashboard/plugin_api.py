@@ -9,19 +9,69 @@ by the desktop/dashboard backend under the plugin's scoped namespace).
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
 router = APIRouter()
 
-HYATLAS_HOST = os.environ.get("HYATLAS_HOST", "127.0.0.1")
-HYATLAS_PORT = int(os.environ.get("HYATLAS_PORT", "19528"))
-BASE = f"http://{HYATLAS_HOST}:{HYATLAS_PORT}"
+
+def _settings() -> dict[str, Any]:
+    """Load the plugin's settings module, resolving the sibling by file path.
+
+    The dashboard backend imports this file with
+    ``importlib.util.spec_from_file_location`` and no parent package, so a
+    relative import is not available here. Loading ``settings.py`` the same way
+    — by path, from this file's own directory — reaches the same module the
+    provider uses without touching ``sys.path``, which would leak the plugin
+    directory into every other module's import search.
+
+    The provider and this dashboard must agree on the server's host and port, so
+    both read it through one module rather than each keeping its own defaults.
+    """
+    path = Path(__file__).resolve().parent.parent / "settings.py"
+    if not path.is_file():
+        return {}
+    name = "hyatlas_dashboard_settings"
+    if name in sys.modules:
+        return sys.modules[name].__dict__
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        return {}
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except Exception:
+        sys.modules.pop(name, None)
+        return {}
+    return mod.__dict__
+
+
+def _origin() -> str:
+    """Server origin from the plugin's real settings, falling back to loopback.
+
+    ``HYATLAS_HOST`` / ``HYATLAS_PORT`` are kept as an explicit escape hatch for
+    pointing the dashboard at a server the plugin is not configured to use, but
+    the defaults now come from the same settings the provider reads rather than
+    being hardcoded here.
+    """
+    cfg = _settings()
+    load = cfg.get("load")
+    resolved = load() if callable(load) else {}
+    host = (os.environ.get("HYATLAS_HOST") or "").strip() or resolved.get("server_host") or "127.0.0.1"
+    port = (os.environ.get("HYATLAS_PORT") or "").strip() or resolved.get("server_port") or 19528
+    return f"http://{host}:{port}"
+
+
+BASE = _origin()
 TIMEOUT = 15.0
 
 

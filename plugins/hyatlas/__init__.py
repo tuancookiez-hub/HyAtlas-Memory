@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -40,6 +41,9 @@ logger = logging.getLogger(__name__)
 
 # Resolve paths for bundled sibling modules
 _PLUGIN_ROOT = Path(__file__).resolve().parent
+
+# Settings resolution, shared with dashboard/plugin_api.py
+from . import settings
 
 # Tool schemas (used by register())
 from .schemas import (  # noqa: E402
@@ -56,93 +60,14 @@ from .schemas import (  # noqa: E402
 
 
 def _load_config() -> Dict[str, Any]:
-    """Load config from env vars, config.yaml settings, and per-profile JSON.
+    """Resolve plugin settings. See :mod:`settings` for the precedence rules.
 
-    Priority: env > ``plugins.entries.hyatlas.settings`` in config.yaml
-    (the location the Desktop settings form writes) > per-profile JSON.
-    Accepted keys: ``server_host``, ``server_port``, ``user_id``,
-    ``agent_id``, ``auto_start``, ``binary_path``, ``launcher_path``,
-    ``request_timeout``.
+    Kept as a module-level alias so existing callers and the smoke tests keep
+    working; the implementation lives in ``settings.py`` because the dashboard's
+    ``plugin_api.py`` is loaded by file path and cannot use a relative import,
+    and the two must not drift on which host and port they talk to.
     """
-    cfg: Dict[str, Any] = {
-        "server_host": "127.0.0.1",
-        "server_port": 19528,
-        "user_id": "default",
-        "agent_id": "default",
-        "auto_start": False,
-        "binary_path": "",   # empty -> discover from PATH / repo
-        "launcher_path": "", # empty -> spawn the binary directly
-        "request_timeout": 15.0,
-    }
-
-    _V4_KEYS = ("server_host", "server_port", "user_id", "agent_id",
-                "auto_start", "binary_path", "launcher_path", "request_timeout")
-
-    # 1. Per-profile JSON — accept ONLY keys relevant to the v4 client.
-    #    Legacy v3.5 fields (llm, vector_store, api_keys, etc.) are
-    #    silently dropped — they configure the v3.5 Python server, not
-    #    the v4 Go binary. The v4 binary reads env vars directly.
-    for json_path in (
-        Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "hyatlas.json",
-    ):
-        if json_path.exists():
-            try:
-                raw = json.loads(json_path.read_text(encoding="utf-8"))
-                for k in _V4_KEYS:
-                    if k in raw:
-                        cfg[k] = raw[k]
-            except (json.JSONDecodeError, OSError) as e:
-                logger.debug("ignoring %s: %s", json_path, e)
-
-    # 2. config.yaml — per-key layering: the legacy plugins.hyatlas block
-    #    first, then plugins.entries.hyatlas.settings (the Desktop settings
-    #    form + ctx.set_config writer) overriding key by key. A partially
-    #    filled settings form must not shadow keys the legacy block sets.
-    try:
-        import yaml  # hermes core dependency
-
-        cfg_path = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "config.yaml"
-        if cfg_path.exists():
-            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-            plugins = data.get("plugins") or {}
-            sources = (
-                (plugins.get("hyatlas") or {}),
-                ((plugins.get("entries") or {}).get("hyatlas") or {}).get("settings") or {},
-            )
-            for source in sources:
-                if not isinstance(source, dict):
-                    continue
-                for k in _V4_KEYS:
-                    if source.get(k) is not None:
-                        cfg[k] = source[k]
-    except Exception as e:  # noqa: BLE001 — config read must never break plugin load
-        logger.debug("ignoring config.yaml settings: %s", e)
-
-    # 3. Env-var overrides (canonical 12-factor pattern)
-    for env_key, cfg_key, cast in (
-        ("HYATLAS_SERVER_HOST", "server_host", str),
-        ("HYATLAS_SERVER_PORT", "server_port", int),
-        ("HYATLAS_USER_ID", "user_id", str),
-        ("HYATLAS_AGENT_ID", "agent_id", str),
-        ("HYATLAS_AUTO_START", "auto_start", lambda v: v.lower() in ("1", "true", "yes")),
-        ("HYATLAS_BINARY_PATH", "binary_path", str),
-        ("HYATLAS_LAUNCHER_PATH", "launcher_path", str),
-        ("HYATLAS_REQUEST_TIMEOUT", "request_timeout", float),
-    ):
-        v = os.environ.get(env_key, "").strip()
-        if v:
-            try:
-                cfg[cfg_key] = cast(v)
-            except (TypeError, ValueError) as e:
-                logger.debug("ignoring %s=%r: %s", env_key, v, e)
-
-    # 4. Backward compat: HYATLAS_LLM_KEY etc. don't apply here, but legacy
-    #    v3.5 keys HY_MEMORY_* should not bleed in.
-    for legacy in ("HY_MEMORY_HOST", "HY_MEMORY_PORT"):
-        if legacy in os.environ:
-            logger.debug("ignoring legacy env %s — use HYATLAS_SERVER_* instead", legacy)
-
-    return cfg
+    return settings.load()
 
 
 # =============================================================================
@@ -176,7 +101,13 @@ class HyatlasMemoryProvider(MemoryProvider):
         self._prefetch_lock = threading.Lock()
         self._prefetch_result: str = ""
         self._process: Optional[Any] = None  # lazy import to keep _load_config cheap
-        self._version = "4.2.5"
+        self._version = "4.3.0"
+        # Message count already synced per session, so _build_turn_text sends
+        # only what the server has not seen. Bounded: a long-lived gateway
+        # touches far more sessions than it can hold, and the cost of evicting
+        # one is a re-flush of that session's current turn, not a correctness
+        # failure.
+        self._synced: "OrderedDict[str, int]" = OrderedDict()
 
     # --- Required ABC methods ---
 
@@ -185,14 +116,48 @@ class HyatlasMemoryProvider(MemoryProvider):
         return "hyatlas"
 
     def backup_paths(self) -> List[str]:
-        """Data directory paths this provider owns (for `hermes backup`)."""
-        # v4 stores under data/ in the working dir of the Go binary.
-        # We can't know the exact path without the server's response,
-        # so we report the conventional locations.
-        return [
-            "data/graph.json",  # v4 graph store
-            "data/doc_index.json",  # v4 doc index
+        """Existing directories this provider owns, for ``hermes backup``.
+
+        ``backup.py`` drops any declared path that does not exist, and skips —
+        but reports — anything outside ``$HOME``, so the only useful answer is
+        the resolved data directory the server actually writes to. Declaring
+        relative names such as ``data/graph.json`` resolves against the agent's
+        CWD, which is not where the server keeps anything, so those were dropped
+        and the provider contributed nothing to a backup.
+
+        The server owns this path (``HYATLAS_GO_DATA``), and the plugin learns it
+        from the same sources the launcher uses: that variable, an explicit
+        ``data_dir`` setting, then the conventional default locations. Only
+        directories that exist are returned, so a user with a non-default layout
+        gets an accurate answer rather than a path that silently archives
+        nothing.
+        """
+        cfg = self._config
+        declared = str(cfg.get("data_dir") or "").strip()
+        candidates = [
+            os.environ.get("HYATLAS_GO_DATA", ""),
+            declared,
+            str(settings.home() / "hyatlas-data"),
+            str(Path.home() / ".hyatlas" / "data"),
+            str(Path.home() / ".hyatlas"),
         ]
+        out: List[str] = []
+        seen = set()
+        for raw in candidates:
+            if not raw:
+                continue
+            p = Path(raw).expanduser()
+            if not p.is_dir():
+                continue
+            try:
+                key = p.resolve()
+            except (OSError, ValueError):
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(str(p))
+        return out
 
     def is_available(self) -> bool:
         """True iff the v4 server is reachable on the configured port.
@@ -210,12 +175,8 @@ class HyatlasMemoryProvider(MemoryProvider):
 
     def unavailable_reason(self) -> str:
         """Why is_available() returned False — surfaced in the dashboard."""
-        if not self._config.get("server_host"):
-            return "server_host not configured"
-        port = self._config.get("server_port", 0)
         return (
-            f"HyAtlas v4 not reachable at "
-            f"{self._config.get('server_host')}:{port}. "
+            f"HyAtlas v4 not reachable at {self._origin()}. "
             f"Start it with `hyatlas start` (or `hermes hyatlas start`)."
         )
 
@@ -318,16 +279,21 @@ class HyatlasMemoryProvider(MemoryProvider):
 
     # --- Optional: system prompt block ---
 
+    def _origin(self) -> str:
+        """The server origin, built once so every surface agrees on it."""
+        host = self._config.get("server_host") or "127.0.0.1"
+        port = self._config.get("server_port") or 19528
+        return f"{host}:{port}"
+
     def system_prompt_block(self) -> str:
         """Short static block for the agent's system prompt.
 
         v4 already has prefetch() returning relevant context; this is
         the static pointer the agent always sees.
         """
-        port = self._config.get("server_port", 19528)
         return (
             f"You have access to a HyAtlas v4 7-layer memory system "
-            f"(server: 127.0.0.1:{port}). "
+            f"(server: {self._origin()}). "
             "Use the `hyatlas_search` tool to recall relevant past context, "
             "`hyatlas_recent` to see the latest memories, and `hyatlas_add` "
             "to record durable facts. Adds through the standard Hermes "
@@ -385,7 +351,8 @@ class HyatlasMemoryProvider(MemoryProvider):
         if not user_content and not assistant_content:
             return
 
-        text = self._build_turn_text(user_content, assistant_content, messages)
+        text = self._build_turn_text(
+            user_content, assistant_content, messages, session_id=session_id)
         if not text.strip():
             return
 
@@ -467,34 +434,15 @@ class HyatlasMemoryProvider(MemoryProvider):
     # --- Optional: config wizard surface ---
 
     def get_config_schema(self) -> List[Dict[str, Any]]:
-        return [
-            {
-                "key": "server_host",
-                "description": "HyAtlas v4 server host",
-                "default": "127.0.0.1",
-            },
-            {
-                "key": "server_port",
-                "description": "HyAtlas v4 server port",
-                "default": 19528,
-            },
-            {
-                "key": "user_id",
-                "description": "Default user_id (profile-scoped in config.yaml)",
-                "default": "default",
-            },
-            {
-                "key": "agent_id",
-                "description": "Default agent_id (overridden by agent_identity kwarg)",
-                "default": "default",
-            },
-            {
-                "key": "auto_start",
-                "description": "Auto-start the Go binary if not reachable",
-                "default": False,
-                "choices": [True, False],
-            },
-        ]
+        """Settings this provider exposes, derived from :mod:`settings`.
+
+        Not a literal here: the manifest declares the same nine settings for the
+        Desktop settings form, and the two drifted until the provider offered
+        only five — so four settings existed in ``plugin.yaml`` but were
+        invisible to ``hermes memory setup``. A test pins the two together.
+        """
+        return list(settings.config_schema())
+
 
     def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
         """Persist non-secret config to ``$HERMES_HOME/hyatlas.json``.
@@ -527,12 +475,9 @@ class HyatlasMemoryProvider(MemoryProvider):
 
     def _ensure_client(self) -> HyatlasClient:
         if self._client is None:
-            host = self._config.get("server_host", "127.0.0.1")
-            port = int(self._config.get("server_port", 19528))
-            timeout = float(self._config.get("request_timeout", 15.0))
             self._client = HyatlasClient(
-                base_url=f"http://{host}:{port}",
-                timeout=timeout,
+                base_url=f"http://{self._origin()}",
+                timeout=float(self._config.get("request_timeout", 15.0)),
             )
         return self._client
 
@@ -558,23 +503,83 @@ class HyatlasMemoryProvider(MemoryProvider):
         user_content: str,
         assistant_content: str,
         messages: Optional[List[Dict[str, Any]]] = None,
+        session_id: str = "",
     ) -> str:
-        """Concatenate turn into a single text for v4's LLM extraction.
+        """Build the text for THIS turn only, never the whole transcript.
 
-        Preference order: full messages thread (richest), then the
-        passed user/assistant pair.
+        ``sync_turn`` is called after every turn with the full conversation so
+        far, so sending all of *messages* would re-upload the entire transcript
+        each time — quadratic in conversation length, and the server would
+        re-extract facts from messages it already saw.
+
+        The caller's ``user_content`` / ``assistant_content`` pair is exactly
+        one turn, so that is the baseline and it is never dropped. *messages*
+        is used only to close gaps: if the thread has grown past the count last
+        synced for this session, the messages in between are turns this provider
+        never reported (an earlier failure, or a caller that jumped straight
+        here), and they are flushed so the gap does not silently lose memory.
+
+        Growth is tracked per session. A thread that shrinks means context
+        compression rewrote the history, so the index is reset and the single
+        reported turn is used — re-flushing a compressed thread would re-send
+        content the server already has.
         """
-        if messages:
-            parts = []
-            for m in messages:
-                role = m.get("role", "")
-                content = m.get("content", "")
-                if not content or role == "system":
-                    continue
+        if not messages:
+            return self._turn_pair(user_content, assistant_content)
+
+        seen = self._synced.get(session_id)
+        if seen is None:
+            # First turn seen for this session. Adopt the thread's current
+            # length as the baseline instead of 0: everything already in it
+            # predates this provider instance, and flushing it would upload the
+            # whole transcript to the extraction LLM on the first turn after
+            # every gateway restart. The turn the caller is reporting is
+            # carried by user_content / assistant_content, so nothing is lost.
+            self._record_synced(session_id, len(messages))
+            return self._turn_pair(user_content, assistant_content)
+
+        if len(messages) <= seen:
+            # Compressed or replayed thread — the index is meaningless now.
+            self._record_synced(session_id, len(messages))
+            return self._turn_pair(user_content, assistant_content)
+
+        new = messages[seen:]
+        self._record_synced(session_id, len(messages))
+        parts = []
+        for m in new:
+            role = m.get("role", "")
+            content = m.get("content", "")
+            if not content or role == "system":
+                continue
+            if isinstance(content, list):
+                content = " ".join(
+                    str(b.get("text", "")) for b in content
+                    if isinstance(b, dict)
+                ).strip()
+            if content:
                 parts.append(f"{role.upper()}: {content}")
-            if parts:
-                return "\n\n".join(parts)
-        # Fallback
+        if parts:
+            return "\n\n".join(parts)
+        # The new messages carried no usable content (tool stubs, empty roles);
+        # fall back to the reported turn so nothing is lost.
+        return self._turn_pair(user_content, assistant_content)
+
+    _SYNCED_MAX = 64
+
+    def _record_synced(self, session_id: str, count: int) -> None:
+        """Remember how much of *session_id*'s thread has been synced.
+
+        Evicts least-recently-used sessions past ``_SYNCED_MAX``. Losing an
+        entry costs a re-adopt on that session's next turn, never a correctness
+        failure, so a long-lived gateway cannot grow this without bound.
+        """
+        self._synced[session_id] = count
+        self._synced.move_to_end(session_id)
+        while len(self._synced) > self._SYNCED_MAX:
+            self._synced.popitem(last=False)
+
+    @staticmethod
+    def _turn_pair(user_content: str, assistant_content: str) -> str:
         parts = []
         if user_content:
             parts.append(f"USER: {user_content}")
@@ -641,9 +646,8 @@ def register(ctx: Any) -> None:
     provider = HyatlasMemoryProvider()
     ctx.register_memory_provider(provider)
     logger.info(
-        "hyatlas v4 plugin registered (server=%s:%s)",
-        provider._config.get("server_host", "127.0.0.1"),
-        provider._config.get("server_port", 19528),
+        "hyatlas v%s plugin registered (server=%s)",
+        provider._version, provider._origin(),
     )
     # Also register a slash command for diagnostics
     try:

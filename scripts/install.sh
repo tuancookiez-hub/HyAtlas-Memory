@@ -20,7 +20,11 @@
 #                         %LOCALAPPDATA%\hyatlas on Windows)
 #   HYATLAS_MODEL_DIR — where to cache the model (default: ~/.hyatlas/models)
 #   HYATLAS_NO_MODEL  — set to 1 to skip the model download (server will
-#                       fail to start until you supply models/ manually)
+#                       fail to start until you supply models/ manually
+#   HYATLAS_MODE      — lite | pro | ultra (default ultra). lite does no LLM
+#                       extraction at all, so conversation text never leaves
+#                       the machine; pro extracts synchronously; ultra extracts
+#                       on a background worker.)
 
 set -euo pipefail
 
@@ -350,17 +354,32 @@ $(printf '\033[0;32m' )HyAtlas-Memory v4 installed.$(printf '\033[0m')
       export HYATLAS_MODEL_DIR="$MODEL_DIR"
       $BINARY_NAME
 
-  Then set your LLM endpoint (any OpenAI-compatible API):
+  Choose an extraction mode with HYATLAS_MODE (default ultra):
+      lite   no LLM call; raw + local embeddings only, nothing leaves the machine
+      pro    one synchronous extraction per write; the write waits for it
+      ultra  the same extraction on a background worker; all 7 layers
+
+  Then, unless you chose lite, set your LLM endpoint for fact extraction. Pick
+  per your tier — any OpenAI-compatible API works:
       export HYATLAS_LLM_BASE="https://inference-api.nousresearch.com/v1"
       export HYATLAS_LLM_MODEL="poolside/laguna-s-2.1:free"
       export HYATLAS_LLM_KEY="your-key"
 
-  Wire it into Hermes (in ~/.hermes/config.yaml):
+  Wire it into Hermes. Enable the provider:
       memory:
         provider: hyatlas
-        providers:
+
+  If your server is not on the default 127.0.0.1:19528, set the plugin's own
+  settings (NOT a memory.providers block — the plugin does not read one):
+      plugins:
+        entries:
           hyatlas:
-            server_port: 19528
+            settings:
+              server_host: 127.0.0.1
+              server_port: 19528
+
+  Or just run `hermes memory setup` and pick hyatlas; `hermes plugins install`
+  plus that command is the whole path.
 
   Docs: https://github.com/$REPO#readme
 EOF

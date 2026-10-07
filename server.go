@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -21,7 +22,7 @@ import (
 // It is exposed on /api/v1/status and /api/info so every client (Desktop pane,
 // web dashboard, CLI) reports the real running version instead of hardcoding
 // a "v4" badge that silently goes stale on each release. Bump in one place.
-const Version = "4.2.5"
+const Version = "4.3.0"
 
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {
@@ -29,6 +30,7 @@ type Server struct {
 	llm      *LLMClient
 	llmModel string
 	llmBase  string
+	mode     Mode
 	start    time.Time
 	dataDir  string
 
@@ -70,6 +72,9 @@ type Status struct {
 	Layers        map[string]int `json:"layers"`
 	GraphNodes    int            `json:"graph_nodes"`
 	GraphEdges    int            `json:"graph_edges"`
+	Mode          Mode           `json:"mode"`
+	ModeDetail    string         `json:"mode_detail"`
+	UsesLLM       bool           `json:"uses_llm"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -78,12 +83,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		write = "degraded: " + errStr2
 	}
 	writesCount, searchesCount := s.store.Usage()
+	// Lite never calls an LLM, so reporting llm=ok there would claim a
+	// capability this mode deliberately does not use.
+	llmState := "ok"
+	if !s.mode.UsesLLM() {
+		llmState = "unused"
+	}
 	jsonResponse(w, 200, Status{
 		Status:        "ok",
 		Version:       Version,
 		VDB:           "ok",
 		Embed:         "ok",
-		LLM:           "ok",
+		LLM:           llmState,
 		LLMModel:      s.llmModel,
 		LLMBase:       s.llmBase,
 		VDBProvider:   "chromem",
@@ -96,6 +107,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Layers:        s.store.LayerCounts(),
 		GraphNodes:    s.store.Graph().NodeCount(),
 		GraphEdges:    s.store.Graph().EdgeCount(),
+		Mode:          s.mode.OrDefault(),
+		ModeDetail:    s.mode.Describe(),
+		UsesLLM:       s.mode.UsesLLM(),
 	})
 }
 
@@ -184,35 +198,64 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	meta["ts"] = time.Now().UTC().Format(time.RFC3339)
 
 	err := s.store.Add(memory.L2Raw, id, text, meta)
-	resp := map[string]any{"success": err == nil, "memory_id": id, "extraction_status": "pending"}
+	resp := map[string]any{"success": err == nil, "memory_id": id}
 	if err != nil {
 		resp["error"] = err.Error()
 		jsonResponse(w, 500, resp)
 		return
 	}
 
-	// Full 7-layer pipeline: one LLM call extracts facts, summary, knowledge,
-	// schema, and intention, then each is written to its own layer. L1 Profile is
-	// derived from persistent preferences; L2 Raw is the source doc just written.
-	agentID := body.AgentID
-	userID := body.UserID
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-		defer cancel()
-		if s.llm == nil {
-			return
-		}
-		ex, err := s.llm.Complete(ctx, text)
-		if err != nil {
-			s.setExtractErr(err.Error())
-			return
-		}
-		promoteExtraction(s.store, ex, userID, agentID, id)
-		_ = s.store.SetExtracted(id, true)
-		s.setExtractErr("")
-	}()
+	// Extraction behaviour is the mode's decision, not this handler's. Lite stops
+	// here with the raw trace stored; pro blocks on one synchronous extraction;
+	// ultra runs the same extraction on a background goroutine.
+	resp["extraction_status"] = s.extractForMode(text, body.UserID, body.AgentID, id)
 
 	jsonResponse(w, 200, resp)
+}
+
+// extractForMode applies the configured mode to one stored raw memory and
+// reports what the caller should expect.
+//
+// One LLM extraction call fills L1 Profile, L3 Fact, L4 Summary, L5 Knowledge,
+// L6 Schema and L7 Intention from the L2 raw doc; the layers are always all or
+// nothing, so the modes differ only in whether that call happens and whether the
+// request waits for it.
+func (s *Server) extractForMode(text, userID, agentID, id string) string {
+	if !s.mode.UsesLLM() {
+		return "skipped"
+	}
+	if s.llm == nil {
+		return "unavailable"
+	}
+	if !s.mode.Sync() {
+		go s.extract(text, userID, agentID, id)
+		return "pending"
+	}
+	// Pro: synchronous, so the response tells the truth about this write instead
+	// of reporting "pending" and leaving the caller to poll.
+	if err := s.extract(text, userID, agentID, id); err != nil {
+		return "failed"
+	}
+	return "done"
+}
+
+// extract runs one LLM extraction and promotes the result. Shared by the
+// synchronous and background paths so the two cannot drift.
+func (s *Server) extract(text, userID, agentID, id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), extractTimeout)
+	defer cancel()
+	if s.llm == nil {
+		return fmt.Errorf("no LLM client configured")
+	}
+	ex, err := s.llm.Complete(ctx, text)
+	if err != nil {
+		s.setExtractErr(err.Error())
+		return err
+	}
+	promoteExtraction(s.store, ex, userID, agentID, id)
+	_ = s.store.SetExtracted(id, true)
+	s.setExtractErr("")
+	return nil
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
@@ -425,6 +468,15 @@ func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 		}
 		raw, _ = s.store.List(memory.L2Raw, "", "", max, 0, false)
 	}
+	// Lite has no extraction to reprocess, so say so instead of silently
+	// reporting zero work done.
+	if !s.mode.UsesLLM() {
+		jsonResponse(w, 200, map[string]any{
+			"reprocessed": 0, "failed": 0, "skipped": len(raw),
+			"note": "mode is " + string(s.mode) + "; extraction is disabled, nothing to reprocess",
+		})
+		return
+	}
 	reprocessed, failed, skipped := 0, 0, 0
 	for _, it := range raw {
 		if len(body.IDs) == 0 && it.Extracted {
@@ -435,16 +487,12 @@ func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 			failed++
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-		ex, err := s.llm.Complete(ctx, it.Content)
-		cancel()
-		if err != nil {
-			s.setExtractErr(err.Error())
+		// Same extraction path as a normal write, so pro and ultra behave
+		// consistently here rather than this handler keeping its own copy.
+		if err := s.extract(it.Content, it.UserID, it.AgentID, it.ID); err != nil {
 			failed++
 			continue
 		}
-		promoteExtraction(s.store, ex, it.UserID, it.AgentID, it.ID)
-		_ = s.store.SetExtracted(it.ID, true)
 		reprocessed++
 	}
 	jsonResponse(w, 200, map[string]any{"reprocessed": reprocessed, "failed": failed, "skipped": skipped})
@@ -762,33 +810,117 @@ func jsonResponse(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// runtimeCfg is the resolved server configuration. Every default lives here, in
+// one place, rather than as an inline literal inside main() — so the defaults
+// are something a test can assert on instead of something only visible by
+// running the binary.
+type runtimeCfg struct {
+	Port       string
+	DataDir    string
+	GraphPath  string
+	LLMBase    string
+	LLMModel   string
+	EmbedBase  string
+	EmbedModel string
+	ModelDir   string
+	Mode       Mode
+}
+
+// Defaults that decide what leaves the machine:
+//
+//   - EmbedBase is "bge", the in-process local embedder, so embeddings need no
+//     network by default. It used to be one developer's machine-local proxy,
+//     which exists on nobody else's.
+//   - LLMBase is the Nous Portal inference API. Extraction therefore sends
+//     memory text off-machine unless the user points it somewhere local. That is
+//     the documented behaviour, not an accident, and it is disclosed in the
+//     README and in the catalog entry.
+const (
+	defaultPort       = "19528"
+	defaultDataDir    = "./data"
+	defaultLLMBase    = "https://inference-api.nousresearch.com/v1"
+	defaultLLMModel   = "poolside/laguna-s-2.1:free"
+	defaultEmbedBase  = "bge"
+	defaultEmbedModel = "text-embedding-3-small"
+	defaultModelDir   = "./models"
+)
+
+func resolveRuntime() runtimeCfg {
+	dataDir := envOr("HYATLAS_GO_DATA", defaultDataDir)
+	return runtimeCfg{
+		Mode:       resolveMode(),
+		Port:       envOr("HYATLAS_GO_PORT", defaultPort),
+		DataDir:    dataDir,
+		GraphPath:  envOr("HYATLAS_GRAPH_PATH", filepath.Join(dataDir, "graph.json")),
+		LLMBase:    envOr("HYATLAS_LLM_BASE", defaultLLMBase),
+		LLMModel:   envOr("HYATLAS_LLM_MODEL", defaultLLMModel),
+		EmbedBase:  envOr("HYATLAS_EMBED_BASE", defaultEmbedBase),
+		EmbedModel: envOr("HYATLAS_EMBED_MODEL", defaultEmbedModel),
+		ModelDir:   resolveModelDir(envOr("HYATLAS_MODEL_DIR", defaultModelDir)),
+	}
+}
+
+// resolveMode reads HYATLAS_MODE. An invalid value is fatal rather than a silent
+// fallback to ultra: someone who typos "lite" and quietly gets ultra would have
+// their conversation text sent to an extraction LLM they believed they had
+// turned off, which is the exact privacy boundary this selector exists to give.
+func resolveMode() Mode {
+	m, err := ParseMode(os.Getenv("HYATLAS_MODE"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	return m
+}
+
 func main() {
-	port := envOr("HYATLAS_GO_PORT", "19528")
-	dir := envOr("HYATLAS_GO_DATA", "./data")
+	rt := resolveRuntime()
+	port := rt.Port
+	dir := rt.DataDir
 	// LLM: any OpenAI-compatible endpoint. Default is a Nous Portal :free model.
-	llmBase := envOr("HYATLAS_LLM_BASE", "https://inference-api.nousresearch.com/v1")
+	llmBase := rt.LLMBase
 	llmKey := os.Getenv("HYATLAS_LLM_KEY")
 	// Optional: read the key live from a file each call, for rotating
 	// credentials (e.g. Hermes keeps a fresh 1-hour JWT in auth.json).
 	// When set, this wins over the frozen HYATLAS_LLM_KEY value.
 	llmKeyFile := os.Getenv("HYATLAS_LLM_KEY_FILE")
-	llmModel := envOr("HYATLAS_LLM_MODEL", "poolside/laguna-s-2.1:free")
-	embedBase := envOr("HYATLAS_EMBED_BASE", "http://127.0.0.1:49200/v1")
+	llmModel := rt.LLMModel
+	embedBase := rt.EmbedBase
 	embedKey := os.Getenv("HYATLAS_EMBED_KEY")
-	embedModel := envOr("HYATLAS_EMBED_MODEL", "text-embedding-3-small")
+	embedModel := rt.EmbedModel
 
 	ctx := context.Background()
 	var embedder Embedder
 	switch {
 	case strings.EqualFold(embedBase, "bge"):
 		// In-Go BGE inference (no Python, no HTTP) — the pure-Go path.
-		modelDir := envOr("HYATLAS_MODEL_DIR", "./models")
+		//
+		// Resolved to an absolute path before use. A relative "./models" is not
+		// portable on Windows: the onnxruntime loader and the directory check
+		// disagree about what it is relative to, so the same path can find the
+		// model and then fail on the shared library. Absolute paths work from
+		// any cwd, so prefer the cwd, then the executable's own directory.
+		modelDir := rt.ModelDir
 		if useEmbeddedAssets {
 			modelDir = materializeAssets()
 		}
 		b, err := NewBGEGoEmbedder(modelDir)
 		if err != nil {
-			log.Fatal("bge embedder: ", err)
+			// Failing fast is right here: the alternative is a server that
+			// answers every request and silently mis-embeds or 500s on write.
+			// Say how to fix it instead of leaving a bare error, because
+			// "bge" is now the default and a plain build with no models/
+			// directory lands here on first run.
+			log.Fatalf("bge embedder: %v\n\n"+
+				"The in-process embedder needs the BGE model next to the binary.\n"+
+				"Fix one of:\n"+
+				"  1. install via scripts/install.sh (fetches the model for you)\n"+
+				"  2. download a release binary built with -tags embedded, which\n"+
+				"     carries the model inside it\n"+
+				"  3. put bge-small-en-v1.5.onnx and onnxruntime.<ext> in %s,\n"+
+				"     or point HYATLAS_MODEL_DIR at a directory that has them\n"+
+				"Or set HYATLAS_EMBED_BASE to an OpenAI-compatible embeddings URL\n"+
+				"(memory text would then leave the machine) or to \"local\" for the\n"+
+				"offline deterministic stub.\n", err, modelDir)
 		}
 		embedder = b
 	case strings.EqualFold(embedBase, "local"):
@@ -796,14 +928,14 @@ func main() {
 	default:
 		embedder = NewOpenAIEmbedder(embedBase, embedKey, embedModel)
 	}
-	graphPath := envOr("HYATLAS_GRAPH_PATH", filepath.Join(dir, "graph.json"))
+	graphPath := rt.GraphPath
 	store, err := NewMemoryStore(ctx, dir, embedder, graphPath)
 	if err != nil {
 		log.Fatal("store: ", err)
 	}
 	llm := NewLLMClient(llmBase, llmKey, llmModel)
 	llm.KeyFile = llmKeyFile
-	srv := &Server{store: store, llm: llm, llmModel: llmModel, llmBase: llmBase, start: time.Now(), dataDir: dir}
+	srv := &Server{store: store, llm: llm, llmModel: llmModel, llmBase: llmBase, mode: rt.Mode, start: time.Now(), dataDir: dir}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", srv.handleHealthz)
@@ -836,7 +968,7 @@ func main() {
 	mux.HandleFunc("/api/coding-memories", srv.handleDashCodingMemories)
 	mux.Handle("/dashboard/", http.StripPrefix("/dashboard/", srv.handleDashboard()))
 
-	log.Printf("HyAtlas-Go listening on :%s (data=%s embed=%s llm=%s)", port, dir, embedModel, llmModel)
+	log.Print(listeningLine(rt))
 	host := envOr("HYATLAS_GO_HOST", "127.0.0.1")
 	log.Fatal(http.ListenAndServe(host+":"+port, mux))
 }
@@ -846,4 +978,67 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// resolveModelDir turns a configured model directory into an absolute path.
+//
+// The relative default "./models" cannot be handed straight to the embedder: the
+// onnxruntime loader and the directory-existence check resolve it against
+// different bases on Windows, so the same path finds the model file and then
+// fails looking for onnxruntime.dll. Trying the cwd first and the executable's
+// directory second keeps the documented default working from either layout,
+// because installers put the model beside the binary while a dev checkout runs
+// from the repo root.
+func resolveModelDir(dir string) string {
+	if filepath.IsAbs(dir) {
+		return filepath.Clean(dir)
+	}
+	for _, base := range modelBaseDirs() {
+		cand := filepath.Join(base, dir)
+		if fi, err := os.Stat(cand); err == nil && fi.IsDir() {
+			if abs, err := filepath.Abs(cand); err == nil {
+				return abs
+			}
+			return filepath.Clean(cand)
+		}
+	}
+	// Nothing on disk matched; return an absolute cwd-relative path so the
+	// error the user sees names one real location instead of two possible ones.
+	if abs, err := filepath.Abs(dir); err == nil {
+		return abs
+	}
+	return filepath.Clean(dir)
+}
+
+func modelBaseDirs() []string {
+	bases := make([]string, 0, 2)
+	if wd, err := os.Getwd(); err == nil {
+		bases = append(bases, wd)
+	}
+	if exe, err := os.Executable(); err == nil {
+		bases = append(bases, filepath.Dir(exe))
+	}
+	return bases
+}
+
+// describeEmbed names the embedder actually in use, for the startup log.
+// Reporting embedModel unconditionally said "text-embedding-3-small" even on the
+// local BGE path, which reads like a remote OpenAI embedder is configured.
+func describeEmbed(embedBase, embedModel string) string {
+	switch {
+	case strings.EqualFold(embedBase, "bge"):
+		return "bge-small (in-process)"
+	case strings.EqualFold(embedBase, "local"):
+		return "local-stub (deterministic, 384-d)"
+	default:
+		return embedBase + " (" + embedModel + ")"
+	}
+}
+
+// listeningLine is the startup banner. A function rather than an inline
+// log.Printf so a test can assert the embedder it reports matches the one
+// resolved, instead of the message drifting back to embedModel unnoticed.
+func listeningLine(rt runtimeCfg) string {
+	return fmt.Sprintf("HyAtlas-Go listening on :%s (data=%s embed=%s llm=%s mode=%s)",
+		rt.Port, rt.DataDir, describeEmbed(rt.EmbedBase, rt.EmbedModel), rt.LLMModel, rt.Mode.OrDefault())
 }

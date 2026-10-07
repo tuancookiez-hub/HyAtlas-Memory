@@ -1,5 +1,106 @@
 # Changelog
 
+## [4.3.0] — 2026-10-07
+
+Adds the extraction-mode selector. Until now every write ran the full async
+LLM pipeline with no way to opt out, so the only way to keep conversation text
+on the machine was to not run the server. The 7-layer model, local embeddings and
+Chromem store are unchanged in all three modes; what differs is whether an
+extraction LLM is called, and whether the write waits for it.
+
+### Added
+
+- **`HYATLAS_MODE` — `lite` | `pro` | `ultra` (default).**
+  - `lite` makes no LLM call at all. The raw trace and local embeddings are
+    stored; extraction is skipped, so conversation text never leaves the
+    machine. This is the only fully-offline mode.
+  - `pro` extracts synchronously — one LLM call per write, and the request
+    blocks until it returns, so the response reports the real outcome
+    (`done` / `failed`) instead of `pending`.
+  - `ultra` is today's behaviour: the same extraction on a background worker
+    while filling all 7 layers.
+  Settable via env var, `docker-compose.yml`, `.env`, the Windows launcher, and
+  as a `mode` plugin setting in the Desktop settings form (forwarded to a
+  spawned server as `HYATLAS_MODE`).
+- **`mode` plugin setting** with `choices: ["", "lite", "pro", "ultra"]`. Empty
+  means "let the server decide", so nothing is forwarded and the server keeps
+  its own default. `/api/v1/status` remains authoritative at runtime, since a
+  manually started server may be configured differently from the plugin.
+- **`/api/v1/status` reports `mode`, `mode_detail` and `uses_llm`.** In lite the
+  `llm` field reads `unused` rather than `ok`, so status cannot claim a
+  capability the mode deliberately does not use. The startup banner and the
+  dashboard's `/api/info` report the configured mode; the dashboard previously
+  hardcoded `"ultra"` regardless of configuration.
+
+### Changed
+
+- **Extraction is one code path, not two.** `handleAdd` and `handleReprocess`
+  each kept their own inline LLM call with a duplicated 180s timeout. Both now
+  go through `Server.extract()`, with `extractForMode()` deciding sync vs
+  background. `extraction_status` is derived from what actually happened
+  (`skipped` / `pending` / `done` / `failed` / `unavailable`) rather than being
+  hardcoded `"pending"` at write time.
+- **`handleReprocess` explains itself in lite.** It previously walked the raw
+  rows and reported zero work done with no reason. It now says extraction is
+  disabled for the configured mode.
+- **An invalid mode is fatal, and validated before spawning.** The server
+  rejects an unrecognised `HYATLAS_MODE` rather than silently falling back to
+  ultra — someone who typos `lite` and quietly gets ultra would have their
+  conversation text sent to an extraction LLM they believed they had turned off,
+  which is the exact boundary this selector exists to give. The plugin validates
+  through the same shared list and raises from `start()` before any child
+  process exists, so the failure is reported where the user can see it instead
+  of in `hyatlas.log` after a server that dies on boot.
+
+### Tests
+
+- 14 new Go tests (`mode_test.go`) covering parsing, the zero value, per-mode
+  semantics, and each mode's behaviour against a real mock LLM server — lite
+  makes zero calls, ultra returns before the LLM responds, pro blocks and
+  reports failure, and status/dashboard report the configured mode.
+- 8 new Python tests covering validation, normalisation, env override, both
+  config schemas declaring `mode`, and the spawner forwarding only a validated
+  value while keeping the env allowlist intact.
+- 53 Python tests pass (4 skipped where fastapi is unavailable); 49 Go test
+  functions pass under `-race`. Every new assertion was verified non-vacuous by
+  reverting the behaviour it pins and confirming the matching tests fail
+  (9/9 mutations caught).
+
+---
+
+## Review fixes (teknium1, PR #134419)
+
+Everything below addresses the catalog review of `ec0a3482` — what
+leaves the machine, and what the spawned server inherits — plus
+adjacent defects found while fixing those.
+
+Addresses teknium1's catalog review of PR #134419 (what leaves the machine, and
+what the spawned server inherits), plus two adjacent defects found while fixing
+them.
+
+#### Fixed
+
+- **The spawned server inherited the agent's whole environment.** `HyatlasProcess._env()` was `os.environ.copy()`, so every API key and provider token the agent holds (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, `DATABASE_URL`, …) was handed to a child process that then talks to a network endpoint. It now builds an explicit allowlist: the variables an OS needs to run a process at all, `HYATLAS_*` (the only prefix the server reads — `server.go` consults nothing else and never calls `os.Environ()`), and the TLS trust-anchor paths. Measured on a realistic agent environment: 9 planted secrets leaked before, 0 after, and 61 of 79 variables withheld. `SYSTEMROOT` is retained on Windows because without it the Go runtime cannot resolve DNS or complete a TLS handshake, so dropping it would break extraction in a way that looks like an endpoint problem. Verified end to end by spawning the real server under the minimal env and completing a write → extraction → search round trip.
+- **Every turn re-uploaded the whole conversation to the extraction LLM.** `_build_turn_text()` preferred the full `messages` thread, and `sync_turn` is called after every turn with the conversation so far — so payload grew quadratically and the server re-extracted facts from messages it had already seen. It now sends only the current turn. Measured over 50 turns: 41,495 bytes → 1,534 bytes (96.3% less, 27× reduction).
+- **The embedder defaulted to one developer's machine-local proxy.** `HYATLAS_EMBED_BASE` defaulted to `http://127.0.0.1:49200/v1`, which exists on nobody else's machine — the same defect class as the plugin-side proxy default removed in 4.2.5, and it contradicted the README, which documented a different default again. Now defaults to `bge`, the in-process local embedder, which is what every shipped install path already sets (`scripts/install.sh`, `hyatlas-go.ps1`, the release workflow, `docker-compose.yml`).
+- **A relative `HYATLAS_MODEL_DIR` did not work on Windows.** The onnxruntime loader and the directory check resolved `./models` against different bases, so the same path found the model file and then failed on `onnxruntime.dll`. `resolveModelDir()` now returns an absolute path, preferring the cwd and then the executable's own directory, so both the dev-checkout and installer layouts work. The failure message when no model exists names one absolute path and lists the four ways to fix it, instead of a bare error.
+- **The startup log misreported the embedder.** It printed `embedModel` unconditionally, so a server running local in-process BGE announced `embed=text-embedding-3-small` — which reads like a remote OpenAI embedder is configured. `describeEmbed()` names the embedder actually in use.
+- **`backup_paths()` reported paths that never existed.** It returned relative names (`data/graph.json`), which resolve against the agent's CWD. `backup.py` drops any declared path that does not exist, so this provider contributed nothing to `hermes backup`. It now returns existing absolute directories, resolved from `HYATLAS_GO_DATA`, a new `data_dir` setting, then conventional defaults.
+- **The system prompt hardcoded `127.0.0.1`** while the client honored `server_host`, so a remote server made the prompt state a wrong address. One `_origin()` helper now builds the address for the prompt, the client, and `unavailable_reason`.
+- **`stop_running()` could never match.** It read a pidfile that `start()` never wrote, so `hermes hyatlas stop` after a gateway restart left the old server holding the port. `start()` now writes it and `_cleanup()` removes it. Writing it made a `taskkill /F` path live, so `stop_running()` first confirms the pid still belongs to `hyatlas-go` — a recycled pid from a crashed server would otherwise kill an unrelated process.
+- **The dashboard hardcoded its server address.** `plugin_api.py` used `HYATLAS_HOST`/`HYATLAS_PORT` (keys nothing else in the plugin sets) instead of the plugin's real settings, so the pane ignored a configured host or port. Both now resolve through one shared `settings.py`; the env vars remain as an explicit escape hatch.
+
+#### Added
+
+- **`settings.py`** — one module owning settings resolution, shared by the provider and the dashboard. They are loaded by different machinery (`__init__.py` as a package, `plugin_api.py` by file path with no parent package, so it cannot use a relative import), and each keeping its own defaults is how they drifted. The dashboard loads the sibling by explicit path rather than manipulating `sys.path`, which catalog rule 9 forbids.
+- **`resolveRuntime()`** — every server default in one struct rather than inline literals in `main()`, so the defaults are assertable. The first version of these tests called `envOr` with its own default argument and passed whether or not `main()` agreed; reverting the real default did not fail them.
+- **`data_dir` plugin setting** (`HYATLAS_GO_DATA`), exposed in `config_schema`.
+- **Regression tests** for every item above: 14 new Go tests and 20 new Python tests (39 pass, 4 skip where fastapi is unavailable — separately verified passing against real fastapi 0.133.1). Each fix was verified non-vacuous by reverting it and confirming the matching tests fail.
+
+#### Disclosure
+
+The catalog entry, plugin README, and repo README now state plainly that **conversation text leaves the machine by default**: each turn is sent to the server, which sends it to an extraction LLM that defaults to the Nous Portal inference API (`https://inference-api.nousresearch.com/v1`) with no configuration required. Previously the entry said the server calls "an LLM endpoint the user configures" and that "all memory data stays on the user's machine" — both misleading, since the endpoint has a remote default. The repo README gains a *Privacy — what leaves your machine* table separating the local parts (embeddings, storage) from the remote one (extraction), and the "local-first" tag is renamed `self-hosted`.
+
 ## [4.2.5] — 2026-10-07
 
 ### Fixed

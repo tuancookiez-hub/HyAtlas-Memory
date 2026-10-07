@@ -1,12 +1,12 @@
 name: hyatlas
-version: 4.2.5
+version: 4.3.0
 manifest_version: 2
 api_version: 1
 description: "HyAtlas v4 — pure-Go 7-layer memory backend (chromem-go vector store + in-process BGE-small embeddings via onnxruntime-go, async LLM extraction, bitemporal knowledge graph). Talks to the hyatlas-go binary at 127.0.0.1:19528; ships a Desktop pane with a starmap graph view and a web dashboard. Tools (hyatlas_status/search/recent/add) and memory hooks are provided through the MemoryProvider interface."
 author: Tuna
 license: Apache-2.0
 homepage: https://github.com/tuancookiez-hub/HyAtlas-Memory
-tags: [memory, knowledge-graph, local-first, desktop]
+tags: [memory, knowledge-graph, self-hosted, desktop]
 requires_hermes: ">=0.21.4"
 provides_commands:
   - hyatlas
@@ -19,3 +19,5 @@ config_schema:
   binary_path: {type: str, default: "", label: "Binary path", description: "Path to hyatlas-go (empty = discover from PATH)"}
   launcher_path: {type: str, default: "", label: "Launcher script", description: "Optional path to a hyatlas-go.ps1 that owns the server environment (Windows; empty = spawn the binary directly)"}
   request_timeout: {type: float, default: 15.0, label: "Request timeout (s)", description: "HTTP timeout for server calls"}
+  data_dir: {type: str, default: "", label: "Data directory", description: "Where the server keeps its vector store and graph; used by `hermes backup` to include provider state. Empty = HYATLAS_GO_DATA, then the conventional defaults."}
+  mode: {type: str, default: "", label: "Extraction mode", choices: ["", "lite", "pro", "ultra"], description: "Passed to a spawned server as HYATLAS_MODE. lite makes no LLM call, so conversation text never leaves the machine; pro extracts synchronously; ultra extracts in the background and fills all 7 layers. Empty = the server's own default (ultra)."}

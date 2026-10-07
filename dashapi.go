@@ -62,7 +62,7 @@ func (s *Server) handleDashInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"name":           "HyAtlas v4 (Go)",
 		"version":        Version,
-		"mode":           "ultra",
+		"mode":           string(s.mode.OrDefault()),
 		"llm_model":      s.llmModel,
 		"llm_base":       s.llmBase,
 		"writes":         writes,

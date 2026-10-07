@@ -19,6 +19,9 @@ import os
 import socket
 import sys
 import threading
+
+import pytest
+
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -419,6 +422,31 @@ def _load_sibling(name):
     return m
 
 
+try:  # CI installs only pytest + pyyaml; the dashboard needs fastapi.
+    import fastapi  # noqa: F401
+    _HAS_FASTAPI = True
+except Exception:  # noqa: BLE001 — a broken pydantic_core must not fail the suite
+    _HAS_FASTAPI = False
+
+requires_fastapi = pytest.mark.skipif(
+    not _HAS_FASTAPI, reason="fastapi not importable (CI installs pytest + pyyaml only)")
+
+
+def _load_dashboard_api(tag):
+    """Load dashboard/plugin_api.py the way the desktop backend does: by file
+    path, with no parent package, so relative imports are unavailable to it."""
+    path = os.path.join(_PKG, "dashboard", "plugin_api.py")
+    name = f"{tag}_plugin_api"
+    for n in list(sys.modules):
+        if "hyatlas_dashboard_settings" in n:
+            del sys.modules[n]
+    spec = importlib.util.spec_from_file_location(name, path)
+    m = importlib.util.module_from_spec(spec)
+    sys.modules[name] = m
+    spec.loader.exec_module(m)
+    return m
+
+
 def test_subprocess_env_forwards_no_llm_credential(monkeypatch):
     """The server subprocess must not be handed an invented LLM endpoint or key."""
     proc_mod = _load_sibling("process")
@@ -490,3 +518,464 @@ def test_launcher_path_is_configurable(monkeypatch, tmp_path):
     (tmp_path / "hyatlas.json").write_text(
         json.dumps({"launcher_path": str(tmp_path / "from-json.ps1")}), encoding="utf-8")
     assert mod._load_config()["launcher_path"] == str(tmp_path / "from-json.ps1")
+
+
+# ---------------------------------------------------------------------------
+# teknium1's catalog review (PR #134419): what leaves the machine, and what the
+# spawned server inherits.
+# ---------------------------------------------------------------------------
+
+_AGENT_SECRETS = (
+    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AI2API_KEY", "NOUS_API_KEY",
+    "GITHUB_TOKEN", "HERMES_API_KEY", "AWS_SECRET_ACCESS_KEY",
+    "DISCORD_BOT_TOKEN", "DATABASE_URL",
+)
+
+
+def _poison(monkeypatch, extra=None):
+    for k in _AGENT_SECRETS:
+        monkeypatch.setenv(k, "SECRET-" + k)
+    for k in ("HYATLAS_LLM_BASE", "HYATLAS_LLM_MODEL", "HYATLAS_LLM_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in (extra or {}).items():
+        monkeypatch.setenv(k, v)
+
+
+def test_subprocess_env_does_not_inherit_agent_secrets(monkeypatch):
+    """The spawned server gets an allowlist, not a copy of the agent's env."""
+    proc_mod = _load_sibling("process")
+    _poison(monkeypatch)
+
+    env = proc_mod.HyatlasProcess({"server_port": 19528})._env()
+
+    leaked = [k for k in _AGENT_SECRETS if env.get(k) == "SECRET-" + k]
+    assert not leaked, f"agent secrets reached the server subprocess: {leaked}"
+    # The env is genuinely minimal, not merely missing these nine names.
+    assert len(env) < 40, f"child env is not minimal: {len(env)} vars"
+
+
+def test_subprocess_env_keeps_what_the_os_needs(monkeypatch):
+    """Stripping too far breaks the child — Windows Go needs SYSTEMROOT for DNS/TLS."""
+    proc_mod = _load_sibling("process")
+    _poison(monkeypatch, {"PATH": "/usr/bin", "HOME": "/home/u",
+                          "SYSTEMROOT": r"C:\Windows", "TEMP": r"C:\Temp",
+                          "USERPROFILE": r"C:\Users\u"})
+
+    env = proc_mod.HyatlasProcess({"server_port": 19528})._env()
+
+    assert env.get("PATH") == "/usr/bin"
+    assert env.get("SYSTEMROOT") == r"C:\Windows"
+    assert env.get("TEMP") == r"C:\Temp"
+    assert env.get("USERPROFILE") == r"C:\Users\u"
+    assert env["HYATLAS_GO_HOST"] == "127.0.0.1"
+
+
+def test_subprocess_env_passes_all_hyatlas_vars(monkeypatch):
+    """HYATLAS_* is the server's configuration surface, so all of it must pass."""
+    proc_mod = _load_sibling("process")
+    _poison(monkeypatch, {
+        "HYATLAS_GO_DATA": "/srv/data",
+        "HYATLAS_GRAPH_PATH": "/srv/data/graph.json",
+        "HYATLAS_MODEL_DIR": "/srv/models",
+        "HYATLAS_EMBED_BASE": "bge",
+        "HYATLAS_LLM_BASE": "http://127.0.0.1:11434/v1",
+        "HYATLAS_LLM_MODEL": "local:model",
+        "HYATLAS_LLM_KEY_FILE": "/etc/hyatlas/key",
+    })
+
+    env = proc_mod.HyatlasProcess({"server_port": 19528})._env()
+
+    for k in ("HYATLAS_GO_DATA", "HYATLAS_GRAPH_PATH", "HYATLAS_MODEL_DIR",
+              "HYATLAS_EMBED_BASE", "HYATLAS_LLM_BASE", "HYATLAS_LLM_MODEL",
+              "HYATLAS_LLM_KEY_FILE"):
+        assert env.get(k) == os.environ[k], f"{k} did not reach the server"
+    assert env["HYATLAS_LLM_BASE"] == "http://127.0.0.1:11434/v1"
+
+
+def _turn_msgs(n):
+    return [{"role": "user" if i % 2 == 0 else "assistant", "content": f"msg-{i}"}
+            for i in range(n)]
+
+
+def test_sync_sends_only_the_current_turn_not_history():
+    """The whole transcript used to be re-uploaded and re-extracted every turn."""
+    provider = mod.HyatlasMemoryProvider()
+    thread = _turn_msgs(400)
+
+    text = provider._build_turn_text("turn A user", "turn A reply", thread, session_id="s")
+
+    assert "turn A user" in text and "turn A reply" in text
+    assert "msg-0" not in text and "msg-399" not in text
+    assert len(text) < 200, f"payload is not turn-sized: {len(text)} chars"
+
+
+def test_sync_payload_stays_flat_as_conversation_grows():
+    """Quadratic upload was the bug; the payload must not grow with history."""
+    provider = mod.HyatlasMemoryProvider()
+    sizes = []
+    for turn in range(1, 8):
+        thread = _turn_msgs(2 * turn)
+        sizes.append(len(provider._build_turn_text(f"u{turn}", f"a{turn}", thread, session_id="s")))
+
+    assert max(sizes) - min(sizes) < 20, f"payload grew with history: {sizes}"
+
+
+def test_sync_recovers_messages_missed_since_last_turn():
+    """A gap must not silently lose memory."""
+    provider = mod.HyatlasMemoryProvider()
+    provider._record_synced("s", 4)
+
+    text = provider._build_turn_text("now", "reply", _turn_msgs(8), session_id="s")
+
+    for i in (4, 5, 6, 7):
+        assert f"msg-{i}" in text, f"missed message {i} was not recovered"
+    assert "msg-0" not in text and "msg-3" not in text
+
+
+def test_sync_keeps_current_turn_after_compression():
+    """A shrunk thread must not swallow the turn being reported."""
+    provider = mod.HyatlasMemoryProvider()
+    provider._record_synced("s", 100)
+
+    text = provider._build_turn_text("after compress", "after reply", _turn_msgs(40), session_id="s")
+
+    assert "after compress" in text and "after reply" in text
+    assert "msg-0" not in text
+    assert provider._synced["s"] == 40
+
+
+def test_sync_adopts_existing_history_without_uploading_it():
+    """First turn after a gateway restart must not dump the whole thread."""
+    provider = mod.HyatlasMemoryProvider()
+
+    text = provider._build_turn_text("first user", "first reply", _turn_msgs(400), session_id="fresh")
+
+    assert "first user" in text and "first reply" in text
+    assert "msg-0" not in text
+    assert provider._synced["fresh"] == 400
+
+
+def test_sync_without_messages_reports_the_pair():
+    """No thread given: the caller's pair is the whole turn, and it must be
+    separated. Gluing them into "USER: uASSISTANT: a" would hand the extraction
+    LLM one run-together token instead of two roles."""
+    provider = mod.HyatlasMemoryProvider()
+    assert provider._build_turn_text("u", "a", None, session_id="s") == "USER: u\n\nASSISTANT: a"
+
+
+def test_sync_handles_multimodal_content_blocks():
+    """Content can be a list of blocks; concatenating it would stringify dicts."""
+    provider = mod.HyatlasMemoryProvider()
+    provider._record_synced("s", 0)
+    thread = [{"role": "user", "content": [{"type": "text", "text": "look here"},
+                                           {"type": "image_url", "image_url": {"url": "x"}}]}]
+
+    text = provider._build_turn_text("look here", "ok", thread, session_id="s")
+
+    assert "look here" in text
+    assert "image_url" not in text and "{'type'" not in text
+
+
+def test_sync_never_uploads_the_system_prompt():
+    provider = mod.HyatlasMemoryProvider()
+    provider._record_synced("s", 0)
+    thread = [{"role": "system", "content": "SECRET SYSTEM PROMPT"},
+              {"role": "user", "content": "hi"}]
+
+    text = provider._build_turn_text("hi", "hello", thread, session_id="s")
+
+    assert "SECRET SYSTEM PROMPT" not in text
+
+
+def test_synced_index_is_bounded():
+    """A long-lived gateway sees more sessions than it can hold."""
+    provider = mod.HyatlasMemoryProvider()
+    for i in range(provider._SYNCED_MAX * 3):
+        provider._record_synced(f"sess-{i}", i)
+
+    assert len(provider._synced) <= provider._SYNCED_MAX
+    assert "sess-191" in provider._synced
+    assert "sess-0" not in provider._synced
+
+
+def test_synced_index_is_per_session():
+    provider = mod.HyatlasMemoryProvider()
+    provider._build_turn_text("a", "b", _turn_msgs(10), session_id="A")
+    provider._build_turn_text("c", "d", _turn_msgs(50), session_id="B")
+    assert provider._synced["A"] == 10 and provider._synced["B"] == 50
+
+
+def test_system_prompt_uses_configured_host():
+    """The prompt hardcoded 127.0.0.1 while the client honored server_host."""
+    provider = mod.HyatlasMemoryProvider()
+    provider._config["server_host"] = "10.9.8.7"
+    provider._config["server_port"] = 20999
+
+    block = provider.system_prompt_block()
+
+    assert "10.9.8.7:20999" in block
+    assert "127.0.0.1" not in block
+    # The client must be built from the same origin, or the prompt lies.
+    assert provider._ensure_client().base_url == "http://10.9.8.7:20999"
+
+
+def test_unavailable_reason_uses_configured_host():
+    provider = mod.HyatlasMemoryProvider()
+    provider._config["server_host"] = "10.9.8.7"
+    provider._config["server_port"] = 20999
+    assert "10.9.8.7:20999" in provider.unavailable_reason()
+
+
+def test_backup_paths_returns_existing_directories(monkeypatch, tmp_path):
+    """Relative names resolved against the agent CWD, so backup.py dropped them."""
+    data = tmp_path / "hyatlas-data"
+    data.mkdir()
+    monkeypatch.setenv("HYATLAS_GO_DATA", str(data))
+
+    provider = mod.HyatlasMemoryProvider()
+    paths = provider.backup_paths()
+
+    assert paths, "no backup path reported"
+    for raw in paths:
+        p = Path(raw)
+        assert p.is_absolute(), f"backup path is not absolute: {raw}"
+        assert p.exists(), f"backup path does not exist, so backup.py drops it: {raw}"
+    assert any(Path(p).resolve() == data.resolve() for p in paths)
+
+
+def test_backup_paths_empty_when_nothing_exists(monkeypatch, tmp_path):
+    """An empty answer is correct; a nonexistent path silently archives nothing."""
+    monkeypatch.delenv("HYATLAS_GO_DATA", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "no-such-home"))
+
+    provider = mod.HyatlasMemoryProvider()
+    provider._config["data_dir"] = str(tmp_path / "absent")
+
+    for raw in provider.backup_paths():
+        assert Path(raw).exists(), f"reported a path that does not exist: {raw}"
+
+
+def test_pidfile_written_on_start_and_removed_on_cleanup(monkeypatch, tmp_path):
+    """stop_running() reads this file; without the write it could never match."""
+    proc_mod = _load_sibling("process")
+    if sys.platform == "win32":
+        # A real long-running child on each platform: Popen([binary]) gets one
+        # executable, so the fake server has to be a script the OS can run.
+        fake = tmp_path / "hyatlas-go.bat"
+        fake.write_text("@echo off\rping -n 31 127.0.0.1 > nul\r")
+    else:
+        fake = tmp_path / "hyatlas-go"
+        fake.write_text("#!/bin/shsleep 30")
+        os.chmod(fake, 0o755)
+    monkeypatch.setattr(proc_mod, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(proc_mod, "PID_FILE", tmp_path / "hyatlas.pid")
+    monkeypatch.setattr(proc_mod, "LOG_FILE", tmp_path / "hyatlas.log")
+
+    proc = proc_mod.HyatlasProcess({"binary_path": str(fake), "server_port": 19528})
+    try:
+        proc.start()
+        pidfile = tmp_path / "hyatlas.pid"
+        assert pidfile.exists(), "start() did not write the pidfile"
+        assert pidfile.read_text().strip() == str(proc._proc.pid)
+    finally:
+        proc.stop()
+        if proc._proc is not None and proc._proc.poll() is None:
+            proc._proc.kill()
+
+    assert not (tmp_path / "hyatlas.pid").exists(), "_cleanup left a stale pidfile"
+
+
+def test_stop_running_refuses_to_kill_a_recycled_pid(monkeypatch, tmp_path):
+    """Writing the pidfile made a force-kill live, so a stale pid needs a name check."""
+    proc_mod = _load_sibling("process")
+    monkeypatch.setattr(proc_mod, "PID_FILE", tmp_path / "hyatlas.pid")
+    (tmp_path / "hyatlas.pid").write_text("999999")
+
+    killed = []
+    monkeypatch.setattr(proc_mod.subprocess, "run",
+                        lambda *a, **k: killed.append(a) or __import__("types").SimpleNamespace(stdout=""))
+    monkeypatch.setattr(proc_mod.HyatlasProcess, "_is_server", staticmethod(lambda pid: False))
+
+    proc_mod.HyatlasProcess.stop_running()
+
+    assert not killed, "stop_running force-killed a pid that is not hyatlas-go"
+    assert not (tmp_path / "hyatlas.pid").exists(), "stale pidfile was left behind"
+
+
+@requires_fastapi
+def test_dashboard_api_reads_plugin_settings(monkeypatch, tmp_path):
+    """The pane hardcoded 127.0.0.1:19528 instead of the configured server."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    for k in ("HYATLAS_HOST", "HYATLAS_PORT"):
+        monkeypatch.delenv(k, raising=False)
+    (tmp_path / "hyatlas.json").write_text(
+        json.dumps({"server_host": "10.4.5.6", "server_port": 20777}), encoding="utf-8")
+
+    api = _load_dashboard_api("dashcfg")
+
+    assert api.BASE == "http://10.4.5.6:20777", api.BASE
+
+
+@requires_fastapi
+def test_dashboard_api_env_override_still_wins(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "hyatlas.json").write_text(
+        json.dumps({"server_host": "10.4.5.6", "server_port": 20777}), encoding="utf-8")
+    monkeypatch.setenv("HYATLAS_HOST", "127.0.0.1")
+    monkeypatch.setenv("HYATLAS_PORT", "19999")
+
+    api = _load_dashboard_api("dashenv")
+
+    assert api.BASE == "http://127.0.0.1:19999", api.BASE
+
+
+@requires_fastapi
+def test_dashboard_api_defaults_to_loopback(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.delenv("HYATLAS_HOST", raising=False)
+    monkeypatch.delenv("HYATLAS_PORT", raising=False)
+
+    api = _load_dashboard_api("dashdef")
+
+    assert api.BASE == "http://127.0.0.1:19528", api.BASE
+
+
+@requires_fastapi
+def test_dashboard_api_does_not_touch_sys_path():
+    """Catalog rule 9: no sys.path games to reach a sibling module."""
+    before = list(sys.path)
+    _load_dashboard_api("dashpath")
+    assert sys.path == before, "loading the dashboard API mutated sys.path"
+
+
+def test_provider_schema_matches_manifest_schema():
+    """plugin.yaml and get_config_schema() must describe the same settings.
+
+    They are two separate declarations of one thing — the manifest feeds the
+    Desktop settings form, the provider feeds `hermes memory setup` — and they
+    drifted until the provider offered five of nine keys, so four settings were
+    configurable in the UI but invisible to setup. Both now derive from
+    settings.SCHEMA; this pins the derivation for the manifest half, which is
+    static YAML and cannot import it.
+    """
+    yaml = pytest.importorskip("yaml")
+    manifest = yaml.safe_load((Path(_PKG) / "plugin.yaml").read_text(encoding="utf-8"))
+    declared = manifest.get("config_schema") or {}
+    provider = {f["key"]: f for f in mod.HyatlasMemoryProvider().get_config_schema()}
+
+    assert set(declared) == set(provider), (
+        f"manifest/provider settings diverged: "
+        f"manifest-only={sorted(set(declared) - set(provider))} "
+        f"provider-only={sorted(set(provider) - set(declared))}"
+    )
+    for key, field in declared.items():
+        assert field.get("default") == provider[key]["default"], (
+            f"{key}: default {field.get('default')!r} in manifest vs "
+            f"{provider[key]['default']!r} in provider"
+        )
+
+
+def test_settings_schema_is_the_single_source():
+    """KEYS, DEFAULTS and config_schema() all derive from one SCHEMA tuple."""
+    settings = _load_sibling("settings")
+    assert settings.KEYS == tuple(f["key"] for f in settings.SCHEMA)
+    assert settings.DEFAULTS == {f["key"]: f["default"] for f in settings.SCHEMA}
+    assert [f["key"] for f in settings.config_schema()] == list(settings.KEYS)
+    # labels/types are manifest-only; leaking them confuses the setup form
+    assert not any("label" in f or "type" in f for f in settings.config_schema())
+
+
+def test_every_setting_is_documented_in_the_readme():
+    """A setting nobody documents is a setting nobody can find."""
+    settings = _load_sibling("settings")
+    readme = (Path(_PKG) / "README.md").read_text(encoding="utf-8")
+    undocumented = [k for k in settings.KEYS if k not in readme]
+    assert not undocumented, f"settings absent from the plugin README: {undocumented}"
+
+
+# ---- extraction-mode setting (v4.3.0) ----
+
+def test_mode_setting_validates_and_normalises():
+    settings = _load_sibling("settings")
+    assert settings.VALID_MODES == ("lite", "pro", "ultra")
+    for raw, want in [("lite", "lite"), ("LITE", "lite"), ("  Pro ", "pro"),
+                      ("ultra", "ultra"), ("", ""), (None, "")]:
+        assert settings.mode({"mode": raw}) == want, raw
+
+
+def test_mode_setting_rejects_unknown_value():
+    """An invalid mode must fail in the plugin, not on server boot.
+
+    The server treats an unrecognised HYATLAS_MODE as fatal, so forwarding it
+    would produce a child that dies immediately and reports only in a log file.
+    """
+    settings = _load_sibling("settings")
+    for bad in ("turbo", "system1", "Lite2", "0"):
+        with pytest.raises(ValueError) as ei:
+            settings.mode({"mode": bad})
+        msg = str(ei.value)
+        assert bad.lower() in msg.lower(), msg
+        for valid in settings.VALID_MODES:
+            assert valid in msg, msg
+
+
+def test_mode_env_override_lowercases():
+    settings = _load_sibling("settings")
+    os.environ["HYATLAS_MODE"] = "LITE"
+    try:
+        assert settings.load()["mode"] == "lite"
+    finally:
+        os.environ.pop("HYATLAS_MODE", None)
+
+
+def test_mode_declared_in_both_schemas():
+    """The manifest and the provider schema must both expose mode."""
+    yaml = pytest.importorskip("yaml")
+    manifest = yaml.safe_load((Path(_PKG) / "plugin.yaml").read_text(encoding="utf-8"))
+    declared = manifest["config_schema"]
+    assert "mode" in declared
+    assert declared["mode"]["choices"] == ["", "lite", "pro", "ultra"]
+    provider = {f["key"]: f for f in mod.HyatlasMemoryProvider().get_config_schema()}
+    assert "mode" in provider
+    assert provider["mode"]["choices"] == ["", "lite", "pro", "ultra"]
+
+
+def test_spawner_forwards_validated_mode_only():
+    """_env() forwards the resolved mode; an unvalidated raw value never reaches the child."""
+    proc = _load_sibling("process")
+    hp = proc.HyatlasProcess({"mode": "lite", "server_port": 19528})
+    hp._mode = "lite"
+    env = hp._env()
+    assert env.get("HYATLAS_MODE") == "lite"
+
+
+def test_spawner_omits_mode_when_unset():
+    proc = _load_sibling("process")
+    hp = proc.HyatlasProcess({})
+    hp._mode = ""
+    env = hp._env()
+    os.environ.pop("HYATLAS_MODE", None)
+    assert "HYATLAS_MODE" not in env, "empty mode must not pin the child to a value"
+
+
+def test_spawner_start_rejects_invalid_mode():
+    """start() must raise before spawning when the configured mode is unknown."""
+    proc = _load_sibling("process")
+    hp = proc.HyatlasProcess({"mode": "turbo"})
+    with pytest.raises(ValueError):
+        hp.start()
+    assert hp._proc is None, "no child may be spawned for an invalid mode"
+
+
+def test_mode_forwarding_keeps_env_allowlist():
+    """Forwarding the mode must not widen the allowlist or leak anything else."""
+    proc = _load_sibling("process")
+    os.environ["HY_TEST_SECRET"] = "should-not-leak"
+    try:
+        hp = proc.HyatlasProcess({"mode": "pro"})
+        hp._mode = "pro"
+        env = hp._env()
+        assert env.get("HYATLAS_MODE") == "pro"
+        assert "HY_TEST_SECRET" not in env
+    finally:
+        os.environ.pop("HY_TEST_SECRET", None)
