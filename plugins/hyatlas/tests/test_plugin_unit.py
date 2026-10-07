@@ -1156,3 +1156,76 @@ def test_llm_settings_are_documented_in_the_readme():
                       ("llm_key", "HYATLAS_LLM_KEY")]:
         assert f"| `{name}` |" in readme, f"{name} missing from the settings table"
         assert var in readme, f"{var} missing from the plugin README"
+
+
+# ---- bool field must not become a string-coerced select ----
+
+def test_bool_field_declares_no_choices():
+    """A bool field with `choices` is rendered as a select, which stringifies it.
+
+    The desktop bridge classifies a field with choices as `select` before it
+    checks the declared type, and a select's value is coerced to str. Then
+    `"false"` is truthy in Python, so picking "false" in the settings panel
+    silently turned auto-start ON. Pin the shape rather than trusting one
+    consumer to coerce.
+    """
+    settings = _load_sibling("settings")
+    for f in settings.config_schema():
+        if f.get("type") in ("bool", "boolean"):
+            assert not f.get("choices"), (
+                f"{f['key']} is a bool but declares choices; the desktop panel "
+                f"would render it as a select and stringify the value"
+            )
+
+
+def test_truthy_handles_strings_from_a_select():
+    """Any bool read from config must treat the string "false" as false."""
+    settings = _load_sibling("settings")
+    for v in (True, "true", "True", "TRUE", "1", "yes", "on"):
+        assert settings.truthy(v) is True, v
+    for v in (False, "false", "False", "FALSE", "0", "no", "off", "", None, [], "banana"):
+        assert settings.truthy(v) is False, v
+
+
+def test_auto_start_respects_string_false():
+    """The regression: a hyatlas.json holding "false" must not enable auto-start."""
+    settings = _load_sibling("settings")
+    # Mirrors what a select-coerced value or a hand-edited JSON file produces.
+    for cfg in ({"auto_start": "false"}, {"auto_start": "False"}, {"auto_start": "0"}):
+        assert settings.truthy(cfg.get("auto_start")) is False, cfg
+    for cfg in ({"auto_start": "true"}, {"auto_start": True}):
+        assert settings.truthy(cfg.get("auto_start")) is True, cfg
+
+
+def test_schema_types_match_manifest_types():
+    """SCHEMA's `type` must agree with plugin.yaml, or the two renderers disagree.
+
+    Checked against settings.SCHEMA rather than config_schema(): the latter
+    intentionally drops `type` and `label`, which belong to the manifest.
+    """
+    yaml = pytest.importorskip("yaml")
+    settings = _load_sibling("settings")
+    declared = yaml.safe_load((Path(_PKG) / "plugin.yaml").read_text(encoding="utf-8"))["config_schema"]
+    aliases = {"bool": {"bool", "boolean"}, "str": {"str", "string", "text"},
+               "int": {"int", "integer"}, "float": {"float", "number"}}
+    for f in settings.SCHEMA:
+        want = declared[f["key"]]["type"]
+        allowed = aliases.get(want, {want})
+        assert f.get("type") in allowed, (
+            f"{f['key']}: SCHEMA type {f.get('type')!r} vs manifest {want!r}")
+
+
+def test_config_schema_drops_manifest_only_fields():
+    """type and label belong to the manifest, so the provider schema omits them.
+
+    Pinned because the omission is deliberate: duplicating them invites drift
+    between the CLI wizard and the Desktop panel. But `secret`, `env_var` and
+    `url` MUST survive, since they change how the wizard stores a credential.
+    """
+    settings = _load_sibling("settings")
+    for f in settings.config_schema():
+        assert "type" not in f, f"{f['key']} leaks a manifest-only field"
+        assert "label" not in f, f"{f['key']} leaks a manifest-only field"
+    key = {f["key"]: f for f in settings.config_schema()}["llm_key"]
+    assert key["secret"] is True
+    assert key["env_var"] == "HYATLAS_LLM_KEY"

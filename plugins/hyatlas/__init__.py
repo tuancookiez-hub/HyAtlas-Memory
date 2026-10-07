@@ -193,7 +193,7 @@ class HyatlasMemoryProvider(MemoryProvider):
             return
 
         # Auto-start the server if configured
-        if self._config.get("auto_start") and not self._client.is_reachable():
+        if settings.truthy(self._config.get("auto_start")) and not self._client.is_reachable():
             self._ensure_server_running()
             # Wait briefly for the server to come up
             if not self._client.wait_until_reachable(timeout=30.0):

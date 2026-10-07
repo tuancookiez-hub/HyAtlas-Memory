@@ -55,7 +55,7 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
     },
     {
         "key": "auto_start", "type": "bool", "default": False,
-        "label": "Auto-start server", "choices": [True, False],
+        "label": "Auto-start server",
         "description": "Spawn the hyatlas-go binary when the server is unreachable",
     },
     {
@@ -279,6 +279,22 @@ def mode(cfg: Dict[str, Any] | None = None) -> str:
             f"(or leave it empty for the server default)"
         )
     return v
+
+
+def truthy(v: Any) -> bool:
+    """Interpret a config value as a boolean.
+
+    A bool field must not declare `choices`: the desktop bridge classifies any
+    field with choices as a `select`, which coerces its value to a string, and
+    then ``"false"`` is truthy in Python — so picking "false" in the settings
+    panel turned auto-start ON. Coercing here also covers a hyatlas.json written
+    before that was fixed.
+    """
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
 def sync(cfg: Dict[str, Any] | None = None) -> str:
