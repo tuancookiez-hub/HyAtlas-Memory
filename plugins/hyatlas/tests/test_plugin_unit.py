@@ -359,3 +359,36 @@ def test_delete_all_guard_survives_client():
         assert len(srv.store["memories"]) == 1
     finally:
         srv.stop()
+
+def test_system_prompt_block_names_only_real_tools():
+    """The agent-facing prompt must not advertise tools that don't exist.
+
+    A rename sweep once turned a reference to Hermes core's `memory` tool into
+    a nonexistent `hyatlas_save`, so the prompt instructed the agent to call a
+    tool that was never registered. Assert every backticked tool name in the
+    block is one the provider actually dispatches.
+    """
+    import re
+
+    srv = FakeV4Server()
+    try:
+        p = _provider_at(srv.base)
+        block = p.system_prompt_block()
+        assert "HyAtlas" in block
+
+        # every `backticked` identifier that looks like a tool must be registered
+        real = {s["name"] for s in p.get_tool_schemas()}
+        assert real, "provider registered no tools"
+        for name in re.findall(r"`([a-z_]+)`", block):
+            if name.startswith("hyatlas_"):
+                assert name in real, f"prompt advertises unknown tool {name!r}; real tools: {sorted(real)}"
+
+        # the mirrored standard tool is Hermes core's `memory`, never a hyatlas_* alias
+        assert "hyatlas_save" not in block
+        assert "hy_memory_save" not in block
+        assert "`memory`" in block
+
+        # server port is interpolated, not hardcoded
+        assert str(p._config.get("server_port", 19528)) in block
+    finally:
+        srv.stop()

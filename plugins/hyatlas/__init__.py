@@ -173,7 +173,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         self._prefetch_lock = threading.Lock()
         self._prefetch_result: str = ""
         self._process: Optional[Any] = None  # lazy import to keep _load_config cheap
-        self._version = "4.2.1"
+        self._version = "4.2.2"
 
     # --- Required ABC methods ---
 
@@ -327,8 +327,8 @@ class HyatlasMemoryProvider(MemoryProvider):
             f"(server: 127.0.0.1:{port}). "
             "Use the `hyatlas_search` tool to recall relevant past context, "
             "`hyatlas_recent` to see the latest memories, and `hyatlas_add` "
-            "to record durable facts. The `hyatlas_save` tool (the standard "
-            "Hermes memory tool) is mirrored automatically to v4's L1 Profile "
+            "to record durable facts. Adds through the standard Hermes "
+            "`memory` tool are mirrored automatically to v4's L1 Profile "
             "layer."
         )
 
