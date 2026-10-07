@@ -231,7 +231,17 @@ Response shape:
 
 ## Hermes Integration
 
-HyAtlas v4 is the **backend HTTP server** (`127.0.0.1:19528`) that backs the existing Hermes `hyatlas` memory provider plugin. It is **not** a native Hermes `MemoryProvider` ABC plugin — those are Python classes that subclass `agent.memory_provider.MemoryProvider` and live in `~/.hermes/plugins/memory/<name>/`.
+HyAtlas v4 is the **backend HTTP server** (`127.0.0.1:19528`). The
+`hyatlas` plugin in [`plugins/hyatlas`](plugins/hyatlas) *is* a native Hermes
+memory provider — it subclasses `agent.memory_provider.MemoryProvider` and
+registers through `ctx.register_memory_provider()` in `register(ctx)`, so
+`memory.provider: hyatlas` works directly. The plugin is a thin HTTP client
+over this server; the server does the vector store, embeddings, extraction and
+graph work.
+
+The plugin installs as a normal Hermes plugin
+(`<HERMES_HOME>/plugins/hyatlas/` — `AppData\Local\hermes\plugins\` on
+Windows, `~/.hermes/plugins/` elsewhere), not under a `memory/` subdirectory.
 
 ### How it works
 
@@ -253,20 +263,65 @@ The `hyatlas` plugin (Python, in your Hermes install) calls HyAtlas v4's HTTP AP
 
 **1. Run HyAtlas v4** (see Quick start above).
 
-**2. Configure Hermes to use the v4 port** in `~/.hermes/config.yaml`:
+**2. Install the plugin and select the provider.** Once the catalog entry is
+merged ([PR #134419](https://github.com/NousResearch/hermes-agent/pull/134419)),
+this is the supported path:
+
+```bash
+hermes plugins install hyatlas
+hermes plugins enable hyatlas
+hermes memory setup        # then choose "hyatlas"
+```
+
+Until it merges, install with the `owner/repo/subdir` shorthand — the plugin
+lives in the `plugins/hyatlas` subdirectory, and the subdirectory has to be part
+of the identifier so the scan is scoped to it:
+
+```bash
+hermes plugins install tuancookiez-hub/HyAtlas-Memory/plugins/hyatlas
+hermes plugins enable hyatlas
+hermes memory setup
+```
+
+Equivalent spellings, all resolving to the same clone plus `plugins/hyatlas`:
+
+```bash
+hermes plugins install "tuancookiez-hub/HyAtlas-Memory#plugins/hyatlas"
+hermes plugins install "https://github.com/tuancookiez-hub/HyAtlas-Memory.git#plugins/hyatlas"
+```
+
+Two forms do **not** work, and both fail quietly enough to be confusing:
+
+- `tuancookiez-hub/HyAtlas-Memory` on its own (no subdirectory) clones the
+  repository *root*, so the security scan sees the prebuilt `dashboard/dist`
+  bundle and the large `assets/` images and returns a CAUTION verdict instead of
+  the `safe` verdict the plugin subdirectory gets.
+- A bare relative path such as `./HyAtlas-Memory/plugins/hyatlas` is not treated
+  as a filesystem path — `owner/repo[/subdir]` parsing turns it into
+  `https://github.com/./HyAtlas-Memory.git`. To install from a local clone, use
+  a `file://` URL with an explicit `#subdir` fragment:
+  `file:///C:/path/to/HyAtlas-Memory#plugins/hyatlas`.
+
+The catalog entry carries the same scoping as `subdir: plugins/hyatlas`, which
+is why the merged entry is just the bare name.
+
+Installing and enabling alone does **not** activate memory — `hermes memory
+setup` is what writes `memory.provider: hyatlas`:
 
 ```yaml
 memory:
-  enabled: true
+  memory_enabled: true
   provider: hyatlas
-  providers:
-    hyatlas:
-      provider: hyatlas
-      server_port: 19528
-      auto_start: false
 ```
 
-> If you previously pointed at v3.5, just change `server_port: 19527` → `server_port: 19528`.
+Plugin settings (server host/port, user/agent id, `auto_start`,
+`binary_path`, `launcher_path`, timeout) live under
+`plugins.entries.hyatlas.settings` in `<HERMES_HOME>/config.yaml`, are
+editable in **Desktop → Settings → Plugins → hyatlas**, or can be set per
+variable via `HYATLAS_*` env vars (env wins). The defaults
+(`127.0.0.1:19528`, `auto_start: false`) work with no config at all.
+
+> There is no `memory.providers.hyatlas` block — settings do not go there.
 
 **3. Restart Hermes.**
 
@@ -274,7 +329,12 @@ The `hyatlas` plugin (Python client) is already wire-compatible with v4. Verifie
 
 ### Building a native `MemoryProvider` plugin
 
-If you want a **true native** Hermes memory plugin (Python, subclasses `MemoryProvider`, lives in `~/.hermes/plugins/memory/`), you can write a thin wrapper that calls HyAtlas v4 over HTTP. This is a future-work item — it would let `memory.provider: hyatlas` work directly. For now, the `hyatlas` plugin is the path of least resistance.
+This is what [`plugins/hyatlas`](plugins/hyatlas) already is, so there is no
+wrapper left to write — see *Hermes Integration* above. If you want to build
+your own, that plugin is the reference: subclass
+`agent.memory_provider.MemoryProvider`, implement the four client operations
+against the HTTP API, and call `ctx.register_memory_provider(provider)` from
+`register(ctx)`.
 
 ---
 
