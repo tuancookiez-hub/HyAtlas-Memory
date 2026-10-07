@@ -203,6 +203,10 @@ ENV: Tuple[Tuple[str, str, Any], ...] = (
     ("HYATLAS_LLM_MODEL", "llm_model", str),
 )
 
+# The declared type of each key, so a JSON/YAML string ("19528") is interpreted
+# the same way an environment variable is. Derived from ENV, never restated.
+CASTS = {key: cast for _, key, cast in ENV}
+
 # v3.5-era names that must not bleed into v4 settings.
 LEGACY_ENV = ("HY_MEMORY_HOST", "HY_MEMORY_PORT")
 
@@ -210,6 +214,45 @@ LEGACY_ENV = ("HY_MEMORY_HOST", "HY_MEMORY_PORT")
 def home() -> Path:
     """The Hermes home the plugin is operating against."""
     return Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+
+
+class _Skip:
+    """Sentinel: a raw value that cannot be interpreted, so keep the default."""
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid only
+        return "<skip>"
+
+
+_SKIP = _Skip()
+
+
+def coerce(key: str, value: Any, cast: Any = None) -> Any:
+    """Interpret one raw config value as the setting ``key``.
+
+    Shared by all three input layers (hyatlas.json, config.yaml, environment) so
+    a null or a mistyped value cannot survive into ``cfg``. That matters because
+    consumers use ``cfg.get(k, default)``, whose fallback only fires when the key
+    is ABSENT — a present-but-null key yields None, and ``float(None)`` then
+    raises inside the plugin instead of using the documented default.
+
+    ``cast`` is the ENV layer's string parser. It is applied only to strings, so
+    an already-typed value from JSON or YAML (``19528``, ``true``) passes through
+    rather than hitting a ``str``-shaped callable. Anything uninterpretable
+    returns _SKIP and the caller keeps the default.
+    """
+    if value is None:
+        return _SKIP
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return _SKIP
+        if cast is None:
+            return s
+        try:
+            return cast(s)
+        except (TypeError, ValueError):
+            return _SKIP
+    return value
 
 
 def load() -> Dict[str, Any]:
@@ -223,7 +266,9 @@ def load() -> Dict[str, Any]:
             if isinstance(raw, dict):
                 for k in KEYS:
                     if k in raw:
-                        cfg[k] = raw[k]
+                        got = coerce(k, raw[k], CASTS.get(k))
+                        if got is not _SKIP:
+                            cfg[k] = got
             else:
                 logger.debug("ignoring %s: not a mapping", profile)
         except (json.JSONDecodeError, OSError) as e:
@@ -243,8 +288,9 @@ def load() -> Dict[str, Any]:
                 if not isinstance(source, dict):
                     continue
                 for k in KEYS:
-                    if source.get(k) is not None:
-                        cfg[k] = source[k]
+                    got = coerce(k, source.get(k), CASTS.get(k))
+                    if got is not _SKIP:
+                        cfg[k] = got
     except Exception as e:  # noqa: BLE001 — a bad config read must not break plugin load
         logger.debug("ignoring config.yaml settings: %s", e)
 
@@ -252,10 +298,11 @@ def load() -> Dict[str, Any]:
         v = os.environ.get(env_key, "").strip()
         if not v:
             continue
-        try:
-            cfg[key] = cast(v)
-        except (TypeError, ValueError) as e:
-            logger.debug("ignoring %s=%r: %s", env_key, v, e)
+        got = coerce(key, v, cast)
+        if got is _SKIP:
+            logger.debug("ignoring %s=%r: not a valid %s", env_key, v, key)
+            continue
+        cfg[key] = got
 
     for legacy in LEGACY_ENV:
         if legacy in os.environ:

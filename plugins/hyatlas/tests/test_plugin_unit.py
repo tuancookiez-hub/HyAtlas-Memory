@@ -1236,6 +1236,187 @@ def test_llm_settings_are_documented_in_the_readme():
         assert var in readme, f"{var} missing from the plugin README"
 
 
+# ---- a present-but-null config value must not override the default ----
+
+def _write_profile(monkeypatch, payload, tmp_name="hyatlas.json"):
+    """Point HERMES_HOME at a scratch dir holding one hyatlas.json."""
+    import tempfile
+    home = Path(tempfile.mkdtemp(prefix="hy-nullcfg-"))
+    (home / tmp_name).write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    for var in ("HYATLAS_REQUEST_TIMEOUT", "HYATLAS_SERVER_PORT",
+                "HYATLAS_MODE", "HYATLAS_GO_DATA"):
+        monkeypatch.delenv(var, raising=False)
+    return home
+
+
+def test_null_values_in_profile_fall_back_to_defaults(monkeypatch):
+    """The regression: `{"request_timeout": null}` crashed the plugin.
+
+    Consumers read ``cfg.get("request_timeout", 15.0)``, whose default only
+    applies when the key is ABSENT. A present-but-null key yields None, so
+    ``float(None)`` raised TypeError inside _ensure_client() on the first memory
+    operation -- and a null field is exactly what the desktop settings panel
+    writes for a setting the user cleared.
+    """
+    settings = _load_sibling("settings")
+    _write_profile(monkeypatch, {
+        "request_timeout": None, "server_port": None, "auto_start": None,
+        "data_dir": None, "mode": None, "user_id": None, "llm_base": None,
+    })
+    cfg = settings.load()
+    for k, want in (("request_timeout", 15.0), ("server_port", 19528),
+                    ("auto_start", False), ("data_dir", ""), ("mode", ""),
+                    ("user_id", "default"), ("llm_base", "")):
+        assert cfg[k] == want, f"{k}: null overrode the default ({cfg[k]!r})"
+
+    # The exact expression that used to raise.
+    assert float(cfg.get("request_timeout", 15.0)) == 15.0
+    assert int(cfg.get("server_port", 19528)) == 19528
+
+
+def test_blank_strings_in_profile_fall_back_to_defaults(monkeypatch):
+    """Same hole via "": a cleared text field, not a null one."""
+    settings = _load_sibling("settings")
+    _write_profile(monkeypatch, {"binary_path": "   ", "agent_id": "",
+                                 "llm_model": "", "data_dir": "  "})
+    cfg = settings.load()
+    for k in ("binary_path", "agent_id", "llm_model", "data_dir"):
+        assert cfg[k] == settings.DEFAULTS[k], f"{k}: blank overrode the default"
+
+
+def test_json_strings_coerce_like_environment_strings(monkeypatch):
+    """A profile holding "19528" must become an int, not stay a string.
+
+    Previously only the env layer cast, so the same value behaved differently
+    depending on which of the three layers supplied it.
+    """
+    settings = _load_sibling("settings")
+    _write_profile(monkeypatch, {"request_timeout": "30.5", "server_port": "20777",
+                                 "auto_start": "true"})
+    cfg = settings.load()
+    assert cfg["request_timeout"] == 30.5
+    assert cfg["server_port"] == 20777
+    assert cfg["auto_start"] is True
+
+
+def test_unparseable_values_keep_the_default(monkeypatch):
+    """A numeric typo must degrade to the default, not a string in a numeric slot."""
+    settings = _load_sibling("settings")
+    _write_profile(monkeypatch, {"request_timeout": "soon", "server_port": "lots"})
+    cfg = settings.load()
+    assert cfg["request_timeout"] == 15.0
+    assert cfg["server_port"] == 19528
+
+
+def _write_yaml_profile(monkeypatch, settings_block):
+    """Point HERMES_HOME at a scratch dir holding config.yaml with a settings block."""
+    import tempfile
+    home = Path(tempfile.mkdtemp(prefix="hy-nullcfg-yaml-"))
+    doc = {"plugins": {"entries": {"hyatlas": {"settings": settings_block}}}}
+    (home / "config.yaml").write_text(json.dumps(doc), encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    for var in ("HYATLAS_REQUEST_TIMEOUT", "HYATLAS_SERVER_PORT",
+                "HYATLAS_MODE", "HYATLAS_GO_DATA"):
+        monkeypatch.delenv(var, raising=False)
+    return home
+
+
+def test_null_values_in_config_yaml_fall_back_to_defaults(monkeypatch):
+    """The config.yaml layer must coerce like hyatlas.json does.
+
+    This is the third input layer -- `plugins.entries.hyatlas.settings` -- and it
+    reads a config a user edits by hand, so a null or a mistyped numeric is just
+    as likely there. Covered explicitly because a mutation that reverts this
+    layer to raw assignment passes every other test.
+    """
+    settings = _load_sibling("settings")
+    _write_yaml_profile(monkeypatch, {
+        "request_timeout": None, "server_port": None, "data_dir": None,
+        "binary_path": "   ", "agent_id": "",
+    })
+    cfg = settings.load()
+    assert cfg["request_timeout"] == 15.0
+    assert cfg["server_port"] == 19528
+    assert cfg["data_dir"] == ""
+    assert cfg["binary_path"] == ""
+    assert cfg["agent_id"] == "default"
+    assert float(cfg.get("request_timeout", 15.0)) == 15.0
+
+
+def test_config_yaml_strings_coerce_like_the_other_layers(monkeypatch):
+    """A hand-written `server_port: "20777"` must become an int, not a str."""
+    settings = _load_sibling("settings")
+    _write_yaml_profile(monkeypatch, {"request_timeout": "45", "server_port": "20777"})
+    cfg = settings.load()
+    assert cfg["server_port"] == 20777
+    assert cfg["request_timeout"] == 45.0
+
+
+def test_config_yaml_unparseable_keeps_the_default(monkeypatch):
+    """A typo in config.yaml degrades to the default instead of poisoning the slot."""
+    settings = _load_sibling("settings")
+    _write_yaml_profile(monkeypatch, {"server_port": "lots", "request_timeout": None})
+    cfg = settings.load()
+    assert cfg["server_port"] == 19528
+    assert cfg["request_timeout"] == 15.0
+
+
+def test_invalid_mode_stays_fatal_rather_than_silently_defaulting(monkeypatch):
+    """load() stores the raw mode; mode() refuses one the server would reject.
+
+    Deliberate: a mode the server treats as fatal must not be quietly rewritten
+    here, or a user who typed "turbo" would get ultra with no signal. The two
+    layers split storage from validation, so this pins the validation half.
+    """
+    settings = _load_sibling("settings")
+    _write_profile(monkeypatch, {"mode": "turbo"})
+    cfg = settings.load()
+    assert cfg["mode"] == "turbo", "load() must not rewrite the raw value"
+    with pytest.raises(ValueError) as exc:
+        settings.mode(cfg)
+    assert "turbo" in str(exc.value)
+    assert "lite" in str(exc.value) and "ultra" in str(exc.value), (
+        "the error must name the valid set so the user can correct it")
+    # A valid one normalises rather than raising.
+    _write_profile(monkeypatch, {"mode": "PRO"})
+    assert settings.mode(settings.load()) == "pro"
+
+
+def test_coerce_is_the_single_interpretation_path(monkeypatch):
+    """All three layers share one coercion helper -- pin that, or they drift."""
+    settings = _load_sibling("settings")
+    # Env layer and JSON layer must agree on the same raw string.
+    _write_profile(monkeypatch, {"server_port": "20777"})
+    from_json = settings.load()["server_port"]
+    monkeypatch.setenv("HYATLAS_SERVER_PORT", "20777")
+    from_env = settings.load()["server_port"]
+    assert from_json == from_env == 20777
+
+    # Env wins over the profile, matching the documented precedence.
+    _write_profile(monkeypatch, {"server_port": "19528"})
+    monkeypatch.setenv("HYATLAS_SERVER_PORT", "20777")
+    assert settings.load()["server_port"] == 20777
+
+
+def test_casts_table_covers_every_persisted_setting(monkeypatch):
+    """CASTS is derived from ENV; a persisted setting missing there coerces as str.
+
+    llm_key is the one intended exclusion: it is declared secret, so the wizard
+    routes it to Hermes' .env and save_config strips it. The plugin never
+    persists or forwards it, and the server reads it from its own environment.
+    """
+    settings = _load_sibling("settings")
+    assert set(settings.KEYS) - set(settings.CASTS) == {"llm_key"}, (
+        f"unexpected ENV/CASTS coverage: "
+        f"missing={sorted(set(settings.KEYS) - set(settings.CASTS))}")
+    assert "llm_key" not in settings.CASTS
+    # And the exclusion is the security property, not an oversight.
+    field = {f["key"]: f for f in settings.SCHEMA}["llm_key"]
+    assert field.get("secret") is True
+    assert field.get("env_var") == "HYATLAS_LLM_KEY"
+
+
 # ---- bool field must not become a string-coerced select ----
 
 def test_bool_field_declares_no_choices():
