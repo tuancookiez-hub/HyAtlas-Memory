@@ -53,6 +53,17 @@ type MemoryStore struct {
 	writes     atomic.Uint64
 	searches   atomic.Uint64
 	countsPath string
+
+	// pending tracks in-flight persistUsageAsync goroutines so Close can wait
+	// for them; without it a goroutine writes into the data dir after the caller
+	// has moved on (which makes t.TempDir() cleanup fail with "directory not
+	// empty"). countsMu serializes the file write itself: concurrent callers
+	// share one fixed .tmp path, so unserialized writes can clobber each other.
+	pending   sync.WaitGroup
+	countsMu  sync.Mutex
+	closeMu   sync.Mutex // guards the closed flag against pending.Add
+	closeOnce sync.Once
+	closed    bool
 }
 
 // NewMemoryStore opens (or creates) the persistent layer DB + graph + doc index.
@@ -357,21 +368,46 @@ func (s *MemoryStore) persistUsageAsync() {
 	if s.countsPath == "" {
 		return
 	}
+	// Hold closeMu across the closed-check and Add so a concurrent Close cannot
+	// observe an empty WaitGroup and start Wait while this Add is still pending
+	// (concurrent Add/Wait on a zero counter is WaitGroup misuse).
+	s.closeMu.Lock()
+	if s.closed {
+		s.closeMu.Unlock()
+		return
+	}
+	s.pending.Add(1)
+	s.closeMu.Unlock()
 	go func() {
+		defer s.pending.Done()
 		s.persistUsage()
 	}()
 }
 
-// Close drains any pending async persistence before the store is discarded.
-// Safe to call multiple times.
+// Close drains any pending async persistence before the store is discarded, so
+// no goroutine writes into the data dir afterwards. Safe to call multiple times.
 func (s *MemoryStore) Close() {
-	s.persistUsage() // sync; wait for any in-flight goroutine
+	s.closeOnce.Do(func() {
+		// Stop new async writes...
+		s.closeMu.Lock()
+		s.closed = true
+		s.closeMu.Unlock()
+		// ...then wait for the ones already in flight. Wait is outside closeMu so
+		// a goroutine finishing its Done() cannot deadlock against Close.
+		s.pending.Wait()
+		// Final synchronous snapshot so the last counters are not lost.
+		s.persistUsage()
+	})
 }
 
 func (s *MemoryStore) persistUsage() error {
 	if s.countsPath == "" {
 		return nil
 	}
+	// Callers share one fixed .tmp path; without this lock two concurrent
+	// goroutines can interleave their writes and rename a half-written file.
+	s.countsMu.Lock()
+	defer s.countsMu.Unlock()
 	c := UsageCounters{Writes: s.writes.Load(), Searches: s.searches.Load()}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {

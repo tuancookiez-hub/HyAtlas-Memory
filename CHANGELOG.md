@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.2.4] — 2026-10-07
+
+### Fixed
+- **`Close()` never drained async persistence, despite claiming to.** Its comment said "drains any pending async persistence", but `persistUsageAsync()` spawned fire-and-forget goroutines with nothing tracking them, so `Close()` returned while they were still running. They then wrote `usage.json.tmp` into the data dir *after* the caller had moved on — on CI that made `t.TempDir()` cleanup fail with `unlinkat ...: directory not empty`, which failed the whole `go test` run in the `Build (Go 1.26, plain — Linux)` job. `Close()` now uses a `sync.WaitGroup` plus a `sync.Once`, so it is both synchronous and idempotent.
+- **Concurrent usage writes could clobber each other.** `persistUsage()` writes a single fixed `.tmp` path, and every `Add`/`Search` fires an async persist, so two goroutines could interleave and rename a half-written file. The write is now serialized by a mutex. This is a real (if narrow) data-corruption window on a busy server, not just a test-only artifact.
+
+### Added
+- **`store_close_test.go`** (3 tests): `Close` drains in-flight async persistence so the data dir is removable afterwards; `Close` is idempotent and safe under concurrent calls; and concurrent `persistUsage` does not corrupt the file.
+
+### Verification note
+The drain test was validated by reverting the fix and confirming it fails with the *exact* CI error (`usage.json.tmp left behind after Close`, then `TempDir RemoveAll cleanup: ... directory not empty`). An earlier draft of that test passed vacuously because it hardcoded the wrong filename (`counts.json` instead of the real `usage.json`) and let the driver goroutines finish before `Close`; it now derives the path from the store and keeps persists continuously in flight across the `Close` call.
+
 ## [4.2.3] — 2026-10-07
 
 ### Fixed
