@@ -27,32 +27,55 @@ jobs:
       - name: Smoke test (server boots and serves /healthz)
         run: |
           set -e
-          # Start the server with a fake LLM endpoint; VDB + embed should be ok,
-          # LLM will be reported degraded, but /healthz (liveness) must return 200.
+          # A plain build carries no embedded model, so it cannot use the default
+          # embedder ("bge"), which needs models/ or -tags embedded. Selecting the
+          # deterministic offline stub is the honest option for a binary that ships
+          # none: letting it fall back to bge silently would produce fake
+          # embeddings, and refusing to boot is the correct behaviour. release.yml
+          # smoke-tests the embedded build against real bge, so both paths stay
+          # covered across the two workflows.
+          #
+          # The LLM endpoint is fake on purpose — /healthz is liveness only, and
+          # the LLM is expected to report degraded.
+          HYATLAS_EMBED_BASE=local \
           HYATLAS_LLM_BASE=http://127.0.0.1:1/v1 \
           HYATLAS_LLM_MODEL=fake-model \
           HYATLAS_LLM_KEY=ci-key \
-          /tmp/hyatlas-go-plain &
+            /tmp/hyatlas-go-plain > /tmp/server.log 2>&1 &
           SERVER_PID=$!
-          sleep 4
-          if curl -fsS http://127.0.0.1:19528/healthz > /tmp/healthz.txt; then
-            echo "OK /healthz:"
-            cat /tmp/healthz.txt
-          else
-            echo "FAIL /healthz (exit $?)"
-            cat /tmp/healthz.txt 2>/dev/null || true
+          # Poll instead of sleeping a fixed interval: when the server refuses to
+          # boot it exits at once, and its own log is the only evidence of why.
+          # A fixed sleep hides that and reports a bare connection-refused.
+          READY=0
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:19528/healthz > /tmp/healthz.txt 2>/dev/null; then
+              READY=1
+              echo "healthz OK after $i tries"
+              break
+            fi
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+              echo "::error::server exited before serving /healthz"
+              cat /tmp/server.log
+              exit 1
+            fi
+            sleep 0.5
+          done
+          if [ "$READY" != "1" ]; then
+            echo "::error::server did not become healthy within 20s"
+            cat /tmp/server.log
             kill $SERVER_PID 2>/dev/null || true
             exit 1
           fi
-          if curl -fsS http://127.0.0.1:19528/api/v1/status > /tmp/status.json; then
-            echo "OK /api/v1/status:"
-            cat /tmp/status.json
-          else
-            echo "FAIL /api/v1/status (exit $?)"
-            cat /tmp/status.json 2>/dev/null || true
+          echo "OK /healthz:"
+          cat /tmp/healthz.txt
+          if ! curl -fsS http://127.0.0.1:19528/api/v1/status > /tmp/status.json; then
+            echo "::error::/api/v1/status failed"
+            cat /tmp/server.log
             kill $SERVER_PID 2>/dev/null || true
             exit 1
           fi
+          echo "OK /api/v1/status:"
+          cat /tmp/status.json
           kill $SERVER_PID 2>/dev/null || true
           sleep 1
       - name: Upload artifact (plain)

@@ -841,10 +841,13 @@ def test_pidfile_written_on_start_and_removed_on_cleanup(monkeypatch, tmp_path):
         # A real long-running child on each platform: Popen([binary]) gets one
         # executable, so the fake server has to be a script the OS can run.
         fake = tmp_path / "hyatlas-go.bat"
-        fake.write_text("@echo off\rping -n 31 127.0.0.1 > nul\r")
+        fake.write_text("@echo off\r\nping -n 31 127.0.0.1 > nul\r\n")
     else:
         fake = tmp_path / "hyatlas-go"
-        fake.write_text("#!/bin/shsleep 30")
+        # The shebang newline matters: "#!/bin/shsleep 30" is one token, so the
+        # kernel execs /bin/shsleep and the child dies instantly. Keep this as an
+        # escape sequence, never as a literal newline inside the source string.
+        fake.write_text("#!/bin/sh\nsleep 30\n")
         os.chmod(fake, 0o755)
     monkeypatch.setattr(proc_mod, "LOG_DIR", tmp_path)
     monkeypatch.setattr(proc_mod, "PID_FILE", tmp_path / "hyatlas.pid")
@@ -856,6 +859,12 @@ def test_pidfile_written_on_start_and_removed_on_cleanup(monkeypatch, tmp_path):
         pidfile = tmp_path / "hyatlas.pid"
         assert pidfile.exists(), "start() did not write the pidfile"
         assert pidfile.read_text().strip() == str(proc._proc.pid)
+        # The pidfile alone proves nothing: start() writes it whether or not the
+        # child survived. A fixture whose shebang or line endings are broken exits
+        # instantly and the test still passes, so assert the child is really alive.
+        assert proc._proc.poll() is None, (
+            f"fake server exited immediately (rc={proc._proc.returncode}); the "
+            f"fixture is not a runnable script on this platform")
     finally:
         proc.stop()
         if proc._proc is not None and proc._proc.poll() is None:
