@@ -392,3 +392,101 @@ def test_system_prompt_block_names_only_real_tools():
         assert str(p._config.get("server_port", 19528)) in block
     finally:
         srv.stop()
+
+
+# ---------------------------------------------------------------------------
+# Disclosure invariants — the plugin's README and its catalog entry promise
+# that no LLM credentials live in or flow through this plugin, and that it
+# reaches no machine-specific location. These pin both promises, because both
+# were once true in the docs and false in the code.
+# ---------------------------------------------------------------------------
+
+def _load_sibling(name):
+    """Load a plugin submodule.
+
+    ``cli`` does relative imports, so it must be loaded as a child of the
+    package the module under test already registered — a bare
+    ``spec_from_file_location`` leaves it with no parent package and the
+    import fails before the test can assert anything.
+    """
+    parent = getattr(mod, "__name__", "hyatlas_unit")
+    full = f"{parent}.{name}"
+    spec = importlib.util.spec_from_file_location(
+        full, os.path.join(_PKG, f"{name}.py"), submodule_search_locations=[])
+    m = importlib.util.module_from_spec(spec)
+    sys.modules[full] = m
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_subprocess_env_forwards_no_llm_credential(monkeypatch):
+    """The server subprocess must not be handed an invented LLM endpoint or key."""
+    proc_mod = _load_sibling("process")
+    marker = "SUPERSECRET_MARKER_VALUE"
+    monkeypatch.setenv("AI2API_KEY", marker)
+    monkeypatch.delenv("HYATLAS_LLM_BASE", raising=False)
+    monkeypatch.delenv("HYATLAS_LLM_MODEL", raising=False)
+    monkeypatch.delenv("HYATLAS_LLM_KEY", raising=False)
+
+    env = proc_mod.HyatlasProcess({"server_port": 19528})._env()
+
+    # No credential is copied from another variable into the server's env.
+    assert env.get("HYATLAS_LLM_KEY") != marker
+    # No endpoint or model is invented for the user.
+    assert "HYATLAS_LLM_BASE" not in env
+    assert "HYATLAS_LLM_MODEL" not in env
+    assert "HYATLAS_LLM_KEY" not in env
+    # The loopback-only default the plugin does own is still applied.
+    assert env["HYATLAS_GO_HOST"] == "127.0.0.1"
+    assert env["HYATLAS_GO_PORT"] == "19528"
+
+
+def test_subprocess_env_inherits_user_llm_settings(monkeypatch):
+    """What the user explicitly exported still reaches the server."""
+    proc_mod = _load_sibling("process")
+    monkeypatch.setenv("HYATLAS_LLM_BASE", "https://example.invalid/v1")
+    monkeypatch.setenv("HYATLAS_LLM_MODEL", "some:model")
+    monkeypatch.setenv("HYATLAS_LLM_KEY", "user-supplied")
+    env = proc_mod.HyatlasProcess({"server_port": 20000})._env()
+    assert env["HYATLAS_LLM_BASE"] == "https://example.invalid/v1"
+    assert env["HYATLAS_LLM_MODEL"] == "some:model"
+    assert env["HYATLAS_LLM_KEY"] == "user-supplied"
+    assert env["HYATLAS_GO_PORT"] == "20000"
+
+
+def test_no_machine_specific_path_in_plugin_source():
+    """No absolute developer path may ship to every installer."""
+    bad = ("F:/", "F:\\", "C:/Users/", "C:\\Users\\")
+    for py in Path(_PKG).rglob("*.py"):
+        if "tests" in py.parts:
+            continue
+        src = py.read_text(encoding="utf-8")
+        for token in bad:
+            assert token not in src, f"{py.name} ships a machine-specific path {token!r}"
+
+
+def test_launcher_resolution_needs_an_explicit_path():
+    """The Windows launcher is only used when the user points at one."""
+    cli = _load_sibling("cli")
+    # no config -> no launcher, so start spawns the binary directly
+    assert cli._launcher({}) is None
+    assert cli._launcher({"binary_path": "", "launcher_path": ""}) is None
+    # a configured launcher that does not exist is not invented
+    assert cli._launcher({"launcher_path": "/nonexistent/hyatlas-go.ps1"}) is None
+
+
+def test_launcher_path_is_configurable(monkeypatch, tmp_path):
+    """`launcher_path` reaches the config from both the JSON and env layers."""
+    cfg = mod._load_config()
+    assert cfg["launcher_path"] == ""
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HYATLAS_LAUNCHER_PATH", str(tmp_path / "go.ps1"))
+    cfg = mod._load_config()
+    assert cfg["launcher_path"] == str(tmp_path / "go.ps1")
+
+    # and the settings form layer, which is what the Desktop writes
+    monkeypatch.delenv("HYATLAS_LAUNCHER_PATH", raising=False)
+    (tmp_path / "hyatlas.json").write_text(
+        json.dumps({"launcher_path": str(tmp_path / "from-json.ps1")}), encoding="utf-8")
+    assert mod._load_config()["launcher_path"] == str(tmp_path / "from-json.ps1")

@@ -24,10 +24,6 @@ from .client import HyatlasClient, HyatlasClientError, HyatlasUnreachable
 
 logger = logging.getLogger(__name__)
 
-# Canonical Windows launcher (owns the full env: data dir, LLM key, logs).
-# Only consulted when no launcher sits beside the configured binary_path.
-_WIN_LAUNCHER_FALLBACK = Path("F:/HyAtlas-Memory-Go/hyatlas-go.ps1")
-
 
 def _load_root() -> Any:
     """Provider module (the package ``__init__.py``).
@@ -100,19 +96,27 @@ def _identity(provider: Any) -> "tuple[str, str]":
 
 
 def _launcher(cfg: dict) -> "Path | None":
-    """Canonical Windows launcher script, when one exists.
+    """A user-supplied launcher script, when one exists.
 
-    ``hyatlas-go.ps1`` owns the full server env (data dir, LLM key from
-    auth.json, log redirect), so starting through it keeps a CLI-started
-    server identical to the ``hyatlas start`` shim.
+    Some installs ship a ``hyatlas-go.ps1`` next to the server binary that owns
+    the full server env (data dir, LLM configuration, log redirect). Running it
+    keeps a CLI-started server identical to that install's own start shim.
+
+    The script is the user's own server-side tooling, not part of this plugin:
+    nothing here reads credentials or configures an LLM. Only explicit paths are
+    consulted — ``launcher_path`` from config, then a launcher sitting beside
+    the resolved binary — so no machine-specific location is baked in and a
+    catalog install with no launcher simply spawns the binary directly.
     """
     if sys.platform != "win32":
         return None
     candidates = []
-    bp = str(cfg.get("binary_path") or "")
+    configured = str(cfg.get("launcher_path") or "").strip()
+    if configured:
+        candidates.append(Path(configured))
+    bp = str(cfg.get("binary_path") or "").strip()
     if bp:
         candidates.append(Path(bp).parent / "hyatlas-go.ps1")
-    candidates.append(_WIN_LAUNCHER_FALLBACK)
     for cand in candidates:
         if cand.is_file():
             return cand

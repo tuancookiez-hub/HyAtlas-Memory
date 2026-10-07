@@ -61,7 +61,8 @@ def _load_config() -> Dict[str, Any]:
     Priority: env > ``plugins.entries.hyatlas.settings`` in config.yaml
     (the location the Desktop settings form writes) > per-profile JSON.
     Accepted keys: ``server_host``, ``server_port``, ``user_id``,
-    ``agent_id``, ``auto_start``, ``binary_path``, ``request_timeout``.
+    ``agent_id``, ``auto_start``, ``binary_path``, ``launcher_path``,
+    ``request_timeout``.
     """
     cfg: Dict[str, Any] = {
         "server_host": "127.0.0.1",
@@ -69,12 +70,13 @@ def _load_config() -> Dict[str, Any]:
         "user_id": "default",
         "agent_id": "default",
         "auto_start": False,
-        "binary_path": "",  # empty -> discover from PATH / repo
+        "binary_path": "",   # empty -> discover from PATH / repo
+        "launcher_path": "", # empty -> spawn the binary directly
         "request_timeout": 15.0,
     }
 
     _V4_KEYS = ("server_host", "server_port", "user_id", "agent_id",
-                "auto_start", "binary_path", "request_timeout")
+                "auto_start", "binary_path", "launcher_path", "request_timeout")
 
     # 1. Per-profile JSON — accept ONLY keys relevant to the v4 client.
     #    Legacy v3.5 fields (llm, vector_store, api_keys, etc.) are
@@ -124,6 +126,7 @@ def _load_config() -> Dict[str, Any]:
         ("HYATLAS_AGENT_ID", "agent_id", str),
         ("HYATLAS_AUTO_START", "auto_start", lambda v: v.lower() in ("1", "true", "yes")),
         ("HYATLAS_BINARY_PATH", "binary_path", str),
+        ("HYATLAS_LAUNCHER_PATH", "launcher_path", str),
         ("HYATLAS_REQUEST_TIMEOUT", "request_timeout", float),
     ):
         v = os.environ.get(env_key, "").strip()
@@ -173,7 +176,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         self._prefetch_lock = threading.Lock()
         self._prefetch_result: str = ""
         self._process: Optional[Any] = None  # lazy import to keep _load_config cheap
-        self._version = "4.2.4"
+        self._version = "4.2.5"
 
     # --- Required ABC methods ---
 

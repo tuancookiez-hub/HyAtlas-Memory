@@ -1,5 +1,15 @@
 # Changelog
 
+## [4.2.5] — 2026-10-07
+
+### Fixed
+- **The plugin invented an LLM endpoint and forwarded a credential.** `HyatlasProcess.start()` seeded `HYATLAS_LLM_BASE` to a developer's local proxy (`127.0.0.1:49200`), `HYATLAS_LLM_MODEL` to a specific model, and copied `AI2API_KEY` into `HYATLAS_LLM_KEY` for the spawned server. Any user who installed from the catalog and enabled `auto_start` got a server pointed at somebody else's proxy, and a secret was copied from one environment variable into another. Both contradict the plugin's own documented disclosure ("no LLM credentials live in or flow through this plugin") and `save_config`'s existing contract that no LLM creds belong in the plugin's config. The subprocess env is now built by `HyatlasProcess._env()`, which only inherits the caller's environment and binds the server to loopback — `HYATLAS_LLM_*` remain the server's own concern, and whatever the user exported still reaches it unchanged.
+- **A machine-specific path shipped to every installer.** `cli._launcher()` fell back to `F:/HyAtlas-Memory-Go/hyatlas-go.ps1` — the author's drive letter — so the Windows launcher was discovered on the author's machine and on nobody else's. Removed. The launcher is now opt-in and explicit.
+
+### Added
+- **`launcher_path` config key** (plus `HYATLAS_LAUNCHER_PATH`), so an install that ships its own `hyatlas-go.ps1` beside the binary can point at it instead of relying on a baked-in location. Resolution order is the configured path, then a launcher beside `binary_path`, then no launcher at all — in which case `start` spawns the binary directly, which is what a catalog install does.
+- **Five disclosure-invariant tests** pinning both fixes: the subprocess env forwards no credential and invents no endpoint; user-exported `HYATLAS_LLM_*` still reach the server; no absolute developer path (`F:/`, `C:/Users/`) exists in any non-test plugin source; launcher resolution requires an explicit path; and `launcher_path` flows through both the JSON and env config layers. Verified non-vacuous by reverting each fix and confirming the corresponding tests fail.
+
 ## [4.2.4] — 2026-10-07
 
 ### Fixed

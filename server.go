@@ -21,7 +21,7 @@ import (
 // It is exposed on /api/v1/status and /api/info so every client (Desktop pane,
 // web dashboard, CLI) reports the real running version instead of hardcoding
 // a "v4" badge that silently goes stale on each release. Bump in one place.
-const Version = "4.2.4"
+const Version = "4.2.5"
 
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {

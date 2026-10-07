@@ -70,6 +70,21 @@ class HyatlasProcess:
                     return str(path)
         return None
 
+    def _env(self) -> Dict[str, str]:
+        """Environment for the server subprocess.
+
+        Inherits the caller's environment and binds the server to loopback.
+        LLM configuration is the server's own concern — ``HYATLAS_LLM_*`` come
+        from the environment the user set or from the server's config file.
+        Nothing here invents an endpoint, a model or a credential, so a fresh
+        install cannot start a server pointed at somebody else's proxy, and no
+        secret is copied from one variable into another.
+        """
+        env = os.environ.copy()
+        env.setdefault("HYATLAS_GO_HOST", "127.0.0.1")
+        env.setdefault("HYATLAS_GO_PORT", str(self._config.get("server_port", 19528)))
+        return env
+
     def start(self) -> None:
         """Spawn the v4 Go binary as a detached subprocess."""
         if self._proc is not None:
@@ -88,14 +103,7 @@ class HyatlasProcess:
         # Open log file with errors='replace' to avoid surrogate crashes
         self._log_handle = open(LOG_FILE, mode="a", encoding="utf-8", errors="replace")
 
-        env = os.environ.copy()
-        # Forward LLM env so the v4 server can talk to ai2api
-        env.setdefault("HYATLAS_LLM_BASE", "http://127.0.0.1:49200/v1")
-        env.setdefault("HYATLAS_LLM_MODEL", "deepseek:deepseek-v4-flash")
-        env.setdefault("HYATLAS_LLM_KEY", os.environ.get("AI2API_KEY", ""))
-        # Bind to loopback only by default
-        env.setdefault("HYATLAS_GO_HOST", "127.0.0.1")
-        env.setdefault("HYATLAS_GO_PORT", str(self._config.get("server_port", 19528)))
+        env = self._env()
 
         # Use CREATE_NEW_PROCESS_GROUP on Windows so we can kill the whole tree
         creationflags = 0

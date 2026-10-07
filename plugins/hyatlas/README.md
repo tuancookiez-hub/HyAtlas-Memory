@@ -49,12 +49,17 @@ memory:
   provider: hyatlas
 ```
 
-Settings (server host/port, user/agent id, auto-start, binary path, timeout)
-are editable in **Desktop → Settings → Plugins → hyatlas**, or via
-`plugins.entries.hyatlas.settings` in `config.yaml`, or the
+Settings (server host/port, user/agent id, auto-start, binary path, launcher
+path, timeout) are editable in **Desktop → Settings → Plugins → hyatlas**, or
+via `plugins.entries.hyatlas.settings` in `config.yaml`, or the
 `HYATLAS_SERVER_HOST` / `HYATLAS_SERVER_PORT` / `HYATLAS_USER_ID` /
-`HYATLAS_AGENT_ID` / `HYATLAS_AUTO_START` / `HYATLAS_BINARY_PATH` env vars
-(env wins). Defaults work out of the box for a local server on port 19528.
+`HYATLAS_AGENT_ID` / `HYATLAS_AUTO_START` / `HYATLAS_BINARY_PATH` /
+`HYATLAS_LAUNCHER_PATH` env vars (env wins). Defaults work out of the box for a
+local server on port 19528. `launcher_path` is optional: point it at a
+`hyatlas-go.ps1` if your install ships one beside the binary; otherwise
+`start`/`stop` spawn the binary directly. The plugin does not configure the
+server's LLM — `HYATLAS_LLM_*` are read from your environment or the server's
+own config, never set by the plugin.
 
 The Desktop pane loads automatically from this plugin's `desktop/plugin.js`
 (the unified-package door) — no separate install step.
