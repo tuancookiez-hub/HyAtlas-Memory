@@ -19,8 +19,10 @@ services:
       - "19528:19528"
     environment:
       HYATLAS_PORT: "19528"
-      HYATLAS_LLM_BASE: ${HYATLAS_LLM_BASE:-https://inference-api.nousresearch.com/v1}
-      HYATLAS_LLM_MODEL: ${HYATLAS_LLM_MODEL:-poolside/laguna-s-2.1:free}
+      # No endpoint is assumed: set these in .env, or the server stores the raw
+      # trace only and reports llm=unconfigured. See .env.example.
+      HYATLAS_LLM_BASE: ${HYATLAS_LLM_BASE:-}
+      HYATLAS_LLM_MODEL: ${HYATLAS_LLM_MODEL:-}
       HYATLAS_LLM_KEY: ${HYATLAS_LLM_KEY:-}
       HYATLAS_MODE: ${HYATLAS_MODE:-ultra}
       HYATLAS_SYNC_EXTRACT: ${HYATLAS_SYNC_EXTRACT:-}

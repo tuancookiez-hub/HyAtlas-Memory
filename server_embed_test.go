@@ -155,19 +155,61 @@ func TestEmbedDefaultIsLocal(t *testing.T) {
 	}
 }
 
-// Extraction does send memory text off-machine and the default endpoint is the
-// Nous Portal API. Pinned so any change is deliberate — the catalog disclosure
-// and the README Privacy section both state exactly this.
-func TestLLMDefaultIsNousPortal(t *testing.T) {
+// The shipped server assumes no LLM endpoint. Extraction is the one thing that
+// sends memory text off-machine, so the endpoint must be the user's choice: an
+// unconfigured server stores the raw trace and reports "unconfigured" rather
+// than quietly picking a provider. Pinned so any reintroduced default is a
+// deliberate change and not a regression.
+func TestLLMHasNoShippedDefault(t *testing.T) {
 	clearRuntimeEnv(t)
 	rt := resolveRuntime()
 
-	const want = "https://inference-api.nousresearch.com/v1"
-	if rt.LLMBase != want {
-		t.Errorf("LLMBase default = %q, want %q", rt.LLMBase, want)
+	if rt.LLMBase != "" {
+		t.Errorf("LLMBase default = %q, want empty (no endpoint may be assumed)", rt.LLMBase)
 	}
-	if rt.LLMModel != "poolside/laguna-s-2.1:free" {
-		t.Errorf("LLMModel default = %q, want %q", rt.LLMModel, "poolside/laguna-s-2.1:free")
+	if rt.LLMModel != "" {
+		t.Errorf("LLMModel default = %q, want empty", rt.LLMModel)
+	}
+	// An empty config must not report itself as ready.
+	if c := NewLLMClient(rt.LLMBase, "", rt.LLMModel); c.Configured() {
+		t.Error("an unset endpoint reported Configured()")
+	}
+	// And the suggestion shown to users is not used as a default.
+	if rt.LLMBase == suggestLLMBase || rt.LLMModel == suggestLLMModel {
+		t.Error("the suggested endpoint leaked into the resolved defaults")
+	}
+}
+
+// Setting the endpoint explicitly must still work, and be the only way.
+func TestLLMConfiguredOnlyWhenAllThreeAreSet(t *testing.T) {
+	cases := []struct {
+		name        string
+		base, model string
+		key         string
+		want        bool
+	}{
+		{"nothing set", "", "", "", false},
+		{"key only", "", "", "k", false},
+		{"base and model, no key", suggestLLMBase, suggestLLMModel, "", false},
+		{"base and key, no model", suggestLLMBase, "", "k", false},
+		{"model and key, no base", "", suggestLLMModel, "k", false},
+		{"all three", suggestLLMBase, suggestLLMModel, "k", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cl := NewLLMClient(c.base, c.key, c.model)
+			if got := cl.Configured(); got != c.want {
+				t.Errorf("Configured() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// A nil client must never report itself as ready.
+func TestNilLLMClientIsNotConfigured(t *testing.T) {
+	var cl *LLMClient
+	if cl.Configured() {
+		t.Error("nil client reported Configured()")
 	}
 }
 

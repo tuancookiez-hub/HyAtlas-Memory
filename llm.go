@@ -27,16 +27,18 @@ func NewLLMClient(baseURL, key, model string) *LLMClient {
 		Client: &http.Client{Timeout: 180 * time.Second}}
 }
 
-// HasCredential reports whether any usable key is available, resolving the key
-// file if one is configured.
+// Configured reports whether this client can actually make a call: an endpoint,
+// a model and a usable key. The key is resolved live so a rotating credential
+// never goes stale the way a startup-frozen value does.
 //
-// Without this the server cannot tell "endpoint configured and ready" from
-// "endpoint defaulted, no key". The two look identical in the startup line
-// because LLMModel always has a default, so a fresh install in pro or ultra mode
-// appeared healthy and then failed every write with a bare "failed" whose reason
-// sat in a log file nobody reads.
-func (l *LLMClient) HasCredential() bool {
-	return l != nil && l.resolveKey() != ""
+// One gate for all three, because every decision that depends on them — whether
+// to extract, what status reports, whether to warn at startup — must reach the
+// same answer. Checking the key alone was not enough once the shipped defaults
+// went away: an empty endpoint and model are the same "not ready" state as a
+// missing key, and a caller that only looked at the key would report ok and then
+// POST to an empty URL.
+func (l *LLMClient) Configured() bool {
+	return l != nil && l.BaseURL != "" && l.Model != "" && l.resolveKey() != ""
 }
 
 // resolveKey returns the bearer key to use for this request. When KeyFile is

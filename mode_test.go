@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -436,6 +437,21 @@ func TestStatusReportsMode(t *testing.T) {
 func TestStartupWarningFiresOnlyWhenUnconfigured(t *testing.T) {
 	base := runtimeCfg{LLMBase: "http://api/v1", LLMModel: "m"}
 
+	// resolveKey() reads the file live, so the fixtures have to be real.
+	// extractKey accepts either the Hermes auth.json shape or a bare token
+	// file; use the real one so the fixture proves the live-read path.
+	keyFile := filepath.Join(t.TempDir(), "auth.json")
+	authShape := `{"providers":{"nous":{"access_token":"***"}}}`
+	if err := os.WriteFile(keyFile, []byte(authShape), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keyFilePath := keyFile
+	emptyFile := filepath.Join(t.TempDir(), "empty.json")
+	if err := os.WriteFile(emptyFile, []byte(``), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	emptyFilePath := emptyFile
+
 	cases := []struct {
 		name    string
 		mode    Mode
@@ -447,14 +463,19 @@ func TestStartupWarningFiresOnlyWhenUnconfigured(t *testing.T) {
 		{"pro without a key warns", ModePro, "", "", true},
 		{"ultra without a key warns", ModeUltra, "", "", true},
 		{"pro with a key is quiet", ModePro, "k", "", false},
-		{"ultra with a key file is quiet", ModeUltra, "", "/path/auth.json", false},
+		{"ultra with a key file is quiet", ModeUltra, "", keyFilePath, false},
+		{"pro with a key file that will not parse still warns", ModePro, "", emptyFilePath, true},
 	}
 	for _, c := range cases {
 		t.Setenv("HYATLAS_LLM_KEY", c.key)
 		t.Setenv("HYATLAS_LLM_KEY_FILE", c.keyFile)
 		rt := base
 		rt.Mode = c.mode
-		w := startupWarning(rt)
+		// Build the client the way main() does, including KeyFile, or the
+		// key-file case warns for the wrong reason.
+		cl := NewLLMClient(rt.LLMBase, os.Getenv("HYATLAS_LLM_KEY"), rt.LLMModel)
+		cl.KeyFile = os.Getenv("HYATLAS_LLM_KEY_FILE")
+		w := startupWarning(rt, cl)
 		if got := w != ""; got != c.want {
 			t.Errorf("%s: warning present = %v, want %v (got %q)", c.name, got, c.want, w)
 		}

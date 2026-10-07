@@ -1192,6 +1192,64 @@ def test_save_config_strips_the_llm_key():
         shutil.rmtree(home, ignore_errors=True)
 
 
+# ---- no LLM endpoint may be baked into the plugin ----
+
+def test_llm_endpoint_and_model_default_to_empty():
+    """The endpoint is the user's choice, so nothing may be assumed.
+
+    A remote default here would mean an unconfigured install has somewhere to
+    send memory text. The server dropped its defaults for the same reason; the
+    plugin must not reintroduce them from the other side.
+    """
+    settings = _load_sibling("settings")
+    fields = {f["key"]: f for f in settings.config_schema()}
+    assert fields["llm_base"]["default"] == ""
+    assert fields["llm_model"]["default"] == ""
+    assert fields["llm_key"]["default"] == ""
+    # And load() really resolves to empty, not to something hidden in DEFAULTS.
+    for k in ("llm_base", "llm_model", "llm_key"):
+        assert settings.DEFAULTS[k] == "", f"{k} has a baked-in default"
+
+
+def test_no_remote_endpoint_is_hardcoded_in_plugin_source():
+    """No plugin source may invent an extraction endpoint.
+
+    Same invariant as the developer-path check: a value that only makes sense on
+    one machine, or that silently decides where user text goes, must not ship.
+    Docs and tests may mention one as an example; runtime source may not.
+    """
+    banned = ("nousresearch.com", "inference-api", "poolside/", "laguna-s")
+    offenders = []
+    for f in sorted(Path(_PKG).rglob("*.py")):
+        if "tests" in f.parts:
+            continue
+        text = f.read_text(encoding="utf-8", errors="replace")
+        for needle in banned:
+            if needle in text:
+                offenders.append(f"{f.name}: {needle}")
+    assert not offenders, f"plugin source bakes in an endpoint: {offenders}"
+
+
+def test_unconfigured_llm_is_forwarded_as_absent_not_as_a_default(monkeypatch):
+    """Empty settings must leave the env unset, so the server stays unconfigured.
+
+    Forwarding an invented value would defeat the server's own empty default and
+    send text somewhere the user never chose.
+    """
+    proc_mod = _load_sibling("process")
+    _poison(monkeypatch, {"PATH": "/usr/bin", "HOME": "/home/u"})
+
+    env = proc_mod.HyatlasProcess({"llm_base": "", "llm_model": ""})._env()
+    assert "HYATLAS_LLM_BASE" not in env, "an empty endpoint must not be forwarded"
+    assert "HYATLAS_LLM_MODEL" not in env, "an empty model must not be forwarded"
+
+    # A real value still goes through.
+    env2 = proc_mod.HyatlasProcess({"llm_base": "https://api.example.com/v1",
+                                    "llm_model": "m"})._env()
+    assert env2["HYATLAS_LLM_BASE"] == "https://api.example.com/v1"
+    assert env2["HYATLAS_LLM_MODEL"] == "m"
+
+
 def test_spawner_forwards_llm_endpoint_and_model():
     """Settings-configured endpoint must reach the child, or it is silently ignored."""
     proc = _load_sibling("process")

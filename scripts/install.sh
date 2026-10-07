@@ -376,8 +376,9 @@ $(printf '\033[0;32m' )HyAtlas-Memory v4 installed.$(printf '\033[0m')
       HYATLAS_SYNC_EXTRACT=off  the write returns pending; extraction runs behind
       (unset follows the mode: pro blocks, ultra does not)
 
-  Then, unless you chose lite, set your LLM endpoint for fact extraction. Pick
-  per your tier — any OpenAI-compatible API works:
+  Then, unless you chose lite, set your LLM endpoint for fact extraction. The
+  server assumes none, so this is required for pro/ultra. Pick per your tier —
+  any OpenAI-compatible API works, including a local one:
       export HYATLAS_LLM_BASE="https://inference-api.nousresearch.com/v1"
       export HYATLAS_LLM_MODEL="poolside/laguna-s-2.1:free"
       export HYATLAS_LLM_KEY="your-key"

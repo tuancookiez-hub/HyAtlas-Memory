@@ -58,13 +58,13 @@ func (s *Server) extractErr() string {
 // /api/v1/status, the dashboard and the startup line cannot disagree.
 //
 //	unused        — this mode makes no LLM call
-//	unconfigured  — the mode needs one but no credential is present
+//	unconfigured  — the mode needs one but endpoint, model or key is unset
 //	ok            — a credential resolved
 func (s *Server) llmState() string {
 	if !s.mode.UsesLLM() {
 		return "unused"
 	}
-	if !s.llm.HasCredential() {
+	if !s.llm.Configured() {
 		return "unconfigured"
 	}
 	return "ok"
@@ -254,7 +254,7 @@ func (s *Server) extractForMode(text, userID, agentID, id string) string {
 	if !s.mode.UsesLLM() {
 		return "skipped"
 	}
-	if !s.llm.HasCredential() {
+	if !s.llm.Configured() {
 		return "unconfigured"
 	}
 	// Blocking versus background is the separate sync knob, not the mode: pro
@@ -903,15 +903,27 @@ type runtimeCfg struct {
 //   - EmbedBase is "bge", the in-process local embedder, so embeddings need no
 //     network by default. It used to be one developer's machine-local proxy,
 //     which exists on nobody else's.
-//   - LLMBase is the Nous Portal inference API. Extraction therefore sends
-//     memory text off-machine unless the user points it somewhere local. That is
-//     the documented behaviour, not an accident, and it is disclosed in the
-//     README and in the catalog entry.
+//   - LLMBase and LLMModel are deliberately empty. Extraction is the one thing
+//     that sends memory text off-machine, so the endpoint is the user's to
+//     choose rather than ours to assume. An unconfigured server stores the raw
+//     trace and reports "unconfigured" instead of quietly picking a provider.
+//     The installer and `hermes memory setup` suggest a free Nous Portal
+//     endpoint the user can accept or overwrite.
+//
+// suggestLLMBase / suggestLLMModel are what the installer and `hermes memory
+// setup` offer as a starting point, and what the startup warning prints as an
+// example. They are never read as a default: resolveRuntime leaves the endpoint
+// empty until the user chooses one, so nothing is sent anywhere by default.
+const (
+	suggestLLMBase  = "https://inference-api.nousresearch.com/v1"
+	suggestLLMModel = "poolside/laguna-s-2.1:free"
+)
+
 const (
 	defaultPort       = "19528"
 	defaultDataDir    = "./data"
-	defaultLLMBase    = "https://inference-api.nousresearch.com/v1"
-	defaultLLMModel   = "poolside/laguna-s-2.1:free"
+	defaultLLMBase    = ""
+	defaultLLMModel   = ""
 	defaultEmbedBase  = "bge"
 	defaultEmbedModel = "text-embedding-3-small"
 	defaultModelDir   = "./models"
@@ -1086,7 +1098,7 @@ func main() {
 	mux.HandleFunc("/api/coding-memories", srv.handleDashCodingMemories)
 	mux.Handle("/dashboard/", http.StripPrefix("/dashboard/", srv.handleDashboard()))
 
-	if w := startupWarning(rt); w != "" {
+	if w := startupWarning(rt, llm); w != "" {
 		log.Print(w)
 	}
 	log.Print(listeningLine(rt))
@@ -1160,24 +1172,31 @@ func describeEmbed(embedBase, embedModel string) string {
 // log.Printf so a test can assert the embedder it reports matches the one
 // resolved, instead of the message drifting back to embedModel unnoticed.
 func listeningLine(rt runtimeCfg) string {
+	llm := rt.LLMModel
+	if llm == "" {
+		llm = "unset"
+	}
 	return fmt.Sprintf("HyAtlas-Go listening on :%s (data=%s embed=%s llm=%s mode=%s)",
-		rt.Port, rt.DataDir, describeEmbed(rt.EmbedBase, rt.EmbedModel), rt.LLMModel, rt.Mode.OrDefault())
+		rt.Port, rt.DataDir, describeEmbed(rt.EmbedBase, rt.EmbedModel), llm, rt.Mode.OrDefault())
 }
 
 // startupWarning returns a human-readable setup message for the one state that
-// silently produces empty memories: a mode that calls an LLM with no credential.
-// Empty means nothing to warn about.
-func startupWarning(rt runtimeCfg) string {
+// silently produces empty memories: a mode that calls an LLM that is not fully
+// configured. Empty means nothing to warn about.
+func startupWarning(rt runtimeCfg, llm *LLMClient) string {
 	if !rt.Mode.UsesLLM() {
 		return ""
 	}
-	if os.Getenv("HYATLAS_LLM_KEY") != "" || os.Getenv("HYATLAS_LLM_KEY_FILE") != "" {
+	// Same gate status and extraction use, so the three cannot disagree about
+	// whether this server is ready. An empty endpoint or model counts as
+	// unconfigured too: there is no shipped default to fall back on.
+	if llm.Configured() {
 		return ""
 	}
 	return fmt.Sprintf(`
-  %s mode calls an LLM but no credential is configured, so writes will store the
-  raw trace only and extraction will report "unconfigured". Point it at any
-  OpenAI-compatible endpoint:
+  %s mode calls an LLM but %s, so writes will store the raw trace only and
+  extraction will report "unconfigured". No endpoint is assumed: set your own
+  OpenAI-compatible one.
 
       export HYATLAS_LLM_BASE="%s"
       export HYATLAS_LLM_MODEL="%s"
@@ -1189,5 +1208,27 @@ func startupWarning(rt runtimeCfg) string {
 
   In the Hermes plugin, these are the "LLM endpoint", "LLM model" and
   "LLM API key" settings (hermes memory setup, or the Desktop settings form).
-`, rt.Mode.OrDefault(), rt.LLMBase, rt.LLMModel)
+`, rt.Mode.OrDefault(), missingLLM(rt, llm), suggestLLMBase, suggestLLMModel)
+}
+
+// missingLLM names the unset parts, so the warning tells the user what to fix
+// rather than claiming a key is missing when it is the endpoint that is.
+func missingLLM(rt runtimeCfg, llm *LLMClient) string {
+	parts := make([]string, 0, 3)
+	if rt.LLMBase == "" {
+		parts = append(parts, "HYATLAS_LLM_BASE")
+	}
+	if rt.LLMModel == "" {
+		parts = append(parts, "HYATLAS_LLM_MODEL")
+	}
+	if llm == nil || llm.resolveKey() == "" {
+		parts = append(parts, "HYATLAS_LLM_KEY")
+	}
+	switch len(parts) {
+	case 0:
+		return "it is not fully configured"
+	case 1:
+		return parts[0] + " is not set"
+	}
+	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1] + " are not set"
 }

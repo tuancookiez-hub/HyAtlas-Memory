@@ -124,20 +124,26 @@ The Desktop pane loads automatically from this plugin's `desktop/plugin.js`
 
 ## Disclosure (what this plugin does at runtime)
 
-- **Conversation text leaves your machine, by default.** This is the important
-  one. After each turn the plugin posts that turn to the server, and the server
-  sends it to an extraction LLM to derive facts, summaries and intentions.
+- **Conversation text leaves your machine only if you point it somewhere.**
+  This is the important one. After each turn the plugin posts that turn to the
+  server, and — if you have configured an extraction LLM — the server sends it
+  there to derive facts, summaries and intentions.
 
-  You choose that endpoint per the tier you picked, by setting
-  `HYATLAS_LLM_BASE` / `HYATLAS_LLM_MODEL` / `HYATLAS_LLM_KEY` (any
-  OpenAI-compatible API works). The shipped default is the Nous Portal inference
-  API (`https://inference-api.nousresearch.com/v1`, model
-  `poolside/laguna-s-2.1:free`), and extraction fires on every write even if you
-  have not set a key — so out of the box your turn text is transmitted there.
-  Set `HYATLAS_MODE=lite` on the server for no LLM call at all — raw trace and
-  local embeddings only, nothing leaves the machine. Or point those variables
-  at a local or alternative endpoint, or turn memory off. Only the current
-  turn is sent, never the whole conversation history.
+  **No endpoint is assumed.** The server ships with `HYATLAS_LLM_BASE`,
+  `HYATLAS_LLM_MODEL` and `HYATLAS_LLM_KEY` all unset, and without all three it
+  makes no LLM call at all: writes store the raw trace plus local embeddings and
+  report `extraction_status: "unconfigured"`. Nothing is transmitted. You opt in
+  by setting those three to any OpenAI-compatible API, including a local one
+  (`hermes memory setup`, the Desktop settings form, or `scripts/install.sh` all
+  ask; the installer offers a free Nous Portal endpoint
+  `https://inference-api.nousresearch.com/v1` / `poolside/laguna-s-2.1:free` as a
+  starting point, which you can accept or overwrite).
+
+  Once configured, extraction runs on every write in `pro` and `ultra`, and only
+  the current turn is sent, never the whole conversation history. Set
+  `HYATLAS_MODE=lite` for no LLM call regardless of configuration — raw trace and
+  local embeddings only. Or point the endpoint at a local server, or turn memory
+  off.
 
   | `HYATLAS_MODE` | LLM calls | Reasoning scope | Layers | Consolidation |
   |---|---|---|---|---|

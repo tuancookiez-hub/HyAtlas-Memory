@@ -207,7 +207,17 @@ them.
 
 #### Disclosure
 
-The catalog entry, plugin README, and repo README now state plainly that **conversation text leaves the machine by default**: each turn is sent to the server, which sends it to an extraction LLM that defaults to the Nous Portal inference API (`https://inference-api.nousresearch.com/v1`) with no configuration required. Previously the entry said the server calls "an LLM endpoint the user configures" and that "all memory data stays on the user's machine" — both misleading, since the endpoint has a remote default. The repo README gains a *Privacy — what leaves your machine* table separating the local parts (embeddings, storage) from the remote one (extraction), and the "local-first" tag is renamed `self-hosted`.
+**No LLM endpoint is assumed.** `HYATLAS_LLM_BASE` and `HYATLAS_LLM_MODEL` shipped with a remote default (the Nous Portal inference API, `poolside/laguna-s-2.1:free`), so an unconfigured `pro`/`ultra` server had somewhere to send memory text. Extraction is the only thing that leaves the machine, so the endpoint is the user's choice, not ours: both defaults are now empty.
+
+An unconfigured server makes no LLM call. It stores the raw trace plus local embeddings, reports `llm: "unconfigured"` in status and `extraction_status: "unconfigured"` per write, and warns at startup naming the unset variables. The installer and `hermes memory setup` still offer that free Nous Portal endpoint as a starting value the user can accept or overwrite, so the onboarding is three answers either way — but accepting is now an explicit choice.
+
+The readiness gate is one method, `LLMClient.Configured()`, requiring endpoint **and** model **and** key. Checking the key alone was not sufficient once the defaults went away: a missing endpoint is the same "not ready" state, and a key-only check would report `ok` and then POST to an empty URL. Status, extraction and the startup warning all consult it, so they cannot disagree.
+
+The repo README gains a *Privacy — what leaves your machine* table separating the local parts (embeddings, storage) from the opt-in remote one (extraction), and the "local-first" tag is renamed `self-hosted`. The catalog entry, plugin README and repo README all state the opt-in behaviour explicitly.
+
+Two stale claims were corrected in the same pass. The plugin README asserted extraction "fires on every write even if you have not set a key — so out of the box your turn text is transmitted there"; that was true at v4.2.5 and stopped being true when the credential gate landed, so the disclosure overstated what the code did. And `extractForMode`'s docstring still described the pre-split behaviour ("fills L1 … L6 … the layers are always all or nothing"), on the one function a reader consults to learn what each mode does.
+
+Verified against real servers with a canary endpoint counting requests: default install transmits **nothing** and fills 1/7 layers; with all three set, extraction fires and fills 4/7; with base and key but **no** model, nothing fires. 8/8 mutations of the new defaults, gate and warning were caught.
 
 ## [4.2.5] — 2026-10-07
 

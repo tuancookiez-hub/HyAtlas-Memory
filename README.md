@@ -76,9 +76,11 @@ go build -tags embedded -o hyatlas-go .       # embedded build (one binary, mode
 export HYATLAS_EMBED_BASE=bge
 export HYATLAS_MODEL_DIR=/path/to/models
 
-# Required for LLM extraction (any OpenAI-compatible endpoint):
-export HYATLAS_LLM_BASE="https://inference-api.nousresearch.com/v1"
-export HYATLAS_LLM_MODEL="poolside/laguna-s-2.1:free"
+# Required for LLM extraction in pro/ultra. No endpoint is assumed: without all
+# three the server stores the raw trace only and reports llm=unconfigured.
+# Any OpenAI-compatible API works, including a local one.
+export HYATLAS_LLM_BASE="https://inference-api.nousresearch.com/v1"   # example
+export HYATLAS_LLM_MODEL="poolside/laguna-s-2.1:free"                 # example
 export HYATLAS_LLM_KEY="your-nous-agent-key"
 
 ./hyatlas-go
@@ -93,7 +95,7 @@ default configuration is not fully local:
 
 | What | Goes where | Default | How to keep it local |
 |---|---|---|---|
-| **Memory text** (the turn being extracted) | Sent to the extraction LLM | **`https://inference-api.nousresearch.com/v1`**, model `poolside/laguna-s-2.1:free` — remote, and on with no configuration | Point `HYATLAS_LLM_BASE` at a local OpenAI-compatible server |
+| **Memory text** (the turn being extracted) | Sent to the extraction LLM | **Nowhere** — no endpoint is shipped, so an unconfigured server makes no LLM call and reports `unconfigured` | Already opt-in: set `HYATLAS_LLM_BASE`/`_MODEL`/`_KEY` to choose where it goes. Point them at a local OpenAI-compatible server to keep it on-machine, or use `HYATLAS_MODE=lite` |
 | Embeddings | In-process BGE-small (onnxruntime-go) | **Local** — `HYATLAS_EMBED_BASE=bge`, no network | Already local |
 | Stored memories, vector index, graph | `HYATLAS_GO_DATA` (default `./data`) | **Local** | Already local |
 | Telemetry / usage reporting | — | **None** | — |
@@ -172,8 +174,8 @@ credential.
 | `HYATLAS_GO_DATA` | `./data` | Where chromem collections + graph.json live |
 | `HYATLAS_EMBED_BASE` | `bge` | `bge` = local in-process BGE embedder (no network). Set to a URL for an OpenAI-compatible embedder, or `local` for a deterministic stub. |
 | `HYATLAS_MODEL_DIR` | `./models` | Where the BGE model lives |
-| `HYATLAS_LLM_BASE` | `https://inference-api.nousresearch.com/v1` | OpenAI-compatible LLM endpoint. **Memory text is sent here** — see *Privacy* above. |
-| `HYATLAS_LLM_MODEL` | `poolside/laguna-s-2.1:free` | LLM model name |
+| `HYATLAS_LLM_BASE` | *(unset)* | OpenAI-compatible LLM endpoint. **Memory text is sent here once you set it** — see *Privacy* above. Unset means no LLM call at all. |
+| `HYATLAS_LLM_MODEL` | *(unset)* | LLM model name. Base, model and key must all be set for extraction to run. |
 | `HYATLAS_LLM_KEY` | (empty) | LLM bearer token |
 | `HYATLAS_LLM_KEY_FILE` | (empty) | Read the key live from this file per call (rotating creds, e.g. Hermes auth.json). Accepts `providers.nous.agent_key`/`access_token` JSON or a plain-text token. Wins over `HYATLAS_LLM_KEY`, which becomes the fallback |
 | `HYATLAS_GRAPH_PATH` | `<data>/graph.json` | L5 graph store location |

@@ -37,8 +37,11 @@ function Start-V4 {
     # HYATLAS_SYNC_EXTRACT=on|off separately controls whether a write blocks.
     if ($env:HYATLAS_MODE) { Write-Host "  mode: $env:HYATLAS_MODE" }
 
-    $env:HYATLAS_LLM_BASE   = "https://inference-api.nousresearch.com/v1"
-    $env:HYATLAS_LLM_MODEL  = "poolside/laguna-s-2.1:free"
+    # This launcher pairs the key below (a Nous Portal JWT from auth.json) with
+    # that provider's endpoint, so it sets them -- but only when unset, so an
+    # explicit export always wins. The server itself assumes no endpoint.
+    if (-not $env:HYATLAS_LLM_BASE)  { $env:HYATLAS_LLM_BASE  = "https://inference-api.nousresearch.com/v1" }
+    if (-not $env:HYATLAS_LLM_MODEL) { $env:HYATLAS_LLM_MODEL = "poolside/laguna-s-2.1:free" }
     # The Nous Portal key is a 1-hour JWT that Hermes keeps fresh in auth.json.
     # Point the server at the file so it reads the current key per call, instead
     # of freezing today's JWT for the whole process lifetime. $llmKey stays as
