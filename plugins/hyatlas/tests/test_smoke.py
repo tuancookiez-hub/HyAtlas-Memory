@@ -9,6 +9,12 @@ These tests verify the plugin's HTTP wire contract against a live v4
 server on 127.0.0.1:19528. They do NOT spin up the server; assume
 the user has one running (``hermes hyatlas start`` or directly
 ``hyatlas-go``).
+
+Each check returns ``(status, msg)`` where status is one of the ``_CHECKS``
+tokens PASS / SKIP / FAIL. A check that needs a live server returns SKIP when
+none is reachable — that is a pass-equivalent, NOT a failure, so this file
+exits 0 on CI where no server is running. Both the standalone runner below and
+the pytest wrappers consume the same contract.
 """
 
 from __future__ import annotations
@@ -19,6 +25,13 @@ import os
 import sys
 import time
 import traceback
+
+# Explicit check outcomes. A live-server check that finds no server returns
+# SKIP; the runners treat SKIP as pass-equivalent so CI (which has no server)
+# is green instead of red.
+PASS = "PASS"
+SKIP = "SKIP"
+FAIL = "FAIL"
 
 # Make `hyatlas` importable when this file is run directly.
 # _HERE = .../hyatlas/tests/
@@ -41,49 +54,62 @@ def _load_plugin_module():
     return mod
 
 
-def _check_config_loads_clean() -> tuple[bool, str]:
-    """Plugin's _load_config should not pick up v3.5 garbage fields."""
+def _check_config_loads_clean() -> tuple[str, str]:
+    """Plugin's _load_config should not pick up v3.5 garbage fields.
+
+    The port is checked against what the plugin's own documented precedence
+    produces (HYATLAS_SERVER_PORT override, else the 19528 default) rather than
+    a hardcoded 19528 — asserting the default as an invariant would spuriously
+    fail whenever the supported env override is in play, as in CI.
+    """
     try:
         mod = _load_plugin_module()
         provider = mod.HyatlasMemoryProvider()
         v3_keys = {"llm", "vector_store", "api_keys", "embedding_dims"}
         leaked = v3_keys & set(provider._config.keys())
         if leaked:
-            return False, f"v3.5 keys leaked into config: {leaked}"
-        if provider._config.get("server_port") != 19528:
-            return False, f"wrong port: {provider._config.get('server_port')}"
-        return True, f"config clean: {list(provider._config.keys())}"
+            return FAIL, f"v3.5 keys leaked into config: {leaked}"
+        env_port = os.environ.get("HYATLAS_SERVER_PORT")
+        want = int(env_port) if env_port else 19528
+        got = provider._config.get("server_port")
+        if got != want:
+            return FAIL, f"server_port {got!r}, want {want!r} (env override {env_port!r})"
+        if not isinstance(got, int) or got <= 0:
+            return FAIL, f"server_port is not a positive int: {got!r}"
+        return PASS, f"config clean, port {got}: {list(provider._config.keys())}"
     except Exception as e:
-        return False, f"import/init failed: {e}"
+        return FAIL, f"import/init failed: {e}"
 
 
-def _check_provider_metadata() -> tuple[bool, str]:
+def _check_provider_metadata() -> tuple[str, str]:
     """Provider should expose name, tool schemas, and config schema."""
     try:
         mod = _load_plugin_module()
         provider = mod.HyatlasMemoryProvider()
         if provider.name != "hyatlas":
-            return False, f"wrong name: {provider.name}"
+            return FAIL, f"wrong name: {provider.name}"
         tools = [s["name"] for s in provider.get_tool_schemas()]
         expected = {"hyatlas_status", "hyatlas_search", "hyatlas_recent", "hyatlas_add"}
         missing = expected - set(tools)
         if missing:
-            return False, f"missing tools: {missing}"
+            return FAIL, f"missing tools: {missing}"
         cfg_keys = {f["key"] for f in provider.get_config_schema()}
         if not {"server_host", "server_port", "user_id", "agent_id"} <= cfg_keys:
-            return False, f"config schema missing keys: {cfg_keys}"
-        return True, f"name={provider.name}, tools={len(tools)}, cfg_keys={len(cfg_keys)}"
+            return FAIL, f"config schema missing keys: {cfg_keys}"
+        return PASS, f"name={provider.name}, tools={len(tools)}, cfg_keys={len(cfg_keys)}"
     except Exception as e:
-        return False, f"{e}\n{traceback.format_exc()}"
+        return FAIL, f"{e}\n{traceback.format_exc()}"
 
 
-def _check_live_server_round_trip() -> tuple[bool, str]:
+def _check_live_server_round_trip() -> tuple[str, str]:
     """The plugin's client must talk to a live v4 server and round-trip add+search."""
     try:
         mod = _load_plugin_module()
         provider = mod.HyatlasMemoryProvider()
+        host = provider._config.get("server_host", "127.0.0.1")
+        port = provider._config.get("server_port", 19528)
         if not provider.is_available():
-            return True, "SKIP (no live v4 server on 127.0.0.1:19528)"
+            return SKIP, f"no live v4 server on {host}:{port}"
         client = provider._ensure_client()
         marker = f"smoke-test-{int(time.time())}"
         user_id = "smoke_test_user"
@@ -93,7 +119,7 @@ def _check_live_server_round_trip() -> tuple[bool, str]:
             agent_id="smoke",
         )
         if not add_resp.get("success"):
-            return False, f"add failed: {add_resp}"
+            return FAIL, f"add failed: {add_resp}"
         time.sleep(2)  # LLM extraction
         search_resp = client.search(
             query=marker,
@@ -104,49 +130,74 @@ def _check_live_server_round_trip() -> tuple[bool, str]:
         total = sum(len(v) for v in search_resp.get("memories", {}).values())
         client.delete_all(user_id=user_id, agent_id="smoke")
         if total == 0:
-            return False, f"search returned 0 hits for marker '{marker}'"
-        return True, f"add+search round-trip OK ({total} hits)"
+            return FAIL, f"search returned 0 hits for marker '{marker}'"
+        return PASS, f"add+search round-trip OK ({total} hits)"
     except Exception as e:
-        return False, f"{e}"
+        return FAIL, f"{e}"
 
 
-# pytest wrappers — the _check_* helpers above return (ok, msg) tuples for the
-# standalone runner; under pytest, assert so collection produces no warnings.
+_CHECKS = [
+    ("config_loads_clean", _check_config_loads_clean),
+    ("provider_metadata", _check_provider_metadata),
+    ("live_server_round_trip", _check_live_server_round_trip),
+]
+
+
+def _pytest_skip(status, msg):
+    """SKIP is pass-equivalent: it means the precondition (a live server) is
+    absent, not that anything is broken. Raise pytest.skip so it reports as
+    skipped rather than failed."""
+    if status == SKIP:
+        import pytest
+        pytest.skip(msg)
+
+
+# pytest wrappers — same (status, msg) contract as the standalone runner, with
+# SKIP surfaced as a real pytest skip instead of a failure.
 
 def test_config_loads_clean():
-    ok, msg = _check_config_loads_clean()
-    assert ok, msg
+    status, msg = _check_config_loads_clean()
+    _pytest_skip(status, msg)
+    assert status == PASS, msg
 
 
 def test_provider_metadata():
-    ok, msg = _check_provider_metadata()
-    assert ok, msg
+    status, msg = _check_provider_metadata()
+    _pytest_skip(status, msg)
+    assert status == PASS, msg
 
 
 def test_live_server_round_trip():
-    ok, msg = _check_live_server_round_trip()
-    assert ok, msg
+    status, msg = _check_live_server_round_trip()
+    _pytest_skip(status, msg)
+    assert status == PASS, msg
 
 
 def _run_all() -> int:
-    """Run all smoke tests. Returns 0 on success, 1 on failure."""
-    tests = [
-        ("config_loads_clean", _check_config_loads_clean),
-        ("provider_metadata", _check_provider_metadata),
-        ("live_server_round_trip", _check_live_server_round_trip),
-    ]
-    failures = 0
-    for name, fn in tests:
+    """Run all smoke tests. Returns 0 unless a check actually FAILs.
+
+    SKIP (no live server, as on CI) is counted separately and does not fail the
+    run — only FAIL does. The status token is authoritative; the message text is
+    never inspected to decide the outcome.
+    """
+    failures = skipped = 0
+    for name, fn in _CHECKS:
         try:
-            ok, msg = fn()
+            status, msg = fn()
         except Exception as e:
-            ok, msg = False, f"raised: {e}"
-        status = "PASS" if ok and "SKIP" not in msg else "FAIL"
-        if status == "FAIL":
+            status, msg = FAIL, f"raised: {e}"
+        if status == FAIL:
             failures += 1
+        elif status == SKIP:
+            skipped += 1
         print(f"[{status}] {name}: {msg}")
-    print(f"\n{'All tests passed' if failures == 0 else f'{failures} test(s) failed'}")
-    return 0 if failures == 0 else 1
+    parts = []
+    if failures:
+        parts.append(f"{failures} failed")
+    if skipped:
+        parts.append(f"{skipped} skipped")
+    print("\n" + (", ".join(parts) if parts else "All tests passed"))
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

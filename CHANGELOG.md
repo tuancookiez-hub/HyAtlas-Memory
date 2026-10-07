@@ -1,5 +1,16 @@
 # Changelog
 
+## [4.2.3] — 2026-10-07
+
+### Fixed
+- **CI `plugin-tests` job could never pass.** The standalone smoke runner classified a legitimate skip as a failure: `_check_live_server_round_trip` returned a "skip" signal, but `_run_all` derived its verdict by string-sniffing the message (`ok and "SKIP" not in msg`), so "no live server" — the normal condition on CI — counted as a failed test and exited 1. Checks now return an explicit `PASS`/`SKIP`/`FAIL` token, both runners (standalone and pytest) consume that one contract, and SKIP is pass-equivalent. The outcome is never inferred from message text again.
+- **`_check_config_loads_clean` asserted the default port as an invariant.** It hardcoded `== 19528`, so it spuriously failed whenever the supported `HYATLAS_SERVER_PORT` override was in play. It now derives the expected port the way the plugin does (env override, else 19528) and also asserts the value is a positive int. The SKIP message likewise reports the configured `host:port` instead of a hardcoded address.
+
+### Verified
+- With a live server: 18 pytest tests pass and the standalone runner exits 0 (all PASS).
+- With no reachable server (CI's condition): standalone runner exits **0** reporting `1 skipped`; pytest reports `2 passed, 1 skipped`.
+- Negative test: injecting a genuine FAIL still exits **1** — the runner detects real failures, so SKIP handling did not make the suite vacuous.
+
 ## [4.2.2] — 2026-10-07
 
 ### Fixed
