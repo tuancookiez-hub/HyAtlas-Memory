@@ -82,6 +82,30 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
                        "HYATLAS_GO_DATA, then the conventional defaults.",
     },
     {
+        "key": "llm_base", "type": "str", "default": "",
+        "label": "LLM endpoint",
+        "description": "Base URL of any OpenAI-compatible chat-completions API, "
+                       "used for fact extraction and (in ultra) consolidation. "
+                       "Forwarded to the server as HYATLAS_LLM_BASE. Not used in "
+                       "lite mode, which makes no LLM call. Leave empty to use "
+                       "the server's default.",
+    },
+    {
+        "key": "llm_model", "type": "str", "default": "",
+        "label": "LLM model",
+        "description": "Model id at that endpoint, e.g. a `:free` tier. Forwarded "
+                       "as HYATLAS_LLM_MODEL. Leave empty for the server default.",
+    },
+    {
+        "key": "llm_key", "type": "str", "default": "", "secret": True,
+        "env_var": "HYATLAS_LLM_KEY",
+        "label": "LLM API key",
+        "url": "https://platform.openai.com/api-keys",
+        "description": "API key for the endpoint above. Stored in Hermes' .env "
+                       "(0600), never in hyatlas.json, and never logged. Not "
+                       "needed in lite mode.",
+    },
+    {
         "key": "mode", "type": "str", "default": "",
         "label": "Extraction mode", "choices": ["", "lite", "pro", "ultra"],
         "description": "Passed to a spawned server as HYATLAS_MODE. lite makes "
@@ -129,13 +153,23 @@ KEYS = tuple(f["key"] for f in SCHEMA)
 DEFAULTS: Dict[str, Any] = {f["key"]: f["default"] for f in SCHEMA}
 
 
+# Fields the setup wizard reads. Anything else in SCHEMA is documentation for
+# the manifest and must not leak into get_config_schema().
+#
+# `secret`, `env_var` and `url` are NOT cosmetic: hermes_cli.memory_setup masks
+# secret prompts, routes their value to .env via env_var instead of the provider
+# JSON, and prints `url` as "Get yours at ...". Dropping them silently turns an
+# API key into a plaintext field in hyatlas.json, so they are passed through.
+_WIZARD_FIELDS = ("choices", "secret", "env_var", "url", "when", "default_from")
+
+
 def config_schema() -> Tuple[Dict[str, Any], ...]:
     """The provider config schema, derived from :data:`SCHEMA`.
 
     Shaped for ``MemoryProvider.get_config_schema()``: ``key``, ``description``,
-    ``default``, plus ``choices`` where declared. The ``label`` and ``type``
-    fields belong to the manifest's ``config_schema``, which the Desktop
-    settings form reads, so they are dropped here rather than duplicated.
+    ``default``, plus the wizard-relevant fields. ``label`` and ``type`` belong to
+    the manifest's ``config_schema``, which the Desktop settings form reads, so
+    they are dropped here rather than duplicated.
     """
     out = []
     for f in SCHEMA:
@@ -144,8 +178,9 @@ def config_schema() -> Tuple[Dict[str, Any], ...]:
             "description": f["description"],
             "default": f["default"],
         }
-        if "choices" in f:
-            item["choices"] = f["choices"]
+        for extra in _WIZARD_FIELDS:
+            if extra in f:
+                item[extra] = f[extra]
         out.append(item)
     return tuple(out)
 
@@ -162,6 +197,10 @@ ENV: Tuple[Tuple[str, str, Any], ...] = (
     ("HYATLAS_GO_DATA", "data_dir", str),
     ("HYATLAS_MODE", "mode", lambda v: v.lower()),
     ("HYATLAS_SYNC_EXTRACT", "sync", lambda v: _SYNC_ALIASES.get(v.lower(), v.lower())),
+    # Non-secret: safe to land in hyatlas.json. The key is secret and is read
+    # straight from the environment by the server, never persisted by us.
+    ("HYATLAS_LLM_BASE", "llm_base", str),
+    ("HYATLAS_LLM_MODEL", "llm_model", str),
 )
 
 # v3.5-era names that must not bleed into v4 settings.

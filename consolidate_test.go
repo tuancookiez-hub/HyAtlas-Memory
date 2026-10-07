@@ -662,3 +662,174 @@ func TestSlowPathDisabledByZeroInterval(t *testing.T) {
 		t.Errorf("zero interval made %d call(s)", calls)
 	}
 }
+
+// L5 is a System2 product: the slow path is the only thing that may write graph
+// edges, and only when a triple is corroborated by more than one fact.
+func TestConsolidateSynthesisesCorroboratedEdges(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	// Two facts with real L2 provenance, so the edge can cite conversations.
+	raw := newID()
+	if err := srv.store.Add("l2_raw", raw, "skyhook discussion", map[string]string{
+		"user_id": "u", "agent_id": "a", "ts": time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 2)
+	for i := range ids {
+		ids[i] = newID()
+		if err := srv.store.Add("l3_fact", ids[i], fmt.Sprintf("skyhook fact %d", i), map[string]string{
+			"user_id": "u", "agent_id": "a", "source_id": raw,
+			"ts": time.Now().UTC().Format(time.RFC3339),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	calls := 0
+	mock := mockConsolidationServer(t, &calls, Consolidation{
+		Knowledge: []CitedRelation{{
+			From: "skyhook", Relation: "listens_on", To: "4471",
+			Evidence: []string{ids[0], ids[1]},
+		}},
+	})
+	defer mock.Close()
+
+	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
+	rep, err := c.Once(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Edges != 2 {
+		t.Errorf("Edges = %d, want 2 (one per evidence citation)", rep.Edges)
+	}
+	_, edges := srv.store.Graph().Snapshot(0)
+	if len(edges) == 0 {
+		t.Fatal("no L5 edge was written")
+	}
+	// The citation must point at the L2 raw row, not the fact row, or decayRaw
+	// cannot protect the conversation the graph depends on.
+	for _, e := range edges {
+		if e.Source != raw {
+			t.Errorf("edge cites %q, want the L2 raw %q", e.Source, raw)
+		}
+	}
+}
+
+// A triple resting on a single fact is that fact restated. The per-turn pass
+// already declined to write it, so the slow path must too.
+func TestConsolidateRejectsUncorroboratedEdge(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	ids := seed(t, srv.store, 2, "single")
+
+	calls := 0
+	mock := mockConsolidationServer(t, &calls, Consolidation{
+		Knowledge: []CitedRelation{{
+			From: "a", Relation: "r", To: "b", Evidence: []string{ids[0]},
+		}},
+	})
+	defer mock.Close()
+
+	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
+	rep, err := c.Once(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Edges != 0 {
+		t.Errorf("Edges = %d, want 0 for a single-fact triple", rep.Edges)
+	}
+	if _, edges := srv.store.Graph().Snapshot(0); len(edges) != 0 {
+		t.Errorf("%d edge(s) written from uncorroborated evidence", len(edges))
+	}
+}
+
+// Two facts merged into one must still corroborate an edge citing them. Merges
+// delete IDs from the live set, so evidence resolved against that set instead of
+// the original batch would silently drop the edge.
+func TestConsolidateEdgeSurvivesMergingItsEvidence(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	ids := seed(t, srv.store, 2, "merged")
+
+	calls := 0
+	mock := mockConsolidationServer(t, &calls, Consolidation{
+		Merges: []Merge{{Text: "the combined fact", Supersedes: []string{ids[0], ids[1]}}},
+		Knowledge: []CitedRelation{{
+			From: "skyhook", Relation: "listens_on", To: "4471",
+			Evidence: []string{ids[0], ids[1]},
+		}},
+	})
+	defer mock.Close()
+
+	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
+	rep, err := c.Once(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Merged != 1 {
+		t.Errorf("Merged = %d, want 1", rep.Merged)
+	}
+	if rep.Edges == 0 {
+		t.Error("the edge was dropped because its evidence was consumed by the merge")
+	}
+}
+
+// Fabricated evidence IDs must not create an edge, mirroring the merge guard.
+func TestConsolidateIgnoresFabricatedEvidence(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	seed(t, srv.store, 2, "real")
+
+	calls := 0
+	mock := mockConsolidationServer(t, &calls, Consolidation{
+		Knowledge: []CitedRelation{{
+			From: "x", Relation: "y", To: "z",
+			Evidence: []string{"m-fake-1", "m-fake-2"},
+		}},
+	})
+	defer mock.Close()
+
+	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
+	rep, err := c.Once(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Edges != 0 {
+		t.Errorf("Edges = %d from fabricated evidence, want 0", rep.Edges)
+	}
+}
+
+// The slow path is now the ONLY writer of L5 and L6. If the per-turn pass ever
+// regains them, the two systems stop being a partition.
+func TestSlowPathOwnsL5AndL6(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	seed(t, srv.store, 2, "own")
+
+	// Per-turn pass writing every field it used to own.
+	promoteExtraction(srv.store, &Extraction{
+		Facts:     []Fact{{Data: "a fact", Layer: "project_state"}},
+		Knowledge: []Relation{{From: "p", Relation: "q", To: "r"}},
+		Schemas:   []Schema{{Pattern: "a pattern", Context: "ctx"}},
+	}, "u", "a", "mem-src")
+
+	if _, edges := srv.store.Graph().Snapshot(0); len(edges) != 0 {
+		t.Errorf("per-turn pass wrote %d L5 edge(s); L5 belongs to the slow path", len(edges))
+	}
+	if _, n := srv.store.List("l6_schema", "", "", 1, 0, false); n != 0 {
+		t.Errorf("per-turn pass wrote %d L6 row(s); L6 belongs to the slow path", n)
+	}
+
+	// The slow path does write both.
+	calls := 0
+	mock := mockConsolidationServer(t, &calls, Consolidation{
+		Schemas: []Schema{{Pattern: "generalised", Context: "ctx"}},
+		Knowledge: []CitedRelation{{From: "p", Relation: "q", To: "r",
+			Evidence: []string{"will-be-ignored"}}},
+	})
+	defer mock.Close()
+
+	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
+	if _, err := c.Once(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, n := srv.store.List("l6_schema", "", "", 1, 0, false); n != 1 {
+		t.Errorf("slow path wrote %d L6 row(s), want 1", n)
+	}
+}

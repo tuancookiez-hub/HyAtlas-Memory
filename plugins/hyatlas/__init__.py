@@ -457,7 +457,11 @@ class HyatlasMemoryProvider(MemoryProvider):
         path = Path(hermes_home) / "hyatlas.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         merged = {**self._config, **values}
-        for k in ("request_timeout",):
+        # llm_key is declared secret, so the setup wizard routes it to .env and
+        # never puts it here. Strip it anyway: a defence-in-depth guard against a
+        # future caller, a hand-edited config.yaml, or a Desktop form that does
+        # not honour the secret flag, writing a credential into hyatlas.json.
+        for k in ("request_timeout", "llm_key"):
             merged.pop(k, None)
         try:
             import stat

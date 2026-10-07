@@ -2,19 +2,20 @@
 
 ## [4.3.0] — 2026-10-08
 
-Adds the extraction-mode selector and the slow path that makes the three modes a
-real ladder. Until now every write ran the same async LLM pipeline with no way to
-opt out, so the only way to keep conversation text on the machine was to not run
-the server at all.
+Adds the extraction-mode selector, the slow path behind it, and the setup flow
+that makes the modes reachable. Until now every write ran the same async LLM
+pipeline with no way to opt out, so the only way to keep conversation text on the
+machine was to not run the server at all — and there was no way to configure the
+LLM through any wizard.
 
-The distinction between the modes is **how widely the server reasons**, not how
-long a write takes:
+The modes differ in **how widely the server reasons**, not in how long a write
+takes:
 
-| Mode | LLM calls | Reasons about | Consolidation |
-|---|---|---|---|
-| `lite` | none | — | no |
-| `pro` | one per write | one turn | no |
-| `ultra` | one per write + periodic batch | across memories and time | yes |
+| Mode | LLM calls | Reasons about | Layers | Consolidation |
+|---|---|---|---|---|
+| `lite` | none | — | 1 / 7 (L2) | no |
+| `pro` | one per write | within one turn | 5 / 7 | no |
+| `ultra` | one per write + periodic batch | across memories and time | 7 / 7 | yes |
 
 ### Added
 
@@ -24,12 +25,24 @@ long a write takes:
   turn. `ultra` adds the slow path below. Settable via env var,
   `docker-compose.yml`, `.env`, the Windows launcher, and as a `mode` plugin
   setting forwarded to a spawned server.
+- **The System1 / System2 layer split.** The two systems own disjoint layers, and
+  this is what makes the layer counts differ per tier:
+  - **System1 (per turn)** writes L1 Profile, L2 Raw, L3 Fact, L4 Summary and
+    L7 Intention — what a single turn can actually evidence.
+  - **System2 (slow path)** writes L5 Knowledge and L6 Schema. A relation worth
+    keeping is corroborated by more than one turn, and a schema is a *recurring*
+    pattern, so neither can be produced from one turn. The per-turn prompt used to
+    ask for "0-2 recurring patterns" from a single input, which cannot work by
+    construction; those guesses then competed with real ones at retrieval time.
+    L5 edges now require at least two distinct corroborating facts, and fabricated
+    evidence IDs are ignored.
 - **The slow path (`consolidate.go`) — what ultra adds over pro.** A ticker-driven
   pass reasons *across* accumulated memories rather than within one turn, which
   is the only way to notice things no single write can see:
   - **merges** contradicting or duplicate L3 facts, writing the replacement
     before pruning what it absorbed;
-  - **generalises L6 schemas** that are only visible across many turns;
+  - **synthesises L5 knowledge** edges corroborated by multiple facts;
+  - **generalises L6 schemas** visible only across many turns;
   - **synthesises a cross-session L4 arc** from the accumulated summaries;
   - **decays** L2 raw history past `HYATLAS_RAW_RETENTION`.
   Tuned by `HYATLAS_CONSOLIDATE_EVERY` (default `6h`) and
@@ -42,10 +55,37 @@ long a write takes:
   overridden, so `ultra` can be made blocking without losing consolidation and
   `pro` can be made background without gaining it. Exposed as a `sync` plugin
   setting too.
+- **Setup, in both surfaces.** Three fields then it works — mode, LLM endpoint,
+  API key:
+  - `hermes memory setup` now offers `llm_base`, `llm_model` and `llm_key`. The
+    key is declared `secret` with an `env_var`, which is load-bearing rather than
+    cosmetic: `hermes_cli.memory_setup` masks the prompt, routes the value to
+    Hermes' `.env` at `0600`, and prints the `url` as "Get yours at ...".
+    `save_config()` strips `llm_key` defensively even if handed one, so a
+    hand-edited config cannot land a credential in `hyatlas.json`. `llm_base` and
+    `llm_model` are forwarded to a spawned server; an explicit export still wins.
+  - `scripts/install.sh` asks the same three questions interactively and writes
+    the answers to Hermes' `.env`. Guarded on `[ -t 0 ]`, so `curl | bash` in CI
+    and pre-seeded installs never block. `lite` skips the endpoint and key
+    entirely. Values are CRLF-stripped, an invalid mode falls back to ultra
+    instead of persisting a value the server would reject, and the key is never
+    echoed back.
+  - Provenance: every L3 fact and L1 profile row now records `source_id`, the L2
+    raw memory it came from. Without it the slow path could not cite evidence for
+    an L5 edge, and raw decay could not tell which history the graph still
+    depends on.
+- **An actionable startup warning.** A mode that needs an LLM with no credential
+  configured used to look healthy: `listeningLine` prints `llm=<model>` from a
+  value that always has a default, and `/api/v1/status` reported `llm: "ok"`.
+  The first write then returned a bare `failed` with the reason only in a log.
+  The server now prints the exact exports needed plus the `HYATLAS_MODE=lite`
+  escape hatch, status reports `llm: "unconfigured"`, and writes return
+  `extraction_status: "unconfigured"` — distinct from `unavailable`, which meant
+  "no client at all".
 - **Deletion safety guards**, since the slow path is the first code that removes
   stored memories:
-  - a merge or drop may only name IDs that were actually in the input batch, so
-    a hallucinated ID in the model's reply cannot delete anything;
+  - a merge, drop or edge may only name IDs that were actually in the input batch,
+    so a hallucinated ID in the model's reply cannot delete or cite anything;
   - a "merge" naming fewer than two real facts is skipped — it would be a
     rewrite that loses provenance for no dedup gain;
   - **L2 raw cited by a live L5 graph edge is never decayed**, so consolidation
@@ -54,9 +94,8 @@ long a write takes:
 - **`/api/v1/status` reports `mode`, `mode_detail`, `uses_llm`, `extract_sync`,
   `consolidations` and `last_consolidated`.** `consolidations` is `-1` when the
   mode has no slow path and `0` when it has one that has not run yet, so the two
-  are distinguishable. In lite the `llm` field reads `unused` rather than `ok`.
-  The startup banner and the dashboard's `/api/info` report the configured mode;
-  the dashboard previously hardcoded `"ultra"` regardless of configuration.
+  are distinguishable. The dashboard's `/api/info` reports the configured mode;
+  it previously hardcoded `"ultra"` regardless of configuration.
 
 ### Changed
 
@@ -73,7 +112,9 @@ long a write takes:
   WAF 403s Go's default User-Agent, and the key must be resolved per request
   because a rotating JWT goes stale if frozen at startup.
 - **`extraction_status` is derived**, not hardcoded `"pending"` at write time:
-  `skipped` / `pending` / `done` / `failed` / `unavailable`.
+  `skipped` / `pending` / `done` / `failed` / `unconfigured`.
+- **`Server.llmState()` is the single place** that decides what to report about
+  the LLM, so status, the dashboard and the startup line cannot disagree.
 - **`handleReprocess` explains itself in lite** rather than reporting zero work
   done with no reason.
 - **An invalid mode or sync value is fatal, and validated before spawning.** The
@@ -84,6 +125,10 @@ long a write takes:
   the same alias table the server uses and raises from `start()` before any child
   process exists, so the failure surfaces where the user can see it instead of in
   `hyatlas.log` after a server that dies on boot.
+- **`config_schema()` was dropping wizard metadata.** It passed through only
+  key/description/default/choices, which silently demoted a secret field to a
+  plaintext one — the API key would have been written into `hyatlas.json`. It now
+  forwards `secret`, `env_var`, `url`, `when` and `default_from`.
 - **`test_every_setting_is_documented_in_the_readme` was vacuous.** It checked
   whether the setting name appeared anywhere in the README, so `sync` "passed"
   because the word occurs inside "synchronous". It now requires an actual
@@ -91,8 +136,14 @@ long a write takes:
 
 ### Tests
 
-- 75 Go test functions pass under `-race`; 60 Python tests pass (4 skipped where
-  fastapi is unavailable); `hermes plugins validate` passes 15/15.
+- 85 Go test functions pass under `-race`; 67 Python tests pass (4 skipped where
+  fastapi is unavailable); `hermes plugins validate` passes 15/15; `bash -n` on
+  the installer passes with LF endings preserved.
+- `TestSystemPartitionCoversEveryLayerExactlyOnce` asserts the two systems
+  partition all seven layers with no overlap and no orphan, so L5/L6 cannot
+  silently drift back into the per-turn path. `TestSlowPathOwnsL5AndL6` checks it
+  behaviourally: a per-turn extraction that volunteers knowledge and schemas must
+  still write neither.
 - `TestModesFormAMonotonicLadder` asserts each tier does everything the one below
   it does, so "ultra is better than pro" is a checked property rather than a
   claim in prose. `TestSyncKnobIsIndependentOfMode` and
@@ -102,19 +153,25 @@ long a write takes:
 - `TestParseSyncParityWithPlugin` pins one truth table for both validators, so
   the Desktop form cannot accept a value the server then treats as fatal.
 - Slow-path coverage includes merge-and-prune ordering, unknown-ID rejection,
-  single-fact-merge rejection, citation protection during decay, decay disabled
-  without retention, null-arc handling, LLM failure survival, garbage-reply
-  tolerance, batch capping, ticker firing and stopping on cancel, and zero
-  interval not spinning.
+  single-fact-merge rejection, L5 corroboration and fabricated-evidence
+  rejection, evidence surviving the merge that consumed it, citation protection
+  during decay, decay disabled without retention, null-arc handling, LLM failure
+  survival, garbage-reply tolerance, batch capping, ticker firing and stopping on
+  cancel, and zero interval not spinning.
 - Every new assertion was verified non-vacuous by reverting the behaviour it pins
-  and confirming the matching test fails — 10/10 guards caught, including all
-  four deletion guards.
-- All five mode/knob combinations were exercised end to end against real servers
-  with a call-counting mock LLM. Measured: `lite` 0 calls / 19 ms; `pro` 1 call /
-  115 ms blocking / no consolidation; `ultra` 1 + 1 calls / 19 ms / consolidation
-  ran; `ultra` with `sync=on` 111 ms **and still consolidated**; `pro` with
-  `sync=off` 17 ms **and still did not**. Ultra filled 2 L4 and 2 L6 rows where
-  pro filled 1 and 1.
+  and confirming the matching test fails — 10/10 Go guards and 3/3 installer
+  guards caught. Shell mutations are syntax-gated first, because a mutation that
+  breaks parsing "fails" for the wrong reason and proves nothing.
+- All mode/knob combinations were exercised end to end against real servers with
+  a call-counting mock LLM. Layer counts measured: `lite` 1/7, `pro` 5/7 (L1 3,
+  L2 3, L3 6, L4 3, L7 3, with L5 and L6 at 0), `ultra` 7/7 (adding L5 2 nodes
+  and L6 1 row after one consolidation pass). Sync independence measured: `ultra`
+  with `sync=on` blocked 111 ms and still consolidated; `pro` with `sync=off`
+  returned in 17 ms and still did not.
+- The installer was driven through ten scripted scenarios (numeric and named
+  tiers, blank input, garbage input, missing key, malformed URL, CRLF input,
+  pre-seeded environment, and the non-interactive guard) against real MSYS
+  git-bash, with `.env` contents and permissions inspected afterwards.
 
 ---
 

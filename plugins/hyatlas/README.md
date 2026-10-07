@@ -59,6 +59,32 @@ memory:
   provider: hyatlas
 ```
 
+### Setup
+
+Three fields, then it works:
+
+```bash
+hermes memory setup      # pick hyatlas, then:
+```
+
+1. **Extraction mode** — `lite`, `pro`, or `ultra`
+2. **LLM endpoint** — any OpenAI-compatible base URL
+3. **LLM API key** — prompted masked, written to `.env` at `0600`
+
+`lite` needs neither 2 nor 3: it makes no LLM call, so nothing leaves the
+machine. Choose `lite` and you are done.
+
+The key is declared `secret` in the schema, which is not cosmetic:
+`hermes memory setup` masks the prompt, routes the value to `.env` through
+`env_var` instead of the provider JSON, and prints the `url` as
+"Get yours at ...". `save_config()` strips `llm_key` defensively even if handed
+one, so a hand-edited config cannot land a credential in `hyatlas.json`.
+
+A spawned server receives `llm_base` and `llm_model` from settings. If a mode
+that needs an LLM has no credential, the server prints an actionable warning at
+startup, `/api/v1/status` reports `llm: "unconfigured"` rather than `ok`, and
+writes return `extraction_status: "unconfigured"` instead of failing silently.
+
 ### Settings
 
 The `mode` setting is the one that decides whether conversation text leaves
@@ -76,10 +102,13 @@ the machine — see the extraction-mode table under [Disclosure](#disclosure-wha
 | `launcher_path` | `HYATLAS_LAUNCHER_PATH` | *(none)* | Optional `hyatlas-go.ps1` that owns the server environment |
 | `request_timeout` | `HYATLAS_REQUEST_TIMEOUT` | `15.0` | HTTP timeout, seconds |
 | `data_dir` | `HYATLAS_GO_DATA` | *(conventional)* | Server data directory, for `hermes backup` |
+| `llm_base` | `HYATLAS_LLM_BASE` | *(server default)* | Base URL of an OpenAI-compatible extraction endpoint |
+| `llm_model` | `HYATLAS_LLM_MODEL` | *(server default)* | Model id at that endpoint |
+| `llm_key` | `HYATLAS_LLM_KEY` | *(none)* | **Secret** — stored in `.env` (0600), never in `hyatlas.json` |
 | `mode` | `HYATLAS_MODE` | *(server default)* | Extraction mode forwarded to a spawned server: `lite` \| `pro` \| `ultra` |
 | `sync` | `HYATLAS_SYNC_EXTRACT` | *(follows mode)* | Whether a write blocks on extraction: `on` \| `off` |
 
-All eleven are editable in **Desktop → Settings → Plugins → hyatlas**, or
+All fourteen are editable in **Desktop → Settings → Plugins → hyatlas**, or
 via `plugins.entries.hyatlas.settings` in `config.yaml`, or the
 `HYATLAS_SERVER_HOST` / `HYATLAS_SERVER_PORT` / `HYATLAS_USER_ID` /
 `HYATLAS_AGENT_ID` / `HYATLAS_AUTO_START` / `HYATLAS_BINARY_PATH` /
@@ -112,9 +141,18 @@ The Desktop pane loads automatically from this plugin's `desktop/plugin.js`
 
   | `HYATLAS_MODE` | LLM calls | Reasoning scope | Layers | Consolidation |
   |---|---|---|---|---|
-  | `lite` | none | — | L2 Raw only | no |
-  | `pro` | one per write | within one turn | all 7 | no |
-  | `ultra` *(default)* | one per write **+** periodic batch | **across memories and time** | all 7, rewritten | **yes** |
+  | `lite` | none | — | **1 / 7** — L2 Raw only | no |
+  | `pro` | one per write | within one turn | **5 / 7** — L1, L2, L3, L4, L7 | no |
+  | `ultra` *(default)* | one per write **+** periodic batch | **across memories and time** | **7 / 7** | **yes** |
+  
+  The two systems own disjoint layers:
+  
+  - **System1 (per turn)** — L1 Profile, L2 Raw, L3 Fact, L4 Summary, L7 Intention.
+    What one turn can actually evidence.
+  - **System2 (slow path)** — L5 Knowledge, L6 Schema. A relation worth keeping is
+    corroborated by more than one turn, and a schema is a *recurring* pattern, so
+    neither can come from a single turn. Ultra is the only mode that runs System2,
+    which is why it is the only one that fills L5 and L6.
 
   Ultra is the only mode that reasons across memories: a periodic consolidation
   pass merges contradicting facts, generalises schemas that are visible only

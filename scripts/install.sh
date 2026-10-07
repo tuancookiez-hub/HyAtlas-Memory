@@ -40,7 +40,7 @@
 set -euo pipefail
 
 REPO="tuancookiez-hub/HyAtlas-Memory"
-VERSION="${HYATLAS_VERSION:-v4.2.0}"
+VERSION="${HYATLAS_VERSION:-v4.3.0}"
 INSTALL_DIR="${HYATLAS_INSTALL_DIR:-}"
 MODEL_DIR="${HYATLAS_MODEL_DIR:-}"
 NO_MODEL="${HYATLAS_NO_MODEL:-0}"
@@ -402,6 +402,187 @@ $(printf '\033[0;32m' )HyAtlas-Memory v4 installed.$(printf '\033[0m')
 EOF
 }
 
+# ---------------------------------------------------------------------------
+# Onboarding: mode + LLM endpoint + key
+# ---------------------------------------------------------------------------
+#
+# A fresh install used to print instructions and exit, so picking pro or ultra
+# without exporting HYATLAS_LLM_* left every write returning "unconfigured" with
+# the reason buried in a log. Three questions is enough to make it work.
+#
+# Only asked when stdin is a terminal AND the answer is not already supplied by
+# the environment, so `curl | bash` in CI and pre-seeded installs never block.
+
+# strip_cr removes a trailing carriage return. `IFS= read -r` strips only \n,
+# so CRLF input leaves the \r attached and turns "3" into an unrecognised mode.
+strip_cr() { printf '%s' "${1%$'\r'}"; }
+
+# ask VARNAME PROMPT [default] — read a value into VARNAME unless already set.
+ask() {
+    local name="$1" prompt="$2" def="${3:-}" current val
+    current="${!name:-}"
+    if [ -n "$current" ]; then
+        return 0
+    fi
+    if [ "$def" != "" ]; then
+        printf '  %s [%s]: ' "$prompt" "$def"
+    else
+        printf '  %s: ' "$prompt"
+    fi
+    if ! IFS= read -r val; then
+        return 0
+    fi
+    val="$(strip_cr "$val")"
+    if [ -z "$val" ] && [ "$def" != "" ]; then
+        val="$def"
+    fi
+    printf -v "$name" '%s' "$val"
+}
+
+# ask_secret VARNAME PROMPT — same, but the terminal does not echo the key.
+ask_secret() {
+    local name="$1" prompt="$2" current val
+    current="${!name:-}"
+    if [ -n "$current" ]; then
+        return 0
+    fi
+    printf '  %s (input hidden): ' "$prompt"
+    if command -v stty >/dev/null 2>&1; then stty -echo 2>/dev/null || true; fi
+    IFS= read -r val || val=""
+    val="$(strip_cr "$val")"
+    if command -v stty >/dev/null 2>&1; then stty echo 2>/dev/null || true; fi
+    printf '\n'
+    [ -n "$val" ] && printf -v "$name" '%s' "$val"
+    return 0
+}
+
+# choose_mode — present the three tiers by what they actually do.
+choose_mode() {
+    [ -n "${HYATLAS_MODE:-}" ] && return 0
+    printf '\n'
+    info "Extraction mode"
+    printf '    1) lite   no LLM call; raw + local embeddings only.\n'
+    printf '              Conversation text never leaves the machine.\n'
+    printf '    2) pro    one extraction per write; reasons within that single turn.\n'
+    printf '              Fills L1-L4 and L7.\n'
+    printf '    3) ultra  pro, plus the slow path: periodic consolidation that reasons\n'
+    printf '              ACROSS memories — merges contradictions, generalises schemas,\n'
+    printf '              synthesises a cross-session arc. System1 (L1-L4,L7) +\n'
+    printf '              System2 (L5,L6) together fill all 7 layers. [default]\n'
+    printf '  Choice [1-3, default 3]: '
+    local pick
+    IFS= read -r pick || pick=""
+    pick="$(strip_cr "$pick")"
+    # Both the number and the name are accepted for every tier. "3" was
+    # missing from this table, so picking the advertised default produced
+    # HYATLAS_MODE=3 — a value the server rejects at startup.
+    case "$pick" in
+        1|lite)  HYATLAS_MODE="lite" ;;
+        2|pro)   HYATLAS_MODE="pro" ;;
+        3|ultra|"") HYATLAS_MODE="ultra" ;;
+        *)       HYATLAS_MODE="$pick" ;;
+    esac
+    case "$HYATLAS_MODE" in
+        lite|pro|ultra) ok "mode: $HYATLAS_MODE" ;;
+        # Never persist an invalid mode: it would make the server refuse to
+        # start, and the .env would carry the bad value into every later run.
+        *) warn "unrecognised mode '$HYATLAS_MODE'; falling back to ultra."
+           warn "valid values are lite, pro, ultra"
+           HYATLAS_MODE="ultra" ;;
+    esac
+}
+
+# validate_url — cheap structural check so a typo is caught here, not at 401.
+validate_url() {
+    case "$1" in
+        http://*|https://*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+configure_llm() {
+    if [ "${HYATLAS_MODE:-ultra}" = "lite" ]; then
+        ok "lite mode: no LLM endpoint needed"
+        return 0
+    fi
+    printf '\n'
+    info "LLM endpoint (any OpenAI-compatible API)"
+    ask HYATLAS_LLM_BASE "Base URL" "https://inference-api.nousresearch.com/v1"
+    if [ -n "${HYATLAS_LLM_BASE:-}" ] && ! validate_url "$HYATLAS_LLM_BASE"; then
+        warn "'$HYATLAS_LLM_BASE' does not look like a URL; extraction will fail until fixed"
+    fi
+    ask HYATLAS_LLM_MODEL "Model" "poolside/laguna-s-2.1:free"
+
+    if [ -z "${HYATLAS_LLM_KEY:-}" ] && [ -z "${HYATLAS_LLM_KEY_FILE:-}" ]; then
+        ask_secret HYATLAS_LLM_KEY "API key"
+    fi
+    if [ -z "${HYATLAS_LLM_KEY:-}" ] && [ -z "${HYATLAS_LLM_KEY_FILE:-}" ]; then
+        warn "no API key set; $HYATLAS_MODE mode will report llm=unconfigured"
+        warn "set HYATLAS_LLM_KEY later, or run: export HYATLAS_MODE=lite"
+        return 0
+    fi
+    ok "endpoint: ${HYATLAS_LLM_BASE} (${HYATLAS_LLM_MODEL})"
+    # Never echo the key back.
+    ok "api key: configured"
+}
+
+# write_hermes_env — persist what we collected so a spawned server inherits it.
+#
+# Appends to Hermes' own .env (the file `hermes memory setup` uses for secrets)
+# rather than inventing a second config location. 0600 from creation, and the key
+# is masked in the success message.
+write_hermes_env() {
+    # Split across two statements: on one line the second assignment expands
+    # $home before the first has taken effect, which is an unbound-variable
+    # error under `set -u`.
+    local home="${HERMES_HOME:-${HOME:-$HOME/.hermes}}"
+    local envfile="$home/.env"
+    [ -d "$home" ] || return 0
+    [ -n "${HYATLAS_LLM_KEY:-}${HYATLAS_MODE:-}${HYATLAS_LLM_BASE:-}" ] || return 0
+    mkdir -p "$home" 2>/dev/null || return 0
+    touch "$envfile" 2>/dev/null || { warn "cannot write $envfile"; return 0; }
+    chmod 600 "$envfile" 2>/dev/null || true
+
+    local wrote=0
+    _env_set() {
+        local k="$1" v="$2"
+        [ -z "$v" ] && return 0
+        # Replace an existing line so a re-run updates instead of duplicating.
+        if grep -q "^${k}=" "$envfile" 2>/dev/null; then
+            local tmp
+            tmp="$(mktemp)"
+            grep -v "^${k}=" "$envfile" > "$tmp" 2>/dev/null || true
+            printf '%s=%s\n' "$k" "$v" >> "$tmp"
+            mv "$tmp" "$envfile"
+            chmod 600 "$envfile" 2>/dev/null || true
+        else
+            printf '%s=%s\n' "$k" "$v" >> "$envfile"
+        fi
+        wrote=1
+    }
+    _env_set HYATLAS_MODE      "${HYATLAS_MODE:-}"
+    _env_set HYATLAS_LLM_BASE  "${HYATLAS_LLM_BASE:-}"
+    _env_set HYATLAS_LLM_MODEL "${HYATLAS_LLM_MODEL:-}"
+    _env_set HYATLAS_LLM_KEY   "${HYATLAS_LLM_KEY:-}"
+    if [ "$wrote" = "1" ]; then
+        ok "wrote settings to $envfile (0600)"
+    fi
+}
+
+# onboarding runs only on an interactive terminal.
+onboarding() {
+    if [ ! -t 0 ]; then
+        info "non-interactive install: skipping setup questions"
+        info "configure later with: hermes memory setup"
+        return 0
+    fi
+    printf '\n'
+    info "Setup — three questions, then it works"
+    choose_mode
+    configure_llm
+    write_hermes_env
+}
+
 main() {
     info "HyAtlas-Memory v4 installer"
     detect_platform
@@ -429,6 +610,7 @@ main() {
     install_binary
     ensure_on_path
     verify_install || true
+    onboarding
     print_next_steps
 }
 

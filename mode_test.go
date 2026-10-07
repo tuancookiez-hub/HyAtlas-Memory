@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tuancookiez-hub/hyatlas-v4/memory"
 )
 
 // The mode selector is a privacy boundary, not a cosmetic setting: lite is the
@@ -106,8 +108,8 @@ func TestModeSemantics(t *testing.T) {
 		describHas  string
 	}{
 		{ModeLite, false, false, 1, 0, false, "no LLM call"},
-		{ModePro, true, false, 7, 1, true, "no slow path"},
-		{ModeUltra, true, true, 7, 2, false, "consolidation"},
+		{ModePro, true, false, 5, 1, true, "no slow path"},
+		{ModeUltra, true, true, 7, 2, false, "slow path"},
 	}
 	for _, c := range cases {
 		if got := c.mode.UsesLLM(); got != c.usesLLM {
@@ -337,52 +339,134 @@ func TestExtractForModeProReportsFailure(t *testing.T) {
 	}
 }
 
-// No LLM client configured: report unavailable rather than silently skipping.
-func TestExtractForModeWithoutLLMClient(t *testing.T) {
+// A mode that needs an LLM but cannot make the call must say so in a way that
+// names the problem. The old spelling, "unavailable", did not distinguish "no
+// client at all" from "client present, no credential" — and the latter is the
+// state a fresh install lands in, so the message could not tell the user what to
+// do about it.
+func TestExtractForModeReportsUnconfigured(t *testing.T) {
+	// No client at all.
 	srv := newTestServer(t, "test-model", "http://127.0.0.1:1/v1")
 	srv.mode = ModeUltra
 	srv.llm = nil
+	if got := srv.extractForMode("text", "u", "a", "id1"); got != "unconfigured" {
+		t.Errorf("extraction_status = %q, want \"unconfigured\"", got)
+	}
 
-	if got := srv.extractForMode("text", "u", "a", "id1"); got != "unavailable" {
-		t.Errorf("extraction_status = %q, want \"unavailable\"", got)
+	// Client present but no credential — the fresh-install case.
+	srv2 := newTestServer(t, "test-model", "http://127.0.0.1:1/v1")
+	srv2.mode = ModePro
+	srv2.llm = NewLLMClient("http://127.0.0.1:1/v1", "", "test-model")
+	if got := srv2.extractForMode("text", "u", "a", "id2"); got != "unconfigured" {
+		t.Errorf("with an empty key extraction_status = %q, want \"unconfigured\"", got)
+	}
+
+	// A client WITH a credential must not report unconfigured (it will fail on
+	// the unreachable endpoint instead, which is a different and honest state).
+	srv3 := newTestServer(t, "test-model", "http://127.0.0.1:1/v1")
+	srv3.mode = ModePro
+	srv3.llm = NewLLMClient("http://127.0.0.1:1/v1", "k", "test-model")
+	if got := srv3.extractForMode("text", "u", "a", "id3"); got == "unconfigured" {
+		t.Error("a configured key reported \"unconfigured\"")
+	}
+
+	// Lite never calls an LLM, so the question does not arise.
+	srv4 := newTestServer(t, "test-model", "http://127.0.0.1:1/v1")
+	srv4.mode = ModeLite
+	srv4.llm = nil
+	if got := srv4.extractForMode("text", "u", "a", "id4"); got != "skipped" {
+		t.Errorf("lite extraction_status = %q, want \"skipped\"", got)
 	}
 }
 
 // /api/v1/status must report the configured mode, and must not claim llm=ok in
 // lite where no LLM call is ever made.
+// /api/v1/status must report the configured mode, and must be honest about the
+// LLM: lite never calls one, and a mode that needs one but has no credential
+// must not claim "ok". That false-healthy state is what made a fresh install
+// look fine and then fail every write.
 func TestStatusReportsMode(t *testing.T) {
 	for _, c := range []struct {
+		name    string
 		mode    Mode
+		key     string // credential handed to the LLM client; "" means no client
 		wantLLM string
 	}{
-		{ModeLite, "unused"},
-		{ModePro, "ok"},
-		{ModeUltra, "ok"},
+		{"lite ignores the LLM entirely", ModeLite, "", "unused"},
+		{"lite with a key still does not use it", ModeLite, "k", "unused"},
+		{"pro with no client", ModePro, "", "unconfigured"},
+		{"ultra with no client", ModeUltra, "", "unconfigured"},
+		{"pro with a credential", ModePro, "k", "ok"},
+		{"ultra with a credential", ModeUltra, "k", "ok"},
 	} {
 		srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
 		srv.mode = c.mode
+		if c.key != "" {
+			srv.llm = NewLLMClient("http://127.0.0.1:1/v1", c.key, "m")
+		}
 
 		w := httptest.NewRecorder()
 		srv.handleStatus(w, httptest.NewRequest("GET", "/api/v1/status", nil))
 		if w.Code != http.StatusOK {
-			t.Fatalf("%s: status code %d", c.mode, w.Code)
+			t.Fatalf("%s: status code %d", c.name, w.Code)
 		}
 		var st map[string]any
 		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
-			t.Fatalf("%s: %v", c.mode, err)
+			t.Fatalf("%s: %v", c.name, err)
 		}
 		if got := st["mode"]; got != string(c.mode) {
-			t.Errorf("%s: mode = %v, want %q", c.mode, got, c.mode)
+			t.Errorf("%s: mode = %v, want %q", c.name, got, c.mode)
 		}
 		if got := st["llm"]; got != c.wantLLM {
-			t.Errorf("%s: llm = %v, want %q", c.mode, got, c.wantLLM)
+			t.Errorf("%s: llm = %v, want %q", c.name, got, c.wantLLM)
 		}
 		wantUses := c.mode != ModeLite
 		if got := st["uses_llm"]; got != wantUses {
-			t.Errorf("%s: uses_llm = %v, want %v", c.mode, got, wantUses)
+			t.Errorf("%s: uses_llm = %v, want %v", c.name, got, wantUses)
 		}
 		if d, _ := st["mode_detail"].(string); !strings.Contains(d, string(c.mode)) {
-			t.Errorf("%s: mode_detail = %q, want it to name the mode", c.mode, d)
+			t.Errorf("%s: mode_detail = %q, want it to name the mode", c.name, d)
+		}
+	}
+}
+
+// The startup warning is the only thing that reaches a user who never reads
+// status: it must fire exactly when a mode needs an LLM and has no credential,
+// and must not fire in lite or when one is configured.
+func TestStartupWarningFiresOnlyWhenUnconfigured(t *testing.T) {
+	base := runtimeCfg{LLMBase: "http://api/v1", LLMModel: "m"}
+
+	cases := []struct {
+		name    string
+		mode    Mode
+		key     string
+		keyFile string
+		want    bool
+	}{
+		{"lite never warns", ModeLite, "", "", false},
+		{"pro without a key warns", ModePro, "", "", true},
+		{"ultra without a key warns", ModeUltra, "", "", true},
+		{"pro with a key is quiet", ModePro, "k", "", false},
+		{"ultra with a key file is quiet", ModeUltra, "", "/path/auth.json", false},
+	}
+	for _, c := range cases {
+		t.Setenv("HYATLAS_LLM_KEY", c.key)
+		t.Setenv("HYATLAS_LLM_KEY_FILE", c.keyFile)
+		rt := base
+		rt.Mode = c.mode
+		w := startupWarning(rt)
+		if got := w != ""; got != c.want {
+			t.Errorf("%s: warning present = %v, want %v (got %q)", c.name, got, c.want, w)
+		}
+		if c.want {
+			// The warning must be actionable: name the mode, the variables, and the
+			// offline escape hatch.
+			for _, need := range []string{string(c.mode), "HYATLAS_LLM_BASE",
+				"HYATLAS_LLM_KEY", "HYATLAS_MODE=lite", "hermes memory setup"} {
+				if !strings.Contains(w, need) {
+					t.Errorf("%s: warning does not mention %q", c.name, need)
+				}
+			}
 		}
 	}
 }
@@ -501,5 +585,48 @@ func TestParseSyncParityWithPlugin(t *testing.T) {
 		if got != c.want {
 			t.Errorf("ParseSync(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// The two systems must partition the layer model exactly. L5 knowledge and L6
+// schemas are System2 products: a relation worth keeping is corroborated by more
+// than one turn, and a schema is a recurring pattern, so neither can come from a
+// single turn. If this partition drifts, pro and ultra look identical again.
+func TestSystemPartitionCoversEveryLayerExactlyOnce(t *testing.T) {
+	s1, s2 := System1Layers(), System2Layers()
+
+	seen := map[memory.Layer]int{}
+	for _, l := range s1 {
+		seen[l]++
+	}
+	for _, l := range s2 {
+		seen[l]++
+	}
+
+	for _, l := range memory.All() {
+		if seen[l] != 1 {
+			t.Errorf("layer %s is owned by %d system(s), want exactly 1", l, seen[l])
+		}
+	}
+	for _, l := range s2 {
+		if l != memory.L5Knowledge && l != memory.L6Schema {
+			t.Errorf("System2 owns %s; it should own only L5 and L6", l)
+		}
+	}
+	if len(s1)+len(s2) != len(memory.All()) {
+		t.Errorf("partition covers %d layers, model has %d", len(s1)+len(s2), len(memory.All()))
+	}
+}
+
+// Each tier must fill exactly the layers its systems own.
+func TestLayersActiveMatchesSystemOwnership(t *testing.T) {
+	if got := ModeLite.LayersActive(); got != 1 {
+		t.Errorf("lite fills %d layers, want 1 (L2 raw only)", got)
+	}
+	if got, want := ModePro.LayersActive(), len(System1Layers()); got != want {
+		t.Errorf("pro fills %d layers, want %d (System1 only)", got, want)
+	}
+	if got, want := ModeUltra.LayersActive(), len(memory.All()); got != want {
+		t.Errorf("ultra fills %d layers, want %d (System1 + System2)", got, want)
 	}
 }

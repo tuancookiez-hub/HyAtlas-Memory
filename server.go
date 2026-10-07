@@ -54,6 +54,22 @@ func (s *Server) extractErr() string {
 	return s.lastExtractErr
 }
 
+// llmState is the single place that decides what to report about the LLM, so
+// /api/v1/status, the dashboard and the startup line cannot disagree.
+//
+//	unused        — this mode makes no LLM call
+//	unconfigured  — the mode needs one but no credential is present
+//	ok            — a credential resolved
+func (s *Server) llmState() string {
+	if !s.mode.UsesLLM() {
+		return "unused"
+	}
+	if !s.llm.HasCredential() {
+		return "unconfigured"
+	}
+	return "ok"
+}
+
 // Status is the /api/v1/status payload. It is marshaled directly, so these
 // json tags are the wire contract — do not restate the shape in a map literal.
 type Status struct {
@@ -99,11 +115,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		consRuns, lastCons = n, last
 	}
 	// Lite never calls an LLM, so reporting llm=ok there would claim a
-	// capability this mode deliberately does not use.
-	llmState := "ok"
-	if !s.mode.UsesLLM() {
-		llmState = "unused"
-	}
+	// capability this mode deliberately does not use. A mode that does need one
+	// but has no credential must not report ok either — that is the single most
+	// confusing state a fresh install can land in.
+	llmState := s.llmState()
 	jsonResponse(w, 200, Status{
 		Status:           "ok",
 		Version:          Version,
@@ -131,8 +146,20 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// promoteExtraction writes one LLM extraction result to its 7 layers.
-// sourceID is the L2 raw memory id — used to anchor L5 edges back to their origin.
+// promoteExtraction writes one System1 pass to the layers that pass owns:
+// L3 facts (and the L1 profile mirror for preferences), L4 summary, L7 intention.
+//
+// L5 knowledge and L6 schemas are deliberately NOT written here. They are
+// System2 products: a knowledge relation worth keeping is one corroborated by
+// more than a single turn, and a schema is a *recurring* pattern, which no
+// single turn can evidence. Writing them per turn made pro and ultra look
+// identical and filled L6 with guesses that competed with the real thing at
+// retrieval time. The consolidation pass owns both layers.
+//
+// sourceID is the L2 raw memory id. It is recorded on every L3 fact as
+// source_id so the slow path can trace a consolidated claim back to the
+// conversations that produced it, and so raw decay can protect the rows a live
+// claim still depends on.
 func promoteExtraction(store *MemoryStore, ex *Extraction, userID, agentID, sourceID string) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	// L3 Facts
@@ -142,12 +169,13 @@ func promoteExtraction(store *MemoryStore, ex *Extraction, userID, agentID, sour
 		}
 		_ = store.Add(memory.L3Fact, newID(), f.Data, map[string]string{
 			"user_id": userID, "agent_id": agentID,
-			"source_layer_label": f.Layer, "ts": now,
+			"source_layer_label": f.Layer, "source_id": sourceID, "ts": now,
 		})
 		// L1 Profile: user_preferences are stable identity — mirror to profile layer.
 		if f.Layer == "user_preferences" {
 			_ = store.Add(memory.L1Profile, newID(), f.Data, map[string]string{
-				"user_id": userID, "agent_id": agentID, "ts": now,
+				"user_id": userID, "agent_id": agentID,
+				"source_id": sourceID, "ts": now,
 			})
 		}
 	}
@@ -155,23 +183,6 @@ func promoteExtraction(store *MemoryStore, ex *Extraction, userID, agentID, sour
 	if ex.Summary != nil && strings.TrimSpace(ex.Summary.Text) != "" {
 		_ = store.Add(memory.L4Summary, newID(), ex.Summary.Text, map[string]string{
 			"user_id": userID, "agent_id": agentID, "ts": now,
-		})
-	}
-	// L5 Knowledge graph — every edge is anchored to its L2 source memory.
-	for _, rel := range ex.Knowledge {
-		if rel.From == "" || rel.Relation == "" || rel.To == "" {
-			continue
-		}
-		_ = store.Graph().AddEdgeWithSource(rel.From, rel.Relation, rel.To, sourceID)
-	}
-	// L6 Schema
-	for _, sc := range ex.Schemas {
-		if sc.Pattern == "" {
-			continue
-		}
-		_ = store.Add(memory.L6Schema, newID(), sc.Pattern, map[string]string{
-			"user_id": userID, "agent_id": agentID,
-			"context": sc.Context, "ts": now,
 		})
 	}
 	// L7 Intention
@@ -242,8 +253,8 @@ func (s *Server) extractForMode(text, userID, agentID, id string) string {
 	if !s.mode.UsesLLM() {
 		return "skipped"
 	}
-	if s.llm == nil {
-		return "unavailable"
+	if !s.llm.HasCredential() {
+		return "unconfigured"
 	}
 	// Blocking versus background is the separate sync knob, not the mode: pro
 	// defaults to blocking so the caller sees the outcome, ultra to background
@@ -1074,6 +1085,9 @@ func main() {
 	mux.HandleFunc("/api/coding-memories", srv.handleDashCodingMemories)
 	mux.Handle("/dashboard/", http.StripPrefix("/dashboard/", srv.handleDashboard()))
 
+	if w := startupWarning(rt); w != "" {
+		log.Print(w)
+	}
 	log.Print(listeningLine(rt))
 	host := envOr("HYATLAS_GO_HOST", "127.0.0.1")
 	log.Fatal(http.ListenAndServe(host+":"+port, mux))
@@ -1147,4 +1161,32 @@ func describeEmbed(embedBase, embedModel string) string {
 func listeningLine(rt runtimeCfg) string {
 	return fmt.Sprintf("HyAtlas-Go listening on :%s (data=%s embed=%s llm=%s mode=%s)",
 		rt.Port, rt.DataDir, describeEmbed(rt.EmbedBase, rt.EmbedModel), rt.LLMModel, rt.Mode.OrDefault())
+}
+
+// startupWarning returns a human-readable setup message for the one state that
+// silently produces empty memories: a mode that calls an LLM with no credential.
+// Empty means nothing to warn about.
+func startupWarning(rt runtimeCfg) string {
+	if !rt.Mode.UsesLLM() {
+		return ""
+	}
+	if os.Getenv("HYATLAS_LLM_KEY") != "" || os.Getenv("HYATLAS_LLM_KEY_FILE") != "" {
+		return ""
+	}
+	return fmt.Sprintf(`
+  %s mode calls an LLM but no credential is configured, so writes will store the
+  raw trace only and extraction will report "unconfigured". Point it at any
+  OpenAI-compatible endpoint:
+
+      export HYATLAS_LLM_BASE="%s"
+      export HYATLAS_LLM_MODEL="%s"
+      export HYATLAS_LLM_KEY="***"
+
+  Or run offline with no LLM call at all:
+
+      export HYATLAS_MODE=lite
+
+  In the Hermes plugin, these are the "LLM endpoint", "LLM model" and
+  "LLM API key" settings (hermes memory setup, or the Desktop settings form).
+`, rt.Mode.OrDefault(), rt.LLMBase, rt.LLMModel)
 }

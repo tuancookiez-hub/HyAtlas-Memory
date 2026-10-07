@@ -46,11 +46,26 @@ type Merge struct {
 	Supersedes []string `json:"supersedes"`
 }
 
+// CitedRelation is an L5 edge plus the fact IDs that evidence it. Unlike the
+// per-turn triple, it must be corroborated by more than one memory — that is
+// what makes it a System2 product rather than a restatement of one turn.
+type CitedRelation struct {
+	From     string   `json:"from"`
+	Relation string   `json:"relation"`
+	To       string   `json:"to"`
+	Evidence []string `json:"evidence"`
+}
+
 // Consolidation is the JSON contract for one consolidation call.
 type Consolidation struct {
 	Merges  []Merge  `json:"merges"`
 	Drops   []string `json:"drops"`
 	Schemas []Schema `json:"schemas"`
+	// Knowledge are L5 graph edges. The slow path owns L5: a relation worth
+	// keeping is one corroborated across memories, and only this pass can see
+	// more than one. Each triple carries the fact IDs that evidence it, so the
+	// edge cites real provenance instead of a single turn's guess.
+	Knowledge []CitedRelation `json:"knowledge"`
 	// Arc is the cross-session narrative: a longer summary synthesised from
 	// many L4 summaries rather than from any single turn.
 	Arc *string `json:"arc,omitempty"`
@@ -62,6 +77,7 @@ type Consolidation struct {
 type Report struct {
 	FactsIn    int      `json:"facts_in"`
 	Merged     int      `json:"merged"`
+	Edges      int      `json:"edges"`
 	Dropped    int      `json:"dropped"`
 	Schemas    int      `json:"schemas"`
 	Arc        bool     `json:"arc"`
@@ -155,6 +171,12 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 	}
 
 	live := liveIDs(facts)
+	// batch is the immutable membership of what the LLM was shown. Evidence is
+	// resolved against this rather than `live`, because merges delete IDs from
+	// `live` — two facts merged into one would otherwise stop corroborating the
+	// edge that cited them, silently dropping it.
+	batch := liveIDs(facts)
+	byID := byIDOf(facts)
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Apply merges first: write the replacement, then prune what it absorbed.
@@ -221,6 +243,46 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 			} else {
 				rep.Dropped += n
 			}
+		}
+	}
+
+	// L5 knowledge graph. The slow path owns this layer: a relation worth
+	// keeping is one corroborated by more than one memory, and only this pass
+	// can see more than one. Edges are cited against the L2 raw rows behind the
+	// evidence, not the fact rows, so decayRaw's citation guard still protects
+	// the conversations the graph depends on.
+	for _, rel := range cons.Knowledge {
+		if strings.TrimSpace(rel.From) == "" || strings.TrimSpace(rel.Relation) == "" ||
+			strings.TrimSpace(rel.To) == "" {
+			continue
+		}
+		// Corroboration is the whole reason this is a System2 product. A triple
+		// resting on a single fact is just that fact restated, and the per-turn
+		// pass already declined to write it.
+		seen := map[string]bool{}
+		cites := make([]string, 0, len(rel.Evidence))
+		for _, id := range rel.Evidence {
+			if !batch[id] || seen[id] {
+				continue
+			}
+			seen[id] = true
+			// Trace the fact back to the conversation it came from so the edge's
+			// citation protects real raw history.
+			if src := byID[id].Meta["source_id"]; src != "" {
+				cites = append(cites, src)
+			} else {
+				cites = append(cites, id)
+			}
+		}
+		if len(seen) < 2 {
+			continue
+		}
+		for _, src := range cites {
+			if err := c.store.Graph().AddEdgeWithSource(rel.From, rel.Relation, rel.To, src); err != nil {
+				rep.Errors = append(rep.Errors, "edge: "+err.Error())
+				break
+			}
+			rep.Edges++
 		}
 	}
 
@@ -327,12 +389,14 @@ func (c *Consolidator) ask(ctx context.Context, facts []DocIndex) (*Consolidatio
   "merges": [{"text": "<one fact that replaces several>", "layer": "user_preferences|project_state|technical_lesson|decision|negative_knowledge", "supersedes": ["<id>", "<id>"]}],
   "drops": ["<id>"],
   "schemas": [{"pattern": "<a recurring pattern only visible across many facts>", "context": "<when it applies>"}],
+  "knowledge": [{"from": "<entity>", "relation": "<relation>", "to": "<entity>", "evidence": ["<id>", "<id>"]}],
   "arc": "<1-3 sentences: what these facts say about the user's work over time>"
 }
 Rules:
 - merges: ONLY combine facts that genuinely say the same thing or contradict each other. For a contradiction, keep the newer statement and supersede the older. supersedes MUST list at least 2 ids. Use only ids from the input.
 - drops: ids of facts that are stale, trivially obvious, or fully absorbed by a merge. Be conservative — deleting memory is irreversible.
 - schemas: 0-3 patterns that generalise beyond the individual facts.
+- knowledge: 0-5 entity-relation-entity edges, each corroborated by AT LEAST 2 different fact ids in "evidence". A triple resting on one fact is just that fact restated — do not emit it. Use only ids from the input.
 - arc: null if the facts are too few or too unrelated to synthesise.
 - Never invent an id. Never reference a fact not listed.
 Return ONLY valid JSON, no prose, no markdown fences.
@@ -367,6 +431,15 @@ func parseConsolidation(content string) (*Consolidation, error) {
 		return nil, err
 	}
 	return &cons, nil
+}
+
+// byIDOf indexes the batch so evidence lookups do not rescan it.
+func byIDOf(facts []DocIndex) map[string]DocIndex {
+	m := make(map[string]DocIndex, len(facts))
+	for _, f := range facts {
+		m[f.ID] = f
+	}
+	return m
 }
 
 func liveIDs(facts []DocIndex) map[string]bool {

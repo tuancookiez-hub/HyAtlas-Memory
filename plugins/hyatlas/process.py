@@ -139,6 +139,22 @@ class HyatlasProcess:
         sync = getattr(self, "_sync", "") or settings.sync(self._config)
         if sync:
             env.setdefault("HYATLAS_SYNC_EXTRACT", sync)
+
+        # Endpoint and model are non-secret, so they arrive through the settings
+        # form into hyatlas.json rather than the environment. Without forwarding
+        # them here the server would fall back to its own default and silently
+        # ignore what the user just configured. setdefault keeps an explicitly
+        # exported variable authoritative, matching mode and sync.
+        for key, var in (("llm_base", "HYATLAS_LLM_BASE"),
+                         ("llm_model", "HYATLAS_LLM_MODEL")):
+            val = str(self._config.get(key) or "").strip()
+            if val:
+                env.setdefault(var, val)
+
+        # The key is deliberately NOT forwarded from config: it is declared
+        # secret, so the setup wizard routes it to Hermes' .env and save_config
+        # strips it. It reaches the child through the HYATLAS_* prefix rule above
+        # like any other exported variable, and never through this code path.
         return env
 
     def start(self) -> None:

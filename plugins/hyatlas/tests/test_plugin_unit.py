@@ -1053,3 +1053,106 @@ def test_mode_and_sync_are_independent_settings():
             cfg = {"mode": m, "sync": s}
             assert settings.mode(cfg) == m
             assert settings.sync(cfg) == s
+
+
+# ---- LLM onboarding settings ----
+
+def test_llm_key_is_declared_secret_with_env_var():
+    """The secret flag is load-bearing, not decoration.
+
+    hermes_cli.memory_setup masks secret prompts and routes their value to .env
+    via env_var instead of the provider JSON. If config_schema() dropped these
+    fields the API key would be written into hyatlas.json in plaintext, so this
+    test pins the round trip through get_config_schema().
+    """
+    fields = {f["key"]: f for f in mod.HyatlasMemoryProvider().get_config_schema()}
+    key = fields["llm_key"]
+    assert key.get("secret") is True
+    assert key.get("env_var") == "HYATLAS_LLM_KEY"
+    assert key.get("url"), "a secret field should say where to get one"
+    # The non-secret pair must NOT be masked.
+    for name in ("llm_base", "llm_model"):
+        assert not fields[name].get("secret"), f"{name} should not be secret"
+
+
+def test_wizard_fields_survive_config_schema():
+    """secret/env_var/url must not be stripped when deriving the provider schema.
+
+    config_schema() used to pass through only key/description/default/choices,
+    which silently demoted a secret field to a plaintext one.
+    """
+    settings = _load_sibling("settings")
+    for f in settings.SCHEMA:
+        if "secret" in f:
+            got = {g["key"]: g for g in settings.config_schema()}[f["key"]]
+            assert got.get("secret") == f["secret"], f["key"]
+            assert got.get("env_var") == f.get("env_var"), f["key"]
+
+
+def test_save_config_strips_the_llm_key():
+    """Defence in depth: even a caller that hands save_config a key gets it dropped."""
+    import json as _json
+    import tempfile
+
+    home = Path(tempfile.mkdtemp(prefix="hyatlas-cfg-"))
+    try:
+        provider = mod.HyatlasMemoryProvider()
+        provider.save_config(
+            {"mode": "pro", "llm_base": "https://api.example.com/v1",
+             "llm_model": "m", "llm_key": "SK-SHOULD-NOT-PERSIST"},
+            str(home),
+        )
+        raw = (home / "hyatlas.json").read_text(encoding="utf-8")
+        written = _json.loads(raw)
+        assert "llm_key" not in written
+        assert "SHOULD-NOT-PERSIST" not in raw
+        # The non-secret pair does persist, so the setting is usable.
+        assert written["llm_base"] == "https://api.example.com/v1"
+        assert written["llm_model"] == "m"
+    finally:
+        import shutil
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_spawner_forwards_llm_endpoint_and_model():
+    """Settings-configured endpoint must reach the child, or it is silently ignored."""
+    proc = _load_sibling("process")
+    for k in ("HYATLAS_LLM_BASE", "HYATLAS_LLM_MODEL"):
+        os.environ.pop(k, None)
+    hp = proc.HyatlasProcess({"llm_base": "https://api.example.com/v1", "llm_model": "gpt-mini"})
+    hp._mode = hp._sync = ""
+    env = hp._env()
+    assert env.get("HYATLAS_LLM_BASE") == "https://api.example.com/v1"
+    assert env.get("HYATLAS_LLM_MODEL") == "gpt-mini"
+
+
+def test_spawner_never_forwards_the_key_from_config():
+    """The key reaches a child only through the environment, never from settings."""
+    proc = _load_sibling("process")
+    os.environ.pop("HYATLAS_LLM_KEY", None)
+    hp = proc.HyatlasProcess({"llm_key": "SK-FROM-CONFIG"})
+    hp._mode = hp._sync = ""
+    env = hp._env()
+    assert "HYATLAS_LLM_KEY" not in env
+    assert not any("FROM-CONFIG" in str(v) for v in env.values())
+
+
+def test_spawner_exported_env_wins_over_settings():
+    """setdefault semantics: an explicit export stays authoritative."""
+    proc = _load_sibling("process")
+    os.environ["HYATLAS_LLM_BASE"] = "http://from-env/v1"
+    try:
+        hp = proc.HyatlasProcess({"llm_base": "http://from-settings/v1"})
+        hp._mode = hp._sync = ""
+        assert hp._env().get("HYATLAS_LLM_BASE") == "http://from-env/v1"
+    finally:
+        os.environ.pop("HYATLAS_LLM_BASE", None)
+
+
+def test_llm_settings_are_documented_in_the_readme():
+    """A user cannot onboard to a field they cannot find documented."""
+    readme = (Path(_PKG) / "README.md").read_text(encoding="utf-8")
+    for name, var in [("llm_base", "HYATLAS_LLM_BASE"), ("llm_model", "HYATLAS_LLM_MODEL"),
+                      ("llm_key", "HYATLAS_LLM_KEY")]:
+        assert f"| `{name}` |" in readme, f"{name} missing from the settings table"
+        assert var in readme, f"{var} missing from the plugin README"

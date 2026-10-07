@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/tuancookiez-hub/hyatlas-v4/memory"
 )
 
 // Mode selects how much reasoning the server does. All three share the same
@@ -113,14 +115,39 @@ func (m Mode) Rank() int {
 	}
 }
 
-// LayersActive is the count of the 7-layer model this mode populates. Lite stops
-// at the raw trace; pro and ultra both fill all seven through extraction. Layer
-// count alone therefore does not separate pro from ultra — consolidation does.
+// LayersActive is the count of the 7-layer model this mode populates.
+//
+// The counts differ per tier because the two systems own different layers:
+//
+//	lite   1 — L2 raw only, nothing extracted
+//	pro    5 — System1 fills L1, L2, L3, L4, L7 from each turn
+//	ultra  7 — System1 plus the slow path, which adds L5 knowledge and L6
+//	           schemas. Those two are System2 products: a knowledge relation
+//	           worth keeping is corroborated by more than one turn, and a schema
+//	           is a *recurring* pattern, so neither can be produced from a single
+//	           turn.
 func (m Mode) LayersActive() int {
-	if m.OrDefault() == ModeLite {
+	switch m.OrDefault() {
+	case ModeLite:
 		return 1
+	case ModePro:
+		return 5
+	default:
+		return 7
 	}
-	return 7
+}
+
+// System1Layers are the layers the per-turn pass owns, for any mode that calls
+// an LLM. L5 and L6 are excluded on purpose — see LayersActive.
+func System1Layers() []memory.Layer {
+	return []memory.Layer{
+		memory.L1Profile, memory.L2Raw, memory.L3Fact, memory.L4Summary, memory.L7Intention,
+	}
+}
+
+// System2Layers are the layers only the slow path produces.
+func System2Layers() []memory.Layer {
+	return []memory.Layer{memory.L5Knowledge, memory.L6Schema}
 }
 
 // Describe is the startup-log and status spelling of a mode.
@@ -129,9 +156,9 @@ func (m Mode) Describe() string {
 	case ModeLite:
 		return "lite (raw + local embeddings, no LLM call, nothing leaves the machine)"
 	case ModePro:
-		return "pro (per-write extraction, all 7 layers, no slow path)"
+		return "pro (per-write extraction: L1-L4 + L7, no slow path)"
 	default:
-		return "ultra (per-write extraction + periodic consolidation across memories)"
+		return "ultra (per-write extraction + slow path adding L5 knowledge and L6 schemas)"
 	}
 }
 

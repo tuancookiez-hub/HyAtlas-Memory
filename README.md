@@ -113,9 +113,18 @@ The three modes form a ladder of reasoning scope, not of latency:
 
 | Mode | LLM calls | Reasoning scope | Layers | Consolidation |
 |---|---|---|---|---|
-| `lite` | none | — | L2 Raw only | no |
-| `pro` | one per write | within one turn | all 7 | no |
-| `ultra` *(default)* | one per write **+** periodic batch | **across memories and time** | all 7, rewritten | **yes** |
+| `lite` | none | — | **1 / 7** — L2 Raw only | no |
+| `pro` | one per write | within one turn | **5 / 7** — L1, L2, L3, L4, L7 | no |
+| `ultra` *(default)* | one per write **+** periodic batch | **across memories and time** | **7 / 7** | **yes** |
+
+The two systems own disjoint layers:
+
+- **System1 (per turn)** — L1 Profile, L2 Raw, L3 Fact, L4 Summary, L7 Intention.
+  What one turn can actually evidence.
+- **System2 (slow path)** — L5 Knowledge, L6 Schema. A relation worth keeping is
+  corroborated by more than one turn, and a schema is a *recurring* pattern, so
+  neither can come from a single turn. Ultra is the only mode that runs System2,
+  which is why it is the only one that fills L5 and L6.
 
 Whether a write *blocks* on its extraction is a separate knob
 (`HYATLAS_SYNC_EXTRACT=on|off`), not part of the mode. Pro blocks by default and

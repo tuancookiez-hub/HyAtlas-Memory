@@ -27,6 +27,18 @@ func NewLLMClient(baseURL, key, model string) *LLMClient {
 		Client: &http.Client{Timeout: 180 * time.Second}}
 }
 
+// HasCredential reports whether any usable key is available, resolving the key
+// file if one is configured.
+//
+// Without this the server cannot tell "endpoint configured and ready" from
+// "endpoint defaulted, no key". The two look identical in the startup line
+// because LLMModel always has a default, so a fresh install in pro or ultra mode
+// appeared healthy and then failed every write with a bare "failed" whose reason
+// sat in a log file nobody reads.
+func (l *LLMClient) HasCredential() bool {
+	return l != nil && l.resolveKey() != ""
+}
+
 // resolveKey returns the bearer key to use for this request. When KeyFile is
 // set it is read live, so a rotating credential — e.g. the 1-hour JWT Hermes
 // keeps fresh in auth.json — never goes stale the way a startup-frozen env
@@ -70,6 +82,13 @@ func extractKey(b []byte) string {
 
 // Facts, Summary, Knowledge, Schema, Intention is the structured output the LLM
 // returns for one raw input. It drives the full 7-layer promotion.
+// Extraction is the structured result of one System1 pass over a single input.
+//
+// Knowledge and Schemas are retained for tolerant parsing — a model that
+// volunteers them must not break the decode — but the per-turn prompt no longer
+// requests them and promoteExtraction no longer writes them. L5 knowledge and
+// L6 schemas are System2 products, synthesised across many memories by the
+// consolidation pass.
 type Extraction struct {
 	Facts     []Fact     `json:"facts"`
 	Summary   *Summary   `json:"summary,omitempty"`
@@ -159,20 +178,23 @@ func (l *LLMClient) Complete(ctx context.Context, text string) (*Extraction, err
 }
 
 func (l *LLMClient) completeOnce(ctx context.Context, text string, reinforce bool) (*Extraction, error) {
+	// System1: this pass sees ONE turn, so it may only produce what a single
+	// turn can actually evidence — facts, a narrative summary of itself, and the
+	// current intention. L5 knowledge and L6 schemas are deliberately NOT
+	// requested here: a recurring pattern is by definition not observable in one
+	// turn, and asking for one produced guesses that then competed with the real
+	// thing at retrieval time. The slow path owns those layers.
 	system := `You are a memory extraction engine. Given one user input, output a JSON object with EXACTLY these keys:
 {
   "facts": [{"data": "<durable atomic fact>", "layer": "user_preferences|project_state|technical_lesson|decision|negative_knowledge"}],
   "summary": {"text": "<1-2 sentence narrative of what this input is about and why it matters>"},
-  "knowledge": [{"from": "<entity/subject>", "relation": "<relation>", "to": "<entity/object>"}],
-  "schemas": [{"pattern": "<recurring structural pattern>", "context": "<when it applies>"}],
   "intention": {"goal": "<what the user is trying to achieve right now>"}
 }
 Rules:
 - facts: ONLY durable, non-obvious facts worth remembering. Do not fabricate.
 - summary: synthesize the ARC of this input, not just restate it.
-- knowledge: extract 0-4 entity-relation-entity triples ONLY if meaningful.
-- schemas: extract 0-2 recurring patterns ONLY if this is a repeated/structural case.
 - intention: the immediate goal, or null if none.
+- Do NOT invent patterns or entity relations; those come from a later pass.
 Return ONLY valid JSON, no prose, no markdown fences.`
 
 	user := "Input: " + text
