@@ -127,8 +127,13 @@ class HyatlasProcess:
             k: v for k, v in os.environ.items()
             if k in allow or k.startswith("HYATLAS_")
         }
-        env.setdefault("HYATLAS_GO_HOST", "127.0.0.1")
+        env.setdefault("HYATLAS_GO_HOST", str(self._config.get("server_host") or "127.0.0.1"))
         env.setdefault("HYATLAS_GO_PORT", str(self._config.get("server_port", 19528)))
+        # The client resolves both of those from config, so the spawned server has
+        # to bind the same pair or the plugin talks to a port nothing listens on.
+        data = str(self._config.get("data_dir") or "").strip()
+        if data:
+            env.setdefault("HYATLAS_GO_DATA", data)
 
         # The extraction mode is a privacy boundary, so only a value start() has
         # already validated and normalised is forwarded. Empty means "let the

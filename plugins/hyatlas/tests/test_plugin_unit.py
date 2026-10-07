@@ -571,6 +571,84 @@ def test_subprocess_env_keeps_what_the_os_needs(monkeypatch):
     assert env["HYATLAS_GO_HOST"] == "127.0.0.1"
 
 
+# Every setting the SERVER reads must reach the spawned server. The client-only
+# ones are listed so the guard fails loudly when a new server-read setting is
+# added to SCHEMA without being forwarded -- the bug this pins is data_dir, which
+# was a declared, validated, documented setting that _env() never forwarded, so
+# the Desktop's value was silently ignored and the server used its own default.
+_SERVER_READ = {
+    "data_dir": "HYATLAS_GO_DATA",
+    "server_host": "HYATLAS_GO_HOST",
+    "server_port": "HYATLAS_GO_PORT",
+    "mode": "HYATLAS_MODE",
+    "sync": "HYATLAS_SYNC_EXTRACT",
+    "llm_base": "HYATLAS_LLM_BASE",
+    "llm_model": "HYATLAS_LLM_MODEL",
+}
+_CLIENT_ONLY = {"user_id", "agent_id", "auto_start", "binary_path",
+                "launcher_path", "request_timeout", "llm_key"}
+
+
+def test_every_server_read_setting_is_forwarded_to_the_child(monkeypatch):
+    """A config value the server reads must arrive as the env var it reads.
+
+    Class-level guard: catches any SCHEMA entry that is meaningful to the server
+    but missing from _env(). Without this, a setting can be declared, validated,
+    documented and still do nothing.
+    """
+    proc_mod = _load_sibling("process")
+    settings = _load_sibling("settings")
+    _poison(monkeypatch, {"PATH": "/usr/bin", "HOME": "/home/u"})
+
+    cfg = {"data_dir": "/srv/hyatlas-data", "server_host": "10.9.8.7",
+           "server_port": 20777, "mode": "pro", "sync": "off",
+           "llm_base": "https://llm.test/v1", "llm_model": "test/model"}
+    env = proc_mod.HyatlasProcess(cfg)._env()
+
+    for key, var in _SERVER_READ.items():
+        assert env.get(var) == str(cfg[key]), (
+            f"setting {key!r} -> {var}: server would fall back to its own "
+            f"default and silently ignore the configured {cfg[key]!r}")
+
+
+def test_server_read_settings_cover_every_schema_key(monkeypatch):
+    """The two tables above must stay exhaustive, or the guard has blind spots."""
+    settings = _load_sibling("settings")
+    keys = {f["key"] for f in settings.SCHEMA}
+    assert keys == set(_SERVER_READ) | _CLIENT_ONLY, (
+        f"SCHEMA drifted: unclassified={sorted(keys - set(_SERVER_READ) - _CLIENT_ONLY)}, "
+        f"stale={sorted((set(_SERVER_READ) | _CLIENT_ONLY) - keys)}")
+
+
+def test_data_dir_setting_reaches_the_server(monkeypatch):
+    """The regression itself: data_dir was a documented no-op on the spawn path."""
+    proc_mod = _load_sibling("process")
+    _poison(monkeypatch, {"PATH": "/usr/bin", "HOME": "/home/u"})
+
+    env = proc_mod.HyatlasProcess({"data_dir": "/srv/hyatlas-data"})._env()
+    assert env["HYATLAS_GO_DATA"] == "/srv/hyatlas-data"
+
+    # Empty means "let the server use its own default", so nothing is set.
+    env2 = proc_mod.HyatlasProcess({})._env()
+    assert "HYATLAS_GO_DATA" not in env2, "an empty data_dir must not override the server default"
+
+
+def test_explicit_env_beats_config_for_the_forwarded_settings(monkeypatch):
+    """setdefault keeps an exported variable authoritative, matching mode/sync."""
+    proc_mod = _load_sibling("process")
+    _poison(monkeypatch, {"PATH": "/usr/bin", "HOME": "/home/u",
+                          "HYATLAS_GO_DATA": "/from/env",
+                          "HYATLAS_GO_HOST": "1.2.3.4",
+                          "HYATLAS_GO_PORT": "31337"})
+
+    env = proc_mod.HyatlasProcess({"data_dir": "/from/config",
+                                   "server_host": "10.0.0.1",
+                                   "server_port": 19999})._env()
+    assert env["HYATLAS_GO_DATA"] == "/from/env"
+    assert env["HYATLAS_GO_HOST"] == "1.2.3.4"
+    assert env["HYATLAS_GO_PORT"] == "31337"
+
+
 def test_subprocess_env_passes_all_hyatlas_vars(monkeypatch):
     """HYATLAS_* is the server's configuration surface, so all of it must pass."""
     proc_mod = _load_sibling("process")
