@@ -3,7 +3,8 @@
 Persistent 7-layer memory for Hermes backed by **HyAtlas v4**: a pure-Go,
 single-binary, local-first memory server (Apache-2.0). Chromem-go embedded
 vector store, in-process BGE-small embeddings via onnxruntime-go (no Python,
-no GPU, no external embedding service), async LLM fact extraction, and a
+no GPU, no external embedding service), LLM fact extraction with a selectable
+mode ladder (lite makes no LLM call at all), and a
 bitemporal knowledge graph with source citations.
 
 This plugin is the Hermes-side integration: a `MemoryProvider` implementation
