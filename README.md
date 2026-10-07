@@ -31,6 +31,10 @@ Useful env vars:
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the BGE model is cached | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
 | `HYATLAS_MODE` | Extraction mode: `lite` \| `pro` \| `ultra` | `ultra` |
+| `HYATLAS_SYNC_EXTRACT` | Whether a write blocks on extraction: `on` \| `off` | *(follows the mode)* |
+| `HYATLAS_CONSOLIDATE_EVERY` | Ultra only: how often the slow path runs | `6h` |
+| `HYATLAS_CONSOLIDATE_BATCH` | Ultra only: max facts per consolidation call | `200` |
+| `HYATLAS_RAW_RETENTION` | Ultra only: decay uncited L2 Raw older than this | *(never delete)* |
 | `HYATLAS_NO_MODEL=1` | Skip the model download | (downloads) |
 
 ---
@@ -104,8 +108,38 @@ The extraction endpoint is yours to choose per the tier you are on — set
 `HYATLAS_LLM_BASE`, `HYATLAS_LLM_MODEL` and `HYATLAS_LLM_KEY` to any
 OpenAI-compatible API. To keep conversation text on the machine, set `HYATLAS_MODE=lite`: no LLM
 call is made at all, so only the raw trace and local embeddings are stored.
-`HYATLAS_MODE=pro` extracts synchronously (the write waits), and the default
-`ultra` extracts on a background worker while filling all 7 layers.
+
+The three modes form a ladder of reasoning scope, not of latency:
+
+| Mode | LLM calls | Reasoning scope | Layers | Consolidation |
+|---|---|---|---|---|
+| `lite` | none | — | L2 Raw only | no |
+| `pro` | one per write | within one turn | all 7 | no |
+| `ultra` *(default)* | one per write **+** periodic batch | **across memories and time** | all 7, rewritten | **yes** |
+
+Whether a write *blocks* on its extraction is a separate knob
+(`HYATLAS_SYNC_EXTRACT=on|off`), not part of the mode. Pro blocks by default and
+ultra does not, but either can be overridden — capability follows the mode,
+latency follows the knob.
+
+| `HYATLAS_SYNC_EXTRACT` | Effect |
+|---|---|
+| *(unset)* | follow the mode: `pro` blocks, `ultra` returns immediately |
+| `on` | the write waits for extraction and reports `done` / `failed` |
+| `off` | the write returns `pending`; extraction runs behind it |
+
+Ultra-only tuning:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `HYATLAS_CONSOLIDATE_EVERY` | `6h` | how often the slow path runs |
+| `HYATLAS_CONSOLIDATE_BATCH` | `200` | max facts per consolidation call |
+| `HYATLAS_RAW_RETENTION` | *(unset = never delete)* | age after which uncited L2 Raw is decayed |
+
+`HYATLAS_RAW_RETENTION` is opt-in because it deletes. Raw memories cited by a
+live L5 graph edge are always protected, so decay cannot leave the knowledge
+graph pointing at a memory that no longer exists.
+
 
 Otherwise the endpoint is yours to choose per the tier you are on — set
 `HYATLAS_LLM_BASE`, `HYATLAS_LLM_MODEL` and `HYATLAS_LLM_KEY` to any

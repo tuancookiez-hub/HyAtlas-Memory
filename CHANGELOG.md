@@ -1,72 +1,123 @@
 # Changelog
 
-## [4.3.0] — 2026-10-07
+## [4.3.0] — 2026-10-08
 
-Adds the extraction-mode selector. Until now every write ran the full async
-LLM pipeline with no way to opt out, so the only way to keep conversation text
-on the machine was to not run the server. The 7-layer model, local embeddings and
-Chromem store are unchanged in all three modes; what differs is whether an
-extraction LLM is called, and whether the write waits for it.
+Adds the extraction-mode selector and the slow path that makes the three modes a
+real ladder. Until now every write ran the same async LLM pipeline with no way to
+opt out, so the only way to keep conversation text on the machine was to not run
+the server at all.
+
+The distinction between the modes is **how widely the server reasons**, not how
+long a write takes:
+
+| Mode | LLM calls | Reasons about | Consolidation |
+|---|---|---|---|
+| `lite` | none | — | no |
+| `pro` | one per write | one turn | no |
+| `ultra` | one per write + periodic batch | across memories and time | yes |
 
 ### Added
 
-- **`HYATLAS_MODE` — `lite` | `pro` | `ultra` (default).**
-  - `lite` makes no LLM call at all. The raw trace and local embeddings are
-    stored; extraction is skipped, so conversation text never leaves the
-    machine. This is the only fully-offline mode.
-  - `pro` extracts synchronously — one LLM call per write, and the request
-    blocks until it returns, so the response reports the real outcome
-    (`done` / `failed`) instead of `pending`.
-  - `ultra` is today's behaviour: the same extraction on a background worker
-    while filling all 7 layers.
-  Settable via env var, `docker-compose.yml`, `.env`, the Windows launcher, and
-  as a `mode` plugin setting in the Desktop settings form (forwarded to a
-  spawned server as `HYATLAS_MODE`).
-- **`mode` plugin setting** with `choices: ["", "lite", "pro", "ultra"]`. Empty
-  means "let the server decide", so nothing is forwarded and the server keeps
-  its own default. `/api/v1/status` remains authoritative at runtime, since a
-  manually started server may be configured differently from the plugin.
-- **`/api/v1/status` reports `mode`, `mode_detail` and `uses_llm`.** In lite the
-  `llm` field reads `unused` rather than `ok`, so status cannot claim a
-  capability the mode deliberately does not use. The startup banner and the
-  dashboard's `/api/info` report the configured mode; the dashboard previously
-  hardcoded `"ultra"` regardless of configuration.
+- **`HYATLAS_MODE` — `lite` | `pro` | `ultra` (default).** `lite` makes no LLM
+  call at all: the raw trace and local embeddings are stored and nothing leaves
+  the machine. `pro` extracts once per write and reasons within that single
+  turn. `ultra` adds the slow path below. Settable via env var,
+  `docker-compose.yml`, `.env`, the Windows launcher, and as a `mode` plugin
+  setting forwarded to a spawned server.
+- **The slow path (`consolidate.go`) — what ultra adds over pro.** A ticker-driven
+  pass reasons *across* accumulated memories rather than within one turn, which
+  is the only way to notice things no single write can see:
+  - **merges** contradicting or duplicate L3 facts, writing the replacement
+    before pruning what it absorbed;
+  - **generalises L6 schemas** that are only visible across many turns;
+  - **synthesises a cross-session L4 arc** from the accumulated summaries;
+  - **decays** L2 raw history past `HYATLAS_RAW_RETENTION`.
+  Tuned by `HYATLAS_CONSOLIDATE_EVERY` (default `6h`) and
+  `HYATLAS_CONSOLIDATE_BATCH` (default `200` facts per call, so the prompt cannot
+  grow without bound).
+- **`HYATLAS_SYNC_EXTRACT=on|off`** — whether a write *blocks* on its extraction.
+  This is a separate knob from the mode, because blocking is a latency question
+  and the mode is a capability question. Unset follows the mode: pro blocks and
+  reports `done`/`failed`, ultra returns `pending` immediately. Either can be
+  overridden, so `ultra` can be made blocking without losing consolidation and
+  `pro` can be made background without gaining it. Exposed as a `sync` plugin
+  setting too.
+- **Deletion safety guards**, since the slow path is the first code that removes
+  stored memories:
+  - a merge or drop may only name IDs that were actually in the input batch, so
+    a hallucinated ID in the model's reply cannot delete anything;
+  - a "merge" naming fewer than two real facts is skipped — it would be a
+    rewrite that loses provenance for no dedup gain;
+  - **L2 raw cited by a live L5 graph edge is never decayed**, so consolidation
+    cannot leave the knowledge graph pointing at a memory that no longer exists;
+  - `HYATLAS_RAW_RETENTION` is opt-in. Unset, nothing is ever deleted.
+- **`/api/v1/status` reports `mode`, `mode_detail`, `uses_llm`, `extract_sync`,
+  `consolidations` and `last_consolidated`.** `consolidations` is `-1` when the
+  mode has no slow path and `0` when it has one that has not run yet, so the two
+  are distinguishable. In lite the `llm` field reads `unused` rather than `ok`.
+  The startup banner and the dashboard's `/api/info` report the configured mode;
+  the dashboard previously hardcoded `"ultra"` regardless of configuration.
 
 ### Changed
 
+- **`/api/v1/digest` is real.** It returned a hardcoded `digest_ok: true` with a
+  note saying "a full scheduled digest runs here" — nothing did, and a caller
+  could not tell whether consolidation had ever run. `GET` now reports run count
+  and the last report, `POST` triggers a pass on demand, and a mode with no slow
+  path says so explicitly instead of claiming success.
 - **Extraction is one code path, not two.** `handleAdd` and `handleReprocess`
-  each kept their own inline LLM call with a duplicated 180s timeout. Both now
-  go through `Server.extract()`, with `extractForMode()` deciding sync vs
-  background. `extraction_status` is derived from what actually happened
-  (`skipped` / `pending` / `done` / `failed` / `unavailable`) rather than being
-  hardcoded `"pending"` at write time.
-- **`handleReprocess` explains itself in lite.** It previously walked the raw
-  rows and reported zero work done with no reason. It now says extraction is
-  disabled for the configured mode.
-- **An invalid mode is fatal, and validated before spawning.** The server
-  rejects an unrecognised `HYATLAS_MODE` rather than silently falling back to
-  ultra — someone who typos `lite` and quietly gets ultra would have their
-  conversation text sent to an extraction LLM they believed they had turned off,
-  which is the exact boundary this selector exists to give. The plugin validates
-  through the same shared list and raises from `start()` before any child
-  process exists, so the failure is reported where the user can see it instead
-  of in `hyatlas.log` after a server that dies on boot.
+  each kept their own inline LLM call with a duplicated 180s timeout. Both now go
+  through `Server.extract()`. The HTTP transport moved into a shared
+  `LLMClient.chat()`, so extraction and consolidation cannot drift on the two
+  things that are easy to get wrong once and hard to notice later: the Cloudflare
+  WAF 403s Go's default User-Agent, and the key must be resolved per request
+  because a rotating JWT goes stale if frozen at startup.
+- **`extraction_status` is derived**, not hardcoded `"pending"` at write time:
+  `skipped` / `pending` / `done` / `failed` / `unavailable`.
+- **`handleReprocess` explains itself in lite** rather than reporting zero work
+  done with no reason.
+- **An invalid mode or sync value is fatal, and validated before spawning.** The
+  server rejects an unrecognised `HYATLAS_MODE` rather than silently falling back
+  to ultra — someone who typos `lite` and quietly gets ultra would have their
+  conversation text sent to an LLM they believed they had turned off, which is
+  the exact boundary this selector exists to give. The plugin validates through
+  the same alias table the server uses and raises from `start()` before any child
+  process exists, so the failure surfaces where the user can see it instead of in
+  `hyatlas.log` after a server that dies on boot.
+- **`test_every_setting_is_documented_in_the_readme` was vacuous.** It checked
+  whether the setting name appeared anywhere in the README, so `sync` "passed"
+  because the word occurs inside "synchronous". It now requires an actual
+  settings-table row.
 
 ### Tests
 
-- 14 new Go tests (`mode_test.go`) covering parsing, the zero value, per-mode
-  semantics, and each mode's behaviour against a real mock LLM server — lite
-  makes zero calls, ultra returns before the LLM responds, pro blocks and
-  reports failure, and status/dashboard report the configured mode.
-- 8 new Python tests covering validation, normalisation, env override, both
-  config schemas declaring `mode`, and the spawner forwarding only a validated
-  value while keeping the env allowlist intact.
-- 53 Python tests pass (4 skipped where fastapi is unavailable); 49 Go test
-  functions pass under `-race`. Every new assertion was verified non-vacuous by
-  reverting the behaviour it pins and confirming the matching tests fail
-  (9/9 mutations caught).
+- 75 Go test functions pass under `-race`; 60 Python tests pass (4 skipped where
+  fastapi is unavailable); `hermes plugins validate` passes 15/15.
+- `TestModesFormAMonotonicLadder` asserts each tier does everything the one below
+  it does, so "ultra is better than pro" is a checked property rather than a
+  claim in prose. `TestSyncKnobIsIndependentOfMode` and
+  `TestSyncKnobDoesNotChangeCapability` pin the orthogonality: forcing ultra to
+  block must not disable consolidation, and forcing pro to background must not
+  grant it.
+- `TestParseSyncParityWithPlugin` pins one truth table for both validators, so
+  the Desktop form cannot accept a value the server then treats as fatal.
+- Slow-path coverage includes merge-and-prune ordering, unknown-ID rejection,
+  single-fact-merge rejection, citation protection during decay, decay disabled
+  without retention, null-arc handling, LLM failure survival, garbage-reply
+  tolerance, batch capping, ticker firing and stopping on cancel, and zero
+  interval not spinning.
+- Every new assertion was verified non-vacuous by reverting the behaviour it pins
+  and confirming the matching test fails — 10/10 guards caught, including all
+  four deletion guards.
+- All five mode/knob combinations were exercised end to end against real servers
+  with a call-counting mock LLM. Measured: `lite` 0 calls / 19 ms; `pro` 1 call /
+  115 ms blocking / no consolidation; `ultra` 1 + 1 calls / 19 ms / consolidation
+  ran; `ultra` with `sync=on` 111 ms **and still consolidated**; `pro` with
+  `sync=off` 17 ms **and still did not**. Ultra filled 2 L4 and 2 L6 rows where
+  pro filled 1 and 1.
 
 ---
+
 
 ## Review fixes (teknium1, PR #134419)
 

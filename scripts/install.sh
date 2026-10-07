@@ -23,8 +23,19 @@
 #                       fail to start until you supply models/ manually
 #   HYATLAS_MODE      — lite | pro | ultra (default ultra). lite does no LLM
 #                       extraction at all, so conversation text never leaves
-#                       the machine; pro extracts synchronously; ultra extracts
-#                       on a background worker.)
+#                       the machine; pro extracts per write and reasons within
+#                       one turn; ultra adds the slow path — periodic
+#                       consolidation that reasons across memories.
+#   HYATLAS_SYNC_EXTRACT
+#                     — on | off. Whether a write blocks on extraction. Unset
+#                       follows the mode (pro blocks, ultra does not).
+#   HYATLAS_CONSOLIDATE_EVERY
+#                     — ultra only; how often the slow path runs (default 6h).
+#   HYATLAS_CONSOLIDATE_BATCH
+#                     — ultra only; max facts per consolidation call (200).
+#   HYATLAS_RAW_RETENTION
+#                     — ultra only; age after which uncited L2 raw is decayed.
+#                       Unset means raw history is never deleted.)
 
 set -euo pipefail
 
@@ -356,8 +367,14 @@ $(printf '\033[0;32m' )HyAtlas-Memory v4 installed.$(printf '\033[0m')
 
   Choose an extraction mode with HYATLAS_MODE (default ultra):
       lite   no LLM call; raw + local embeddings only, nothing leaves the machine
-      pro    one synchronous extraction per write; the write waits for it
-      ultra  the same extraction on a background worker; all 7 layers
+      pro    one extraction per write; reasons within that single turn
+      ultra  pro, plus the slow path: periodic consolidation across memories
+             (merges contradictions, generalises schemas, synthesises an arc)
+
+    Whether a write BLOCKS is a separate knob, not the mode:
+      HYATLAS_SYNC_EXTRACT=on   the write waits and reports done/failed
+      HYATLAS_SYNC_EXTRACT=off  the write returns pending; extraction runs behind
+      (unset follows the mode: pro blocks, ultra does not)
 
   Then, unless you chose lite, set your LLM endpoint for fact extraction. Pick
   per your tier — any OpenAI-compatible API works:

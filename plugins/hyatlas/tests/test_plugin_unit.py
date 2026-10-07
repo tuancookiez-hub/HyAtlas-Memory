@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -886,11 +887,17 @@ def test_settings_schema_is_the_single_source():
 
 
 def test_every_setting_is_documented_in_the_readme():
-    """A setting nobody documents is a setting nobody can find."""
+    """A setting nobody documents is a setting nobody can find.
+
+    Matched as a table row (``| `name` |``), not as a bare substring: "sync"
+    occurs inside "synchronous" elsewhere in this README, so a substring check
+    passed while the setting itself was undocumented.
+    """
     settings = _load_sibling("settings")
     readme = (Path(_PKG) / "README.md").read_text(encoding="utf-8")
-    undocumented = [k for k in settings.KEYS if k not in readme]
-    assert not undocumented, f"settings absent from the plugin README: {undocumented}"
+    rows = set(re.findall(r"^\| `([a-z_]+)` \|", readme, re.M))
+    undocumented = [k for k in settings.KEYS if k not in rows]
+    assert not undocumented, f"settings absent from the plugin README table: {undocumented}"
 
 
 # ---- extraction-mode setting (v4.3.0) ----
@@ -979,3 +986,70 @@ def test_mode_forwarding_keeps_env_allowlist():
         assert "HY_TEST_SECRET" not in env
     finally:
         os.environ.pop("HY_TEST_SECRET", None)
+
+
+# ---- sync knob (separate from mode) ----
+
+def test_sync_setting_validates_and_aliases():
+    settings = _load_sibling("settings")
+    assert settings.VALID_SYNC == ("on", "off")
+    # Every alias must resolve to the canonical value the server also accepts,
+    # or the Desktop form and the server disagree about one setting.
+    for raw, want in [("", ""), ("on", "on"), ("ON", "on"), ("true", "on"),
+                      ("1", "on"), ("yes", "on"), ("off", "off"),
+                      ("false", "off"), ("0", "off"), ("no", "off")]:
+        assert settings.sync({"sync": raw}) == want, raw
+
+
+def test_sync_setting_rejects_unknown_value():
+    settings = _load_sibling("settings")
+    for bad in ("maybe", "2", "on/off"):
+        with pytest.raises(ValueError) as ei:
+            settings.sync({"sync": bad})
+        assert bad.lower() in str(ei.value).lower()
+
+
+def test_sync_declared_in_both_schemas():
+    """Manifest and provider schema must both expose sync."""
+    yaml = pytest.importorskip("yaml")
+    declared = yaml.safe_load((Path(_PKG) / "plugin.yaml").read_text(encoding="utf-8"))["config_schema"]
+    assert "sync" in declared
+    assert declared["sync"]["choices"] == ["", "on", "off"]
+    provider = {f["key"]: f for f in mod.HyatlasMemoryProvider().get_config_schema()}
+    assert "sync" in provider
+    assert provider["sync"]["choices"] == ["", "on", "off"]
+
+
+def test_spawner_forwards_validated_sync_only():
+    proc = _load_sibling("process")
+    hp = proc.HyatlasProcess({"mode": "ultra", "sync": "on"})
+    hp._mode, hp._sync = "ultra", "on"
+    env = hp._env()
+    assert env.get("HYATLAS_SYNC_EXTRACT") == "on"
+    assert env.get("HYATLAS_MODE") == "ultra"
+
+
+def test_spawner_omits_sync_when_unset():
+    proc = _load_sibling("process")
+    hp = proc.HyatlasProcess({})
+    hp._mode = hp._sync = ""
+    os.environ.pop("HYATLAS_SYNC_EXTRACT", None)
+    assert "HYATLAS_SYNC_EXTRACT" not in hp._env(), "empty must not pin the child"
+
+
+def test_spawner_start_rejects_invalid_sync():
+    proc = _load_sibling("process")
+    hp = proc.HyatlasProcess({"sync": "maybe"})
+    with pytest.raises(ValueError):
+        hp.start()
+    assert hp._proc is None
+
+
+def test_mode_and_sync_are_independent_settings():
+    """Setting one must not imply the other; they are orthogonal knobs."""
+    settings = _load_sibling("settings")
+    for m in settings.VALID_MODES:
+        for s in settings.VALID_SYNC:
+            cfg = {"mode": m, "sync": s}
+            assert settings.mode(cfg) == m
+            assert settings.sync(cfg) == s

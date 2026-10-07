@@ -31,9 +31,10 @@ function Start-V4 {
     $env:HYATLAS_GRAPH_PATH = (Join-Path $data "graph.json")
     $env:HYATLAS_EMBED_BASE = "bge"
     $env:HYATLAS_MODEL_DIR  = (Join-Path $goDir "models")
-    # Extraction mode: lite (no LLM, text never leaves the machine),
-    # pro (synchronous extraction), ultra (background, all 7 layers).
-    # Unset means the server default, ultra.
+    # Extraction mode: lite (no LLM call, text never leaves the machine),
+    # pro (per-write extraction, reasons within one turn), ultra (adds the slow
+    # path: periodic consolidation across memories). Unset means ultra.
+    # HYATLAS_SYNC_EXTRACT=on|off separately controls whether a write blocks.
     if ($env:HYATLAS_MODE) { Write-Host "  mode: $env:HYATLAS_MODE" }
 
     $env:HYATLAS_LLM_BASE   = "https://inference-api.nousresearch.com/v1"

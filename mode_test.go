@@ -76,8 +76,19 @@ func TestModeZeroValueIsUltra(t *testing.T) {
 	if !m.UsesLLM() {
 		t.Error("zero value disabled the LLM; it silently behaves like lite")
 	}
-	if m.Sync() {
-		t.Error("zero value is synchronous; it silently behaves like pro")
+	// The zero value IS ultra, so it must do everything ultra does — including
+	// the slow path — and must not block on extraction.
+	if SyncAuto.Blocks(m) {
+		t.Error("zero value blocks on extraction; it silently behaves like pro")
+	}
+	if !m.Consolidates() {
+		t.Error("zero value skipped the slow path; it no longer behaves like ultra")
+	}
+	if m.Rank() != 2 {
+		t.Errorf("Rank() = %d, want 2 (ultra)", m.Rank())
+	}
+	if m.Describe() != ModeUltra.Describe() {
+		t.Errorf("zero value Describe()=%q, want the ultra spelling %q", m.Describe(), ModeUltra.Describe())
 	}
 	if m.LayersActive() != 7 {
 		t.Errorf("LayersActive() = %d, want 7", m.LayersActive())
@@ -86,28 +97,137 @@ func TestModeZeroValueIsUltra(t *testing.T) {
 
 func TestModeSemantics(t *testing.T) {
 	cases := []struct {
-		mode       Mode
-		usesLLM    bool
-		sync       bool
-		layers     int
-		describHas string
+		mode        Mode
+		usesLLM     bool
+		consolidate bool
+		layers      int
+		rank        int
+		blocksByDef bool
+		describHas  string
 	}{
-		{ModeLite, false, false, 1, "no LLM extraction"},
-		{ModePro, true, true, 7, "synchronous"},
-		{ModeUltra, true, false, 7, "background"},
+		{ModeLite, false, false, 1, 0, false, "no LLM call"},
+		{ModePro, true, false, 7, 1, true, "no slow path"},
+		{ModeUltra, true, true, 7, 2, false, "consolidation"},
 	}
 	for _, c := range cases {
 		if got := c.mode.UsesLLM(); got != c.usesLLM {
 			t.Errorf("%s UsesLLM() = %v, want %v", c.mode, got, c.usesLLM)
 		}
-		if got := c.mode.Sync(); got != c.sync {
-			t.Errorf("%s Sync() = %v, want %v", c.mode, got, c.sync)
+		if got := c.mode.Consolidates(); got != c.consolidate {
+			t.Errorf("%s Consolidates() = %v, want %v", c.mode, got, c.consolidate)
 		}
 		if got := c.mode.LayersActive(); got != c.layers {
 			t.Errorf("%s LayersActive() = %d, want %d", c.mode, got, c.layers)
 		}
+		if got := c.mode.Rank(); got != c.rank {
+			t.Errorf("%s Rank() = %d, want %d", c.mode, got, c.rank)
+		}
+		if got := SyncAuto.Blocks(c.mode); got != c.blocksByDef {
+			t.Errorf("%s default Blocks() = %v, want %v", c.mode, got, c.blocksByDef)
+		}
 		if d := c.mode.Describe(); !strings.Contains(d, c.describHas) {
 			t.Errorf("%s Describe() = %q, want it to mention %q", c.mode, d, c.describHas)
+		}
+	}
+}
+
+// The modes must form a real ladder: each tier does everything the one below it
+// does, plus more. Without this the tiers are just three unrelated settings and
+// "ultra is better than pro" is marketing rather than a property.
+func TestModesFormAMonotonicLadder(t *testing.T) {
+	for i := 1; i < len(validModes); i++ {
+		lo, hi := validModes[i-1], validModes[i]
+		if hi.Rank() <= lo.Rank() {
+			t.Errorf("%s.Rank()=%d not above %s.Rank()=%d", hi, hi.Rank(), lo, lo.Rank())
+		}
+		if hi.LayersActive() < lo.LayersActive() {
+			t.Errorf("%s populates fewer layers (%d) than %s (%d)",
+				hi, hi.LayersActive(), lo, lo.LayersActive())
+		}
+		// Capability must be monotonic: anything the lower tier does, the higher
+		// one does too. Lite makes no LLM call; the two above it both do.
+		if lo.UsesLLM() && !hi.UsesLLM() {
+			t.Errorf("%s uses an LLM but %s does not — capability regresses", lo, hi)
+		}
+		if lo.Consolidates() && !hi.Consolidates() {
+			t.Errorf("%s consolidates but %s does not — capability regresses", lo, hi)
+		}
+	}
+	// Ultra must be strictly more capable than pro, not merely different.
+	if ModeUltra.Consolidates() == ModePro.Consolidates() {
+		t.Error("ultra and pro both do or both skip consolidation; they are then the same tier")
+	}
+}
+
+// The sync knob is orthogonal to the mode: any mode that extracts can be forced
+// to block or not block, so pro and ultra differ in capability rather than in
+// latency alone.
+func TestSyncKnobIsIndependentOfMode(t *testing.T) {
+	cases := []struct {
+		sync Sync
+		mode Mode
+		want bool
+	}{
+		{SyncAuto, ModeLite, false},  // never blocks: nothing to wait for
+		{SyncOn, ModeLite, false},    // forcing on cannot make lite call an LLM
+		{SyncAuto, ModePro, true},    // pro defaults to blocking
+		{SyncOff, ModePro, false},    // but can be made background
+		{SyncAuto, ModeUltra, false}, // ultra defaults to background
+		{SyncOn, ModeUltra, true},    // but can be made blocking
+	}
+	for _, c := range cases {
+		if got := c.sync.Blocks(c.mode); got != c.want {
+			t.Errorf("sync=%q mode=%s Blocks() = %v, want %v", c.sync, c.mode, got, c.want)
+		}
+	}
+}
+
+// Forcing ultra to block must not silently disable consolidation — that would
+// turn ultra into pro and misreport what the server does.
+func TestSyncKnobDoesNotChangeCapability(t *testing.T) {
+	for _, s := range []Sync{SyncAuto, SyncOn, SyncOff} {
+		if !ModeUltra.Consolidates() {
+			t.Errorf("ultra stopped consolidating under sync=%q", s)
+		}
+		if ModePro.Consolidates() {
+			t.Errorf("pro gained consolidation under sync=%q", s)
+		}
+	}
+}
+
+func TestParseSync(t *testing.T) {
+	for in, want := range map[string]Sync{
+		"": SyncAuto, "on": SyncOn, "ON": SyncOn, "true": SyncOn, "1": SyncOn, "yes": SyncOn,
+		"  off ": SyncOff, "false": SyncOff, "0": SyncOff, "no": SyncOff,
+	} {
+		got, err := ParseSync(in)
+		if err != nil {
+			t.Errorf("ParseSync(%q) unexpected error: %v", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("ParseSync(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for _, bad := range []string{"maybe", "sync", "2", "on/off"} {
+		if _, err := ParseSync(bad); err == nil {
+			t.Errorf("ParseSync(%q) should reject an unknown value", bad)
+		}
+	}
+}
+
+// Describe must reflect the resolved combination, so logs and status cannot
+// claim a write blocks when it does not.
+func TestSyncDescribeMatchesBlocks(t *testing.T) {
+	for _, m := range validModes {
+		for _, s := range []Sync{SyncAuto, SyncOn, SyncOff} {
+			d, b := s.Describe(m), s.Blocks(m)
+			if b && !strings.Contains(d, "blocking") {
+				t.Errorf("mode=%s sync=%q blocks but Describe()=%q", m, s, d)
+			}
+			if !b && strings.Contains(d, "blocking") {
+				t.Errorf("mode=%s sync=%q does not block but Describe()=%q", m, s, d)
+			}
 		}
 	}
 }
@@ -140,7 +260,16 @@ func TestExtractForModeUltraIsAsync(t *testing.T) {
 	called := make(chan struct{}, 1)
 	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called <- struct{}{}
-		<-release // hold the LLM so we can prove the handler did not wait
+		// Hold the LLM open so a synchronous call would be observably slow.
+		// Capped: if a regression makes this mode block, the handler returns
+		// instead of deadlocking the whole test binary until the package
+		// timeout (180s), so the failure is fast and names the real problem.
+		select {
+		case <-release:
+		case <-time.After(3 * time.Second):
+			http.Error(w, "held too long", http.StatusGatewayTimeout)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{}"}}]}`))
 	}))
@@ -160,6 +289,9 @@ func TestExtractForModeUltraIsAsync(t *testing.T) {
 	}
 	if elapsed > 500*time.Millisecond {
 		t.Errorf("ultra blocked the caller for %v; extraction should be backgrounded", elapsed)
+	}
+	if status == "failed" && elapsed > 2*time.Second {
+		t.Error("extraction ran inline and waited on the LLM; ultra must not block the write")
 	}
 	select {
 	case <-called:
@@ -327,5 +459,47 @@ func TestReprocessSkippedInLiteMode(t *testing.T) {
 	}
 	if note, _ := got["note"].(string); !strings.Contains(note, "lite") {
 		t.Errorf("reprocess note = %q, want it to explain why nothing ran", note)
+	}
+}
+
+// The plugin (Python) and the server (Go) both validate this setting. They must
+// agree exactly: a value the Desktop form permits must not be fatal on server
+// boot, and one it rejects must not silently work on the server. This table is
+// the shared contract — mirror any change in plugins/hyatlas/settings.py.
+func TestParseSyncParityWithPlugin(t *testing.T) {
+	cases := []struct {
+		in   string
+		want Sync // "" means "must error"
+		err  bool
+	}{
+		{"", SyncAuto, false},
+		{"on", SyncOn, false},
+		{"ON", SyncOn, false},
+		{"true", SyncOn, false},
+		{"1", SyncOn, false},
+		{"yes", SyncOn, false},
+		{"off", SyncOff, false},
+		{"false", SyncOff, false},
+		{"0", SyncOff, false},
+		{"no", SyncOff, false},
+		{"maybe", "", true},
+		{"2", "", true},
+		{"on/off", "", true},
+	}
+	for _, c := range cases {
+		got, err := ParseSync(c.in)
+		if c.err {
+			if err == nil {
+				t.Errorf("ParseSync(%q) = %q, want an error (the plugin rejects this too)", c.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ParseSync(%q) unexpected error: %v", c.in, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("ParseSync(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }

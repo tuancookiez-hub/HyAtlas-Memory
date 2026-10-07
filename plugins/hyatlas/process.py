@@ -65,6 +65,7 @@ class HyatlasProcess:
         self._proc: Optional[subprocess.Popen] = None
         self._log_handle: Optional[Any] = None
         self._mode = ""
+        self._sync = ""
 
     @staticmethod
     def _discover_binary() -> Optional[str]:
@@ -135,13 +136,16 @@ class HyatlasProcess:
         mode = getattr(self, "_mode", "") or settings.mode(self._config)
         if mode:
             env.setdefault("HYATLAS_MODE", mode)
+        sync = getattr(self, "_sync", "") or settings.sync(self._config)
+        if sync:
+            env.setdefault("HYATLAS_SYNC_EXTRACT", sync)
         return env
 
     def start(self) -> None:
         """Spawn the v4 Go binary as a detached subprocess.
 
-        Raises ValueError if a configured extraction mode is not one the server
-        accepts. The server treats that as fatal, so starting anyway would
+        Raises ValueError if a configured extraction mode or sync setting is not
+        one the server accepts. The server treats that as fatal, so starting anyway would
         produce a process that dies immediately and reports it only in
         ``hyatlas.log`` — and a user who meant ``lite`` would not learn that
         nothing came up at all.
@@ -154,6 +158,7 @@ class HyatlasProcess:
         # once here; _env() forwards the result instead of re-reading the raw
         # setting, so an un-normalised value can never reach the child.
         self._mode = settings.mode(self._config)
+        self._sync = settings.sync(self._config)
 
         binary = self._config.get("binary_path") or self._discover_binary()
         if not binary:

@@ -31,6 +31,8 @@ type Server struct {
 	llmModel string
 	llmBase  string
 	mode     Mode
+	sync     Sync
+	cons     *Consolidator
 	start    time.Time
 	dataDir  string
 
@@ -75,6 +77,13 @@ type Status struct {
 	Mode          Mode           `json:"mode"`
 	ModeDetail    string         `json:"mode_detail"`
 	UsesLLM       bool           `json:"uses_llm"`
+	// Slow-path observability. ExtractSync tells the caller whether a write
+	// blocks, so pro and ultra cannot be mistaken for one another on latency
+	// alone. Consolidations is the number of completed passes; -1 means this
+	// mode has no slow path at all, which is distinguishable from zero passes.
+	ExtractSync      string  `json:"extract_sync"`
+	Consolidations   int     `json:"consolidations"`
+	LastConsolidated *Report `json:"last_consolidated,omitempty"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -83,6 +92,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		write = "degraded: " + errStr2
 	}
 	writesCount, searchesCount := s.store.Usage()
+	// -1 means "no slow path in this mode"; 0 means "has one, never completed".
+	consRuns, lastCons := -1, (*Report)(nil)
+	if s.cons != nil {
+		n, last, _ := s.cons.Stats()
+		consRuns, lastCons = n, last
+	}
 	// Lite never calls an LLM, so reporting llm=ok there would claim a
 	// capability this mode deliberately does not use.
 	llmState := "ok"
@@ -90,26 +105,29 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		llmState = "unused"
 	}
 	jsonResponse(w, 200, Status{
-		Status:        "ok",
-		Version:       Version,
-		VDB:           "ok",
-		Embed:         "ok",
-		LLM:           llmState,
-		LLMModel:      s.llmModel,
-		LLMBase:       s.llmBase,
-		VDBProvider:   "chromem",
-		VDBCollection: "layers",
-		VDBPoints:     s.store.TotalMemories(),
-		EmbedDims:     384,
-		WritePipeline: write,
-		Writes:        writesCount,
-		Searches:      searchesCount,
-		Layers:        s.store.LayerCounts(),
-		GraphNodes:    s.store.Graph().NodeCount(),
-		GraphEdges:    s.store.Graph().EdgeCount(),
-		Mode:          s.mode.OrDefault(),
-		ModeDetail:    s.mode.Describe(),
-		UsesLLM:       s.mode.UsesLLM(),
+		Status:           "ok",
+		Version:          Version,
+		VDB:              "ok",
+		Embed:            "ok",
+		LLM:              llmState,
+		LLMModel:         s.llmModel,
+		LLMBase:          s.llmBase,
+		VDBProvider:      "chromem",
+		VDBCollection:    "layers",
+		VDBPoints:        s.store.TotalMemories(),
+		EmbedDims:        384,
+		WritePipeline:    write,
+		Writes:           writesCount,
+		Searches:         searchesCount,
+		Layers:           s.store.LayerCounts(),
+		GraphNodes:       s.store.Graph().NodeCount(),
+		GraphEdges:       s.store.Graph().EdgeCount(),
+		Mode:             s.mode.OrDefault(),
+		ModeDetail:       s.mode.Describe(),
+		UsesLLM:          s.mode.UsesLLM(),
+		ExtractSync:      s.sync.Describe(s.mode),
+		Consolidations:   consRuns,
+		LastConsolidated: lastCons,
 	})
 }
 
@@ -205,9 +223,9 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extraction behaviour is the mode's decision, not this handler's. Lite stops
-	// here with the raw trace stored; pro blocks on one synchronous extraction;
-	// ultra runs the same extraction on a background goroutine.
+	// Whether extraction happens at all is the mode's decision; whether the
+	// write waits for it is the sync knob's. Lite stops here with only the raw
+	// trace stored, so no LLM call is made.
 	resp["extraction_status"] = s.extractForMode(text, body.UserID, body.AgentID, id)
 
 	jsonResponse(w, 200, resp)
@@ -227,12 +245,16 @@ func (s *Server) extractForMode(text, userID, agentID, id string) string {
 	if s.llm == nil {
 		return "unavailable"
 	}
-	if !s.mode.Sync() {
+	// Blocking versus background is the separate sync knob, not the mode: pro
+	// defaults to blocking so the caller sees the outcome, ultra to background
+	// so the write never waits. Either can be overridden with
+	// HYATLAS_SYNC_EXTRACT.
+	if !s.sync.Blocks(s.mode) {
 		go s.extract(text, userID, agentID, id)
 		return "pending"
 	}
-	// Pro: synchronous, so the response tells the truth about this write instead
-	// of reporting "pending" and leaving the caller to poll.
+	// Blocking: the response tells the truth about this write instead of
+	// reporting "pending" and leaving the caller to poll.
 	if err := s.extract(text, userID, agentID, id); err != nil {
 		return "failed"
 	}
@@ -438,12 +460,45 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleDigest reports the slow path's state, and runs a pass on demand.
+//
+// It used to return a hardcoded digest_ok with a note saying "a full scheduled
+// digest runs here", which meant a caller could not tell whether consolidation
+// had ever run. Now GET reports the last pass and POST triggers one, so the
+// slow path is observable and testable rather than assumed.
 func (s *Server) handleDigest(w http.ResponseWriter, r *http.Request) {
+	if s.cons == nil {
+		jsonResponse(w, 200, map[string]any{
+			"digest_ok": false,
+			"mode":      string(s.mode.OrDefault()),
+			"reason":    "this mode has no slow path; consolidation runs only in ultra",
+		})
+		return
+	}
+	if r.Method != http.MethodPost {
+		runs, last, at := s.cons.Stats()
+		jsonResponse(w, 200, map[string]any{
+			"digest_ok":   true,
+			"runs":        runs,
+			"last":        last,
+			"last_at":     at,
+			"graph_nodes": s.store.Graph().NodeCount(),
+			"graph_edges": s.store.Graph().EdgeCount(),
+		})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), consolidateTimeout)
+	defer cancel()
+	rep, err := s.cons.Once(ctx)
+	if err != nil {
+		jsonResponse(w, 500, map[string]any{"digest_ok": false, "error": err.Error()})
+		return
+	}
 	jsonResponse(w, 200, map[string]any{
 		"digest_ok":   true,
+		"report":      rep,
 		"graph_nodes": s.store.Graph().NodeCount(),
 		"graph_edges": s.store.Graph().EdgeCount(),
-		"note":        "L5 graph is built incrementally on each add; a full scheduled digest runs here.",
 	})
 }
 
@@ -824,6 +879,11 @@ type runtimeCfg struct {
 	EmbedModel string
 	ModelDir   string
 	Mode       Mode
+	Sync       Sync
+	// Slow-path (ultra) tuning. Zero retention means raw history is never decayed.
+	Consolidate time.Duration
+	Retention   time.Duration
+	Batch       int
 }
 
 // Defaults that decide what leaves the machine:
@@ -848,15 +908,19 @@ const (
 func resolveRuntime() runtimeCfg {
 	dataDir := envOr("HYATLAS_GO_DATA", defaultDataDir)
 	return runtimeCfg{
-		Mode:       resolveMode(),
-		Port:       envOr("HYATLAS_GO_PORT", defaultPort),
-		DataDir:    dataDir,
-		GraphPath:  envOr("HYATLAS_GRAPH_PATH", filepath.Join(dataDir, "graph.json")),
-		LLMBase:    envOr("HYATLAS_LLM_BASE", defaultLLMBase),
-		LLMModel:   envOr("HYATLAS_LLM_MODEL", defaultLLMModel),
-		EmbedBase:  envOr("HYATLAS_EMBED_BASE", defaultEmbedBase),
-		EmbedModel: envOr("HYATLAS_EMBED_MODEL", defaultEmbedModel),
-		ModelDir:   resolveModelDir(envOr("HYATLAS_MODEL_DIR", defaultModelDir)),
+		Mode:        resolveMode(),
+		Sync:        resolveSync(),
+		Consolidate: parseDuration("HYATLAS_CONSOLIDATE_EVERY", defaultConsolidate),
+		Retention:   parseDuration("HYATLAS_RAW_RETENTION", 0),
+		Batch:       envInt("HYATLAS_CONSOLIDATE_BATCH", defaultBatch),
+		Port:        envOr("HYATLAS_GO_PORT", defaultPort),
+		DataDir:     dataDir,
+		GraphPath:   envOr("HYATLAS_GRAPH_PATH", filepath.Join(dataDir, "graph.json")),
+		LLMBase:     envOr("HYATLAS_LLM_BASE", defaultLLMBase),
+		LLMModel:    envOr("HYATLAS_LLM_MODEL", defaultLLMModel),
+		EmbedBase:   envOr("HYATLAS_EMBED_BASE", defaultEmbedBase),
+		EmbedModel:  envOr("HYATLAS_EMBED_MODEL", defaultEmbedModel),
+		ModelDir:    resolveModelDir(envOr("HYATLAS_MODEL_DIR", defaultModelDir)),
 	}
 }
 
@@ -870,6 +934,45 @@ func resolveMode() Mode {
 		log.Fatal(err)
 	}
 	return m
+}
+
+// resolveSync reads HYATLAS_SYNC_EXTRACT. Fatal on an invalid value, for the
+// same reason as resolveMode: a silently-ignored knob reads as working while
+// doing nothing.
+func resolveSync() Sync {
+	s, err := ParseSync(os.Getenv(syncKey))
+	if err != nil {
+		log.Fatal(err)
+	}
+	return s
+}
+
+// attachSlowPath wires the consolidation worker onto a server.
+//
+// Lifted out of main so the wiring is testable: the slow path is the entire
+// difference between ultra and pro, and a construction site that forgets it
+// would leave ultra silently identical to pro. Returns whether it attached.
+func (s *Server) attachSlowPath(ctx context.Context, rt runtimeCfg) bool {
+	if !s.mode.Consolidates() {
+		return false
+	}
+	s.cons = NewConsolidator(s.store, s.llm, rt.Consolidate, rt.Retention, rt.Batch)
+	go s.cons.Run(ctx)
+	return true
+}
+
+// envInt reads a positive integer or falls back.
+func envInt(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		log.Printf("%s=%q is not a positive integer; using %d", key, v, def)
+		return def
+	}
+	return n
 }
 
 func main() {
@@ -935,7 +1038,10 @@ func main() {
 	}
 	llm := NewLLMClient(llmBase, llmKey, llmModel)
 	llm.KeyFile = llmKeyFile
-	srv := &Server{store: store, llm: llm, llmModel: llmModel, llmBase: llmBase, mode: rt.Mode, start: time.Now(), dataDir: dir}
+	srv := &Server{store: store, llm: llm, llmModel: llmModel, llmBase: llmBase,
+		mode: rt.Mode, sync: rt.Sync, start: time.Now(), dataDir: dir}
+
+	srv.attachSlowPath(ctx, rt)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", srv.handleHealthz)

@@ -86,11 +86,22 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
         "label": "Extraction mode", "choices": ["", "lite", "pro", "ultra"],
         "description": "Passed to a spawned server as HYATLAS_MODE. lite makes "
                        "no LLM call, so conversation text never leaves the "
-                       "machine; pro extracts synchronously; ultra extracts in "
-                       "the background and fills all 7 layers. Empty = the "
-                       "server's own default (ultra). The server's "
+                       "machine; pro extracts per write and reasons within that "
+                       "one turn; ultra adds a periodic consolidation pass that "
+                       "reasons across memories. Empty = the server's own "
+                       "default (ultra). The server's "
                        "/api/v1/status `mode` field is authoritative at "
                        "runtime, since a manually started server may differ.",
+    },
+    {
+        "key": "sync", "type": "str", "default": "",
+        "label": "Block on extraction", "choices": ["", "on", "off"],
+        "description": "Passed to a spawned server as HYATLAS_SYNC_EXTRACT. on "
+                       "makes the write wait for extraction and report done or "
+                       "failed; off returns immediately and extracts behind it. "
+                       "Empty follows the mode: pro blocks, ultra does not. This "
+                       "is a latency choice and does not change what the mode can "
+                       "reason about.",
     },
 )
 
@@ -99,6 +110,19 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
 # log line nobody reads. Validating in the plugin turns that into a message
 # naming the three valid modes before anything is started.
 VALID_MODES = ("lite", "pro", "ultra")
+
+# The sync knob is separate from the mode: capability follows the mode, latency
+# follows this. Validated here for the same reason as mode — the server treats an
+# unknown value as fatal, and a spawned server that dies on boot reports it only
+# in a log file.
+# Alias sets must match the server's ParseSync exactly. Two validators that
+# disagree on one setting means the Desktop form accepts a value the server then
+# treats as fatal — or rejects one the server would have honored.
+VALID_SYNC = ("on", "off")
+_SYNC_ALIASES = {
+    "on": "on", "true": "on", "1": "on", "yes": "on",
+    "off": "off", "false": "off", "0": "off", "no": "off",
+}
 
 KEYS = tuple(f["key"] for f in SCHEMA)
 
@@ -137,6 +161,7 @@ ENV: Tuple[Tuple[str, str, Any], ...] = (
     ("HYATLAS_REQUEST_TIMEOUT", "request_timeout", float),
     ("HYATLAS_GO_DATA", "data_dir", str),
     ("HYATLAS_MODE", "mode", lambda v: v.lower()),
+    ("HYATLAS_SYNC_EXTRACT", "sync", lambda v: _SYNC_ALIASES.get(v.lower(), v.lower())),
 )
 
 # v3.5-era names that must not bleed into v4 settings.
@@ -215,6 +240,23 @@ def mode(cfg: Dict[str, Any] | None = None) -> str:
             f"(or leave it empty for the server default)"
         )
     return v
+
+
+def sync(cfg: Dict[str, Any] | None = None) -> str:
+    """Whether a write blocks on extraction: "on", "off", or "" to follow the mode.
+
+    Empty is the meaningful default — the server then applies the mode's own
+    behaviour (pro blocks, ultra does not) rather than this plugin guessing at it.
+    """
+    v = str((cfg or load()).get("sync") or "").strip().lower()
+    if not v:
+        return ""
+    if v not in _SYNC_ALIASES:
+        raise ValueError(
+            f"invalid hyatlas sync {v!r}; valid values are {', '.join(VALID_SYNC)} "
+            f"(or leave it empty to follow the mode)"
+        )
+    return _SYNC_ALIASES[v]
 
 
 def base_url(cfg: Dict[str, Any] | None = None) -> str:

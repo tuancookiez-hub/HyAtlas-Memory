@@ -77,8 +77,9 @@ the machine — see the extraction-mode table under [Disclosure](#disclosure-wha
 | `request_timeout` | `HYATLAS_REQUEST_TIMEOUT` | `15.0` | HTTP timeout, seconds |
 | `data_dir` | `HYATLAS_GO_DATA` | *(conventional)* | Server data directory, for `hermes backup` |
 | `mode` | `HYATLAS_MODE` | *(server default)* | Extraction mode forwarded to a spawned server: `lite` \| `pro` \| `ultra` |
+| `sync` | `HYATLAS_SYNC_EXTRACT` | *(follows mode)* | Whether a write blocks on extraction: `on` \| `off` |
 
-All ten are editable in **Desktop → Settings → Plugins → hyatlas**, or
+All eleven are editable in **Desktop → Settings → Plugins → hyatlas**, or
 via `plugins.entries.hyatlas.settings` in `config.yaml`, or the
 `HYATLAS_SERVER_HOST` / `HYATLAS_SERVER_PORT` / `HYATLAS_USER_ID` /
 `HYATLAS_AGENT_ID` / `HYATLAS_AUTO_START` / `HYATLAS_BINARY_PATH` /
@@ -109,11 +110,21 @@ The Desktop pane loads automatically from this plugin's `desktop/plugin.js`
   at a local or alternative endpoint, or turn memory off. Only the current
   turn is sent, never the whole conversation history.
 
-  | `HYATLAS_MODE` | LLM call | Extraction | Layers filled |
-  |---|---|---|---|
-  | `lite` | none | skipped | L2 Raw (+ embeddings) |
-  | `pro` | one per write | synchronous — the write waits | all 7 |
-  | `ultra` *(default)* | one per write | background worker | all 7 |
+  | `HYATLAS_MODE` | LLM calls | Reasoning scope | Layers | Consolidation |
+  |---|---|---|---|---|
+  | `lite` | none | — | L2 Raw only | no |
+  | `pro` | one per write | within one turn | all 7 | no |
+  | `ultra` *(default)* | one per write **+** periodic batch | **across memories and time** | all 7, rewritten | **yes** |
+
+  Ultra is the only mode that reasons across memories: a periodic consolidation
+  pass merges contradicting facts, generalises schemas that are visible only
+  across many turns, synthesises a cross-session arc, and optionally decays raw
+  history no graph edge still cites. Pro extracts within the single turn it was
+  handed and stops.
+
+  Whether a write *blocks* is a separate knob, `HYATLAS_SYNC_EXTRACT=on|off`
+  (unset = follow the mode). Pro blocks by default, ultra does not; either can be
+  overridden. Capability follows the mode, latency follows the knob.
 - **Network calls (plugin → server):** all plugin traffic goes to the HyAtlas
   server you configure (default `127.0.0.1:19528`, loopback). The plugin itself
   contacts nothing else, sets no `HYATLAS_LLM_*` variable, forwards no
