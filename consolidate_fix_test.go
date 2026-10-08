@@ -181,7 +181,7 @@ func TestPartialMergeKeepsReplacementLive(t *testing.T) {
 	absorbed := append(srv.store.GetMany([]string{a}), DocIndex{ID: "ghost-not-stored"})
 	live := map[string]bool{a: true, "ghost-not-stored": true}
 	id := c.applyMerge(scopeKey{user: "alice", agent: "a1"}, "merged text", "consolidated",
-		absorbed, time.Now().UTC().Format(time.RFC3339), live, rep, fail)
+		absorbed, time.Now().UTC().Format(time.RFC3339), live, rep, fail, fail)
 	if id == "" {
 		t.Fatal("replacement retracted although one original was marked")
 	}
@@ -208,7 +208,7 @@ func TestMergeWithNothingMarkedIsRetracted(t *testing.T) {
 	var errs []string
 	id := c.applyMerge(scopeKey{user: "alice", agent: "a1"}, "merged text", "consolidated",
 		[]DocIndex{{ID: "ghost-1"}, {ID: "ghost-2"}}, time.Now().UTC().Format(time.RFC3339),
-		map[string]bool{}, &Report{}, func(m string) { errs = append(errs, m) })
+		map[string]bool{}, &Report{}, func(m string) { errs = append(errs, m) }, func(m string) { errs = append(errs, m) })
 	if id != "" {
 		t.Errorf("returned id %q, want none", id)
 	}

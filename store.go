@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -159,11 +160,19 @@ func (s *MemoryStore) Add(layer memory.Layer, id, content string, meta map[strin
 		doc.Metadata = map[string]string{}
 	}
 	doc.Metadata["layer"] = string(layer)
+	// Embed before rowMu. The embedder can be a slow or hung HTTP call, and holding
+	// the row lock across it would stall every Add and Supersede. Chromem uses the
+	// vector given here rather than embedding the content a second time.
+	emb, err := s.embed.Embed(s.ctx, content)
+	if err != nil {
+		return fmt.Errorf("couldn't create embedding of document: %w", err)
+	}
+	doc.Embedding = emb
 	// rowMu keeps this write apart from a Supersede rewrite of the same row, so a
 	// rewrite can never put a stale row back over this one. The index update stays
 	// under it too, so a rewrite never sees a chromem row the index does not match.
 	s.rowMu.Lock()
-	err := s.cols[layer].AddDocument(s.ctx, doc)
+	err = s.cols[layer].AddDocument(s.ctx, doc)
 	if err == nil {
 		s.mu.Lock()
 		s.putLocked(docIndexFrom(id, string(layer), content, meta))

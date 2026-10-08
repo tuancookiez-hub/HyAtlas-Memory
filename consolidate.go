@@ -128,11 +128,24 @@ type consolidateState struct {
 }
 
 // windowCursor is an owner's position in its window walk. Next is the window the
-// next pass sends; Covered counts windows sent since the owner's watermark was set.
+// next walk pass sends. Covered counts windows sent since the owner's facts last
+// changed; a change resets it (but not Next), so new facts are reconciled against
+// every older window before an unchanged owner stops being due. LastFresh records
+// whether the last pass sent the newest window because the owner changed, so
+// changed passes alternate between that window and the walk. Fails counts
+// consecutive failed passes on window FailWin.
 type windowCursor struct {
-	Next    int `json:"next"`
-	Covered int `json:"covered"`
+	Next      int  `json:"next"`
+	Covered   int  `json:"covered"`
+	LastFresh bool `json:"last_fresh,omitempty"`
+	Fails     int  `json:"fails,omitempty"`
+	FailWin   int  `json:"fail_win,omitempty"`
 }
+
+// maxWindowFails is how many consecutive failed passes on one window are tolerated
+// before the walk moves past it, so one bad window cannot re-spend an LLM call on
+// every pass and hold back the rest of the owner's facts.
+const maxWindowFails = 3
 
 // Consolidator owns the slow path.
 type Consolidator struct {
@@ -308,18 +321,49 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 		key := k.String()
 		fp := factsFingerprint(facts)
 		w := c.windows[key]
-		if c.done[key] != fp {
-			// The owner's facts changed since its watermark: a new cycle starts at the newest window.
-			w = windowCursor{}
-		}
 		count := windowsOf(len(facts), c.batch)
+		// A changed owner sends the newest window, but only every other changed pass;
+		// the other passes continue the walk. Otherwise an owner that changes between
+		// every pass would never get past its newest window.
+		changed := c.done[key] != fp
+		if changed {
+			// New facts must meet every older window again, so coverage restarts.
+			// Next is kept: the walk resumes where it was rather than at the newest
+			// window, which is what keeps a busy owner from starving its history.
+			w.Covered = 0
+		}
+		fresh := changed && !w.LastFresh
 		idx := w.Next % count
+		if fresh {
+			idx = 0
+		}
 		rep.OwnersRun++
 		ok, created := c.consolidateScope(ctx, k, c.windowAt(facts, idx), rep)
+		w.LastFresh = fresh
 		if ok {
-			ran[k] = cycleStep{considered: idsOf(facts), created: created,
-				next: (idx + 1) % count, covered: w.Covered + 1}
+			w.Fails, w.FailWin = 0, 0
+			w.Covered++
+			if idx == w.Next%count {
+				w.Next = (idx + 1) % count
+			}
+			ran[k] = cycleStep{considered: idsOf(facts), created: created}
+		} else {
+			if w.Fails > 0 && w.FailWin == idx {
+				w.Fails++
+			} else {
+				w.Fails, w.FailWin = 1, idx
+			}
+			// A window that keeps failing is given up on, so the walk moves past it.
+			if w.Fails >= maxWindowFails && idx == w.Next%count {
+				rep.Errors = append(rep.Errors, fmt.Sprintf(
+					"%s: window %d failed %d passes in a row; skipped", k, idx, w.Fails))
+				log.Printf("consolidate: %s window %d failed %d passes; skipping it", k, idx, w.Fails)
+				w.Next = (idx + 1) % count
+				w.Covered++
+				w.Fails, w.FailWin = 0, 0
+			}
 		}
+		c.windows[key] = w
 	}
 	if n > 0 {
 		c.cursor = next % n
@@ -346,7 +390,6 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 				}
 			}
 			c.done[key] = idsFingerprint(keep)
-			c.windows[key] = windowCursor{Next: st.next, Covered: st.covered}
 		}
 	}
 	present := map[string]bool{}
@@ -378,8 +421,6 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 type cycleStep struct {
 	considered []string // the owner's live fact ids at the start of the pass
 	created    []string // ids of facts this pass wrote
-	next       int      // window index the next pass starts from
-	covered    int      // windows covered in the current cycle
 }
 
 // windowsOf is how many windows of batch facts cover n facts.
@@ -418,18 +459,28 @@ func (c *Consolidator) due(k scopeKey, facts []DocIndex) bool {
 // is that window, and everything written carries the owner's scope.
 //
 // Only IDs in facts are acted on. An ID that belongs to another owner, or one the
-// model invented, fails the live-set guard and changes nothing. It reports
-// whether the model answered and every write succeeded, which is what lets the
-// owner's watermark advance. It also returns the IDs of the facts it wrote.
+// model invented, fails the live-set guard and changes nothing. It reports whether
+// the owner's watermark may advance, and returns the IDs of the facts it wrote.
+//
+// Failures are fatal or soft. Fatal ones (the LLM call or its reply, a merge's
+// replacement write, and supersedes of merged or dropped facts) make the owner
+// retry, because the facts it was meant to reconcile are still unreconciled. Soft
+// ones (arc, schema, L5 edge, and L1 mirrors) are reported in rep.Errors but do not
+// hold the owner back: the facts were reconciled and the next pass would not repair
+// them.
 func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, facts []DocIndex, rep *Report) (bool, []string) {
-	fail := func(msg string) {
+	failed := false
+	fatal := func(msg string) {
+		failed = true
 		rep.Errors = append(rep.Errors, owner.String()+": "+msg)
 	}
-	errsBefore := len(rep.Errors)
+	soft := func(msg string) {
+		rep.Errors = append(rep.Errors, owner.String()+": "+msg)
+	}
 	schemas := c.liveOf(memory.L6Schema, owner)
 	cons, err := c.ask(ctx, facts, schemas)
 	if err != nil {
-		fail(err.Error())
+		fatal(err.Error())
 		return false, nil
 	}
 
@@ -468,7 +519,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		if label == "" {
 			label = "consolidated"
 		}
-		if id := c.applyMerge(owner, text, label, absorbed, now, live, rep, fail); id != "" {
+		if id := c.applyMerge(owner, text, label, absorbed, now, live, rep, fatal, soft); id != "" {
 			created = append(created, id)
 		}
 	}
@@ -492,10 +543,10 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		}
 		rep.Dropped += len(marked)
 		if err := c.retireMirrors(c.store.GetMany(marked), ""); err != nil {
-			fail("drop mirror: " + err.Error())
+			soft("drop mirror: " + err.Error())
 		}
 		if err != nil {
-			fail("drop: " + err.Error())
+			fatal("drop: " + err.Error())
 		}
 	}
 
@@ -547,7 +598,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 			rep.Edges++
 		}
 		if err != nil {
-			fail("edge: " + err.Error())
+			soft("edge: " + err.Error())
 		}
 	}
 
@@ -573,7 +624,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 			"user_id": owner.user, "agent_id": owner.agent,
 			"context": sc.Context, "ts": now, "consolidated": "true",
 		}); err != nil {
-			fail("schema: " + err.Error())
+			soft("schema: " + err.Error())
 			continue
 		}
 		rep.Schemas++
@@ -585,7 +636,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		}
 		if len(retire) > 0 {
 			if _, err := c.store.Supersede(retire, id); err != nil {
-				fail("schema supersede: " + err.Error())
+				soft("schema supersede: " + err.Error())
 			}
 		}
 	}
@@ -605,17 +656,17 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 			"user_id": owner.user, "agent_id": owner.agent,
 			"ts": now, "consolidated": "true", "kind": "arc",
 		}); err != nil {
-			fail("arc: " + err.Error())
+			soft("arc: " + err.Error())
 		} else {
 			rep.Arc = true
 			if len(prevArcs) > 0 {
 				if _, err := c.store.Supersede(prevArcs, arcID); err != nil {
-					fail("arc supersede: " + err.Error())
+					soft("arc supersede: " + err.Error())
 				}
 			}
 		}
 	}
-	return len(rep.Errors) == errsBefore, created
+	return !failed, created
 }
 
 // applyMerge writes one consolidated fact and retires the facts it absorbed. It
@@ -627,9 +678,10 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 // live. If none were marked the replacement is retracted, since nothing points at
 // it. If some were marked, it stays live: retracting it would leave those marked
 // originals superseded by a fact that no longer exists. The unmarked originals
-// stay live beside it, and the failure is reported so the owner is retried.
+// stay live beside it, and the failure is reported so the owner is retried. The
+// replacement write and the supersedes are fatal; the L1 mirror writes are soft.
 func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed []DocIndex, now string,
-	live map[string]bool, rep *Report, fail func(string)) string {
+	live map[string]bool, rep *Report, fatal, soft func(string)) string {
 	srcs := distinctSources(absorbed)
 	// The merged fact inherits the conversations it absorbed, so L5
 	// corroboration and the raw-decay citation guard still see them.
@@ -643,7 +695,7 @@ func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed [
 	}
 	mergedID := newID()
 	if err := c.store.Add(memory.L3Fact, mergedID, text, meta); err != nil {
-		fail("merge add: " + err.Error())
+		fatal("merge add: " + err.Error())
 		return ""
 	}
 	ids := make([]string, len(absorbed))
@@ -664,7 +716,7 @@ func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed [
 		if retractErr != nil {
 			msg += ": retract: " + retractErr.Error()
 		}
-		fail(msg)
+		fatal(msg)
 		return ""
 	}
 	if len(marked) < len(ids) || supErr != nil {
@@ -672,7 +724,7 @@ func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed [
 		if supErr != nil {
 			msg += ": " + supErr.Error()
 		}
-		fail(msg)
+		fatal(msg)
 	}
 	rep.Merged++
 
@@ -680,14 +732,14 @@ func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed [
 	// the profile does not keep an old phrasing. A preference that survives the
 	// merge is mirrored again under the new text.
 	if err := c.retireMirrors(c.store.GetMany(marked), mergedID); err != nil {
-		fail("merge mirror: " + err.Error())
+		soft("merge mirror: " + err.Error())
 	}
 	if label == "user_preferences" && len(srcs) > 0 {
 		if err := c.store.Add(memory.L1Profile, newID(), text, map[string]string{
 			"user_id": owner.user, "agent_id": owner.agent,
 			"source_id": srcs[0], "ts": now,
 		}); err != nil {
-			fail("merge mirror add: " + err.Error())
+			soft("merge mirror add: " + err.Error())
 		}
 	}
 	return mergedID
