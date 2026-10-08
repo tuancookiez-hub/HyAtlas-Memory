@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
-	"time"
 )
 
 // LLMClient wraps an OpenAI-compatible chat completions endpoint.
@@ -22,9 +22,22 @@ type LLMClient struct {
 	Client  *http.Client
 }
 
+// NewLLMClient builds the shared HTTP client.
+//
+// The client deliberately carries NO Timeout. A per-client cap silently becomes
+// the real bound for every caller, and the two callers here need different ones:
+// extraction is bounded at extractTimeout, while a consolidation pass is bounded
+// at consolidateTimeout because it reasons over a whole batch of facts in one
+// call. With a 180s client cap in place, the 600s pass bound was unreachable —
+// a real pass against a slow endpoint died at 180s with "Client.Timeout exceeded
+// while awaiting headers", and the declared bound never applied.
+//
+// Every call path sets its own deadline on the context (extract() and both
+// Once() callers), so removing the client cap removes the hidden min() without
+// letting anything run unbounded.
 func NewLLMClient(baseURL, key, model string) *LLMClient {
 	return &LLMClient{BaseURL: baseURL, APIKey: key, Model: model,
-		Client: &http.Client{Timeout: 180 * time.Second}}
+		Client: &http.Client{}}
 }
 
 // Configured reports whether this client can actually make a call: an endpoint,
@@ -256,6 +269,13 @@ func (l *LLMClient) chat(ctx context.Context, messages []map[string]string, temp
 		Choices []struct {
 			Message struct {
 				Content string `json:"content"`
+				// Reasoning models (DeepSeek-R1, MiniMax-M3, and the
+				// poolside/laguna :free tier) may return an empty `content`
+				// and put the text in `reasoning_content` instead. The v3.5
+				// floor captured this; the Go rewrite did not, so every such
+				// reply became an empty string and failed as a parse error
+				// ("consolidation parse failed (raw )") with nothing to show.
+				ReasoningContent string `json:"reasoning_content"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
@@ -265,7 +285,20 @@ func (l *LLMClient) chat(ctx context.Context, messages []map[string]string, temp
 	if len(out.Choices) == 0 {
 		return "", fmt.Errorf("LLM: no choices")
 	}
-	return out.Choices[0].Message.Content, nil
+	msg := out.Choices[0].Message
+	if strings.TrimSpace(msg.Content) == "" && strings.TrimSpace(msg.ReasoningContent) != "" {
+		// The reasoning text is what the caller has to work with, and the
+		// tolerant JSON extraction downstream picks the object out of it.
+		log.Printf("llm: empty content, using reasoning_content (%d bytes)", len(msg.ReasoningContent))
+		return msg.ReasoningContent, nil
+	}
+	if strings.TrimSpace(msg.Content) == "" {
+		// Say so plainly: a parse error on an empty string reads as "the model
+		// answered badly" when the truth is "the model answered with nothing",
+		// and the two want different fixes.
+		return "", fmt.Errorf("LLM returned an empty message (no content, no reasoning_content)")
+	}
+	return msg.Content, nil
 }
 
 // parseExtraction tolerantly extracts the JSON object from the LLM reply.

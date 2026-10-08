@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -64,5 +65,73 @@ func TestCompleteFailsAfterRetry(t *testing.T) {
 	client := NewLLMClient(srv.URL, "test-key", "mock-model")
 	if _, err := client.Complete(context.Background(), "input"); err == nil {
 		t.Fatal("want error after both attempts return prose, got nil")
+	}
+}
+
+// The shared HTTP client must not carry a global Timeout. One cap silently
+// becomes the real bound for every caller, and the two callers here need
+// different ones: extraction is bounded at extractTimeout, a consolidation pass
+// at consolidateTimeout. A 180s client cap once made the 600s pass bound
+// unreachable, so a real pass against a slow endpoint died with "Client.Timeout
+// exceeded while awaiting headers" and no consolidation ever completed.
+func TestLLMClientHasNoGlobalTimeout(t *testing.T) {
+	c := NewLLMClient("http://example.invalid/v1", "k", "m")
+	if c.Client == nil {
+		t.Fatal("NewLLMClient returned no HTTP client")
+	}
+	if c.Client.Timeout != 0 {
+		t.Errorf("client Timeout = %v, want 0: deadlines belong to each caller's context, "+
+			"because a global cap silently overrides a longer bound", c.Client.Timeout)
+	}
+}
+
+// mockReasoningServer answers with the shape a reasoning model produces when it
+// puts everything in reasoning_content and leaves content empty.
+func mockReasoningServer(t *testing.T, content, reasoning string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out, _ := json.Marshal(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]string{"content": content, "reasoning_content": reasoning},
+			}},
+		})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(out)
+	}))
+}
+
+// A reasoning model may leave `content` empty and put the text in
+// `reasoning_content`. Dropping that fallback turned every such reply into an
+// empty string, which surfaced as "consolidation parse failed (raw )" — a parse
+// error with nothing to show. The v3.5 floor captured the field; the Go rewrite
+// must too.
+func TestCompleteFallsBackToReasoningContent(t *testing.T) {
+	payload := `{"facts":[{"data":"Reasoning-only fact","layer":"technical_lesson"}],"summary":{"text":"s"},"intention":null}`
+	srv := mockReasoningServer(t, "", payload)
+	defer srv.Close()
+
+	c := NewLLMClient(srv.URL, "k", "m")
+	ex, err := c.Complete(context.Background(), "some input")
+	if err != nil {
+		t.Fatalf("Complete with reasoning-only content: %v", err)
+	}
+	if len(ex.Facts) != 1 || ex.Facts[0].Data != "Reasoning-only fact" {
+		t.Errorf("facts = %+v, want the fact carried in reasoning_content", ex.Facts)
+	}
+}
+
+// When the endpoint answers with nothing at all, the error must say that rather
+// than blaming the parse: the two failures want different fixes.
+func TestCompleteNamesAnEmptyReply(t *testing.T) {
+	srv := mockReasoningServer(t, "", "")
+	defer srv.Close()
+
+	c := NewLLMClient(srv.URL, "k", "m")
+	_, err := c.Complete(context.Background(), "some input")
+	if err == nil {
+		t.Fatal("expected an error for a fully empty reply")
+	}
+	if !strings.Contains(err.Error(), "empty message") {
+		t.Errorf("err = %v, want it to name an empty message", err)
 	}
 }

@@ -947,3 +947,101 @@ func TestDigestPassSurvivesClientDisconnect(t *testing.T) {
 		t.Errorf("status = %d, want 200", w.Code)
 	}
 }
+
+// A pass is bounded by its caller's deadline. The shared HTTP client used to
+// carry a 180s cap that silently overrode the 600s pass bound, so a real
+// consolidation against a slow endpoint died at 180s. This pins the mechanism
+// the fix relies on: the context governs, and an expired deadline is recorded
+// in the report rather than hanging or vanishing.
+func TestConsolidationPassRespectsCallerDeadline(t *testing.T) {
+	release := make(chan struct{})
+	var hits int32
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		// Hold past the caller's 150ms deadline. Bounded so that a regression
+		// which drops the context makes this test FAIL in ~2s rather than hang
+		// until the package timeout.
+		select {
+		case <-release:
+		case <-time.After(2 * time.Second):
+		}
+		payload, _ := json.Marshal(Consolidation{})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"content":%s}}]}`, string(mustJSON(payload)))
+	}))
+	defer mock.Close()
+	defer close(release)
+
+	srv := newTestServer(t, "m", mock.URL)
+	seed(t, srv.store, 3, "deadline")
+	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	rep, err := c.Once(ctx)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Once returned a hard error; a failed sub-step belongs in the report: %v", err)
+	}
+	if atomic.LoadInt32(&hits) == 0 {
+		t.Fatal("the pass never called the LLM")
+	}
+	if rep == nil {
+		t.Fatal("no report")
+	}
+	if elapsed > time.Second {
+		t.Errorf("pass ran %v past a 150ms deadline: the caller's context is not the bound", elapsed)
+	}
+	if len(rep.Errors) == 0 {
+		t.Error("an expired deadline was not recorded in the report")
+	} else {
+		joined := strings.ToLower(strings.Join(rep.Errors, " "))
+		if !strings.Contains(joined, "deadline") && !strings.Contains(joined, "context") {
+			t.Errorf("errors = %v, want the deadline failure named", rep.Errors)
+		}
+	}
+}
+
+// The same fallback has to reach the slow path, which is where it was found: a
+// real pass against a reasoning model spent 8 minutes and then reported
+// "consolidation parse failed (raw )" because the reply arrived in
+// reasoning_content.
+func TestConsolidationAcceptsReasoningOnlyReply(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	ids := seed(t, srv.store, 3, "reasoning")
+
+	// A merge only counts when it supersedes real facts from the batch, so the
+	// payload cites two of the seeded ids.
+	payload, _ := json.Marshal(Consolidation{
+		Merges: []Merge{{
+			Text:       "merged fact",
+			Layer:      "technical_lesson",
+			Supersedes: ids[:2],
+		}},
+	})
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out, _ := json.Marshal(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]string{"content": "", "reasoning_content": string(payload)},
+			}},
+		})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(out)
+	}))
+	defer mock.Close()
+
+	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
+
+	rep, err := c.Once(ctxForTest())
+	if err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if len(rep.Errors) > 0 {
+		t.Errorf("errors = %v, want the reasoning-only reply accepted", rep.Errors)
+	}
+	if rep.Merged != 1 {
+		t.Errorf("merged = %d, want 1 from the reasoning-only reply", rep.Merged)
+	}
+}
