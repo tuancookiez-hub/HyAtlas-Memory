@@ -52,6 +52,25 @@ func TestDropNeedsAReason(t *testing.T) {
 			}
 		}
 	}
+
+	// The reason is visible where history is read: /api/v1/list with superseded rows.
+	w := httptest.NewRecorder()
+	srv.handleList(w, httptest.NewRequest("GET", "/api/v1/list?layer=l3_fact&include_superseded=true", nil))
+	var resp struct {
+		Memories []map[string]any `json:"memories"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range resp.Memories {
+		if m["memory_id"] == ids[2] {
+			found = m["drop_reason"] == "a temporary state that has passed"
+		}
+	}
+	if !found {
+		t.Error("/api/v1/list did not show the dropped fact's drop_reason")
+	}
 }
 
 // graphPass runs one pass over two facts from two turns whose reply asks for an

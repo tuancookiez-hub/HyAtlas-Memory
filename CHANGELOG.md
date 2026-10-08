@@ -13,6 +13,7 @@
   `{"id": ..., "reason": ...}`; a drop without a reason (including the old bare-id
   form) is not applied, and the reason is kept on the dropped row as `drop_reason`.
   The prompt now says a durable fact is never stale only because it is old.
+  `/api/v1/list?include_superseded=true` shows `drop_reason` on dropped rows.
 - **Search embeds the query once.** A search across aliased owners ran one vector
   query per owner and layer, and chromem embedded the query text for each: 21
   embeddings for three aliased IDs. Now one embedding serves them all.

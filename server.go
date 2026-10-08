@@ -154,7 +154,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		GraphEdges:       s.store.Graph().EdgeCount(),
 		Mode:             s.mode.OrDefault(),
 		ModeDetail:       s.modeDetail(),
-		UsesLLM:         s.mode.UsesLLM(),
+		UsesLLM:          s.mode.UsesLLM(),
 		ExtractSync:      s.sync.Describe(s.mode),
 		Consolidations:   consRuns,
 		LastConsolidated: lastCons,
@@ -520,6 +520,10 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		if isSuperseded(it) {
 			m["invalid_at"] = it.Meta["invalid_at"]
 			m["superseded_by"] = it.Meta["superseded_by"]
+			// Why consolidation dropped it, when it was a drop rather than a merge.
+			if r := it.Meta["drop_reason"]; r != "" {
+				m["drop_reason"] = r
+			}
 		}
 		out = append(out, m)
 	}
