@@ -16,10 +16,20 @@
 #      download fails, the binary is still installed, the manual steps are printed,
 #      and the script exits non-zero at the end.
 #   5. Installs the binary to a directory on your PATH
-#   6. Verifies the install by starting the server and hitting /healthz
+#   6. Verifies the install by starting the server on a free loopback port and
+#      hitting /healthz. If the probe fails the installer says NOT verified and
+#      exits non-zero. A source build with HYATLAS_NO_MODEL=1 is skipped (exit 0),
+#      and the output says "skipped, not verified".
+#   7. Asks the three setup questions (mode, LLM endpoint, key) on the terminal.
+#      Under `curl | bash` they are asked on /dev/tty. With no terminal at all,
+#      nothing is asked, and any HYATLAS_MODE / HYATLAS_LLM_* values already in the
+#      environment are saved to $HERMES_HOME/.env (default ~/.hermes/.env, 0600).
 #
 # Environment variables (all optional):
-#   HYATLAS_VERSION   — release tag to install (default: v4.3.3)
+#   HYATLAS_VERSION   — release tag to install (default: v4.3.3). A source build
+#                       clones this tag. If the tag is missing, the default branch
+#                       is built with a loud warning, unless HYATLAS_VERSION is set
+#                       explicitly; then the install fails instead.
 #   HYATLAS_INSTALL_DIR — where to put the binary (default: ~/.local/bin, or
 #                         %LOCALAPPDATA%\hyatlas on Windows)
 #   HYATLAS_MODEL_DIR — where to cache the model (default: ~/.hyatlas/models)
@@ -113,27 +123,49 @@ set_default_install_dir() {
 # ---------------------------------------------------------------------------
 
 ensure_on_path() {
+    local dir="$INSTALL_DIR"
+    # Git Bash / MSYS: PATH and rc files use /c/... paths, but INSTALL_DIR can be
+    # C:\... (from %LOCALAPPDATA%). Convert it before comparing or writing.
+    if [ "$PLATFORM_OS" = "windows" ] && command -v cygpath >/dev/null 2>&1; then
+        dir="$(cygpath -u "$INSTALL_DIR" 2>/dev/null || echo "$INSTALL_DIR")"
+    fi
     case ":$PATH:" in
-        *":$INSTALL_DIR:"*) return 0 ;;
+        *":$dir:"*) return 0 ;;
     esac
-    warn "$INSTALL_DIR is not on your PATH."
-    local shellrc=""
+    warn "$dir is not on your PATH."
+    local shellrc="" line
     case "${SHELL:-}" in
         */bash) shellrc="$HOME/.bashrc" ;;
         */zsh)  shellrc="$HOME/.zshrc" ;;
         */fish) shellrc="$HOME/.config/fish/config.fish" ;;
     esac
-    if [ -n "$shellrc" ]; then
-        info "Adding $INSTALL_DIR to PATH in $shellrc"
-        if [ "${SHELL##*/}" = "fish" ]; then
-            echo "set -gx PATH \$PATH $INSTALL_DIR" >> "$shellrc"
-        else
-            echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> "$shellrc"
-        fi
-        warn "Restart your shell (or run: source $shellrc) to pick it up."
-    else
-        warn "Add $INSTALL_DIR to your PATH manually."
+    if [ -z "$shellrc" ]; then
+        warn "Add $dir to your PATH manually."
+        return 0
     fi
+    if [ "${SHELL##*/}" = "fish" ]; then
+        line="set -gx PATH \$PATH $dir"
+    else
+        line="export PATH=\"\$PATH:$dir\""
+    fi
+    # An earlier run may already have added it. rc files often spell the home
+    # directory as $HOME, so match that form too.
+    local home_form="$dir"
+    if [ -n "${HOME:-}" ]; then home_form="${dir/#$HOME/\$HOME}"; fi
+    if grep -qsF -- "$dir" "$shellrc" 2>/dev/null || grep -qsF -- "$home_form" "$shellrc" 2>/dev/null; then
+        info "$shellrc already adds $dir to PATH; not adding it again."
+        warn "Restart your shell (or run: source $shellrc) to pick it up."
+        return 0
+    fi
+    info "Adding $dir to PATH in $shellrc"
+    mkdir -p "$(dirname "$shellrc")" 2>/dev/null || true
+    # An unwritable rc file is a warning, not a reason to abort the install.
+    if ! printf '%s\n' "$line" >> "$shellrc" 2>/dev/null; then
+        warn "Could not write $shellrc. Add this line to it yourself:"
+        warn "  $line"
+        return 0
+    fi
+    warn "Restart your shell (or run: source $shellrc) to pick it up."
 }
 
 # ---------------------------------------------------------------------------
@@ -183,9 +215,24 @@ check_build_prereqs() {
 build_from_source() {
     info "Building HyAtlas-Go from source (this takes 1-3 minutes)..."
     local repo_dir="$TMP_DIR/source"
-    git clone --depth 1 "https://github.com/$REPO.git" "$repo_dir" >/dev/null 2>&1 \
-        || err "git clone failed into $repo_dir. Is git installed and is GitHub reachable?
+    local url="https://github.com/$REPO.git"
+    # Build the tag that was asked for. The default branch is a fallback only when
+    # HYATLAS_VERSION was not set explicitly: an explicit version must never
+    # silently turn into whatever main happens to contain.
+    if git clone --depth 1 --branch "$VERSION" "$url" "$repo_dir" >/dev/null 2>&1; then
+        ok "Cloned tag $VERSION"
+    else
+        rm -rf "$repo_dir"
+        if [ -n "${HYATLAS_VERSION:-}" ]; then
+            err "git clone of tag $VERSION failed. HYATLAS_VERSION is set, so the default branch is not used instead.
+    Check that the tag exists: https://github.com/$REPO/tags"
+        fi
+        warn "Tag $VERSION could not be cloned. Building the DEFAULT BRANCH instead."
+        warn "The result may not match $VERSION. Set HYATLAS_VERSION to pin a tag."
+        git clone --depth 1 "$url" "$repo_dir" >/dev/null 2>&1 \
+            || err "git clone failed into $repo_dir. Is git installed and is GitHub reachable?
     (Note: on Windows this script must run from Git Bash / MSYS, not cmd.exe.)"
+    fi
     cd "$repo_dir"
     CGO_ENABLED=1 go build -o "$TMP_DIR/$BINARY_NAME" . \
         || err "Build failed. See the error above; check that you have Go 1.26+ and a C compiler."
@@ -430,17 +477,66 @@ install_binary() {
     ok "Installed: $INSTALL_DIR/$BINARY_NAME"
 }
 
-verify_install() {
-    info "Verifying install (starting server, probing /healthz)..."
+# VERIFY_STATUS is the outcome of the install probe:
+#   ok      server started with the BGE embedder (model + onnxruntime present)
+#   binary  server started with the stub embedder: the binary runs, but embeddings
+#           need the model (its download failed or was skipped)
+#   failed  the server did not start
+#   skipped HYATLAS_NO_MODEL=1 on a source build
+# main() reads it to set the exit code, so a failed probe is never reported as success.
+VERIFY_STATUS="not-run"
 
-    # Start the server on a scratch port so we don't clash with a running instance
-    local probe_port=19599
-    local data_dir
+# pick_free_port — print a loopback TCP port nothing is listening on. python3 asks
+# the kernel for one. Without python3, try random high ports and keep the first one
+# that refuses a connection (bash /dev/tcp).
+pick_free_port() {
+    local p
+    if command -v python3 >/dev/null 2>&1; then
+        p="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()' 2>/dev/null || true)"
+        case "$p" in
+            ''|*[!0-9]*) ;;
+            *) echo "$p"; return 0 ;;
+        esac
+    fi
+    for _ in 1 2 3 4 5 6 7 8; do
+        p=$((20000 + RANDOM % 40000))
+        if ! (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then
+            echo "$p"
+            return 0
+        fi
+    done
+    return 1
+}
+
+verify_install() {
+    # A source build with HYATLAS_NO_MODEL=1 has no model, so the server cannot
+    # start. That is a documented skip, not a failure, and it is not verified.
+    if [ "$NO_MODEL" = "1" ] && [ "$BINARY_EMBEDDED" = "0" ]; then
+        VERIFY_STATUS="skipped"
+        warn "Verification skipped (HYATLAS_NO_MODEL=1, source build): skipped, not verified."
+        warn "The server cannot start without the model. Run the installer again without HYATLAS_NO_MODEL=1 to verify."
+        return 0
+    fi
+
+    local probe_port data_dir pid body
+    if ! probe_port="$(pick_free_port)"; then
+        VERIFY_STATUS="failed"
+        warn "NOT verified: could not find a free loopback port to start the server on."
+        return 1
+    fi
+    # The BGE embedder needs the model and onnxruntime on disk (or an embedded
+    # release binary). When they are missing, the server cannot start with it, so
+    # the probe uses the stub embedder (HYATLAS_EMBED_BASE=local) instead. That
+    # proves the binary runs. It does not prove embeddings work.
+    local embed="bge"
+    if [ "$BINARY_EMBEDDED" != "1" ] && ! { bge_present && ort_present; }; then
+        embed="local"
+    fi
+    info "Verifying install: starting the server on 127.0.0.1:$probe_port (embedder: $embed), then probing /healthz..."
     data_dir="$(mktemp -d)"
-    trap 'kill $pid 2>/dev/null || true; rm -rf "$data_dir"' RETURN
 
     # The binary is env-var configured (no CLI flags). Set the essentials:
-    #   HYATLAS_EMBED_BASE=bge   -> use the local BGE model, not the HTTP embedder
+    #   HYATLAS_EMBED_BASE       -> bge (local model, chosen above) or local (stub)
     #   HYATLAS_MODEL_DIR        -> where the BGE model lives
     #   HYATLAS_GO_DATA          -> scratch data dir so we don't touch real memory
     # LLM points at a dead port on purpose: the server still starts and
@@ -448,38 +544,54 @@ verify_install() {
     # to prove the install works; a real LLM key is a separate config step.
     HYATLAS_GO_PORT="$probe_port" \
     HYATLAS_GO_DATA="$data_dir" \
-    HYATLAS_EMBED_BASE="bge" \
+    HYATLAS_EMBED_BASE="$embed" \
     HYATLAS_MODEL_DIR="$MODEL_DIR" \
     HYATLAS_LLM_BASE="http://127.0.0.1:1/v1" \
     HYATLAS_LLM_MODEL="probe" \
     HYATLAS_LLM_KEY="probe" \
         "$INSTALL_DIR/$BINARY_NAME" >/dev/null 2>&1 &
-    local pid=$!
+    pid=$!
 
-    # Wait up to 15s for the server to come up (model load can take a few seconds)
+    # Wait up to 15s (model load can take a few seconds). If our server has exited,
+    # stop waiting: whatever else answers on the port is not this install.
     for _ in $(seq 1 30); do
-        if curl -fsS "http://127.0.0.1:$probe_port/healthz" >/dev/null 2>&1; then
-            ok "Server started and /healthz responded."
-            kill $pid 2>/dev/null || true
-            rm -rf "$data_dir"
-            trap - RETURN
-            return 0
+        if ! kill -0 "$pid" 2>/dev/null; then
+            break
         fi
+        body="$(curl -fsS "http://127.0.0.1:$probe_port/healthz" 2>/dev/null || true)"
+        case "$body" in
+            *'"status":"ok"'*)
+                kill "$pid" 2>/dev/null || true
+                wait "$pid" 2>/dev/null || true
+                rm -rf "$data_dir"
+                if [ "$embed" = "bge" ]; then
+                    VERIFY_STATUS="ok"
+                else
+                    VERIFY_STATUS="binary"
+                fi
+                ok "Server started and /healthz responded."
+                if [ "$embed" = "local" ]; then
+                    warn "Binary verified. Embeddings need the model: see the steps above."
+                fi
+                return 0
+                ;;
+        esac
         sleep 0.5
     done
 
-    kill $pid 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
     rm -rf "$data_dir"
-    trap - RETURN
-    warn "Server did not respond within 15s. It installed, but may need attention."
-    warn "Check logs by running: $INSTALL_DIR/$BINARY_NAME"
+    VERIFY_STATUS="failed"
+    warn "NOT verified: the server did not answer /healthz on 127.0.0.1:$probe_port."
+    warn "Start it by hand to see its error: $INSTALL_DIR/$BINARY_NAME"
     return 1
 }
 
 print_next_steps() {
     cat <<EOF
 
-$(printf '\033[0;32m' )HyAtlas-Memory v4 installed.$(printf '\033[0m')
+$(printf '\033[0;32m' )HyAtlas-Memory v4: next steps$(printf '\033[0m')
 
   Binary:  $INSTALL_DIR/$BINARY_NAME
   Model:   $MODEL_DIR
@@ -535,14 +647,17 @@ EOF
 # without exporting HYATLAS_LLM_* left every write returning "unconfigured" with
 # the reason buried in a log. Three questions is enough to make it work.
 #
-# Only asked when stdin is a terminal AND the answer is not already supplied by
-# the environment, so `curl | bash` in CI and pre-seeded installs never block.
+# Asked only when there is a terminal to ask on (stdin, or /dev/tty under
+# `curl | bash`), and never for a value the environment already supplies. With no
+# terminal at all (CI, pre-seeded installs) nothing blocks.
 
 # strip_cr removes a trailing carriage return. `IFS= read -r` strips only \n,
 # so CRLF input leaves the \r attached and turns "3" into an unrecognised mode.
 strip_cr() { printf '%s' "${1%$'\r'}"; }
 
 # ask VARNAME PROMPT [default] — read a value into VARNAME unless already set.
+# Reads from stdin. onboarding() points stdin at /dev/tty when the installer
+# itself came in on a pipe, so the question is still asked.
 ask() {
     local name="$1" prompt="$2" def="${3:-}" current val
     current="${!name:-}"
@@ -668,12 +783,14 @@ write_hermes_env() {
         home="$HOME/.hermes"
     fi
     local envfile="$home/.env"
-    [ -n "${HYATLAS_LLM_KEY:-}${HYATLAS_MODE:-}${HYATLAS_LLM_BASE:-}" ] || return 0
+    [ -n "${HYATLAS_LLM_KEY:-}${HYATLAS_MODE:-}${HYATLAS_LLM_BASE:-}${HYATLAS_LLM_MODEL:-}" ] || return 0
     if ! mkdir -p "$home" 2>/dev/null; then
         warn "cannot create $home; settings were not saved to $envfile"
         return 0
     fi
-    if ! touch "$envfile" 2>/dev/null; then
+    # Create the file under umask 077, so it is never readable by others, not even
+    # for a moment. An existing file keeps its old mode, so chmod 600 still runs.
+    if ! ( umask 077 && : >> "$envfile" ) 2>/dev/null; then
         warn "cannot write $envfile"
         return 0
     fi
@@ -685,7 +802,8 @@ write_hermes_env() {
         [ -z "$v" ] && return 0
         # Replace an existing line so a re-run updates instead of duplicating.
         if grep -q "^${k}=" "$envfile" 2>/dev/null; then
-            tmp="$(mktemp 2>/dev/null)" || { failed=1; return 0; }
+            # Temp file beside the target: same filesystem, so mv is an atomic rename.
+            tmp="$(umask 077 && mktemp "$envfile.XXXXXX" 2>/dev/null)" || { failed=1; return 0; }
             grep -v "^${k}=" "$envfile" > "$tmp" 2>/dev/null || true
             if ! printf '%s=%s\n' "$k" "$v" >> "$tmp" || ! mv "$tmp" "$envfile"; then
                 rm -f "$tmp"
@@ -710,18 +828,50 @@ write_hermes_env() {
     return 0
 }
 
-# onboarding runs only on an interactive terminal.
+# onboarding asks the setup questions on a terminal. It uses stdin when stdin is a
+# terminal. Under `curl | bash`, stdin is the script itself, so it asks on /dev/tty
+# when that can be opened. With no terminal at all, nothing is asked: only values
+# already exported in the environment are saved to the Hermes .env.
 onboarding() {
-    if [ ! -t 0 ]; then
-        info "non-interactive install: skipping setup questions"
+    if [ -t 0 ]; then
+        _setup_questions
+    elif [ -r /dev/tty ] && ( : </dev/tty ) 2>/dev/null; then
+        info "stdin is the installer script (curl | bash); asking on /dev/tty"
+        _setup_questions </dev/tty
+    else
+        info "non-interactive install: no terminal to ask on; using values from the environment"
         info "configure later with: hermes memory setup"
-        return 0
+        write_hermes_env
     fi
+}
+
+_setup_questions() {
     printf '\n'
     info "Setup — three questions, then it works"
     choose_mode
     configure_llm
     write_hermes_env
+}
+
+# final_summary — the single closing status. Returns the exit code for the outcome.
+final_summary() {
+    if [ "$MODEL_STATUS" -ne 0 ]; then
+        if [ "$VERIFY_STATUS" = "binary" ]; then
+            warn "Installed; the binary is verified, but the model is missing (exit $MODEL_STATUS). Embeddings do not work until it is in place: follow the steps above, then re-run this installer."
+        else
+            warn "Installed, but NOT verified and the model is missing (exit $MODEL_STATUS). Follow the steps above, then re-run this installer."
+        fi
+        return "$MODEL_STATUS"
+    fi
+    case "$VERIFY_STATUS" in
+        ok)      ok "HyAtlas-Memory v4 installed and verified." ;;
+        binary)  warn "Installed; the binary is verified. Embeddings need the model: follow the steps above." ;;
+        skipped) warn "Installed. Verification skipped (HYATLAS_NO_MODEL=1): skipped, not verified." ;;
+        failed)  warn "Installed, but NOT verified: the server did not start. Fix the error above, then re-run this installer."
+                 return 1 ;;
+        *)       warn "Installed, but verification did not run: NOT verified." ;;
+    esac
+    return 0
 }
 
 main() {
@@ -752,18 +902,27 @@ main() {
     download_model || MODEL_STATUS=$?
     install_binary
     ensure_on_path
+    # verify_install records its result in VERIFY_STATUS. The exit code below reads
+    # that, so a failed probe cannot pass as success.
     verify_install || true
     onboarding
     print_next_steps
 
-    if [ "$MODEL_STATUS" -ne 0 ]; then
-        warn "Installed the binary, but the model is missing (exit $MODEL_STATUS). Follow the steps above, then re-run this installer."
-        exit "$MODEL_STATUS"
-    fi
+    # One closing status line, last on screen, and the exit code that matches it.
+    local code=0
+    final_summary || code=$?
+    exit "$code"
 }
 
-# HYATLAS_INSTALL_LIB=1 sources the functions without running the installer
-# (used by the test harness). Unset for every real install, including curl | bash.
-if [ "${HYATLAS_INSTALL_LIB:-0}" != "1" ]; then
+# main runs unless this file is being sourced AND HYATLAS_INSTALL_LIB=1. The test
+# harness loads the functions that way. Under `curl | bash` BASH_SOURCE[0] is unset
+# and $0 is "bash"; under `bash install.sh` the two are equal. Both run main, even
+# if HYATLAS_INSTALL_LIB leaked in from the environment, so that case is not silent.
+if [ "${BASH_SOURCE[0]:-$0}" != "$0" ] && [ "${HYATLAS_INSTALL_LIB:-0}" = "1" ]; then
+    : # sourced by the test harness: define the functions only
+else
+    if [ "${HYATLAS_INSTALL_LIB:-0}" = "1" ]; then
+        warn "HYATLAS_INSTALL_LIB=1 is set, but this script is being run, not sourced: running the installer."
+    fi
     main "$@"
 fi

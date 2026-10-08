@@ -90,14 +90,16 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
         "description": "Base URL of any OpenAI-compatible chat-completions API, "
                        "used for fact extraction and (in ultra) consolidation. "
                        "Forwarded to the server as HYATLAS_LLM_BASE. Not used in "
-                       "lite mode, which makes no LLM call. Leave empty to use "
-                       "the server's default.",
+                       "lite mode, which makes no LLM call. The server has no "
+                       "default endpoint: empty leaves extraction unconfigured "
+                       "(pro/ultra report llm=unconfigured).",
     },
     {
         "key": "llm_model", "type": "str", "default": "",
         "label": "LLM model",
         "description": "Model id at that endpoint, e.g. a `:free` tier. Forwarded "
-                       "as HYATLAS_LLM_MODEL. Leave empty for the server default.",
+                       "as HYATLAS_LLM_MODEL. The server has no default model: "
+                       "empty leaves extraction unconfigured.",
     },
     {
         "key": "llm_key", "type": "str", "default": "", "secret": True,

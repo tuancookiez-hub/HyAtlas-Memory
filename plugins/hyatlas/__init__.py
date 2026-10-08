@@ -257,7 +257,8 @@ class HyatlasMemoryProvider(MemoryProvider):
                     agent_id=args.get("agent_id", self._agent_id) or self._agent_id,
                     layer=args.get("layer", "") or "",
                     limit=int(args.get("limit", 20)),
-                    include_raw=bool(args.get("include_raw", False)),
+                    include_raw=(None if args.get("include_raw") is None
+                                 else bool(args.get("include_raw"))),
                 )
                 return json.dumps(items)
             if tool_name == "hyatlas_add":

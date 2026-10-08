@@ -126,19 +126,13 @@
     <div class="scope-bar-label">MEMORY SCOPE</div>
     <label class="scope-select-wrap" for="agent-selector">
       <span class="text-xs text-muted">Profile</span>
-      <select class="filter-select" id="agent-selector">
-        <option value="all">All profiles</option>
-        <option value="default">default</option>
-        <option value="research">research</option>
-        <option value="sentinel">sentinel</option>
-        <option value="work-backend">work-backend</option>
-        <option value="work-frontend">work-frontend</option>
-        <option value="trading">trading</option>
-        <option value="hestia">hestia</option>
+      <select class="filter-select" id="agent-selector" aria-label="Owner">
+        <option value="all">All owners</option>
+        <!-- owner options are filled from the data (user_id / agent_id pairs) -->
       </select>
     </label>
     <div class="scope-bar-meta">
-      <span id="scope-label">All profiles</span>
+      <span id="scope-label">All owners</span>
       <span class="scope-separator">·</span>
       <span id="scope-status">Loading…</span>
     </div>

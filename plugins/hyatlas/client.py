@@ -156,6 +156,13 @@ class HyatlasClient:
             body["layer"] = layer
         return self._post("/api/v1/search", body)
 
+    def _server_mode(self) -> str:
+        """The server's mode from /api/v1/status ("lite", "pro", "ultra"), or ""."""
+        try:
+            return str((self.status() or {}).get("mode") or "")
+        except HyatlasClientError:
+            return ""
+
     def list_memories(
         self,
         user_id: str = "",
@@ -163,14 +170,23 @@ class HyatlasClient:
         layer: str = "",
         limit: int = 50,
         offset: int = 0,
-        include_raw: bool = False,
+        include_raw: Optional[bool] = None,
     ) -> Dict[str, Any]:
+        """List memories. ``include_raw=None`` picks the default for the server's mode.
+
+        Lite stores only L2 raw rows, so a list that excludes raw is always empty
+        there, and lite includes them by default. Other modes exclude raw by
+        default. An explicit True or False always wins. The mode is read with one
+        /api/v1/status call per invocation.
+        """
+        if include_raw is None:
+            include_raw = self._server_mode() == "lite"
         body: Dict[str, Any] = {
             "user_id": user_id,
             "agent_id": agent_id,
             "limit": limit,
             "offset": offset,
-            "include_raw": include_raw,
+            "include_raw": bool(include_raw),
         }
         if layer:
             body["layer"] = layer

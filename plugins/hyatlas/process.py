@@ -13,6 +13,7 @@ resolved relative to the binary's directory.
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import shutil
@@ -145,12 +146,23 @@ class StartLockBusy(RuntimeError):
     """Another start held the start lock for longer than the caller was willing to wait."""
 
 
+# Windows (msvcrt.locking) reports a held lock as EACCES or EDEADLOCK.
+_WINDOWS_BUSY_ERRNOS = {errno.EACCES} | (
+    {errno.EDEADLOCK} if hasattr(errno, "EDEADLOCK") else set())
+
+
 def _acquire_start_lock(wait: float) -> int:
     """Take the exclusive start lock, waiting at most *wait* seconds.
 
-    Returns an open file descriptor that holds the lock; pass it to
-    :func:`_release_start_lock`. The lock is advisory and lives in LOG_DIR. The OS
-    drops it when the holder exits, so a crashed starter cannot leave it held.
+    Returns an open file descriptor; pass it to :func:`_release_start_lock`. The
+    lock is advisory and lives in LOG_DIR. The OS drops it when the holder exits,
+    so a crashed starter cannot leave it held.
+
+    Only "someone else holds it" is retried: BlockingIOError (EAGAIN/EWOULDBLOCK)
+    on POSIX, and EACCES/EDEADLOCK from msvcrt on Windows. Any other lock error
+    means the filesystem cannot lock at all (ENOLCK, EOPNOTSUPP, ...). Waiting
+    cannot help there, so a warning is logged and the start proceeds unlocked.
+
     Raises StartLockBusy when the wait runs out, and OSError if the lock file
     cannot be created.
     """
@@ -167,13 +179,21 @@ def _acquire_start_lock(wait: float) -> int:
                     os.lseek(fd, 0, os.SEEK_SET)
                     msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
                 return fd
-            except OSError:
-                # Held by another starter (flock raises BlockingIOError, msvcrt OSError).
-                if time.monotonic() >= deadline:
-                    raise StartLockBusy(
-                        f"another hyatlas start holds {path}; gave up after "
-                        f"{float(wait):g}s. Retry in a moment.")
-                time.sleep(0.1)
+            except BlockingIOError:
+                pass  # flock: another starter holds it; retry below
+            except OSError as e:
+                if fcntl is None and e.errno in _WINDOWS_BUSY_ERRNOS:
+                    pass  # msvcrt: held; retry below
+                else:
+                    logger.warning(
+                        "start lock unavailable on %s (%s); starting without the "
+                        "lock, so two simultaneous starts are not serialised", path, e)
+                    return fd
+            if time.monotonic() >= deadline:
+                raise StartLockBusy(
+                    f"another hyatlas start holds {path}; gave up after "
+                    f"{float(wait):g}s. Retry in a moment.")
+            time.sleep(0.1)
     except BaseException:
         os.close(fd)
         raise
@@ -345,7 +365,10 @@ class HyatlasProcess:
         self._mode = settings.mode(self._config)
         self._sync = settings.sync(self._config)
 
-        self._lock_fd = _acquire_start_lock(lock_wait)
+        # Reuse a lock this instance already holds. Taking a second one would
+        # overwrite the first descriptor and leak it.
+        if self._lock_fd is None:
+            self._lock_fd = _acquire_start_lock(lock_wait)
         try:
             existing = _read_pid()
             owner_alive = existing is not None and HyatlasProcess._is_server(existing)

@@ -10,10 +10,14 @@ function tsToDate(ts) {
   return n > 0 ? new Date(n * 1000) : null;
 }
 let currentPage = 'overview';
-const PROFILE_IDS = ['all', 'default', 'research', 'sentinel', 'work-backend', 'work-frontend', 'trading', 'hestia'];
-let currentAgentId = PROFILE_IDS.includes(localStorage.getItem('hyatlas-agent-id'))
-  ? localStorage.getItem('hyatlas-agent-id')
-  : 'all';
+// Owner scope. A key is 'all' (no owner filter) or JSON [user_id, agent_id] for
+// one (user_id, agent_id) pair seen in the data. The options are built from the
+// data (see setOwnerOptions), not hardcoded.
+let ownerOptions = [];  // [{key, user_id, agent_id, count}] from distinct pairs
+let currentOwnerKey = 'all';
+try {
+  currentOwnerKey = localStorage.getItem('hyatlas-owner') || 'all';
+} catch (e) { currentOwnerKey = 'all'; }
 let loadSeq = 0;
 let vdbMemories = [];
 let codingMemories = [];
@@ -163,13 +167,28 @@ function computeObservatoryFitZoom() {
   return Math.max(0.3, Math.min(5.0, fit));
 }
 
+// Every server-derived value that reaches innerHTML goes through escapeHtml.
+// Quotes are escaped too, so the result is safe in text and in "..." or '...'
+// attribute values. Do not put escaped values into <script>, on* handlers or
+// unquoted attributes; use data-* attributes plus addEventListener instead.
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   })[c]);
 }
 function escapeAttr(s) {
   return escapeHtml(s);
+}
+// Short alias used in templates.
+const esc = escapeHtml;
+// Reduce a value to a CSS-class-safe token ([a-z0-9_-] only). Used for
+// class="layer-${...}"-style names built from server data.
+function cssToken(s) {
+  return String(s ?? '').toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+}
+// Layer metadata lookup that ignores inherited keys such as "constructor".
+function layerInfoFor(key) {
+  return Object.prototype.hasOwnProperty.call(LAYERS, key) ? LAYERS[key] : null;
 }
 
 // API calls
@@ -198,18 +217,87 @@ async function fetchResult(name, task) {
   }
 }
 
-function scopedPath(path, agentId = currentAgentId) {
-  return scopeQuery(path, agentId);
+function ownerKey(userId, agentId) {
+  return JSON.stringify([String(userId || ''), String(agentId || '')]);
 }
 
-function scopeQuery(path, agentId = currentAgentId) {
+// Parse an owner key back to {user_id, agent_id}; null for 'all' or a bad key.
+function ownerFromKey(key) {
+  if (!key || key === 'all') return null;
+  try {
+    const [user_id, agent_id] = JSON.parse(key);
+    return { user_id: String(user_id || ''), agent_id: String(agent_id || '') };
+  } catch (e) {
+    return null;
+  }
+}
+
+function scopedPath(path, key = currentOwnerKey) {
+  return scopeQuery(path, key);
+}
+
+// Owner filter for the query string. Both user_id and agent_id are sent. The
+// server treats 'all' and '' as no filter. An owner with an empty user_id is
+// filtered by agent_id alone, because the server cannot tell an empty user apart.
+function scopeQuery(path, key = currentOwnerKey) {
   const join = path.includes('?') ? '&' : '?';
-  if (!agentId || agentId === 'all') return `${path}${join}agent_id=all`;
-  return `${path}${join}agent_id=${encodeURIComponent(agentId)}`;
+  const owner = ownerFromKey(key);
+  if (!owner) return `${path}${join}agent_id=all`;
+  const parts = [];
+  if (owner.user_id) parts.push(`user_id=${encodeURIComponent(owner.user_id)}`);
+  parts.push(`agent_id=${encodeURIComponent(owner.agent_id || 'all')}`);
+  return `${path}${join}${parts.join('&')}`;
 }
 
-function scopeAgents(agentId = currentAgentId) {
-  return agentId === 'all' ? [] : [agentId];
+function scopeAgents(key = currentOwnerKey) {
+  const owner = ownerFromKey(key);
+  return owner && owner.agent_id ? [owner.agent_id] : [];
+}
+
+function scopeUsers(key = currentOwnerKey) {
+  const owner = ownerFromKey(key);
+  return owner && owner.user_id ? [owner.user_id] : USER_IDS;
+}
+
+function ownerLabel(key) {
+  const owner = ownerFromKey(key);
+  if (!owner) return 'All owners';
+  return owner.user_id ? `${owner.user_id} · ${owner.agent_id || 'any agent'}` : `(no user) · ${owner.agent_id || 'any agent'}`;
+}
+
+// Distinct (user_id, agent_id) pairs from a /api/memories payload, with counts.
+function distinctOwners(payload) {
+  const memBuckets = payload?.memories || {};
+  const items = Array.isArray(memBuckets) ? memBuckets : [
+    ...(memBuckets.profile || []), ...(memBuckets.proactive || []), ...(memBuckets.normal || []),
+  ];
+  const seen = new Map();
+  for (const m of items) {
+    const key = ownerKey(m.user_id, m.agent_id);
+    const cur = seen.get(key) || { key, user_id: String(m.user_id || ''), agent_id: String(m.agent_id || ''), count: 0 };
+    cur.count += 1;
+    seen.set(key, cur);
+  }
+  return [...seen.values()].sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+}
+
+// Rebuild the selector from the owners in the data. The selection survives a
+// refresh when its owner still exists; otherwise it falls back to All owners.
+function setOwnerOptions(owners) {
+  ownerOptions = owners;
+  const el = document.getElementById('agent-selector');
+  if (el) {
+    el.innerHTML = [`<option value="all">All owners (${owners.reduce((a, o) => a + o.count, 0)} rows)</option>`]
+      .concat(owners.map(o => `<option value="${esc(o.key)}">${esc(ownerLabel(o.key))} · ${esc(o.count)}</option>`))
+      .join('');
+    if (currentOwnerKey !== 'all' && !owners.some(o => o.key === currentOwnerKey)) {
+      currentOwnerKey = 'all';
+      try { localStorage.setItem('hyatlas-owner', 'all'); } catch (e) { /* private mode */ }
+    }
+    el.value = currentOwnerKey;
+  }
+  const label = document.getElementById('scope-label');
+  if (label) label.textContent = ownerLabel(currentOwnerKey);
 }
 
 function setScopeStatus(text) {
@@ -220,26 +308,26 @@ function setScopeStatus(text) {
 function initAgentSelector() {
   const el = document.getElementById('agent-selector');
   if (!el) return;
-  el.value = currentAgentId;
+  el.value = currentOwnerKey;
   el.addEventListener('change', async () => {
-    const next = PROFILE_IDS.includes(el.value) ? el.value : 'all';
-    currentAgentId = next;
-    localStorage.setItem('hyatlas-agent-id', next);
+    const next = el.value === 'all' || ownerFromKey(el.value) ? el.value : 'all';
+    currentOwnerKey = next;
+    try { localStorage.setItem('hyatlas-owner', next); } catch (e) { /* private mode */ }
     l5State.data = null;
     l5State.scope = null;
     setScopeStatus('Loading…');
     await loadAllData();
   });
   const label = document.getElementById('scope-label');
-  if (label) label.textContent = currentAgentId === 'all' ? 'All profiles' : currentAgentId;
+  if (label) label.textContent = ownerLabel(currentOwnerKey);
 }
 
 async function loadAllData() {
   const seq = ++loadSeq;
-  const agentId = currentAgentId;
-  setScopeStatus(`Loading ${agentId === 'all' ? 'all profiles' : agentId}…`);
+  const agentId = currentOwnerKey;
+  setScopeStatus(`Loading ${ownerLabel(agentId)}…`);
   try {
-    const [coreResult, opsResult, graphResult, qualityResult] = await Promise.all([
+    const [coreResult, opsResult, graphResult, qualityResult, ownersResult] = await Promise.all([
       fetchResult('core', Promise.all([
         fetchJSON('/api/v1/status'),
         fetchJSON('/api/info'),
@@ -262,6 +350,8 @@ async function loadAllData() {
         fetchJSON(scopedPath('/api/l5/graph?layer=l7_intention&n=500&rels=false', agentId)),
       ])),
       fetchResult('quality', fetchJSON(scopedPath('/api/quality-metrics', agentId))),
+      // Unscoped: the owner list must cover every owner, not only the selected one.
+      fetchResult('owners', fetchJSON('/api/memories?limit=1000')),
     ]);
     if (!coreResult.ok) throw coreResult.error;
     const [status, info, memories, layerCounts] = coreResult.data;
@@ -276,7 +366,14 @@ async function loadAllData() {
     const quality = qualityResult.ok ? qualityResult.data : qualityData;
     const failed = [opsResult, graphResult, qualityResult].filter(result => !result.ok);
 
-    if (seq !== loadSeq || agentId !== currentAgentId) return false;
+    if (seq !== loadSeq || agentId !== currentOwnerKey) return false;
+    if (ownersResult.ok) {
+      const before = currentOwnerKey;
+      setOwnerOptions(distinctOwners(ownersResult.data));
+      // The stored owner no longer exists, so the selection fell back to All.
+      // Reload under All instead of showing the empty data of the old owner.
+      if (currentOwnerKey !== before) return loadAllData();
+    }
     loadErrors = failed;
     l5Graph = l5;
     layerHealthData = layerHealth;
@@ -374,7 +471,7 @@ async function loadAllData() {
       return {
         memory_id:        'graph_' + (n.node_id || n.id),
         user_id:          'graph',
-        agent_id:         n.agent_id || agentId || 'default',
+        agent_id:         n.agent_id || (ownerFromKey(agentId)?.agent_id) || 'default',
         layer:            layerMap[rawLayer] || 'l5_knowledge',
         content:          n.name || n.label || '',
         gmt_created:      ts,
@@ -413,7 +510,7 @@ async function loadAllData() {
     if (currentPage === 'l5') initL5Page();
     updateGlobalStatus();
     const label = document.getElementById('scope-label');
-    if (label) label.textContent = agentId === 'all' ? 'All profiles' : agentId;
+    if (label) label.textContent = ownerLabel(currentOwnerKey);
     setScopeStatus(failed.length
       ? `Updated with stale ${failed.map(result => result.name).join(', ')} data`
       : `Updated ${new Date().toLocaleTimeString()}`);
@@ -576,7 +673,7 @@ function getLayerTotal() {
 
 function getVdbPoints() {
   const fromLayer = Number(layerCountsData?.vdb_total);
-  if (currentAgentId !== 'all' && Number.isFinite(fromLayer) && fromLayer >= 0) return fromLayer;
+  if (currentOwnerKey !== 'all' && Number.isFinite(fromLayer) && fromLayer >= 0) return fromLayer;
   const fromStatus = Number(statusData?.vdb_points);
   if (Number.isFinite(fromStatus) && fromStatus > 0) return fromStatus;
   const fromStorage = Number(storageData?.vdb?.points);
@@ -785,18 +882,27 @@ function renderOperations() {
 }
 
 
+// Monotonic id for search requests. A response is applied only if no newer
+// search has started since it was sent, so a slow older query cannot
+// overwrite the results of the query the user is looking at.
+let searchSeq = 0;
+
 async function performSearch() {
+  const seq = ++searchSeq;
   const query = document.getElementById('search-input').value.trim();
-  
+
   if (!query) {
     searchResults = [];
     renderSearchResults();
     return;
   }
-  
+
   try {
     document.getElementById('results-count').textContent = 'Searching…';
     document.getElementById('search-results').innerHTML = '<div class="text-muted">Searching memories…</div>';
+    // The layer filter is sent to the server so the limit applies to the
+    // selected layer. Filtering after the fetch would hide matches that the
+    // server never returned.
     const layer = document.getElementById('filter-layer').value;
     const days = Number(document.getElementById('filter-time').value) || 0;
     const sort = document.getElementById('sort-by').value;
@@ -807,11 +913,12 @@ async function performSearch() {
     };
     const body = {
       query,
-      user_ids: USER_IDS,
+      user_ids: scopeUsers(),
       agent_ids: scopeAgents(),
       reader: readers[searchMode] || 'legacy',
       limit: 20,
     };
+    if (layer) body.layer = layer;
     if (days) body.created_after = Date.now() / 1000 - days * 86400;
 
     const resp = await fetchJSON('/api/v1/search', {
@@ -819,30 +926,32 @@ async function performSearch() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
+    if (seq !== searchSeq) return;  // a newer search superseded this one
 
-    searchResults = [
+    let results = [
       ...(resp.memories?.profile || []),
       ...(resp.memories?.proactive || []),
       ...(resp.memories?.normal || [])
     ];
-    if (layer) searchResults = searchResults.filter(m => m.layer === layer);
     if (days) {
       const since = body.created_after;
-      searchResults = searchResults.filter(m => Number(m.gmt_created || 0) >= since);
+      results = results.filter(m => Number(m.gmt_created || 0) >= since);
     }
     if (sort === 'recent') {
-      searchResults.sort((a, b) => Number(b.gmt_created || 0) - Number(a.gmt_created || 0));
+      results.sort((a, b) => Number(b.gmt_created || 0) - Number(a.gmt_created || 0));
     } else {
-      searchResults.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+      results.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
     }
+    searchResults = results;
 
     renderSearchResults();
   } catch (err) {
+    if (seq !== searchSeq) return;
     console.error('Search failed:', err);
     searchResults = [];
     renderSearchResults();
     document.getElementById('search-results').innerHTML =
-      `<div class="text-muted">Search failed: ${escapeHtml(err.message || String(err))}</div>`;
+      `<div class="text-muted">Search failed: ${esc(err.message || String(err))}</div>`;
   }
 }
 
@@ -872,36 +981,40 @@ function renderSearchResults() {
     return;
   }
 
+  const scoreLabel = searchMode === 'keyword'
+    ? 'keyword/hybrid score'
+    : searchMode === 'hybrid'
+      ? 'hybrid retrieval score'
+      : 'semantic similarity score';
+  // Memory content is user-controlled, so every field is escaped. Rows carry
+  // only the index; the click handler reads the memory from searchResults.
   const html = searchResults.map((m, i) => {
-    const title = (m.content || '').substring(0, 60) + '...';
-    const snippet = (m.content || '').substring(0, 100) + '...';
-    const score = m.score?.toFixed(2) || '—';
-    const scoreLabel = searchMode === 'keyword'
-      ? 'keyword/hybrid score'
-      : searchMode === 'hybrid'
-        ? 'hybrid retrieval score'
-        : 'semantic similarity score';
+    const content = String(m.content || '');
+    const title = content.substring(0, 60) + '...';
+    const snippet = content.substring(0, 100) + '...';
+    const score = Number.isFinite(Number(m.score)) && m.score != null ? Number(m.score).toFixed(2) : '—';
     const tagCount = (m.tags || []).length;
 
     return `
       <div class="search-result" data-index="${i}">
         <div class="flex justify-between items-start mb-2">
-          <span class="badge badge-layer layer-${m.layer}">${m.layer}</span>
-          <span class="font-mono text-xs text-muted" title="${scoreLabel}">${score}</span>
+          <span class="badge badge-layer layer-${cssToken(m.layer)}">${esc(m.layer)}</span>
+          <span class="font-mono text-xs text-muted" title="${esc(scoreLabel)}">${esc(score)}</span>
         </div>
-        <div class="text-sm font-semibold mb-2">${title}</div>
-        <div class="text-xs text-muted mb-2">${snippet}</div>
+        <div class="text-sm font-semibold mb-2">${esc(title)}</div>
+        <div class="text-xs text-muted mb-2">${esc(snippet)}</div>
         <div class="text-xs text-muted">${tagCount} tags</div>
       </div>
     `;
   }).join('');
-  
+
   document.getElementById('search-results').innerHTML = html;
-  
+
   document.querySelectorAll('.search-result').forEach(el => {
     el.addEventListener('click', () => {
-      const idx = parseInt(el.dataset.index);
-      enterMemoryDetail(searchResults[idx].memory_id);
+      const hit = searchResults[parseInt(el.dataset.index, 10)];
+      if (!hit) return;
+      enterMemoryDetail(hit.memory_id);
       document.querySelectorAll('.search-result').forEach(r => r.classList.remove('selected'));
       el.classList.add('selected');
     });
@@ -914,11 +1027,6 @@ function showMemoryDetail(memory) {
   // New click flows route through enterMemoryDetail() which navigates to the
   // dedicated memory-detail page instead.
   const title = (memory.content || '');
-  const tagCounts = {};
-  (memory.tags || []).forEach(tag => {
-    tagCounts[tag] = vdbMemories.filter(m => (m.tags || []).includes(tag)).length;
-  });
-
   const imp = typeof memory.importance === 'number' ? memory.importance : null;
   const impCls = imp === null ? '' : imp >= 0.7 ? 'importance-high' : imp >= 0.4 ? 'importance-mid' : 'importance-low';
   const impBadge = imp === null ? '—' : `<span class="badge badge-importance ${impCls}">★ ${imp.toFixed(2)}</span>`;
@@ -928,32 +1036,32 @@ function showMemoryDetail(memory) {
     <div class="memory-detail">
       <div class="text-xs text-muted mb-2">MEMORY DETAIL</div>
       <div class="flex gap-2 mb-3" style="flex-wrap: wrap; align-items: center;">
-        <span class="badge badge-layer layer-${memory.layer}">${memory.layer || '—'}</span>
+        <span class="badge badge-layer layer-${cssToken(memory.layer)}">${esc(memory.layer || '—')}</span>
         ${impBadge}
-        <span class="badge badge-importance" title="Times this memory has been recalled">↻ ${acc}</span>
+        <span class="badge badge-importance" title="Times this memory has been recalled">↻ ${esc(acc)}</span>
       </div>
 
-      <div class="text-xs text-muted font-mono mb-3">id: ${memory.memory_id}</div>
-      <div class="text-xs text-muted mb-4">${tsToDate(memory.gmt_created)?.toLocaleString() ?? '—'}</div>
+      <div class="text-xs text-muted font-mono mb-3">id: ${esc(memory.memory_id)}</div>
+      <div class="text-xs text-muted mb-4">${esc(tsToDate(memory.gmt_created)?.toLocaleString() ?? '—')}</div>
 
-      <div class="text-sm mb-4" style="white-space: pre-wrap; word-break: break-word;">${escapeHtml(title)}</div>
+      <div class="text-sm mb-4" style="white-space: pre-wrap; word-break: break-word;">${esc(title)}</div>
 
       <div class="mb-3">
         <div class="text-xs text-muted mb-1">SCORING (4-factor)</div>
-        <div class="text-xs font-mono">semantic 0.50 · recency 0.30 · importance ${imp === null ? '—' : imp.toFixed(2) + ' × 0.15'} · access ${acc} × 0.05</div>
+        <div class="text-xs font-mono">semantic 0.50 · recency 0.30 · importance ${imp === null ? '—' : imp.toFixed(2) + ' × 0.15'} · access ${esc(acc)} × 0.05</div>
       </div>
 
       ${(memory.user_id || memory.session_id) ? `
       <div class="mb-3">
         <div class="text-xs text-muted mb-1">PROVENANCE</div>
-        ${memory.user_id ? `<div class="text-xs font-mono">user: ${memory.user_id}</div>` : ''}
-        ${memory.session_id ? `<div class="text-xs font-mono">session: ${memory.session_id}</div>` : ''}
+        ${memory.user_id ? `<div class="text-xs font-mono">user: ${esc(memory.user_id)}</div>` : ''}
+        ${memory.session_id ? `<div class="text-xs font-mono">session: ${esc(memory.session_id)}</div>` : ''}
       </div>` : ''}
 
       ${(memory.tags || []).length > 0 ? `
       <div class="mb-3">
         <div class="text-xs text-muted mb-1">TAGS</div>
-        ${(memory.tags || []).map(t => `<span class="badge badge-tag">${t}</span>`).join(' ')}
+        ${(memory.tags || []).map(t => `<span class="badge badge-tag">${esc(t)}</span>`).join(' ')}
       </div>` : ''}
     </div>
   `;
@@ -991,7 +1099,7 @@ function renderMemoryDetailPage(memory) {
   const preview = fullContent.length > 80 ? fullContent.substring(0, 80) + '…' : fullContent;
   titleEl.textContent = preview || '(empty content)';
   titleEl.title = fullContent;
-  const layerInfo = (memory.layer && LAYERS[memory.layer]) ? LAYERS[memory.layer] : null;
+  const layerInfo = layerInfoFor(memory.layer);
   const layerLabel = layerInfo ? layerInfo.name : (memory.layer || 'unknown');
   subEl.textContent  = `${layerLabel}${memory.user_id ? ' · ' + memory.user_id : ''}`;
 
@@ -1055,7 +1163,7 @@ function renderMemoryDetailPage(memory) {
   content.innerHTML = `
     <div class="memory-detail-page">
       <div class="memory-detail-meta-row">
-        <span class="badge badge-layer layer-${memory.layer || ''}">${escapeHtml(memory.layer || '—')}</span>
+        <span class="badge badge-layer layer-${cssToken(memory.layer)}">${escapeHtml(memory.layer || '—')}</span>
         ${impBadge}
         ${accBadge}
         <span class="text-xs text-muted font-mono" title="Memory identifier">id: ${escapeHtml(memory.memory_id)}</span>
@@ -1110,7 +1218,9 @@ function renderMemoryDetailPage(memory) {
 // and remembers the page we came from for the in-page Back button.
 function enterMemoryDetail(memoryId) {
   if (!memoryId) return;
-  const mem = observatoryMemories.find(m => m.memory_id === memoryId);
+  // Search hits can fall outside the recent-100 list, so look in both.
+  const mem = observatoryMemories.find(m => m.memory_id === memoryId)
+    || searchResults.find(m => m.memory_id === memoryId);
   if (!mem) {
     console.warn('enterMemoryDetail: memory not found', memoryId);
     return;
@@ -1404,15 +1514,15 @@ function renderToday() {
       const impBadge = imp === null ? '' : `<span class="badge badge-importance ${impCls}" title="Importance score (4-factor scorer)">★ ${imp.toFixed(2)}</span>`;
 
       return `
-        <div class="timeline-item" data-memory-id="${m.memory_id}" onclick="window.__openMemoryDetail && window.__openMemoryDetail('${m.memory_id}')">
+        <div class="timeline-item" data-memory-id="${esc(m.memory_id)}">
           <div class="timeline-dot"></div>
           <div class="timeline-content">
             <div class="timeline-time">${time} • ${agoText}</div>
             <div class="timeline-title">${escapeHtml(preview)}</div>
             <div class="flex gap-2 mt-2" style="flex-wrap: wrap; align-items: center;">
-              <span class="badge badge-layer layer-${m.layer}">${m.layer}</span>
+              <span class="badge badge-layer layer-${cssToken(m.layer)}">${esc(m.layer)}</span>
               ${impBadge}
-              ${(m.tags || []).slice(0, 3).map(t => `<span class="badge badge-tag">${t}</span>`).join('')}
+              ${(m.tags || []).slice(0, 3).map(t => `<span class="badge badge-tag">${esc(t)}</span>`).join('')}
             </div>
           </div>
         </div>
@@ -1480,23 +1590,23 @@ function renderSystem() {
   const infoHtml = `
     <div class="kv-item">
       <div class="kv-label">System Name</div>
-      <div class="kv-value">${infoData?.name || '—'}</div>
+      <div class="kv-value">${esc(infoData?.name || '—')}</div>
     </div>
     <div class="kv-item">
       <div class="kv-label">Version</div>
-      <div class="kv-value">${infoData?.version || '—'}</div>
+      <div class="kv-value">${esc(infoData?.version || '—')}</div>
     </div>
     <div class="kv-item">
       <div class="kv-label">Status</div>
-      <div class="kv-value">${statusData?.status || '—'}</div>
+      <div class="kv-value">${esc(statusData?.status || '—')}</div>
     </div>
     <div class="kv-item">
       <div class="kv-label">Uptime</div>
-      <div class="kv-value">${uptime}</div>
+      <div class="kv-value">${esc(uptime)}</div>
     </div>
     <div class="kv-item">
       <div class="kv-label">Server Time</div>
-      <div class="kv-value">${new Date().toLocaleString()}</div>
+      <div class="kv-value">${esc(new Date().toLocaleString())}</div>
     </div>
     <div class="kv-item">
       <div class="kv-label">Platform</div>
@@ -1504,15 +1614,15 @@ function renderSystem() {
     </div>
     <div class="kv-item">
       <div class="kv-label">VDB Provider</div>
-      <div class="kv-value">${statusData?.vdb_provider || '—'}</div>
+      <div class="kv-value">${esc(statusData?.vdb_provider || '—')}</div>
     </div>
     <div class="kv-item">
       <div class="kv-label">VDB Collection</div>
-      <div class="kv-value">${statusData?.vdb_collection || '—'}</div>
+      <div class="kv-value">${esc(statusData?.vdb_collection || '—')}</div>
     </div>
     <div class="kv-item">
       <div class="kv-label">Last Memory</div>
-      <div class="kv-value">${lastMemory}</div>
+      <div class="kv-value">${esc(lastMemory)}</div>
     </div>
     ${layerHealthData && layerHealthData.user_id ? `
     <div class="kv-item">
@@ -1521,15 +1631,15 @@ function renderSystem() {
     </div>
     <div class="kv-item">
       <div class="kv-label">Fresh L2 (digest fuel)</div>
-      <div class="kv-value">${layerHealthData.fresh_l2_for_digest ?? '—'}</div>
+      <div class="kv-value">${esc(layerHealthData.fresh_l2_for_digest ?? '—')}</div>
     </div>
     <div class="kv-item">
     <div class="kv-label">Graph L5 / L6 / relations (per agent)</div>
-    <div class="kv-value font-mono text-sm">${layerHealthData.graph_layer_counts ? `${layerHealthData.graph_layer_counts.l5_knowledge ?? '—'} / ${layerHealthData.graph_layer_counts.l6_schema ?? '—'} / ${layerHealthData.graph_relation_count ?? '—'}` : '—'}</div>
+    <div class="kv-value font-mono text-sm">${layerHealthData.graph_layer_counts ? esc(`${layerHealthData.graph_layer_counts.l5_knowledge ?? '—'} / ${layerHealthData.graph_layer_counts.l6_schema ?? '—'} / ${layerHealthData.graph_relation_count ?? '—'}`) : '—'}</div>
     </div>
     <div class="kv-item">
     <div class="kv-label">Graph L5 / L6 / relations (global)</div>
-    <div class="kv-value font-mono text-sm">${layerHealthData.graph_layer_counts_global ? `${layerHealthData.graph_layer_counts_global.l5_knowledge ?? '—'} / ${layerHealthData.graph_layer_counts_global.l6_schema ?? '—'} / ${layerHealthData.graph_relation_count_global ?? '—'}` : '—'}</div>
+    <div class="kv-value font-mono text-sm">${layerHealthData.graph_layer_counts_global ? esc(`${layerHealthData.graph_layer_counts_global.l5_knowledge ?? '—'} / ${layerHealthData.graph_layer_counts_global.l6_schema ?? '—'} / ${layerHealthData.graph_relation_count_global ?? '—'}`) : '—'}</div>
     </div>
     <div class="kv-item">
       <div class="kv-label">Digest log</div>
@@ -1542,7 +1652,7 @@ function renderSystem() {
     ` : ''}
     ${l6SchemasData && l6SchemasData.schemas && l6SchemasData.schemas.length ? `
     <div class="kv-item" style="grid-column:1/-1">
-      <div class="kv-label">L6 schemas (sample ${l6SchemasData.total ?? l6SchemasData.schemas.length} / ${l6SchemasData.graph_l6_total ?? '—'} in graph)</div>
+      <div class="kv-label">L6 schemas (sample ${esc(l6SchemasData.total ?? l6SchemasData.schemas.length)} / ${esc(l6SchemasData.graph_l6_total ?? '—')} in graph)</div>
       <ul class="text-sm" style="margin:8px 0 0;padding-left:18px;line-height:1.45">
         ${l6SchemasData.schemas.map(s => { const id = s.memory_id || s.node_id || ''; const text = s.content || s.name || ''; return `<li style="margin-bottom:8px"><span class="font-mono text-xs text-muted">${escapeHtml(id.slice(0,8))}</span> ${escapeHtml(text.slice(0,220))}${text.length > 220 ? '…' : ''}</li>`; }).join('')}
       </ul>
@@ -1647,16 +1757,16 @@ function renderSystem() {
       <div class="kv-list">
         <div class="kv-item">
           <div class="kv-label">Status</div>
-          <div class="kv-value" style="color: ${c.status === 'ok' ? 'var(--green)' : 'var(--red)'}">${c.status}</div>
+          <div class="kv-value" style="color: ${c.status === 'ok' ? 'var(--green)' : 'var(--red)'}">${esc(c.status)}</div>
         </div>
         ${c.name === 'Vector Database' ? `
           <div class="kv-item">
             <div class="kv-label">Provider</div>
-            <div class="kv-value">${statusData?.vdb_provider || '—'}</div>
+            <div class="kv-value">${esc(statusData?.vdb_provider || '—')}</div>
           </div>
           <div class="kv-item">
             <div class="kv-label">Collection</div>
-            <div class="kv-value">${statusData?.vdb_collection || '—'}</div>
+            <div class="kv-value">${esc(statusData?.vdb_collection || '—')}</div>
           </div>
           <div class="kv-item">
             <div class="kv-label">Points</div>
@@ -1666,7 +1776,7 @@ function renderSystem() {
         ${c.name === 'Embedding Service' ? `
           <div class="kv-item">
             <div class="kv-label">Dimensions</div>
-            <div class="kv-value">${statusData?.embed_dims || '—'}</div>
+            <div class="kv-value">${esc(statusData?.embed_dims || '—')}</div>
           </div>
         ` : ''}
       </div>
@@ -1689,11 +1799,11 @@ function renderSystem() {
       </div>
       <div class="kv-item">
         <div class="kv-label">BIND_PORT</div>
-        <div class="kv-value">${runtime.bind_port ?? '—'}</div>
+        <div class="kv-value">${esc(runtime.bind_port ?? '—')}</div>
       </div>
       <div class="kv-item">
         <div class="kv-label">REFRESH_S</div>
-        <div class="kv-value">${runtime.refresh_seconds ?? REFRESH_S}</div>
+        <div class="kv-value">${esc(runtime.refresh_seconds ?? REFRESH_S)}</div>
       </div>
       <div class="kv-item">
         <div class="kv-label">PLATFORM</div>
@@ -1701,7 +1811,7 @@ function renderSystem() {
       </div>
       <div class="kv-item">
         <div class="kv-label">User IDs</div>
-        <div class="kv-value">${USER_IDS.join(', ')}</div>
+        <div class="kv-value">${USER_IDS.map(esc).join(', ')}</div>
       </div>
     </div>
   `;
@@ -1740,7 +1850,7 @@ function renderQuality() {
       <div class="quality-bar-row">
         <div class="quality-bar-meta">
           <span class="quality-bar-label">${escapeHtml(label)}</span>
-          <span class="quality-bar-value">${shown}${available && maxVal && maxVal !== 100 ? ` / ${maxVal}` : ''}</span>
+          <span class="quality-bar-value">${esc(shown)}${available && maxVal && maxVal !== 100 ? ` / ${esc(maxVal)}` : ''}</span>
         </div>
         <div class="quality-bar-track"><div class="quality-bar-fill" style="width:${pct}%"></div></div>
         ${sub ? `<div class="quality-bar-sub">${escapeHtml(sub)}</div>` : ''}
@@ -1766,7 +1876,7 @@ function renderQuality() {
       const deltaStr = d == null ? '' : (d > 0 ? `+${d}` : `${d}`);
       return `<div class="quality-pulse-chip ${trendClass(p.trend)}">
         <div class="quality-pulse-label">${escapeHtml(p.label)}</div>
-        <div class="quality-pulse-value">${p.value ?? '—'}${escapeHtml(p.suffix || '')}</div>
+        <div class="quality-pulse-value">${esc(p.value ?? '—')}${escapeHtml(p.suffix || '')}</div>
         <div class="quality-pulse-meta">${trendIcon(p.trend)} ${escapeHtml(deltaStr)} <span class="text-muted">${escapeHtml(p.context || '')}</span></div>
       </div>`;
     }).join('');
@@ -1777,17 +1887,17 @@ function renderQuality() {
     let visitLine = '';
     if (visit && visit.composite_delta != null && visit.composite_delta !== 0) {
       const sign = visit.composite_delta > 0 ? '+' : '';
-      visitLine = `<p class="quality-visit-note">${sign}${visit.composite_delta} overall ${escapeHtml(visit.label || '')}</p>`;
+      visitLine = `<p class="quality-visit-note">${sign}${esc(visit.composite_delta)} overall ${escapeHtml(visit.label || '')}</p>`;
     }
 
     vitalsEl.innerHTML = `
-      <div class="quality-vitals-grid tone-${tone}">
+      <div class="quality-vitals-grid tone-${cssToken(tone)}">
         <div class="quality-grade-ring">
           <div class="quality-grade-letter">${escapeHtml(grade)}</div>
           <div class="quality-grade-sub">${escapeHtml(health)}</div>
         </div>
         <div class="quality-vitals-main">
-          <div class="quality-vitals-score">${overall}<span class="quality-vitals-denom">/100</span></div>
+          <div class="quality-vitals-score">${esc(overall)}<span class="quality-vitals-denom">/100</span></div>
           <p class="quality-vitals-headline">${escapeHtml(headline)}</p>
           ${visitLine}
           <ul class="quality-highlight-list">${hiHtml}</ul>
@@ -1839,15 +1949,15 @@ function renderQuality() {
     const tpm = snap.tokens_per_memory_index;
     liveEl.innerHTML = `
       <div class="kv-item"><div class="kv-label">LLM tokens on memory writes (7d)</div>
-        <div class="kv-value font-mono">${llm.total != null ? llm.total.toLocaleString() : '—'}</div></div>
+        <div class="kv-value font-mono">${llm.total != null ? esc(Number(llm.total).toLocaleString()) : '—'}</div></div>
       <div class="kv-item"><div class="kv-label">Tokens per VDB point</div>
-        <div class="kv-value">${tpm != null ? tpm : '—'}</div></div>
+        <div class="kv-value">${tpm != null ? esc(tpm) : '—'}</div></div>
       <div class="kv-item"><div class="kv-label">Writes / digests (7d)</div>
-        <div class="kv-value">${snap.sys1_writes_7d ?? '—'} / ${snap.sys2_digests_7d ?? '—'}</div></div>
+        <div class="kv-value">${esc(snap.sys1_writes_7d ?? '—')} / ${esc(snap.sys2_digests_7d ?? '—')}</div></div>
       <div class="kv-item"><div class="kv-label">Fresh L2 · digest log</div>
-        <div class="kv-value">${snap.fresh_l2_for_digest ?? '—'} · <strong>${escapeHtml(snap.digest_log_status || '—')}</strong></div></div>
+        <div class="kv-value">${esc(snap.fresh_l2_for_digest ?? '—')} · <strong>${escapeHtml(snap.digest_log_status || '—')}</strong></div></div>
       <div class="kv-item"><div class="kv-label">L5 / L6 / L7 · relations</div>
-        <div class="kv-value font-mono">${graph.l5 ?? '—'} / ${graph.l6 ?? '—'} / ${graph.l7 ?? '—'} · ${graph.relations ?? '—'}</div></div>
+        <div class="kv-value font-mono">${esc(graph.l5 ?? '—')} / ${esc(graph.l6 ?? '—')} / ${esc(graph.l7 ?? '—')} · ${esc(graph.relations ?? '—')}</div></div>
     `;
   }
 
@@ -1860,7 +1970,7 @@ function renderQuality() {
     } else {
       if (nudgePanel) nudgePanel.style.display = '';
       tipsEl.innerHTML = tips.map(t => `
-        <div class="quality-tip priority-${escapeHtml(t.priority || 'low')}">
+        <div class="quality-tip priority-${cssToken(t.priority || 'low')}">
           <div class="quality-tip-title">${escapeHtml(t.title || '')}</div>
           <p>${escapeHtml(t.body || '')}</p>
           <p class="text-muted text-sm"><strong>Do:</strong> ${escapeHtml(t.action || '')}</p>
@@ -1944,7 +2054,9 @@ function updateRightSidebar(page) {
   } else if (page === 'observatory') {
     // Field note shown on node click
   } else if (page === 'explore') {
-    // Memory detail is now a dedicated page; no in-sidebar panel needed.
+    // Memory detail is now a dedicated page; no in-sidebar panel needed. Clear
+    // the sidebar so an Overview panel from before does not show stale counts.
+    document.getElementById('right-sidebar').innerHTML = '';
   } else if (page === 'layers') {
     renderLayerHierarchy(layerCountsData?.counts || {});
   } else if (page === 'today') {
@@ -2024,10 +2136,10 @@ function renderOverviewSidebar() {
           : `Created ${ts ? new Date(Number(m.gmt_created) * 1000).toLocaleString() : '—'}`;
 
         return `
-                  <div class="ingestion-item" data-memory-id="${m.memory_id}" onclick="window.__openMemoryDetail && window.__openMemoryDetail('${m.memory_id}')">
+                  <div class="ingestion-item" data-memory-id="${esc(m.memory_id)}">
                     <div class="ingestion-title" title="${escapeHtml(titleAttr)}">${escapeHtml(title)}</div>
                     <div class="ingestion-meta">
-                      <span class="badge badge-layer layer-${m.layer || 'l3_fact'}" style="font-size: 9px; padding: 2px 6px;">${m.layer || '—'}</span>
+                      <span class="badge badge-layer layer-${cssToken(m.layer || 'l3_fact')}" style="font-size: 9px; padding: 2px 6px;">${esc(m.layer || '—')}</span>
                       ${typeof m.importance === 'number' ? `<span class="badge badge-importance ${m.importance >= 0.7 ? 'importance-high' : m.importance >= 0.4 ? 'importance-mid' : 'importance-low'}" style="font-size: 9px; padding: 2px 6px;" title="Importance">★ ${m.importance.toFixed(2)}</span>` : ''}
                       <span>${agoText}${wasUpdated ? ' <span style="color:#888;" title="Memory was updated, not created">⟳</span>' : ''}</span>
                     </div>
@@ -2039,7 +2151,7 @@ function renderOverviewSidebar() {
     <div class="right-section">
       <div class="right-section-title">MEMORY INSIGHT</div>
       <div class="text-sm">
-        <div class="mb-2">Most active layer: <span class="font-mono">${getMostActiveLayer()}</span></div>
+        <div class="mb-2">Most active layer: <span class="font-mono">${esc(getMostActiveLayer())}</span></div>
         <div class="mb-2">VDB points: <span class="font-mono">${fmtCount(getVdbPoints())}</span> · display: <span class="font-mono">${fmtCount(getLayerTotal())}</span></div>
         <div class="mb-2">Active layers: <span class="font-mono">${getActiveLayerCount()}</span></div>
       </div>

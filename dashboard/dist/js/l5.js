@@ -51,18 +51,18 @@ function normalizeL5(raw) {
 }
 
 async function initL5Page() {
-  if (l5State.data && l5State.scope === currentAgentId) {
+  if (l5State.data && l5State.scope === currentOwnerKey) {
     renderL5();
     return;
   }
   try {
-    const data = normalizeL5(await fetchJSON(scopedPath('/api/l5/graph', currentAgentId)));
+    const data = normalizeL5(await fetchJSON(scopedPath('/api/l5/graph', currentOwnerKey)));
     l5State.data = data;
-    l5State.scope = currentAgentId;
+    l5State.scope = currentOwnerKey;
     renderL5();
   } catch (e) {
     document.getElementById('l5-stats').innerHTML =
-      '<div class="text-muted">Failed to load the live Kuzu graph. Check Settings → System and refresh.</div>';
+      '<div class="text-muted">Failed to load the L5 knowledge graph. Check Settings → System and refresh.</div>';
   }
 }
 
@@ -73,15 +73,15 @@ function renderL5() {
   // Stats panel
   const typeDistHtml = Object.entries(d.type_distribution || {})
     .sort((a, b) => b[1] - a[1])
-    .map(([t, n]) => `<span class="l5-type-badge" data-type="${t}">${escapeHtml(t)}: ${n}</span>`)
+    .map(([t, n]) => `<span class="l5-type-badge" data-type="${escapeAttr(t)}">${escapeHtml(t)}: ${escapeHtml(n)}</span>`)
     .join('  ');
   const relDistHtml = Object.entries(d.relation_type_distribution || {})
     .sort((a, b) => b[1] - a[1])
-    .map(([t, n]) => `${escapeHtml(t)}: ${n}`)
+    .map(([t, n]) => `${escapeHtml(t)}: ${escapeHtml(n)}`)
     .join('  ');
   document.getElementById('l5-stats').innerHTML = `
-    <div class="kv"><span class="kv-k">NODES</span><span class="kv-v">${d.node_count}</span></div>
-    <div class="kv"><span class="kv-k">RELATIONS</span><span class="kv-v">${d.relation_count}</span></div>
+    <div class="kv"><span class="kv-k">NODES</span><span class="kv-v">${escapeHtml(d.node_count)}</span></div>
+    <div class="kv"><span class="kv-k">RELATIONS</span><span class="kv-v">${escapeHtml(d.relation_count)}</span></div>
     <div class="kv"><span class="kv-k">LOADED AT</span><span class="kv-v">${escapeHtml(d.exported_at || new Date().toISOString().slice(0, 19).replace('T', ' '))}</span></div>
     <div class="kv"><span class="kv-k">ENTITY TYPES</span><span class="kv-v">${typeDistHtml}</span></div>
     <div class="kv"><span class="kv-k">RELATION TYPES</span><span class="kv-v">${relDistHtml}</span></div>
@@ -89,8 +89,10 @@ function renderL5() {
 
   // Type chips (All + each type)
   const allTypes = Object.keys(d.type_distribution || {}).sort();
+  // data-type holds the exact entity type (escaped for the attribute) so the
+  // chip filter compares the same string the nodes carry.
   const chips = ['<span class="l5-chip ' + (l5State.selectedType === null ? 'active' : '') + '" data-type="">ALL</span>']
-    .concat(allTypes.map(t => `<span class="l5-chip ${l5State.selectedType === t ? 'active' : ''}" data-type="${t}">${t}</span>`));
+    .concat(allTypes.map(t => `<span class="l5-chip ${l5State.selectedType === t ? 'active' : ''}" data-type="${escapeAttr(t)}">${escapeHtml(t)}</span>`));
   document.getElementById('l5-type-chips').innerHTML = chips.join('');
   const relations = Object.keys(d.relation_type_distribution || {}).sort();
   const relChips = ['<span class="l5-chip ' + (l5State.selectedRelation === null ? 'active' : '') + '" data-relation="">ALL RELATIONS</span>']
@@ -186,9 +188,9 @@ function renderL5EntitiesAndRelations() {
           ? `<span class="l5-source">created: ${escapeHtml(n.created_at)}</span>`
           : '';
         return `<div class="l5-entity${selected}" data-name="${escapeAttr(n.name)}">
-          <span class="l5-type-badge l5-type-${n.entity_type}">${escapeHtml(n.entity_type)}</span>
+          <span class="l5-type-badge l5-type-${cssToken(n.entity_type)}">${escapeHtml(n.entity_type)}</span>
           <span class="l5-name">${escapeHtml(n.name)}</span>
-          <span class="l5-mentions">×${n.mention_count || 1}</span>
+          <span class="l5-mentions">×${esc(n.mention_count || 1)}</span>
           ${source}${created}
           ${aliasStr}
         </div>`;
@@ -216,7 +218,7 @@ function renderL5EntitiesAndRelations() {
           <span class="l5-rel-type">${escapeHtml(r.relation_type)}</span>
           <span class="l5-rel-arrow">→</span>
           <span class="l5-rel-name">${escapeHtml(r.b)}</span>
-          <span class="l5-rel-conf">${(r.confidence || 0).toFixed(2)}</span>
+          <span class="l5-rel-conf">${(Number(r.confidence) || 0).toFixed(2)}</span>
         </div>
       `).join('');
   document.getElementById('l5-relations-list').innerHTML = relHtml +

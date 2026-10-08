@@ -75,8 +75,11 @@ def register_cli(plugin_parser: argparse.ArgumentParser) -> None:
     p_recent = sub.add_parser("recent", help="List recent memories")
     p_recent.add_argument("--layer", default="")
     p_recent.add_argument("--limit", type=int, default=20)
-    p_recent.add_argument("--include-raw", action="store_true")
-    p_recent.set_defaults(func=_cmd_recent)
+    # Default (unset): the server's mode decides. Lite includes raw rows, since
+    # they are the only rows lite stores. --include-raw / --no-include-raw override.
+    p_recent.add_argument("--include-raw", dest="include_raw", action="store_true")
+    p_recent.add_argument("--no-include-raw", dest="include_raw", action="store_false")
+    p_recent.set_defaults(include_raw=None, func=_cmd_recent)
 
     p_start = sub.add_parser("start", help="Start the v4 Go server (canonical launcher when present)")
     p_start.set_defaults(func=_cmd_start)

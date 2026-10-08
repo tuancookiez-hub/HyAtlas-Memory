@@ -13,6 +13,8 @@ or from the package root:
 
 from __future__ import annotations
 
+import argparse
+import errno
 import importlib.util
 import json
 import os
@@ -76,8 +78,10 @@ class _V4Handler(BaseHTTPRequestHandler):
         if path == "/healthz":
             return self._json(200, {"status": "ok"})
         if path == "/api/v1/status":
+            self.store["status_calls"] = self.store.get("status_calls", 0) + 1
             return self._json(200, {"status": "ok", "vdb": "ok", "embed": "ok",
-                                    "llm": "ok", "layers": {"l3_fact": 1}})
+                                    "llm": "ok", "layers": {"l3_fact": 1},
+                                    "mode": self.store.get("mode", "ultra")})
         if path == "/api/v1/boom":
             return self._json(500, {"error": "kaboom"})
         return self._json(404, {"error": "not found"})
@@ -98,6 +102,7 @@ class _V4Handler(BaseHTTPRequestHandler):
             return self._json(200, {"memories": {"normal": [
                 {**m, "score": 0.9} for m in hits]}})
         if path == "/api/v1/list":
+            self.store.setdefault("list_bodies", []).append(body)
             return self._json(200, {"total": len(self.store["memories"]),
                                     "memories": self.store["memories"]})
         if path == "/api/v1/delete_all":
@@ -1843,3 +1848,196 @@ def test_unreachable_hint_names_the_real_command():
     reason = p.unavailable_reason()
     assert "`hermes hyatlas start`" in reason
     assert "Start it with `hyatlas start`" not in reason
+
+
+# ---------------------------------------------------------------------------
+# recent: raw rows follow the server's mode (lite stores only raw)
+# ---------------------------------------------------------------------------
+
+def test_recent_default_follows_server_mode():
+    srv = FakeV4Server()
+    try:
+        c = HyatlasClient(base_url=srv.base, timeout=5.0)
+        srv.store["mode"] = "lite"
+        c.list_memories(user_id="u", agent_id="a")
+        assert srv.store["list_bodies"][-1]["include_raw"] is True
+        assert srv.store["status_calls"] == 1          # one status read per call
+        srv.store["mode"] = "ultra"
+        c.list_memories(user_id="u", agent_id="a")
+        assert srv.store["list_bodies"][-1]["include_raw"] is False
+        assert srv.store["status_calls"] == 2
+        # Explicit flags win in both modes, and do not read the status.
+        c.list_memories(user_id="u", agent_id="a", include_raw=True)
+        assert srv.store["list_bodies"][-1]["include_raw"] is True
+        srv.store["mode"] = "lite"
+        c.list_memories(user_id="u", agent_id="a", include_raw=False)
+        assert srv.store["list_bodies"][-1]["include_raw"] is False
+        assert srv.store["status_calls"] == 2
+    finally:
+        srv.stop()
+
+
+def test_recent_tool_in_lite_asks_for_raw_and_flag_still_wins():
+    srv = FakeV4Server()
+    try:
+        srv.store["mode"] = "lite"
+        p = _provider_at(srv.base)
+        json.loads(p.handle_tool_call("hyatlas_recent", {}))
+        assert srv.store["list_bodies"][-1]["include_raw"] is True
+        json.loads(p.handle_tool_call("hyatlas_recent", {"include_raw": False}))
+        assert srv.store["list_bodies"][-1]["include_raw"] is False
+        srv.store["mode"] = "ultra"
+        json.loads(p.handle_tool_call("hyatlas_recent", {}))
+        assert srv.store["list_bodies"][-1]["include_raw"] is False
+    finally:
+        srv.stop()
+
+
+def test_recent_cli_flag_defaults_to_mode_and_flags_override():
+    cli = _load_sibling("cli")
+    parser = argparse.ArgumentParser()
+    cli.register_cli(parser)
+    assert parser.parse_args(["recent"]).include_raw is None
+    assert parser.parse_args(["recent", "--include-raw"]).include_raw is True
+    assert parser.parse_args(["recent", "--no-include-raw"]).include_raw is False
+
+
+def test_recent_schema_no_longer_pins_raw_off():
+    sch = _load_sibling("schemas")
+    props = sch.HYATLAS_RECENT_SCHEMA["parameters"]["properties"]["include_raw"]
+    assert "default" not in props
+    assert "lite" in props["description"]
+
+
+def test_llm_settings_do_not_claim_a_server_default():
+    """The server has no default LLM endpoint or model; the descriptions must say so."""
+    st = _load_sibling("settings")
+    by_key = {f["key"]: f for f in st.SCHEMA}
+    for key in ("llm_base", "llm_model"):
+        desc = by_key[key]["description"]
+        assert "server's default" not in desc and "server default" not in desc, key
+        assert "unconfigured" in desc, key
+
+
+# ---------------------------------------------------------------------------
+# Start lock: retry only on real contention; other lock errors start unlocked
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def lock_mod(monkeypatch, tmp_path):
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    return proc_mod
+
+
+def test_lock_retries_while_another_starter_holds_it(lock_mod, monkeypatch):
+    fc = lock_mod.fcntl
+    if fc is None:
+        pytest.skip("POSIX flock only")
+    calls = {"n": 0}
+    real = fc.flock
+
+    def flaky(fd, op):
+        if op & fc.LOCK_NB:
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise BlockingIOError(errno.EAGAIN, "held by another starter")
+        return real(fd, op)
+
+    monkeypatch.setattr(fc, "flock", flaky)
+    fd = lock_mod._acquire_start_lock(5.0)
+    assert calls["n"] == 3
+    lock_mod._release_start_lock(fd)
+
+
+def test_busy_lock_still_times_out(lock_mod, monkeypatch):
+    fc = lock_mod.fcntl
+    if fc is None:
+        pytest.skip("POSIX flock only")
+
+    def busy(fd, op):
+        if op & fc.LOCK_NB:
+            raise BlockingIOError(errno.EAGAIN, "held")
+        return None
+
+    monkeypatch.setattr(fc, "flock", busy)
+    with pytest.raises(lock_mod.StartLockBusy):
+        lock_mod._acquire_start_lock(0.3)
+
+
+def test_unsupported_filesystem_lock_does_not_wait_or_report_busy(lock_mod, monkeypatch, caplog):
+    fc = lock_mod.fcntl
+    if fc is None:
+        pytest.skip("POSIX flock only")
+    import logging
+    import time as _time
+    for code in (errno.ENOLCK, errno.EOPNOTSUPP):
+        def no_locks(fd, op, code=code):
+            if op & fc.LOCK_NB:
+                raise OSError(code, "locking not supported here")
+            return None
+
+        monkeypatch.setattr(fc, "flock", no_locks)
+        caplog.clear()
+        t0 = _time.monotonic()
+        with caplog.at_level(logging.WARNING):
+            fd = lock_mod._acquire_start_lock(45.0)
+        assert _time.monotonic() - t0 < 1.0, "must not wait out the 45 s bound"
+        assert any("start lock unavailable" in r.getMessage() for r in caplog.records), code
+        lock_mod._release_start_lock(fd)
+
+
+class _FakeMsvcrt:
+    LK_NBLCK = 2
+    LK_UNLCK = 0
+
+    def __init__(self, errs):
+        self.errs = list(errs)   # errnos raised by successive locking attempts
+        self.attempts = 0
+
+    def locking(self, fd, mode, n):
+        if mode == self.LK_NBLCK:
+            self.attempts += 1
+            if self.errs:
+                raise OSError(self.errs.pop(0), "locked")
+
+
+def test_windows_contention_errnos_are_retried(lock_mod, monkeypatch):
+    monkeypatch.setattr(lock_mod, "fcntl", None)
+    fm = _FakeMsvcrt([errno.EACCES, errno.EACCES])
+    monkeypatch.setattr(lock_mod, "msvcrt", fm, raising=False)
+    fd = lock_mod._acquire_start_lock(5.0)
+    assert fm.attempts == 3
+    lock_mod._release_start_lock(fd)
+
+
+def test_windows_other_errno_proceeds_unlocked(lock_mod, monkeypatch, caplog):
+    import logging
+    monkeypatch.setattr(lock_mod, "fcntl", None)
+    fm = _FakeMsvcrt([errno.EINVAL])
+    monkeypatch.setattr(lock_mod, "msvcrt", fm, raising=False)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        fd = lock_mod._acquire_start_lock(45.0)
+    assert fm.attempts == 1, "a non-contention error must not be retried"
+    assert any("start lock unavailable" in r.getMessage() for r in caplog.records)
+    lock_mod._release_start_lock(fd)
+
+
+def test_second_start_reuses_held_lock_instead_of_leaking(lock_mod, monkeypatch):
+    calls = []
+    real_acquire = lock_mod._acquire_start_lock
+
+    def counting(wait):
+        calls.append(wait)
+        return real_acquire(wait)
+
+    monkeypatch.setattr(lock_mod, "_acquire_start_lock", counting)
+    monkeypatch.setattr(lock_mod, "_serving", lambda cfg: True)  # refuse to spawn
+    p = lock_mod.HyatlasProcess({"server_port": 1})
+    held = real_acquire(0)
+    p._lock_fd = held
+    with pytest.raises(lock_mod.ServerAlreadyRunning):
+        p.start(lock_wait=0.1)
+    assert calls == [], "start() must reuse the lock it already holds"
+    assert p._lock_fd is None, "the held lock is released on the refusal path"
