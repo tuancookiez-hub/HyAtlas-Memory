@@ -4,7 +4,7 @@
 
 > **One binary. Seven layers. Three extraction modes. Cross-platform.** Single 17.6 MB Go binary, no Python at runtime, in-process BGE embeddings, 7-layer memory model fully active. **Linux ✅ · macOS ✅ · Windows ✅.**
 
-HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It replaces the Python floor (venv, zvec, Kuzu, FastAPI, HTTP embed subprocess) with a single binary: an embedded Chromem vector store, in-process BGE-small embeddings via onnxruntime-go, and LLM fact extraction whose timing you choose with `HYATLAS_MODE`. The 7-layer memory model (Profile · Raw · Fact · Summary · Knowledge · Schema · Intention) is fully active — including L4 Summary extraction which was dormant in v3.5.
+HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It replaces the Python floor (venv, zvec, Kuzu, FastAPI, HTTP embed subprocess) with a single binary: an embedded Chromem vector store, in-process BGE-small embeddings via onnxruntime-go, and LLM fact extraction, where `HYATLAS_MODE` sets how much the server reasons and `HYATLAS_SYNC_EXTRACT` sets whether a write waits for extraction. The 7-layer memory model (Profile · Raw · Fact · Summary · Knowledge · Schema · Intention) is fully active — including L4 Summary extraction which was dormant in v3.5.
 
 **Previous floor:** [HyAtlas v3.5.0](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.5.0) — Python/Zvec/Kuzu. See [V3_V4_COMPARISON.md](V3_V4_COMPARISON.md) for the full side-by-side and [CHANGELOG.md](CHANGELOG.md) for the migration history.
 
@@ -19,9 +19,11 @@ HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It r
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/scripts/install.sh | bash
 ```
-(falling back to building from source if none exists yet), fetches the
-BGE-small embedding model (~133 MB), installs to a directory on your `PATH`,
-and verifies the install by starting the server and probing `/healthz`.
+
+The script downloads a prebuilt release binary for your platform (or builds
+from source if none exists yet), fetches the BGE-small embedding model (~133 MB),
+installs to a directory on your `PATH`, and verifies the install by starting the
+server and probing `/healthz`.
 
 Useful env vars:
 
@@ -72,7 +74,8 @@ go build -tags embedded -o hyatlas-go .       # embedded build (one binary, mode
 <summary><strong>Step 3 — Run</strong></summary>
 
 ```bash
-# Required for the local BGE embeddings (the "no Python" path):
+# Local BGE embeddings (the "no Python" path) are the default. Set these if the
+# model is not in ./models next to the binary:
 export HYATLAS_EMBED_BASE=bge
 export HYATLAS_MODEL_DIR=/path/to/models
 
@@ -88,6 +91,10 @@ export HYATLAS_LLM_KEY="your-nous-agent-key"
 
 The server listens on `127.0.0.1:19528` (loopback only — no external surface).
 
+Each write returns an `extraction_status`: `pending` (extraction runs in the
+background), `done` or `failed` (the write waited for extraction), `unconfigured`
+(no LLM endpoint, model or key), or `skipped` (lite mode).
+
 ### Privacy — what leaves your machine
 
 The server binds loopback only, but **loopback is not the whole story**, and the
@@ -100,16 +107,17 @@ default configuration is not fully local:
 | Stored memories, vector index, graph | `HYATLAS_GO_DATA` (default `./data`) | **Local** | Already local |
 | Telemetry / usage reporting | — | **None** | — |
 
-So out of the box: **embeddings and storage are local, extraction is not.**
-Every conversation turn the memory system ingests is sent to the configured LLM
-endpoint to derive facts, summaries and intentions. That is the point of the
-feature — but it means the default install transmits conversation text to Nous
-Research's inference API unless you change `HYATLAS_LLM_BASE`.
-
-The extraction endpoint is yours to choose per the tier you are on — set
-`HYATLAS_LLM_BASE`, `HYATLAS_LLM_MODEL` and `HYATLAS_LLM_KEY` to any
-OpenAI-compatible API. To keep conversation text on the machine, set `HYATLAS_MODE=lite`: no LLM
-call is made at all, so only the raw trace and local embeddings are stored.
+So out of the box: **embeddings and storage are local, and extraction stays off
+until you configure an endpoint.** Once `HYATLAS_LLM_BASE`, `HYATLAS_LLM_MODEL`
+and `HYATLAS_LLM_KEY` are all set, every conversation turn the memory system
+ingests in `pro` or `ultra` is sent to that endpoint to derive facts, summaries
+and intentions. That is the point of the feature, and it means choosing the
+endpoint is choosing where the text goes. The endpoint is yours to choose: any
+OpenAI-compatible API, including one on your own machine. To keep conversation
+text on the machine, set `HYATLAS_MODE=lite`: no LLM call is made at all, so only
+the raw trace and local embeddings are stored. (`lite` keeps text local only
+while `HYATLAS_EMBED_BASE` is `bge` or `local`; an HTTP embedder receives the
+text too.)
 
 The three modes form a ladder of reasoning scope, not of latency:
 
@@ -147,7 +155,8 @@ Ultra-only tuning:
 | `HYATLAS_CONSOLIDATE_BATCH` | `200` | max facts per consolidation call |
 | `HYATLAS_RAW_RETENTION` | *(unset = never delete)* | age after which uncited L2 Raw is decayed |
 
-`HYATLAS_RAW_RETENTION` is opt-in because it deletes. Raw memories cited by a
+`HYATLAS_CONSOLIDATE_EVERY` accepts a Go duration (`6h`, `30m`) or a number of
+seconds. `HYATLAS_RAW_RETENTION` is opt-in because it deletes. Raw memories cited by a
 live L5 graph edge are always protected, so decay cannot leave the knowledge
 graph pointing at a memory that no longer exists.
 
@@ -161,9 +170,10 @@ curl -X POST http://127.0.0.1:19528/api/v1/digest
 ```
 
 The response reports exactly what the pass changed (`facts_in`, `merged`,
-`edges`, `dropped`, `schemas`, `arc`), and `/api/v1/status` carries the same
-shape as `consolidations` plus `last_consolidated`, so "the slow path ran" is
-checkable rather than something you have to take on faith. A pass that finds
+`edges`, `dropped`, `schemas`, `arc`, plus `pruned_raw` and `protected_raw`), and
+`/api/v1/status` carries `consolidations` (the number of completed passes) and
+`last_consolidated` (the last report), so "the slow path ran" is checkable rather
+than something you have to take on faith. A pass that finds
 nothing to reconcile still reports as run with zero changes, which is what
 distinguishes it from a pass that never happened.
 
@@ -184,8 +194,10 @@ choosing the endpoint is choosing where memory text leaves the machine. Set
 When the Hermes plugin spawns this server it passes an explicitly allowlisted
 environment — OS essentials plus `HYATLAS_*` only — rather than a copy of the
 agent's environment, so provider API keys the agent holds do not reach the
-server process. The plugin sets no `HYATLAS_LLM_*` value and forwards no
-credential.
+server process. The plugin forwards only the non-secret LLM endpoint and model
+settings, and only when you have set them in the plugin config. It never forwards
+the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
+`HYATLAS_LLM_KEY_FILE`) yourself.
 
 **All configuration is via environment variables** — the binary takes no CLI flags:
 
@@ -195,16 +207,24 @@ credential.
 | `HYATLAS_GO_HOST` | `127.0.0.1` | Bind address (loopback only by default) |
 | `HYATLAS_GO_DATA` | `./data` | Where chromem collections + graph.json live |
 | `HYATLAS_EMBED_BASE` | `bge` | `bge` = local in-process BGE embedder (no network). Set to a URL for an OpenAI-compatible embedder, or `local` for a deterministic stub. |
+| `HYATLAS_EMBED_MODEL` | `text-embedding-3-small` | Model name sent to an OpenAI-compatible embedder. Used only when `HYATLAS_EMBED_BASE` is a URL. |
+| `HYATLAS_EMBED_KEY` | (empty) | Bearer token for that embedder. Used only when `HYATLAS_EMBED_BASE` is a URL. |
 | `HYATLAS_MODEL_DIR` | `./models` | Where the BGE model lives |
+| `HYATLAS_MODE` | `ultra` | `lite` \| `pro` \| `ultra`. An unrecognised value is fatal at startup. See the mode table above. |
+| `HYATLAS_SYNC_EXTRACT` | *(follows the mode)* | `on` \| `off`. Whether a write waits for extraction. An unrecognised value is fatal at startup. |
+| `HYATLAS_CONSOLIDATE_EVERY` | `6h` | Ultra only: interval between slow-path passes |
+| `HYATLAS_CONSOLIDATE_BATCH` | `200` | Ultra only: max facts per consolidation call |
+| `HYATLAS_RAW_RETENTION` | *(unset = never delete)* | Ultra only: age after which uncited L2 Raw is decayed |
 | `HYATLAS_LLM_BASE` | *(unset)* | OpenAI-compatible LLM endpoint. **Memory text is sent here once you set it** — see *Privacy* above. Unset means no LLM call at all. |
 | `HYATLAS_LLM_MODEL` | *(unset)* | LLM model name. Base, model and key must all be set for extraction to run. |
 | `HYATLAS_LLM_KEY` | (empty) | LLM bearer token |
 | `HYATLAS_LLM_KEY_FILE` | (empty) | Read the key live from this file per call (rotating creds, e.g. Hermes auth.json). Accepts `providers.nous.agent_key`/`access_token` JSON or a plain-text token. Wins over `HYATLAS_LLM_KEY`, which becomes the fallback |
 | `HYATLAS_GRAPH_PATH` | `<data>/graph.json` | L5 graph store location |
 
-**Windows batch runner** (reads the AI2API key from Hermes `.env`):
-```bash
-hyatlas-v4-start.bat
+**Windows batch runner** (`scripts/hyatlas-v4-start.bat`) sets these variables for
+a local run and reads the Nous Portal agent key from Hermes `auth.json`:
+```bat
+scripts\hyatlas-v4-start.bat
 ```
 
 </details>
@@ -219,15 +239,15 @@ hyatlas-v4-start.bat
 | **L2 Raw** | Every incoming memory as-is |
 | **L3 Fact** | LLM-extracted factual atoms |
 | **L4 Summary** | LLM-extracted session summaries (**enabled in v4; was dormant in v3.5**) |
-| **L5 Knowledge** | LLM-extracted entity/relation graph nodes (JSON-persisted) |
-| **L6 Schema** | LLM-extracted recurring patterns |
+| **L5 Knowledge** | Entity/relation graph (JSON-persisted). Built by the ultra slow path from relations corroborated across memories, each with evidence citations |
+| **L6 Schema** | Recurring patterns generalised by the ultra slow path |
 | **L7 Intention** | LLM-extracted current goal / next step |
 
 ### Stack
 
 - **Vector store:** [Chromem-go](https://github.com/philippgille/chromem-go) v0.7.0 — embedded, disk-persisted, no server process
 - **Embeddings:** `bge/bge.go` — BGE-small-en-v1.5 (33M params, 384-dim) via onnxruntime-go (cgo). WordPiece tokenizer, mean-pool, L2-normalize. Cross-path cosine vs ground-truth BGE: **0.93**. No Python.
-- **LLM extraction:** Async via OpenAI-compatible endpoint. Promotes L1 Raw → L3 Fact → L4 Summary → L5/L6/L7 in a single structured call.
+- **LLM extraction:** Via any OpenAI-compatible endpoint. One structured call per write (pro, ultra) fills L3 Fact, L4 Summary, L7 Intention and, for user preferences, L1 Profile from the L2 Raw entry. Blocking or background follows `HYATLAS_SYNC_EXTRACT`. L5 and L6 come from the separate ultra consolidation pass.
 - **HTTP:** Standard Go `net/http`. No framework.
 
 ### Headline metrics
@@ -286,17 +306,26 @@ Base URL: `http://127.0.0.1:19528`
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/healthz` | Liveness check |
-| `GET` | `/api/v1/status` | Full health: VDB, embedder, LLM, write pipeline, layer counts |
-| `GET` | `/api/v1/metrics` | Uptime, total memories, per-layer counts |
-| `POST` | `/api/v1/add` | Add memory (text + user_id + agent_id + session_id) |
-| `POST` | `/api/v1/search` | Vector search — returns 3-channel (profile / proactive / normal) |
-| `GET` | `/api/v1/list` | List memories, filterable by user_id, agent_id, layer, time |
+| `GET` | `/api/v1/status` | Full health: VDB, embedder, LLM, write pipeline, layer counts, consolidation state |
+| `GET` | `/api/v1/metrics` | Total memories, per-layer counts, graph node and edge counts |
+| `POST` | `/api/v1/add` | Add memory (text + user_id + agent_id + session_id). Returns `memory_id` and `extraction_status` |
+| `POST` | `/api/v1/search` | Vector search — returns `memories` split into profile / proactive / normal channels |
+| `GET` | `/api/v1/list` | List memories, filterable by `user_id`, `agent_id`, `layer`; paged with `limit` / `offset` |
 | `POST` | `/api/v1/list` | Same as GET but body for clients that send POST |
-| `POST` | `/api/v1/delete_all` | Bulk delete by scope |
-| `POST` | `/api/v1/reprocess` | Re-run extraction on unprocessed raw entries |
-| `POST` | `/api/v1/digest` | Trigger L5/L6/L7 synthesis pass |
-| `GET` | `/api/v1/graph` | L5 knowledge graph (nodes + edges) |
-| `GET` | `/api/v1/graph-as-of?ts=<unix>&n=500` | Bitemporal query — returns graph as it was at unix time `ts` (world validity + recording axes) |
+| `POST` or `DELETE` | `/api/v1/delete_all` | Bulk delete. Requires at least one of `id`, `layer`, `user_id`, `agent_id`, or `all=true`; an unscoped call is refused |
+| `POST` | `/api/v1/reprocess` | Re-run extraction on unprocessed raw entries (or on `ids`). Reports nothing to do in `lite` |
+| `GET` | `/api/v1/digest` | Report on the slow path: completed passes and the last report |
+| `POST` | `/api/v1/digest` | Run one slow-path pass now (ultra only): merges, L5 edges, L6 schemas, arc |
+| `POST` | `/api/v1/graph` | Neighbours of one L5 node, body `{"node": "<id>"}`, with node and edge counts |
+| `GET` | `/api/v1/edges` | L5 knowledge edges plus semantic edges (`n`, `k_semantic`) |
+| `GET` | `/api/v1/learning/graph` | Starmap feed for the Mind Palace view (`n`, `k_semantic`) |
+| `GET` | `/api/v1/graph-as-of?ts=<unix>&n=500` | Bitemporal query — returns L5 nodes and relations as they were at unix time `ts` (world validity + recording axes) |
+
+The web dashboard is served at `/dashboard/`. It reads a set of `/api/*`
+adapter endpoints (`/api/status`, `/api/memories`, `/api/l5/graph`, and so on)
+that return v3.5-shaped data. Two of them are stubs: `/api/quality-metrics`
+returns `{"available": false}` (a v3.5-only feature), and the `/api/coding-*`
+endpoints return empty results because the coding layer does not exist in v4.
 
 ### Add a memory
 
@@ -318,18 +347,23 @@ curl -X POST http://127.0.0.1:19528/api/v1/search \
   -H "Content-Type: application/json" \
   -d '{
     "query": "user communication style",
-    "user_id": "default",
-    "agent_id": "default",
+    "user_ids": ["default"],
+    "agent_ids": ["default"],
     "limit": 5
   }'
 ```
 
+`user_ids` and `agent_ids` are arrays; the server scopes by the first entry of
+each. A `user_id` or `agent_id` string is ignored by search.
+
 Response shape:
 ```json
 {
-  "profile": [...],
-  "proactive": [...],
-  "normal": [...]
+  "memories": {
+    "profile": [...],
+    "proactive": [...],
+    "normal": [...]
+  }
 }
 ```
 
@@ -356,10 +390,10 @@ Windows, `~/.hermes/plugins/` elsewhere), not under a `memory/` subdirectory.
 │  Hermes Agent       │ ─────────────────► │  hyatlas-go (v4)     │
 │  (Python)           │   /api/v1/*        │  127.0.0.1:19528     │
 │                     │ ◄───────────────── │  Pure Go binary      │
-│  hyatlas plugin   │   JSON responses   │  (this release)      │
+│  hyatlas plugin     │   JSON responses   │  (this release)      │
 │  (~/.hermes/plugins/                        │  chromem-go + BGE    │
-│   memory/hyatlas/                          │  in-process          │
-│   client.py)                                └──────────────────────┘
+│   hyatlas/client.py)                        │  in-process          │
+│                                             └──────────────────────┘
 └─────────────────────┘
 ```
 
@@ -458,9 +492,10 @@ The full v3.5 → v4 side-by-side (architecture, performance, reliability, API c
 
 ## Known gaps (honest)
 
-- `/api/v1/digest` is a stub — the scheduled L5/L6/L7 synthesis pass is not yet wired
-- `/api/v1/quality-metrics` returns `{available: false}` (v3.5-only feature)
+- The slow path runs on a timer, not at startup: a fresh ultra server shows 5/7 layers until the first pass (up to `HYATLAS_CONSOLIDATE_EVERY` later). `POST /api/v1/digest` runs one on demand.
+- `/api/quality-metrics` returns `{available: false}` (v3.5-only feature; the dashboard adapter's quality endpoint, not a `/api/v1/` route)
 - Upscaling and codemode are not implemented (those were v3.5 features)
+- The coding layer is not in v4; the `/api/coding-*` endpoints return empty results
 
 ---
 

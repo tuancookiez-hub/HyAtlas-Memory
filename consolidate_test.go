@@ -669,18 +669,20 @@ func TestSlowPathDisabledByZeroInterval(t *testing.T) {
 // edges, and only when a triple is corroborated by more than one fact.
 func TestConsolidateSynthesisesCorroboratedEdges(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
-	// Two facts with real L2 provenance, so the edge can cite conversations.
-	raw := newID()
-	if err := srv.store.Add("l2_raw", raw, "skyhook discussion", map[string]string{
-		"user_id": "u", "agent_id": "a", "ts": time.Now().UTC().Format(time.RFC3339),
-	}); err != nil {
-		t.Fatal(err)
-	}
+	// Two facts from two different conversations, each with real L2 provenance,
+	// so the edge can cite both conversations.
+	raws := make([]string, 2)
 	ids := make([]string, 2)
 	for i := range ids {
+		raws[i] = newID()
+		if err := srv.store.Add("l2_raw", raws[i], "skyhook discussion", map[string]string{
+			"user_id": "u", "agent_id": "a", "ts": time.Now().UTC().Format(time.RFC3339),
+		}); err != nil {
+			t.Fatal(err)
+		}
 		ids[i] = newID()
 		if err := srv.store.Add("l3_fact", ids[i], fmt.Sprintf("skyhook fact %d", i), map[string]string{
-			"user_id": "u", "agent_id": "a", "source_id": raw,
+			"user_id": "u", "agent_id": "a", "source_id": raws[i],
 			"ts": time.Now().UTC().Format(time.RFC3339),
 		}); err != nil {
 			t.Fatal(err)
@@ -708,12 +710,57 @@ func TestConsolidateSynthesisesCorroboratedEdges(t *testing.T) {
 	if len(edges) == 0 {
 		t.Fatal("no L5 edge was written")
 	}
-	// The citation must point at the L2 raw row, not the fact row, or decayRaw
-	// cannot protect the conversation the graph depends on.
+	// The citation must point at the L2 raw rows, not the fact rows, or decayRaw
+	// cannot protect the conversations the graph depends on.
 	for _, e := range edges {
-		if e.Source != raw {
-			t.Errorf("edge cites %q, want the L2 raw %q", e.Source, raw)
+		if e.Source != raws[0] && e.Source != raws[1] {
+			t.Errorf("edge cites %q, want one of the L2 raws %v", e.Source, raws)
 		}
+	}
+}
+
+// Corroboration means more than one conversation. Two facts from the same write
+// share a source_id and are one observation restated, so they must not justify
+// an L5 edge; the same two facts from two writes must.
+func TestConsolidateCorroborationCountsTurnsNotFacts(t *testing.T) {
+	cases := []struct {
+		name      string
+		sources   []string // source_id for each of the two facts
+		wantEdges int
+	}{
+		{"same source turn is one observation", []string{"turn-a", "turn-a"}, 0},
+		{"two source turns corroborate", []string{"turn-a", "turn-b"}, 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+			ids := make([]string, 2)
+			for i := range ids {
+				ids[i] = newID()
+				if err := srv.store.Add("l3_fact", ids[i], fmt.Sprintf("fact %d", i), map[string]string{
+					"user_id": "u", "agent_id": "a", "source_id": c.sources[i],
+					"ts": time.Now().UTC().Format(time.RFC3339),
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			calls := 0
+			mock := mockConsolidationServer(t, &calls, Consolidation{
+				Knowledge: []CitedRelation{{
+					From: "a", Relation: "r", To: "b", Evidence: ids,
+				}},
+			})
+			defer mock.Close()
+
+			c2 := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
+			rep, err := c2.Once(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rep.Edges != c.wantEdges {
+				t.Errorf("Edges = %d, want %d", rep.Edges, c.wantEdges)
+			}
+		})
 	}
 }
 
@@ -1043,5 +1090,29 @@ func TestConsolidationAcceptsReasoningOnlyReply(t *testing.T) {
 	}
 	if rep.Merged != 1 {
 		t.Errorf("merged = %d, want 1 from the reasoning-only reply", rep.Merged)
+	}
+}
+
+// A zero or negative interval in ultra would silently disable the slow path, so
+// it is rejected. The same value is harmless in pro and lite, which have none.
+func TestCheckConsolidateEveryRejectsDisabledSlowPath(t *testing.T) {
+	if err := checkConsolidateEvery(ModeUltra, 0); err == nil {
+		t.Error("ultra with a zero interval was accepted; the slow path would silently vanish")
+	}
+	if err := checkConsolidateEvery(ModeUltra, -time.Minute); err == nil {
+		t.Error("ultra with a negative interval was accepted")
+	}
+	if err := checkConsolidateEvery(ModeUltra, 6*time.Hour); err != nil {
+		t.Errorf("ultra with the default interval rejected: %v", err)
+	}
+	for _, m := range []Mode{ModePro, ModeLite} {
+		if err := checkConsolidateEvery(m, 0); err != nil {
+			t.Errorf("%s has no slow path, but a zero interval was rejected: %v", m, err)
+		}
+	}
+	// The env spelling "0" must parse to the zero duration the check rejects.
+	t.Setenv("HYATLAS_CONSOLIDATE_EVERY", "0")
+	if d := parseDuration("HYATLAS_CONSOLIDATE_EVERY", time.Hour); d != 0 {
+		t.Errorf("HYATLAS_CONSOLIDATE_EVERY=0 parsed to %v, want 0", d)
 	}
 }

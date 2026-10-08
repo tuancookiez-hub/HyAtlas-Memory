@@ -17,14 +17,15 @@ go build -o hyatlas-go.exe .
 ```
 
 Requires:
-- Go 1.26+
-- MinGW-W64 (cgo for onnxruntime-go) on Windows: `winget install BrechtSanders.WinLibs.POSIX.UCRT`
-- onnxruntime 1.28.1 DLL on Windows (matches `onnxruntime_go` v1.32.0's declared API)
+- Go 1.26+ (`go.mod` declares 1.26.5)
+- A C toolchain, since the build uses cgo for onnxruntime-go on every platform: gcc or clang on Linux and macOS, MinGW-W64 on Windows (`winget install BrechtSanders.WinLibs.POSIX.UCRT`)
+- onnxruntime 1.28.1 shared library at run time (`onnxruntime.dll`, `libonnxruntime.so` or `libonnxruntime.dylib`; matches `onnxruntime_go` v1.32.0's declared API)
 
 ## Test
 
 ```bash
 go vet ./...
+go test ./...
 go build ./...
 ```
 

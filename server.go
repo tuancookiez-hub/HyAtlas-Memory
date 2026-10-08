@@ -420,6 +420,13 @@ func atoi(s string, def int) int {
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	// A delete is destructive, so only the verbs that name one are accepted. A
+	// GET from a link prefetcher or a crawler must not reach the wipe path.
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		w.Header().Set("Allow", "POST, DELETE")
+		jsonResponse(w, 405, map[string]any{"deleted_count": 0, "error": "method not allowed: use POST or DELETE"})
+		return
+	}
 	// Scoping may arrive as query params (curl style) OR as a JSON body
 	// (the hyatlas plugin's client style). Read both, query wins.
 	var body struct {
@@ -427,6 +434,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		Layer   string `json:"layer"`
 		UserID  string `json:"user_id"`
 		AgentID string `json:"agent_id"`
+		All     bool   `json:"all"`
 		Confirm string `json:"confirm"`
 	}
 	if r.Body != nil {
@@ -442,7 +450,9 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	layer := first(q.Get("layer"), body.Layer)
 	userID := first(q.Get("user_id"), body.UserID)
 	agentID := first(q.Get("agent_id"), body.AgentID)
-	confirm := first(q.Get("confirm"), body.Confirm) == "wipe-all"
+	// all=true is the explicit wipe. confirm=wipe-all is the older spelling of
+	// the same opt-in, kept so existing callers keep working.
+	all := q.Get("all") == "true" || body.All || first(q.Get("confirm"), body.Confirm) == "wipe-all"
 	ids := []string{}
 	if idStr := first(q.Get("id"), body.ID); idStr != "" {
 		ids = append(ids, idStr)
@@ -451,11 +461,12 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	if layer == "*" {
 		layer = ""
 	}
-	// Guard: an unscoped call is a full-store wipe. Require an explicit opt-in.
-	if len(ids) == 0 && layer == "" && userID == "" && agentID == "" && !confirm {
+	// Guard: a call with no filter is a full-store wipe. Require at least one
+	// scope, or an explicit all=true.
+	if len(ids) == 0 && layer == "" && userID == "" && agentID == "" && !all {
 		jsonResponse(w, 400, map[string]any{
 			"deleted_count": 0,
-			"error":         "unscoped delete refused: pass layer/user_id/agent_id/id, or confirm=wipe-all to wipe the entire store",
+			"error":         "unscoped delete refused: pass layer/user_id/agent_id/id, or all=true to wipe the entire store",
 		})
 		return
 	}
@@ -944,10 +955,11 @@ const (
 
 func resolveRuntime() runtimeCfg {
 	dataDir := envOr("HYATLAS_GO_DATA", defaultDataDir)
+	mode := resolveMode()
 	return runtimeCfg{
-		Mode:        resolveMode(),
+		Mode:        mode,
 		Sync:        resolveSync(),
-		Consolidate: parseDuration("HYATLAS_CONSOLIDATE_EVERY", defaultConsolidate),
+		Consolidate: resolveConsolidate(mode),
 		Retention:   parseDuration("HYATLAS_RAW_RETENTION", 0),
 		Batch:       envInt("HYATLAS_CONSOLIDATE_BATCH", defaultBatch),
 		Port:        envOr("HYATLAS_GO_PORT", defaultPort),
@@ -971,6 +983,28 @@ func resolveMode() Mode {
 		log.Fatal(err)
 	}
 	return m
+}
+
+// resolveConsolidate reads HYATLAS_CONSOLIDATE_EVERY. Fatal when ultra is given a
+// zero or negative interval: that silently turns ultra into pro, because the
+// slow path never ticks. Pro and lite have no slow path, so there it is ignored.
+func resolveConsolidate(m Mode) time.Duration {
+	d := parseDuration("HYATLAS_CONSOLIDATE_EVERY", defaultConsolidate)
+	if err := checkConsolidateEvery(m, d); err != nil {
+		log.Fatal(err)
+	}
+	return d
+}
+
+// checkConsolidateEvery is the pure rule behind resolveConsolidate, split out so
+// a test can assert it without the process exiting.
+func checkConsolidateEvery(m Mode, d time.Duration) error {
+	if m.Consolidates() && d <= 0 {
+		return fmt.Errorf("HYATLAS_CONSOLIDATE_EVERY must be a positive duration in ultra mode (got %s): "+
+			"a zero interval disables the slow path, so ultra would silently behave like pro; "+
+			"unset it for the 6h default, or set HYATLAS_MODE=pro", d)
+	}
+	return nil
 }
 
 // resolveSync reads HYATLAS_SYNC_EXTRACT. Fatal on an invalid value, for the
@@ -1080,43 +1114,67 @@ func main() {
 
 	srv.attachSlowPath(ctx, rt)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", srv.handleHealthz)
-	mux.HandleFunc("/api/v1/status", srv.handleStatus)
-	mux.HandleFunc("/api/v1/add", srv.handleAdd)
-	mux.HandleFunc("/api/v1/search", srv.handleSearch)
-	mux.HandleFunc("/api/v1/list", srv.handleList)
-	mux.HandleFunc("/api/v1/graph", srv.handleGraph)
-	mux.HandleFunc("/api/v1/graph-as-of", srv.handleGraphAsOf)
-	mux.HandleFunc("/api/v1/edges", srv.handleGraphEdges)
-	mux.HandleFunc("/api/v1/learning/graph", srv.handleStarmapGraph)
-	mux.HandleFunc("/api/v1/delete_all", srv.handleDelete)
-	mux.HandleFunc("/api/v1/metrics", srv.handleMetrics)
-	mux.HandleFunc("/api/v1/digest", srv.handleDigest)
-	mux.HandleFunc("/api/v1/reprocess", srv.handleReprocess)
-	// Dashboard UI (embedded single-file frontend)
-	// --- v3.5 dashboard adapter endpoints (real v4 data, v3.5 shapes) ---
-	mux.HandleFunc("/api/status", srv.handleDashStatus)
-	mux.HandleFunc("/api/info", srv.handleDashInfo)
-	mux.HandleFunc("/api/memories", srv.handleDashMemories)
-	mux.HandleFunc("/api/layer-counts", srv.handleDashLayerCounts)
-	mux.HandleFunc("/api/storage", srv.handleDashStorage)
-	mux.HandleFunc("/api/metrics", srv.handleDashMetrics)
-	mux.HandleFunc("/api/graph-counts", srv.handleDashGraphCounts)
-	mux.HandleFunc("/api/layer-health", srv.handleDashLayerHealth)
-	mux.HandleFunc("/api/l6-schemas", srv.handleDashL6Schemas)
-	mux.HandleFunc("/api/l5/graph", srv.handleDashL5Graph)
-	mux.HandleFunc("/api/quality-metrics", srv.handleDashQuality)
-	mux.HandleFunc("/api/coding-count", srv.handleDashCodingCount)
-	mux.HandleFunc("/api/coding-memories", srv.handleDashCodingMemories)
-	mux.Handle("/dashboard/", http.StripPrefix("/dashboard/", srv.handleDashboard()))
-
 	if w := startupWarning(rt, llm); w != "" {
 		log.Print(w)
 	}
 	log.Print(listeningLine(rt))
 	host := envOr("HYATLAS_GO_HOST", "127.0.0.1")
-	log.Fatal(http.ListenAndServe(host+":"+port, mux))
+	hs := &http.Server{Addr: host + ":" + port, Handler: srv.routes(), ReadHeaderTimeout: readHeaderTimeout}
+	log.Fatal(hs.ListenAndServe())
+}
+
+// routes is the complete HTTP surface. Lifted out of main so the body limit and
+// method guards are exercised by the same mux the server serves, not a copy.
+func (s *Server) routes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", s.handleHealthz)
+	mux.HandleFunc("/api/v1/status", s.handleStatus)
+	mux.HandleFunc("/api/v1/add", s.handleAdd)
+	mux.HandleFunc("/api/v1/search", s.handleSearch)
+	mux.HandleFunc("/api/v1/list", s.handleList)
+	mux.HandleFunc("/api/v1/graph", s.handleGraph)
+	mux.HandleFunc("/api/v1/graph-as-of", s.handleGraphAsOf)
+	mux.HandleFunc("/api/v1/edges", s.handleGraphEdges)
+	mux.HandleFunc("/api/v1/learning/graph", s.handleStarmapGraph)
+	mux.HandleFunc("/api/v1/delete_all", s.handleDelete)
+	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)
+	mux.HandleFunc("/api/v1/digest", s.handleDigest)
+	mux.HandleFunc("/api/v1/reprocess", s.handleReprocess)
+	// Dashboard UI (embedded single-file frontend)
+	// --- v3.5 dashboard adapter endpoints (real v4 data, v3.5 shapes) ---
+	mux.HandleFunc("/api/status", s.handleDashStatus)
+	mux.HandleFunc("/api/info", s.handleDashInfo)
+	mux.HandleFunc("/api/memories", s.handleDashMemories)
+	mux.HandleFunc("/api/layer-counts", s.handleDashLayerCounts)
+	mux.HandleFunc("/api/storage", s.handleDashStorage)
+	mux.HandleFunc("/api/metrics", s.handleDashMetrics)
+	mux.HandleFunc("/api/graph-counts", s.handleDashGraphCounts)
+	mux.HandleFunc("/api/layer-health", s.handleDashLayerHealth)
+	mux.HandleFunc("/api/l6-schemas", s.handleDashL6Schemas)
+	mux.HandleFunc("/api/l5/graph", s.handleDashL5Graph)
+	mux.HandleFunc("/api/quality-metrics", s.handleDashQuality)
+	mux.HandleFunc("/api/coding-count", s.handleDashCodingCount)
+	mux.HandleFunc("/api/coding-memories", s.handleDashCodingMemories)
+	mux.Handle("/dashboard/", http.StripPrefix("/dashboard/", s.handleDashboard()))
+	return limitBody(mux)
+}
+
+// maxRequestBody caps every request body. Raw memories can be large session
+// dumps (see utf8Trunc), so the cap is generous. Without it, decoding read
+// whatever a client sent into memory.
+const maxRequestBody = 8 << 20
+
+// readHeaderTimeout stops a client from holding a connection open by trickling
+// request headers one byte at a time.
+const readHeaderTimeout = 10 * time.Second
+
+func limitBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func envOr(k, def string) string {

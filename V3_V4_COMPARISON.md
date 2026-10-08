@@ -30,7 +30,7 @@
 | L1 Profile | ✅ | ✅ | Same (stable identity slot) |
 | L2 Raw | ✅ | ✅ | Same (raw conversation trace) |
 | L3 Fact | ✅ | ✅ | Same (extracted atomic facts) |
-| L4 Summary | ⚠️ DORMANT (extraction skipped by default) | ✅ ACTIVE (extracted on every write) | **v4 fixes this** |
+| L4 Summary | ⚠️ DORMANT (extraction skipped by default) | ✅ ACTIVE (extracted on every write in pro/ultra once an LLM endpoint is configured) | **v4 fixes this** |
 | L5 Knowledge | ✅ Kuzu graph | ✅ JSON graph (4 nodes, 2 relations in test data) | Same concept, simpler backend |
 | L6 Schema | ✅ | ✅ | Same (recurring patterns) |
 | L7 Intention | ✅ | ✅ | Same (user goals) |
@@ -104,7 +104,7 @@ The v3.5 HyMemoryClient (root `client.py`) **talks to v4 cleanly** with zero cha
 | Gap | Severity | Status |
 |---|---|---|
 | L4 Summary enabled = more LLM calls per write | Low (LLM is cheap on ai2api) | Acceptable trade |
-| `/api/v1/digest` is a stub | Medium | Needs scheduled synthesis pass |
+| `/api/v1/digest` is a stub | Medium | Resolved after this review: GET reports the slow path, POST runs a pass (ultra only). See README |
 | `/api/v1/quality-metrics` returns `available: false` | Low | v3.5-only feature, honest about it |
 | No MCP server | Medium | Hermes's MCP toolset is disabled in v4; not blocking |
 | No upscaling | Low | N/A (memory use case) |

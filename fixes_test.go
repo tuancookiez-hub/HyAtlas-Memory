@@ -224,3 +224,175 @@ func TestReprocessByIds(t *testing.T) {
 		}
 	}
 }
+
+// delete_all is destructive, so only POST and DELETE may reach it. A GET from a
+// link prefetcher must get 405 and must not touch the store, even when it
+// carries a scope that would otherwise be valid.
+func TestDeleteAllRejectsNonDeleteMethods(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	if err := srv.store.Add(memory.L2Raw, "doc-1", "text", map[string]string{
+		"user_id": "u", "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	h := srv.routes()
+	for _, method := range []string{"GET", "PUT", "PATCH"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(method, "/api/v1/delete_all?all=true", nil))
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s delete_all: want 405, got %d", method, w.Code)
+		}
+		if w.Header().Get("Allow") == "" {
+			t.Errorf("%s delete_all: 405 without an Allow header", method)
+		}
+	}
+	if srv.store.TotalMemories() != 1 {
+		t.Errorf("refused methods changed the store: %d docs", srv.store.TotalMemories())
+	}
+	// DELETE with a real scope is allowed.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("DELETE", "/api/v1/delete_all?user_id=u", nil))
+	if w.Code != http.StatusOK || srv.store.TotalMemories() != 0 {
+		t.Errorf("DELETE scoped: code %d, docs %d; want 200 and 0", w.Code, srv.store.TotalMemories())
+	}
+}
+
+// A call with no filter is refused, and only an explicit all=true wipes.
+func TestDeleteAllRequiresFilterOrAll(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	if err := srv.store.Add(memory.L2Raw, "doc-1", "text", map[string]string{
+		"user_id": "u", "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	h := srv.routes()
+
+	// layer=* is "everything" and must not bypass the guard.
+	for _, target := range []string{"/api/v1/delete_all", "/api/v1/delete_all?layer=*"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("POST", target, nil))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("POST %s: want 400, got %d", target, w.Code)
+		}
+	}
+	if srv.store.TotalMemories() != 1 {
+		t.Fatalf("refused unscoped delete removed docs: %d left", srv.store.TotalMemories())
+	}
+
+	// all=true in the body is the explicit wipe.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/delete_all", strings.NewReader(`{"all":true}`)))
+	if w.Code != http.StatusOK {
+		t.Errorf("body all=true: want 200, got %d", w.Code)
+	}
+	if srv.store.TotalMemories() != 0 {
+		t.Errorf("body all=true left %d docs", srv.store.TotalMemories())
+	}
+}
+
+// Request bodies are capped. A body over the limit is refused before it is
+// decoded, so nothing is stored.
+func TestRequestBodyIsBounded(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	big := `{"text":"` + strings.Repeat("a", maxRequestBody) + `"}`
+	w := httptest.NewRecorder()
+	srv.routes().ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/add", strings.NewReader(big)))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("oversized add: want 400, got %d", w.Code)
+	}
+	if srv.store.TotalMemories() != 0 {
+		t.Errorf("oversized add stored %d docs", srv.store.TotalMemories())
+	}
+}
+
+// The dashboard status must report the configured mode and the same LLM state
+// as /api/v1/status, not a hardcoded "ok".
+func TestDashStatusReportsModeAndLLMState(t *testing.T) {
+	cases := []struct {
+		mode    Mode
+		withKey bool
+		wantLLM string
+	}{
+		{ModeLite, true, "unused"},
+		{ModeUltra, false, "unconfigured"},
+		{ModePro, true, "ok"},
+	}
+	for _, c := range cases {
+		srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+		srv.mode = c.mode
+		if c.withKey {
+			srv.llm = NewLLMClient("http://127.0.0.1:1/v1", "k", "m")
+		}
+		w := httptest.NewRecorder()
+		srv.handleDashStatus(w, httptest.NewRequest("GET", "/api/status", nil))
+		var st map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		if st["mode"] != string(c.mode) {
+			t.Errorf("%s: dash mode = %v", c.mode, st["mode"])
+		}
+		if st["llm"] != c.wantLLM {
+			t.Errorf("%s: dash llm = %v, want %q", c.mode, st["llm"], c.wantLLM)
+		}
+	}
+}
+
+// The dashboard status reads the extraction error that background goroutines
+// write. Run with -race: this must not read the field unsynchronised.
+func TestDashStatusConcurrentWithExtractErr(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			srv.setExtractErr("boom")
+			srv.setExtractErr("")
+		}()
+		go func() {
+			defer wg.Done()
+			w := httptest.NewRecorder()
+			srv.handleDashStatus(w, httptest.NewRequest("GET", "/api/status", nil))
+		}()
+	}
+	wg.Wait()
+}
+
+// Concurrent Adds all persist the same doc index. The index file must stay
+// valid JSON and every add must succeed.
+func TestConcurrentAddsKeepIndexValid(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	var wg sync.WaitGroup
+	errs := make(chan error, 80)
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 10; i++ {
+				id := "doc-" + string(rune('a'+g)) + "-" + string(rune('a'+i))
+				if err := srv.store.Add(memory.L2Raw, id, "text", map[string]string{
+					"user_id": "u", "ts": "2026-10-06T00:00:00Z",
+				}); err != nil {
+					errs <- err
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent add: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(srv.store.indexPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idx map[string]DocIndex
+	if err := json.Unmarshal(b, &idx); err != nil {
+		t.Fatalf("doc_index.json is not valid after concurrent writes: %v", err)
+	}
+	if len(idx) != 80 {
+		t.Errorf("index has %d docs on disk, want 80", len(idx))
+	}
+}

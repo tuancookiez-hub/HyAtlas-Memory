@@ -43,14 +43,17 @@ func writeJSON(w http.ResponseWriter, code int, v any) { jsonResponse(w, code, v
 
 func (s *Server) handleDashStatus(w http.ResponseWriter, r *http.Request) {
 	write := "ok"
-	if s.lastExtractErr != "" {
-		write = "degraded: " + s.lastExtractErr
+	if errStr := s.extractErr(); errStr != "" {
+		write = "degraded: " + errStr
 	}
 	writeJSON(w, 200, map[string]any{
-		"status":   "ok",
-		"vdb":      "ok",
-		"embed":    "ok",
-		"llm":      "ok",
+		"status": "ok",
+		"vdb":    "ok",
+		"embed":  "ok",
+		// Same gate as /api/v1/status, so the dashboard cannot show a healthy LLM
+		// in lite (which never calls one) or in a mode with no credential.
+		"llm":      s.llmState(),
+		"mode":     string(s.mode.OrDefault()),
 		"layers":   s.store.LayerCounts(),
 		"total":    s.store.TotalMemories(),
 		"pipeline": write,

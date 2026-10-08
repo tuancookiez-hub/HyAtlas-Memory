@@ -15,7 +15,7 @@
 #   6. Verifies the install by starting the server and hitting /healthz
 #
 # Environment variables (all optional):
-#   HYATLAS_VERSION   — release tag to install (default: v4.2.0)
+#   HYATLAS_VERSION   — release tag to install (default: v4.3.3)
 #   HYATLAS_INSTALL_DIR — where to put the binary (default: ~/.local/bin, or
 #                         %LOCALAPPDATA%\hyatlas on Windows)
 #   HYATLAS_MODEL_DIR — where to cache the model (default: ~/.hyatlas/models)

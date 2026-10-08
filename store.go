@@ -437,9 +437,13 @@ func docIndexFrom(id, layer, content string, meta map[string]string) DocIndex {
 	return d
 }
 
+// persistIndex takes the write lock, not a read lock. Concurrent Adds (the
+// background extraction goroutines) all write the same doc_index.json.tmp path,
+// and two readers holding RLock would interleave those writes and rename a
+// half-written file over the index.
 func (s *MemoryStore) persistIndex() error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.persistIndexLocked()
 }
 

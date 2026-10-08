@@ -280,22 +280,28 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 		// Corroboration is the whole reason this is a System2 product. A triple
 		// resting on a single fact is just that fact restated, and the per-turn
 		// pass already declined to write it.
-		seen := map[string]bool{}
+		// Corroboration is counted in distinct conversations, not distinct fact
+		// rows: two facts extracted from one write share a source_id and are one
+		// observation. Legacy rows without a source_id count as their own turn.
+		turns := map[string]bool{}
 		cites := make([]string, 0, len(rel.Evidence))
 		for _, id := range rel.Evidence {
-			if !batch[id] || seen[id] {
+			if !batch[id] {
 				continue
 			}
-			seen[id] = true
 			// Trace the fact back to the conversation it came from so the edge's
 			// citation protects real raw history.
-			if src := byID[id].Meta["source_id"]; src != "" {
-				cites = append(cites, src)
-			} else {
-				cites = append(cites, id)
+			src := byID[id].Meta["source_id"]
+			if src == "" {
+				src = id
 			}
+			if turns[src] {
+				continue
+			}
+			turns[src] = true
+			cites = append(cites, src)
 		}
-		if len(seen) < 2 {
+		if len(turns) < 2 {
 			continue
 		}
 		for _, src := range cites {
@@ -403,9 +409,15 @@ func (c *Consolidator) decayRaw() (pruned, protected int) {
 func (c *Consolidator) ask(ctx context.Context, facts []DocIndex) (*Consolidation, error) {
 	var b strings.Builder
 	for _, f := range facts {
-		fmt.Fprintf(&b, "- id=%s | %s\n", f.ID, truncate(f.Content, 400))
+		// turn names the conversation the fact came from, so the model can tell
+		// two facts from one write apart from genuine corroboration.
+		turn := f.Meta["source_id"]
+		if turn == "" {
+			turn = f.ID
+		}
+		fmt.Fprintf(&b, "- id=%s | turn=%s | %s\n", f.ID, turn, truncate(f.Content, 400))
 	}
-	system := `You are a memory consolidation engine. Below are durable facts already stored, each with its id. Reason ACROSS them — not about any single one — and output a JSON object with EXACTLY these keys:
+	system := `You are a memory consolidation engine. Below are durable facts already stored, each with its id and the turn it came from. Reason ACROSS them — not about any single one — and output a JSON object with EXACTLY these keys:
 {
   "merges": [{"text": "<one fact that replaces several>", "layer": "user_preferences|project_state|technical_lesson|decision|negative_knowledge", "supersedes": ["<id>", "<id>"]}],
   "drops": ["<id>"],
@@ -417,7 +429,7 @@ Rules:
 - merges: ONLY combine facts that genuinely say the same thing or contradict each other. For a contradiction, keep the newer statement and supersede the older. supersedes MUST list at least 2 ids. Use only ids from the input.
 - drops: ids of facts that are stale, trivially obvious, or fully absorbed by a merge. Be conservative — deleting memory is irreversible.
 - schemas: 0-3 patterns that generalise beyond the individual facts.
-- knowledge: 0-5 entity-relation-entity edges, each corroborated by AT LEAST 2 different fact ids in "evidence". A triple resting on one fact is just that fact restated — do not emit it. Use only ids from the input.
+- knowledge: 0-5 entity-relation-entity edges, each corroborated in "evidence" by fact ids from AT LEAST 2 different turns. A triple resting on one turn is just that turn restated — do not emit it. Use only ids from the input.
 - arc: null if the facts are too few or too unrelated to synthesise.
 - Never invent an id. Never reference a fact not listed.
 Return ONLY valid JSON, no prose, no markdown fences.

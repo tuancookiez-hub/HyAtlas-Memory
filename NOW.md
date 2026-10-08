@@ -1,11 +1,22 @@
 # HyAtlas v4 — NOW
 
-**v4.2.1** | 2026-10-07 | Release: tuancookiez-hub/HyAtlas-Memory
+**v4.3.3** | 2026-10-08 | Release: tuancookiez-hub/HyAtlas-Memory
 
 ## Running
-- hyatlas-go v4.2.1 build listening :19528 (live-key-file fix + real version badge; extraction healthy, pipeline ok)
+- Latest release is v4.3.3 (`Version` const in server.go and `plugins/hyatlas/plugin.yaml` both 4.3.3; latest tag v4.3.3)
 - Plugin: `hyatlas` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hyatlas\` + Hermes Desktop pane
 - Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`)
+
+## Done (v4.3.x — slow path)
+- **Consolidation pass detached from the request (v4.3.2):** `POST /api/v1/digest` runs on its own context, still bounded by `consolidateTimeout` (10 min), so a client that stops waiting no longer cancels a pass. Passes are single-flight.
+- **LLM client has no global timeout (v4.3.3):** a hidden 180s cap on the shared HTTP client was overriding the 600s consolidation bound. Each call path now sets its own deadline on the context.
+- **Reasoning-only replies accepted (v4.3.3):** when `content` is empty, `chat()` falls back to `reasoning_content`.
+
+## Known gaps
+- Slow path is timer-driven (`HYATLAS_CONSOLIDATE_EVERY`, default 6h), not run at startup; `POST /api/v1/digest` runs one on demand.
+- `/api/quality-metrics` returns `{available: false}` (v3.5-only feature, not ported).
+- Upscaling and codemode are not implemented (v3.5 features).
+- The coding layer is not in v4; `/api/coding-*` return empty results.
 
 ## Done (v4.2.1 — pre-catalog hardening)
 - **Real version badge:** `/api/v1/status` now carries `version` from one canonical `Version` const in server.go; `handleDashInfo` reads the same const (was its own duplicate "4.2.0" literal). Desktop pane derives `const ver` from `status.version` and uses it in both the header subtitle and the save toast — no more frozen hardcoded "v4". Verified live: both endpoints report 4.2.1.
@@ -45,7 +56,7 @@
 
 ## Next
 - [x] **Extraction LLM key 401 — FIXED.** Root cause was NOT rate-limiting (JWT shows rpm 800, paid_access, no cap) — it's JWT expiry: the Nous key is a 1-hour token Hermes rotates in auth.json, but the server froze it at startup. Fix: `HYATLAS_LLM_KEY_FILE` → `resolveKey()` reads live per call; ps1 points at auth.json; 4 Go tests + E2E verified (extraction fired +2 L3 in 10s).
-- [ ] Release v4.2.1 (L5 unification + live-key-file + plugin tests + CI job) — bundle with banner/screenshots once Tuna delivers them
+- [x] Release v4.2.1 (L5 unification + live-key-file + plugin tests + CI job) — shipped; v4.2.5 through v4.3.3 tags exist since
 - [ ] Catalog submission PR to NousResearch/hermes-agent (`plugin-catalog/hyatlas.yaml`) — HELD per Tuna until banner + screenshots are ready; re-pin sha to the released commit
 - [x] Live migration on this machine: plugins/hyatlas + config.yaml (provider/enabled) + desktop-plugins — DONE (provider resolves, validate green, CLI works)
 - [ ] Backups: `backup_paths` absolute + a daily data snapshot (parked by Tuna 2026-10-06)

@@ -16,9 +16,11 @@ services:
     image: hyatlas-memory:4.3.3
     container_name: hyatlas-memory
     ports:
-      - "19528:19528"
+      - "127.0.0.1:19528:19528"
     environment:
-      HYATLAS_PORT: "19528"
+      HYATLAS_GO_PORT: "19528"
+      HYATLAS_GO_HOST: 0.0.0.0
+      HYATLAS_GO_DATA: /data/hyatlas
       # No endpoint is assumed: set these in .env, or the server stores the raw
       # trace only and reports llm=unconfigured. See .env.example.
       HYATLAS_LLM_BASE: ${HYATLAS_LLM_BASE:-}

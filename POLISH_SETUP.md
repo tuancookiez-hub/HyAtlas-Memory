@@ -1,18 +1,18 @@
 # HyAtlas Memory System — Plugin Polish Setup
 
-*Generated 2026-09-05 · discovery only, no code modified.*
+*Generated 2026-09-05 · discovery only, no code modified. Updated 2026-10-08 for the paths, version and env names that changed since; the backlog line numbers below are from the 2026-09-05 snapshot and were not re-verified.*
 
 ## 1. Plugin Overview
 
-**The plugin is `plugins/hy_memory/`** — a pure-Python Hermes memory-provider plugin plus desktop pane. Everything else in the repo is the **Go backend** it talks to (one module, `github.com/tuancookiez-hub/hyatlas-v4`, go 1.26.5, deps: `chromem-go v0.7.0`, `yalue/onnxruntime_go v1.32.0`): `server.go`, `store.go`, `llm.go`, `graph/`, `memory/`, `bge/`, `dashboard/`. The plugin wraps that server; it is not Go itself.
+**The plugin is `plugins/hyatlas/`** (formerly `plugins/hy_memory/`) — a pure-Python Hermes memory-provider plugin plus desktop pane. Everything else in the repo is the **Go backend** it talks to (one module, `github.com/tuancookiez-hub/hyatlas-v4`, go 1.26.5, deps: `chromem-go v0.7.0`, `yalue/onnxruntime_go v1.32.0`): `server.go`, `store.go`, `llm.go`, `graph/`, `memory/`, `bge/`, `dashboard/`. The plugin wraps that server; it is not Go itself.
 
 | Field | Value |
 |---|---|
-| Name / version | `hy_memory` / 4.0.1 (`plugin.yaml:1-3`, mirrored in `dashboard/manifest.json` and `self._version` in `__init__.py:148`) |
+| Name / version | `hyatlas` / 4.3.3 (`plugin.yaml`, mirrored in `dashboard/manifest.json` and `self._version` in `__init__.py`). The 2026-09-05 snapshot said `hy_memory` / 4.0.1 |
 | Author / license | Tuna / Apache-2.0 |
 | Backend | HyAtlas v4 Go binary at `127.0.0.1:19528` (wire-compatible with v3.5 on 19527) |
-| Hooks | `on_session_end`, `on_pre_compress`, `on_memory_write` (`plugin.yaml:11-14`) |
-| Tools | `hyatlas_status`, `hyatlas_search`, `hyatlas_recent`, `hyatlas_add` (`plugin.yaml:15-19`) |
+| Hooks | Provider methods `on_session_end`, `on_pre_compress`, `on_memory_write` (in `__init__.py`; `plugin.yaml` no longer lists hooks) |
+| Tools | `hyatlas_status`, `hyatlas_search`, `hyatlas_recent`, `hyatlas_add` (schemas in `schemas.py`) |
 
 **What it currently does:**
 
@@ -25,7 +25,7 @@
 **Inputs:** `$HERMES_HOME/hy_memory.json` + `HYATLAS_*` env vars + Hermes `ctx` kwargs; JSON bodies from the Go server.
 **Outputs:** 4 agent tools, prompt block, `<relevant-memories>` prefetch block, CLI JSON on stdout, desktop HTTP routes.
 
-**Current state:** Functional and consistent with the Go server's surface; smoke tests exist (`tests/test_smoke.py`) but are hand-rolled and partly live-server-dependent. Two structural drifts found: repo `desktop/plugin.js` lags the deployed one, and version metadata disagrees across files (backlog below).
+**Current state:** Functional and consistent with the Go server's surface; tests exist in `tests/` (`test_plugin_unit.py` for pytest, which CI runs, and the hand-rolled `test_smoke.py`, which is partly live-server-dependent). Two structural drifts found: repo `desktop/plugin.js` lags the deployed one, and version metadata disagrees across files (backlog below).
 
 ## 2. Polish Backlog
 
@@ -64,19 +64,19 @@ All items cite real code. Ordered by severity within each group.
 
 ## 3. Agent Setup Needs
 
-**Unit of work:** `F:\HyAtlas-Memory-Go\plugins\hy_memory\` only. Do not edit Go files for plugin polish; do not edit `data/` (live server state).
+**Unit of work:** `plugins/hyatlas/` only. Do not edit Go files for plugin polish; do not edit `data/` (live server state).
 
 **Files to edit, by role:**
 
 | Path | Role |
 |---|---|
-| `plugins/hy_memory/__init__.py` | Provider, hooks, config loading, slash command (684 lines — biggest surface) |
-| `plugins/hy_memory/client.py` | HTTP wire contract to the Go server |
-| `plugins/hy_memory/process.py` | Binary discovery, spawn/stop, PID file |
-| `plugins/hy_memory/cli.py` | `hermes hyatlas` subcommands |
-| `plugins/hy_memory/dashboard/plugin_api.py` | FastAPI proxy for the desktop pane |
-| `plugins/hy_memory/desktop/plugin.js` | Desktop pane (stale vs deployed — see backlog #9) |
-| `plugins/hy_memory/plugin.yaml` | Manifest (deps, env, version) |
+| `plugins/hyatlas/__init__.py` | Provider, hooks, config loading, slash command |
+| `plugins/hyatlas/client.py` | HTTP wire contract to the Go server |
+| `plugins/hyatlas/process.py` | Binary discovery, spawn/stop, PID file |
+| `plugins/hyatlas/cli.py` | `hermes hyatlas` subcommands |
+| `plugins/hyatlas/dashboard/plugin_api.py` | FastAPI proxy for the desktop pane |
+| `plugins/hyatlas/desktop/plugin.js` | Desktop pane (stale vs deployed — see backlog #9) |
+| `plugins/hyatlas/plugin.yaml` | Manifest (deps, env, version) |
 
 **Build / run / verify (Windows, repo root `F:\HyAtlas-Memory-Go`):**
 
@@ -89,18 +89,19 @@ go build -tags embedded -o hyatlas-go.exe . # embedded model
 ./hyatlas-go.exe        # serves 127.0.0.1:19528
 ```
 
-Plugin tests (no pytest runner; needs a live server for test 3):
+Plugin tests (CI runs the pytest suite; `test_smoke.py` needs a live server for its round-trip test):
 
 ```bash
-python plugins/hy_memory/tests/test_smoke.py
+python -m pytest plugins/hyatlas/tests
+python plugins/hyatlas/tests/test_smoke.py
 ```
 
 **Environment variables:**
 
-- Plugin config: `HYATLAS_SERVER_HOST` (default 127.0.0.1), `HYATLAS_SERVER_PORT` (19528), `HYATLAS_USER_ID`, `HYATLAS_AGENT_ID`, `HYATLAS_AUTO_START`, `HYATLAS_BINARY_PATH`, `HYATLAS_REQUEST_TIMEOUT`, plus `HERMES_HOME` (config file lives at `$HERMES_HOME/hy_memory.json`).
-- Set by `process.py` when auto-starting: `HYATLAS_GO_HOST`, `HYATLAS_GO_PORT`, `HYATLAS_LLM_BASE`, `HYATLAS_LLM_MODEL`, `HYATLAS_LLM_KEY` (from `AI2API_KEY`).
-- Dashboard proxy reads: `HYATLAS_HOST` / `HYATLAS_PORT` (naming drift, backlog #5).
+- Plugin config (read from the environment, which wins over `hyatlas.json` and `config.yaml`): `HYATLAS_SERVER_HOST` (default 127.0.0.1), `HYATLAS_SERVER_PORT` (19528), `HYATLAS_USER_ID`, `HYATLAS_AGENT_ID`, `HYATLAS_AUTO_START`, `HYATLAS_BINARY_PATH`, `HYATLAS_LAUNCHER_PATH`, `HYATLAS_REQUEST_TIMEOUT`, `HYATLAS_GO_DATA`, `HYATLAS_MODE`, `HYATLAS_SYNC_EXTRACT`, `HYATLAS_LLM_BASE`, `HYATLAS_LLM_MODEL`, plus `HERMES_HOME` (config file lives at `$HERMES_HOME/hy_memory.json` in the 2026-09-05 snapshot; re-check the current path in `settings.py`).
+- Forwarded by `process.py` to a spawned server: `HYATLAS_*` from the environment (allowlist rule), plus `HYATLAS_GO_HOST`, `HYATLAS_GO_PORT`, `HYATLAS_GO_DATA`, `HYATLAS_MODE`, `HYATLAS_SYNC_EXTRACT`, `HYATLAS_LLM_BASE` and `HYATLAS_LLM_MODEL` when set in config. The LLM key is never forwarded from config; it reaches the server only if exported as `HYATLAS_LLM_KEY`. The old `AI2API_KEY` mapping is gone.
+- Dashboard proxy reads: `HYATLAS_HOST` / `HYATLAS_PORT` (naming drift, backlog #5; still present in `dashboard/plugin_api.py`).
 
-**Most relevant sources to start from:** `plugins/hy_memory/__init__.py` → `plugins/hy_memory/client.py` → `plugins/hy_memory/process.py`. For the wire contract cross-check, use the route table at `server.go:727-753`; for intent/roadmap, read `NOW.md` and `after-install.md`.
+**Most relevant sources to start from:** `plugins/hyatlas/__init__.py` → `plugins/hyatlas/client.py` → `plugins/hyatlas/process.py`. For the wire contract cross-check, use the `mux.HandleFunc` calls in `server.go` `main()`; for intent/roadmap, read `NOW.md` and `plugins/hyatlas/after-install.md`.
 
 **Gotchas for the agent:** the deployed desktop plugin is newer than the repo copy — sync before editing `plugin.js`; Python here is stdlib-first (urllib, no requirements file), with `fastapi` needed only for `dashboard/plugin_api.py`; the repo is a git repo on branch state independent of the parent workspace.
