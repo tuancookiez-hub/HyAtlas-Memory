@@ -1,5 +1,43 @@
 # Changelog
 
+## [4.3.1] — 2026-10-08
+
+Fixes a defect that left every shipped binary unable to store a single memory,
+and the gap in the release check that let it ship.
+
+### Fixed
+
+- **The embedded builds could not create an embedding, so every write and every
+  search answered `500`.** The release pipeline fetches its model from
+  `Xenova/bge-small-en-v1.5`, and that export declares `token_type_ids` as a
+  graph input. The embedder built its onnxruntime session for two inputs
+  (`input_ids`, `attention_mask`), so the first inference failed inside the
+  `token_type_embeddings` Gather node with `Missing Input: token_type_ids`.
+  `/healthz` stayed green the whole time, so the server looked healthy while
+  being unable to store anything. The embedder now reads the graph's declared
+  inputs and feeds an all-zero `token_type_ids` when the model asks for one —
+  correct for single-segment BERT inference, and a no-op for the development
+  export, which does not ask.
+- **The release smoke test now writes and recalls.** Reaching `/healthz` proves
+  nothing about the embedder, so the check that ran against v4.3.0 could not see
+  this. It now requires `POST /api/v1/add` to answer 200, `POST /api/v1/search`
+  to answer 200, and the memory that was just written to come back in the
+  results. Verified in both directions: it fails against the previous binary
+  with the original `Missing Input` error, and passes against this one.
+
+Anyone on `v4.3.0` should move to `v4.3.1` — the v4.3.0 binaries cannot store
+memories. Nothing else changed: the mode ladder, the System1/System2 layer split
+and the opt-in LLM endpoint behave exactly as described in the v4.3.0 notes.
+
+### Docs
+
+- The repo README's privacy paragraph no longer claims extraction fires without
+  a key (untrue since the endpoint defaults were removed), and it documents that
+  ultra reaches 7/7 on the slow-path tick rather than instantly.
+- The plugin README and `after-install.md` document how a user updates the
+  plugin (`hermes plugins check-updates`, `hermes plugins update hyatlas`) and
+  draw the line between updating the client and updating the `hyatlas-go` server.
+
 ## [4.3.0] — 2026-10-08
 
 Adds the extraction-mode selector, the slow path behind it, and the setup flow
