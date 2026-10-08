@@ -194,6 +194,58 @@ func isSuperseded(d DocIndex) bool { return d.Meta["invalid_at"] != "" }
 // Search does vector search, scoped to user/agent when provided. Superseded
 // docs are never returned.
 func (s *MemoryStore) Search(query string, limit int, layer memory.Layer, userID, agentID string) ([]SearchHit, error) {
+	hits, err := s.search(query, limit, layer, userID, agentID)
+	if err != nil {
+		return nil, err
+	}
+	s.searches.Add(1)
+	s.persistUsageAsync()
+	return hits, nil
+}
+
+// SearchOwners is Search across several user IDs, for one person known by more than
+// one ID. Each ID is searched with the same agent filter, the hits are merged by
+// score, duplicates (same ID) are dropped, and the best limit are kept. With zero or
+// one user ID it is exactly Search. It counts as one search.
+func (s *MemoryStore) SearchOwners(query string, limit int, layer memory.Layer, userIDs []string, agentID string) ([]SearchHit, error) {
+	if len(userIDs) == 0 {
+		return s.Search(query, limit, layer, "", agentID)
+	}
+	if len(userIDs) == 1 {
+		return s.Search(query, limit, layer, userIDs[0], agentID)
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	var merged []SearchHit
+	for _, id := range userIDs {
+		hits, err := s.search(query, limit, layer, id, agentID)
+		if err != nil {
+			return nil, err
+		}
+		merged = append(merged, hits...)
+	}
+	sort.SliceStable(merged, func(i, j int) bool { return merged[i].Score > merged[j].Score })
+	seen := make(map[string]bool, len(merged))
+	var out []SearchHit
+	for _, h := range merged {
+		if seen[h.ID] {
+			continue
+		}
+		seen[h.ID] = true
+		out = append(out, h)
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	s.searches.Add(1)
+	s.persistUsageAsync()
+	return out, nil
+}
+
+// search is the body of Search without the usage counter, so SearchOwners can
+// count a multi-ID search once.
+func (s *MemoryStore) search(query string, limit int, layer memory.Layer, userID, agentID string) ([]SearchHit, error) {
 	if limit <= 0 {
 		limit = 5
 	}
@@ -248,8 +300,6 @@ func (s *MemoryStore) Search(query string, limit int, layer memory.Layer, userID
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
-	s.searches.Add(1)
-	s.persistUsageAsync()
 	return hits, nil
 }
 

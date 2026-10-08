@@ -43,6 +43,13 @@ type Server struct {
 	// allowedHosts are the extra hostnames (HYATLAS_ALLOWED_HOSTS) a request may
 	// name in Host or Origin, beyond localhost and IP literals (see guardLocal).
 	allowedHosts []string
+	// ownerAliases maps a user ID to every ID of the same person
+	// (HYATLAS_USER_ALIASES), so search covers all of them.
+	ownerAliases map[string][]string
+	// minScore and dedupeScore are HYATLAS_MIN_SCORE and HYATLAS_DEDUPE_SCORE. The
+	// zero value turns each off, which is what tests built without main get.
+	minScore    float64
+	dedupeScore float64
 
 	// mu guards lastExtractErr: the extraction goroutines write it from
 	// background contexts while /api/v1/status reads it on request.
@@ -168,14 +175,36 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // source_id so the slow path can trace a consolidated claim back to the
 // conversations that produced it, and so raw decay can protect the rows a live
 // claim still depends on.
+//
+// It never de-duplicates; the server path uses promoteExtractionDedupe.
 func promoteExtraction(store *MemoryStore, ex *Extraction, userID, agentID, sourceID string) {
+	promoteExtractionDedupe(store, ex, userID, agentID, sourceID, 0)
+}
+
+// promoteExtractionDedupe is promoteExtraction that also folds restatements. Before an
+// L3 fact is written, the owner's nearest live L3 fact is looked up; if it scores at
+// least dedupe, the new fact is written and the old one, with its L1 Profile mirrors,
+// is superseded by it. Newest wins, so an updated value replaces the stale one rather
+// than being dropped as a duplicate. dedupe <= 0 turns this off.
+func promoteExtractionDedupe(store *MemoryStore, ex *Extraction, userID, agentID, sourceID string, dedupe float64) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	// L3 Facts
 	for _, f := range ex.Facts {
 		if f.Data == "" {
 			continue
 		}
-		_ = store.Add(memory.L3Fact, newID(), f.Data, map[string]string{
+		// Found before the new rows are written, so the new L1 mirror is not
+		// taken for one of the old fact's mirrors.
+		var stale []string
+		if dedupe > 0 {
+			near, err := store.search(f.Data, 1, memory.L3Fact, userID, agentID)
+			if err == nil && len(near) > 0 && float64(near[0].Score) >= dedupe {
+				old := near[0]
+				stale = append([]string{old.ID}, store.MirrorsOf(memory.L1Profile, old.Meta["source_id"], old.Content)...)
+			}
+		}
+		factID := newID()
+		_ = store.Add(memory.L3Fact, factID, f.Data, map[string]string{
 			"user_id": userID, "agent_id": agentID,
 			"source_layer_label": f.Layer, "source_id": sourceID, "ts": now,
 		})
@@ -185,6 +214,11 @@ func promoteExtraction(store *MemoryStore, ex *Extraction, userID, agentID, sour
 				"user_id": userID, "agent_id": agentID,
 				"source_id": sourceID, "ts": now,
 			})
+		}
+		if len(stale) > 0 {
+			if _, err := store.Supersede(stale, factID); err != nil {
+				log.Printf("dedupe: supersede %s: %v", stale[0], err)
+			}
 		}
 	}
 	// L4 Summary (enabled layer — the narrative arc)
@@ -294,12 +328,12 @@ func (s *Server) extract(text, userID, agentID, id string) error {
 	if s.llm == nil {
 		return fmt.Errorf("no LLM client configured")
 	}
-	ex, err := s.llm.Complete(ctx, text)
+	ex, err := s.llm.Complete(ctx, utf8Trunc(text, maxExtractInput))
 	if err != nil {
 		s.setExtractErr(err.Error())
 		return err
 	}
-	promoteExtraction(s.store, ex, userID, agentID, id)
+	promoteExtractionDedupe(s.store, ex, userID, agentID, id, s.dedupeScore)
 	_ = s.store.SetExtracted(id, true)
 	s.setExtractErr("")
 	return nil
@@ -312,6 +346,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Layer    string   `json:"layer"`     // optional: filter to one memory layer
 		UserIDs  []string `json:"user_ids"`  // optional: restrict to these users
 		AgentIDs []string `json:"agent_ids"` // optional: restrict to these agents
+		UserID   string   `json:"user_id"`   // what the Hermes plugin sends
+		AgentID  string   `json:"agent_id"`  // what the Hermes plugin sends
+		MinScore *float64 `json:"min_score"` // optional: overrides HYATLAS_MIN_SCORE
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonResponse(w, 400, map[string]any{"error": "bad body"})
@@ -321,18 +358,35 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, 400, map[string]any{"error": "query required"})
 		return
 	}
-	userID, agentID := "", ""
-	if len(body.UserIDs) > 0 {
-		userID = body.UserIDs[0]
+	var users []string
+	seenUser := map[string]bool{}
+	for _, id := range append([]string{body.UserID}, body.UserIDs...) {
+		if id == "" || seenUser[id] {
+			continue
+		}
+		seenUser[id] = true
+		users = append(users, id)
 	}
-	if len(body.AgentIDs) > 0 {
+	agentID := body.AgentID
+	if agentID == "" && len(body.AgentIDs) > 0 {
 		agentID = body.AgentIDs[0]
 	}
-	res, err := s.store.Search(body.Query, body.Limit, memory.Layer(body.Layer), userID, agentID)
+	users = s.expandOwners(users)
+	limit := body.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+	minScore := s.minScore
+	if body.MinScore != nil {
+		minScore = *body.MinScore
+	}
+	// Fetch double so the floor and the duplicate drop still leave limit hits.
+	res, err := s.store.SearchOwners(body.Query, limit*2, memory.Layer(body.Layer), users, agentID)
 	if err != nil {
 		jsonResponse(w, 500, map[string]any{"error": err.Error()})
 		return
 	}
+	res = refineHits(res, minScore, limit)
 	type hit struct {
 		MemoryID   string  `json:"memory_id"`
 		Content    string  `json:"content"`
@@ -362,6 +416,34 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, 200, map[string]any{"memories": map[string]any{
 		"profile": profileHits, "proactive": proactiveHits, "normal": normalHits,
 	}})
+}
+
+// refineHits drops hits scoring below minScore, then drops hits whose text repeats an
+// earlier hit's, and keeps the best limit. Text is compared case-insensitively with
+// whitespace collapsed. An L3 preference and its L1 Profile mirror carry the same
+// text, so of two equal texts the L1 Profile one is kept: it is the one the profile
+// channel shows. hits must be sorted best first, and the result is too.
+func refineHits(hits []SearchHit, minScore float64, limit int) []SearchHit {
+	kept := []SearchHit{}
+	pos := map[string]int{}
+	for _, h := range hits {
+		if float64(h.Score) < minScore {
+			continue
+		}
+		key := strings.ToLower(strings.Join(strings.Fields(h.Content), " "))
+		if i, dup := pos[key]; dup {
+			if h.Layer == memory.L1Profile && kept[i].Layer != memory.L1Profile {
+				kept[i] = h
+			}
+			continue
+		}
+		pos[key] = len(kept)
+		kept = append(kept, h)
+	}
+	if limit > 0 && len(kept) > limit {
+		kept = kept[:limit]
+	}
+	return kept
 }
 
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
@@ -994,8 +1076,16 @@ type runtimeCfg struct {
 	// AllowedHosts is HYATLAS_ALLOWED_HOSTS: extra hostnames a request may name
 	// in Host or Origin (see guardLocal). Empty means loopback and IP literals only.
 	AllowedHosts []string
-	Mode         Mode
-	Sync         Sync
+	// UserAliases is HYATLAS_USER_ALIASES: groups of user IDs that belong to one
+	// person, so a search for any of them covers all of them. Empty means none.
+	UserAliases [][]string
+	// MinScore is HYATLAS_MIN_SCORE: hits below it are dropped from /api/v1/search.
+	MinScore float64
+	// DedupeScore is HYATLAS_DEDUPE_SCORE: a new fact this similar to the owner's
+	// nearest existing fact supersedes it instead of sitting beside it.
+	DedupeScore float64
+	Mode        Mode
+	Sync        Sync
 	// Slow-path (ultra) tuning. Zero retention means raw history is never decayed.
 	Consolidate time.Duration
 	Retention   time.Duration
@@ -1054,6 +1144,9 @@ func resolveRuntime() runtimeCfg {
 		ModelDir:     modelDir,
 		ModelTried:   modelTried,
 		AllowedHosts: parseHostList(envOr("HYATLAS_ALLOWED_HOSTS", "")),
+		UserAliases:  parseUserAliases(envOr("HYATLAS_USER_ALIASES", "")),
+		MinScore:     envFloat("HYATLAS_MIN_SCORE", defaultMinScore),
+		DedupeScore:  envFloat("HYATLAS_DEDUPE_SCORE", defaultDedupeScore),
 	}
 }
 
@@ -1114,6 +1207,20 @@ func (s *Server) attachSlowPath(ctx context.Context, rt runtimeCfg) bool {
 	s.cons = NewConsolidator(s.store, s.llm, rt.Consolidate, rt.Retention, rt.Batch)
 	go s.cons.Run(ctx)
 	return true
+}
+
+// envFloat reads key as a float64. Unset, blank or unparsable means def.
+func envFloat(key string, def float64) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		log.Printf("%s=%q is not a number; using %v", key, v, def)
+		return def
+	}
+	return f
 }
 
 // envInt reads a positive integer or falls back.
@@ -1206,6 +1313,9 @@ func main() {
 	}
 	log.Print(listeningLine(rt))
 	srv.allowedHosts = rt.AllowedHosts
+	srv.ownerAliases = aliasMap(rt.UserAliases)
+	srv.minScore = rt.MinScore
+	srv.dedupeScore = rt.DedupeScore
 	hs := &http.Server{Addr: net.JoinHostPort(rt.Host, port), Handler: srv.routes(), ReadHeaderTimeout: readHeaderTimeout}
 	log.Fatal(hs.ListenAndServe())
 }
@@ -1342,6 +1452,72 @@ func normHost(h string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
 }
 
+// parseUserAliases reads HYATLAS_USER_ALIASES: groups separated by ";", user IDs in a
+// group separated by ",". IDs are trimmed and empty ones dropped; a group needs at
+// least two distinct IDs to mean anything, so smaller ones are dropped.
+// "123,default;alice,al" is two groups.
+func parseUserAliases(raw string) [][]string {
+	var out [][]string
+	for _, group := range strings.Split(raw, ";") {
+		var ids []string
+		seen := map[string]bool{}
+		for _, part := range strings.Split(group, ",") {
+			id := strings.TrimSpace(part)
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			ids = append(ids, id)
+		}
+		if len(ids) >= 2 {
+			out = append(out, ids)
+		}
+	}
+	return out
+}
+
+// aliasMap indexes alias groups by member: each ID maps to its whole group,
+// itself included. An ID in two groups maps to the union of both.
+func aliasMap(groups [][]string) map[string][]string {
+	out := map[string][]string{}
+	for _, group := range groups {
+		for _, id := range group {
+			seen := map[string]bool{}
+			for _, existing := range out[id] {
+				seen[existing] = true
+			}
+			for _, other := range group {
+				if !seen[other] {
+					seen[other] = true
+					out[id] = append(out[id], other)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// expandOwners adds every alias of each user ID (HYATLAS_USER_ALIASES), keeping the
+// order IDs were first seen and dropping duplicates. Without aliases it returns ids.
+func (s *Server) expandOwners(ids []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(id string) {
+		if id == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	for _, id := range ids {
+		add(id)
+		for _, alias := range s.ownerAliases[id] {
+			add(alias)
+		}
+	}
+	return out
+}
+
 // parseHostList reads HYATLAS_ALLOWED_HOSTS: comma-separated hostnames. An entry
 // may carry a port ("myhost:8080" is "myhost"), as a Host header does. Entries are
 // lower-cased with any trailing dot dropped, and empty ones are dropped.
@@ -1365,6 +1541,21 @@ func isLoopbackHost(h string) bool {
 	ip := net.ParseIP(h)
 	return ip != nil && ip.IsLoopback()
 }
+
+// defaultMinScore is the similarity below which /api/v1/search drops a hit. Measured
+// on a real store with bge-small: on-topic queries never put a relevant hit below
+// 0.67, and off-topic queries never scored above 0.55. 0 disables the floor.
+const defaultMinScore = 0.60
+
+// defaultDedupeScore is the similarity at or above which a newly extracted fact is
+// treated as a restatement of the owner's nearest existing fact, which it then
+// supersedes. 0 disables write-time de-duplication.
+const defaultDedupeScore = 0.92
+
+// maxExtractInput caps the text one extraction call sends to the LLM, in bytes. The
+// Hermes plugin already sends one turn; this guards against any other client
+// posting a whole transcript.
+const maxExtractInput = 16000
 
 // maxRequestBody caps every request body. Raw memories can be large session
 // dumps (see utf8Trunc), so the cap is generous. Without it, decoding read

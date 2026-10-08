@@ -1,5 +1,58 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **A turn is stored as the turn, not the transcript.** `sync_turn` receives the whole
+  thread, and the plugin sent every message since its last sync, including each
+  tool result and, after context compaction, the compaction summary. Raw rows reached
+  200,000 to 1,650,000 characters, and the extraction LLM read each in full. Only user
+  and assistant text is sent now, compaction summaries are skipped, and each message
+  (4,000 chars) and turn (12,000 chars) is capped. (`plugins/hyatlas/__init__.py`
+  `_build_turn_text`)
+- **Recall uses the current message.** `prefetch()` ignored its query and returned the
+  results `queue_prefetch` cached after the previous turn, in one slot shared by all
+  sessions. It now searches the message it is given (Hermes bounds the call with a
+  timeout) and keeps a per-session fallback for when the search fails.
+- **Search honours `user_id` and `agent_id`.** The plugin sends singular fields, and
+  `/api/v1/search` read only `user_ids` / `agent_ids`, so every plugin search was
+  unscoped. Both shapes work now. (`server.go` `handleSearch`)
+
+- **Search drops repeats and weak matches.** An L3 preference and its L1 Profile
+  mirror carry the same text and both came back; now one hit per text is kept (the
+  L1 Profile one). Hits below `HYATLAS_MIN_SCORE` (default 0.60) are dropped, so an
+  off-topic query returns nothing instead of five unrelated memories. A request can
+  override the floor with `min_score`. (`server.go` `refineHits`)
+- **A restated fact replaces the old one.** Before an extracted L3 fact is written,
+  the owner's nearest live fact is looked up; at `HYATLAS_DEDUPE_SCORE` (default 0.92)
+  or above, the new fact supersedes it and its L1 mirrors. Newest wins, so a changed
+  value replaces the stale one. About a quarter of facts had a near-twin before this.
+  (`server.go` `promoteExtractionDedupe`)
+- **Extraction input is capped at 16,000 bytes**, whatever the client sends.
+
+### Added
+
+- **`HYATLAS_USER_ALIASES`** groups user IDs that belong to one person
+  (`"id1,id2;id3,id4"`). A search for any of them covers the whole group.
+  (`server.go` `parseUserAliases`, `store.go` `SearchOwners`)
+
+- **A late deadline cut no longer counts as a window failure.** When the pass
+  deadline cut an owner's call after earlier owners' calls had spent the time, the
+  cut counted toward `maxWindowFails`, so with a slow model a healthy window of a
+  large owner was skipped after three passes. That cut now leaves the window's walk
+  state alone and the next pass starts with that owner. An owner cut while it had
+  the whole budget still counts the cut as a failure. (`consolidate.go` `Once`)
+- **Each consolidation call is logged** with its owner, window, fact count, result
+  and duration, so a slow model shows up in the log rather than only as a deadline
+  error in the report.
+- **An empty LLM reply names its `finish_reason`,** so a reply the provider cut off
+  (`length`) can be told apart from one that came back blank. (`llm.go` `chat`)
+- **Two model-directory tests pass on Windows.** They set `HOME` but not
+  `USERPROFILE`, which `os.UserHomeDir` reads on Windows, and one picked up a real
+  installer model directory on a machine that had run the installer.
+  (`model_dir_test.go`, `server_embed_test.go`)
+
 ## [4.4.0] — 2026-10-08
 
 Everything on `claude/busy-faraday-3tvefr` since v4.3.3. Several items are

@@ -53,6 +53,27 @@ from .schemas import (  # noqa: E402
     HYATLAS_ADD_SCHEMA,
 )
 
+# Per-message and per-turn caps on what sync_turn sends. A turn is the user's
+# message and the assistant's reply. Tool output and compaction summaries are not
+# memories; sending them made raw rows of 200,000+ characters that the extraction
+# LLM then had to read in full.
+_MAX_MESSAGE_CHARS = 4000
+_MAX_TURN_CHARS = 12000
+
+
+def _clip(text: str, limit: int) -> str:
+    """Cut text to limit characters, saying how much was dropped."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n…[truncated {len(text) - limit} chars]"
+
+
+def _is_compaction(text: str) -> bool:
+    """Hermes' context-compaction summary, detected the way Hermes itself does
+    (agent/context_compressor.py): a marker near the start of the message."""
+    head = text[:200]
+    return "CONTEXT COMPACTION" in head or "Conversation Summary" in head
+
 
 # =============================================================================
 # Configuration
@@ -99,7 +120,9 @@ class HyatlasMemoryProvider(MemoryProvider):
         self._user_id: str = ""
         self._agent_id: str = ""
         self._prefetch_lock = threading.Lock()
-        self._prefetch_result: str = ""
+        # Last recall per session, the fallback when a live search fails. Keyed by
+        # session so concurrent sessions (gateway and CLI) never see each other's.
+        self._prefetch_cache: "OrderedDict[str, str]" = OrderedDict()
         self._version = "4.4.0"
         # Message count already synced per session, so _build_turn_text sends
         # only what the server has not seen. Bounded: a long-lived gateway
@@ -304,9 +327,27 @@ class HyatlasMemoryProvider(MemoryProvider):
     # --- Optional: prefetch (sync, returns cached result) ---
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        """Return the most recent prefetched result (set by queue_prefetch)."""
+        """Recall for the turn about to run, searched on that turn's own message.
+
+        Hermes passes the current message and bounds this call with a timeout, and a
+        local search takes ~100 ms, so recall is live rather than the previous
+        turn's. If the search fails, the session's last recall is returned instead.
+        """
+        if query and self._client:
+            try:
+                results = self._client.search(
+                    query=query,
+                    user_id=self._user_id,
+                    agent_id=self._agent_id,
+                    limit=5,
+                )
+                formatted = self._format_prefetch(results, query)
+                self._store_prefetch(session_id, formatted)
+                return formatted
+            except Exception as e:
+                logger.debug("prefetch search failed, using cached recall: %s", e)
         with self._prefetch_lock:
-            return self._prefetch_result
+            return self._prefetch_cache.get(session_id, "")
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         """Fire-and-forget recall for the next agent turn."""
@@ -322,8 +363,7 @@ class HyatlasMemoryProvider(MemoryProvider):
                     limit=5,
                 )
                 formatted = self._format_prefetch(results, query)
-                with self._prefetch_lock:
-                    self._prefetch_result = formatted
+                self._store_prefetch(session_id, formatted)
             except Exception as e:
                 logger.debug("prefetch failed: %s", e)
 
@@ -511,7 +551,9 @@ class HyatlasMemoryProvider(MemoryProvider):
         ``sync_turn`` is called after every turn with the full conversation so
         far, so sending all of *messages* would re-upload the entire transcript
         each time — quadratic in conversation length, and the server would
-        re-extract facts from messages it already saw.
+        re-extract facts from messages it already saw. Only user and assistant
+        text is sent, compaction summaries are skipped, and each message and the
+        whole turn are capped.
 
         The caller's ``user_content`` / ``assistant_content`` pair is exactly
         one turn, so that is the baseline and it is never dropped. *messages*
@@ -550,17 +592,17 @@ class HyatlasMemoryProvider(MemoryProvider):
         for m in new:
             role = m.get("role", "")
             content = m.get("content", "")
-            if not content or role == "system":
+            if not content or role not in ("user", "assistant"):
                 continue
             if isinstance(content, list):
                 content = " ".join(
                     str(b.get("text", "")) for b in content
                     if isinstance(b, dict)
                 ).strip()
-            if content:
-                parts.append(f"{role.upper()}: {content}")
+            if content and not _is_compaction(content):
+                parts.append(f"{role.upper()}: {_clip(content, _MAX_MESSAGE_CHARS)}")
         if parts:
-            return "\n\n".join(parts)
+            return _clip("\n\n".join(parts), _MAX_TURN_CHARS)
         # The new messages carried no usable content (tool stubs, empty roles);
         # fall back to the reported turn so nothing is lost.
         return self._turn_pair(user_content, assistant_content)
@@ -583,10 +625,18 @@ class HyatlasMemoryProvider(MemoryProvider):
     def _turn_pair(user_content: str, assistant_content: str) -> str:
         parts = []
         if user_content:
-            parts.append(f"USER: {user_content}")
+            parts.append(f"USER: {_clip(user_content, _MAX_MESSAGE_CHARS)}")
         if assistant_content:
-            parts.append(f"ASSISTANT: {assistant_content}")
+            parts.append(f"ASSISTANT: {_clip(assistant_content, _MAX_MESSAGE_CHARS)}")
         return "\n\n".join(parts)
+
+    def _store_prefetch(self, session_id: str, text: str) -> None:
+        """Remember the last recall for session_id, bounded like _synced."""
+        with self._prefetch_lock:
+            self._prefetch_cache[session_id] = text
+            self._prefetch_cache.move_to_end(session_id)
+            while len(self._prefetch_cache) > self._SYNCED_MAX:
+                self._prefetch_cache.popitem(last=False)
 
     def _format_prefetch(self, results: Dict[str, Any], query: str) -> str:
         """Format v4's 3-channel search result into a prompt block."""
