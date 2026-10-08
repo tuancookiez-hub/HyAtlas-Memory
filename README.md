@@ -103,6 +103,7 @@ default configuration is not fully local:
 | What | Goes where | Default | How to keep it local |
 |---|---|---|---|
 | **Memory text** (the turn being extracted) | Sent to the extraction LLM | **Nowhere** — no endpoint is shipped, so an unconfigured server makes no LLM call and reports `unconfigured` | Already opt-in: set `HYATLAS_LLM_BASE`/`_MODEL`/`_KEY` to choose where it goes. Point them at a local OpenAI-compatible server to keep it on-machine, or use `HYATLAS_MODE=lite` |
+| **Stored facts** (ultra only) | Sent to the same LLM by the consolidation pass, up to `HYATLAS_CONSOLIDATE_BATCH` (200) per user every `HYATLAS_CONSOLIDATE_EVERY` (6h) | Nowhere until an endpoint is configured | Use `pro` or `lite` |
 | Embeddings | In-process BGE-small (onnxruntime-go) | **Local** — `HYATLAS_EMBED_BASE=bge`, no network | Already local |
 | Stored memories, vector index, graph | `HYATLAS_GO_DATA` (default `./data`) | **Local** | Already local |
 | Telemetry / usage reporting | — | **None** | — |
@@ -212,7 +213,7 @@ the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
 | `HYATLAS_MODEL_DIR` | `./models` | Where the BGE model lives |
 | `HYATLAS_MODE` | `ultra` | `lite` \| `pro` \| `ultra`. An unrecognised value is fatal at startup. See the mode table above. |
 | `HYATLAS_SYNC_EXTRACT` | *(follows the mode)* | `on` \| `off`. Whether a write waits for extraction. An unrecognised value is fatal at startup. |
-| `HYATLAS_CONSOLIDATE_EVERY` | `6h` | Ultra only: interval between slow-path passes |
+| `HYATLAS_CONSOLIDATE_EVERY` | `6h` | Ultra only: interval between slow-path passes. Must be positive in ultra (zero or negative is fatal at startup); use `pro` to run without the pass. |
 | `HYATLAS_CONSOLIDATE_BATCH` | `200` | Ultra only: max facts per consolidation call |
 | `HYATLAS_RAW_RETENTION` | *(unset = never delete)* | Ultra only: age after which uncited L2 Raw is decayed |
 | `HYATLAS_LLM_BASE` | *(unset)* | OpenAI-compatible LLM endpoint. **Memory text is sent here once you set it** — see *Privacy* above. Unset means no LLM call at all. |

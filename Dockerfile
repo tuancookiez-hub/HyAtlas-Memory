@@ -15,7 +15,8 @@ EXPOSE 19528
 ENV HYATLAS_GO_PORT=19528
 # The server binds loopback by default; inside a container that would be
 # unreachable through the published port. docker-compose.yml publishes it on
-# the host loopback only.
+# the host loopback only. The server has no authentication: with a plain
+# `docker run`, publish it as -p 127.0.0.1:19528:19528, never -p 19528:19528.
 ENV HYATLAS_GO_HOST=0.0.0.0
 ENV HYATLAS_GO_DATA=/data/hyatlas
 HEALTHCHECK --interval=15s --timeout=5s --retries=8 \
