@@ -1,80 +1,88 @@
 # After install
 
-After copying this directory to `~/.hermes/plugins/hyatlas/` and
-restarting the gateway, verify the plugin loaded:
+Install and enable the plugin, then restart the gateway so it loads:
 
 ```bash
-# 1. Check the plugin is discoverable
-hermes memory status
-# Should show: provider: hyatlas
-
-# 2. Verify the v4 server is reachable
-hermes hyatlas status
-# Should print: {"embed":"ok","llm":"ok",...}
-
-# 3. If the server isn't running, start it
-hermes hyatlas start
-# OR run the binary directly:
-hyatlas-go
-
-# 4. Try a search to confirm wire-compat
-hermes hyatlas search "anything"
-# Should return JSON with profile/proactive/normal channels
+hermes plugins install hyatlas     # or: hermes plugins install tuancookiez-hub/HyAtlas-Memory/plugins/hyatlas
+hermes plugins enable hyatlas
+hermes memory setup                # choose "hyatlas", then mode, LLM endpoint and key
 ```
 
-## Auto-start the v4 server from Hermes
+Then check it:
 
-If you want Hermes to spawn the Go binary automatically when it
-starts (instead of you running `hyatlas-go` in another terminal):
+```bash
+# 1. The provider is selected
+hermes memory status
+
+# 2. The server answers (start it first if it does not, see below)
+hermes hyatlas status
+
+# 3. A round trip
+hermes hyatlas add "I prefer short answers"
+hermes hyatlas search "answer style"
+```
+
+`status` prints the server's JSON, including `version`, `mode`, and `llm`
+(`ok`, `unconfigured` or `unused`). The `search` results are grouped into the
+`profile`, `proactive` and `normal` channels.
+
+## Start the server
+
+The plugin does not install the server. Either run the binary yourself:
+
+```bash
+hyatlas-go          # listens on 127.0.0.1:19528 by default
+```
+
+or let the plugin start it:
+
+```bash
+hermes hyatlas start    # spawns the binary (see binary_path), logs to ~/.hermes/logs/hyatlas.log
+hermes hyatlas stop     # stops a server the plugin started
+```
+
+To have the plugin start the server automatically when it is unreachable, set
+`auto_start: true`:
 
 ```yaml
 # ~/.hermes/config.yaml
 plugins:
-  hyatlas:
-    server_host: 127.0.0.1
-    server_port: 19528
-    auto_start: true
-    binary_path: "C:/HyAtlas-Memory/hyatlas-go.exe"  # Windows
-    # binary_path: "/usr/local/bin/hyatlas-go"      # Linux/macOS
+  entries:
+    hyatlas:
+      settings:
+        auto_start: true
+        binary_path: "/usr/local/bin/hyatlas-go"   # Windows: "C:/HyAtlas-Memory/hyatlas-go.exe"
 ```
 
-The plugin will spawn the binary on the first `initialize()` call if
-the port isn't already bound.
+With `auto_start` the plugin starts the binary during initialization, unless the
+run is a cron or flush context. It then waits up to 30 seconds for the server to
+answer. The server keeps running after Hermes exits; `hermes hyatlas stop` stops it.
+See the README's Disclosure section for the full list of what runs.
 
-## Required environment variables
+## Settings
 
-The plugin reads (in priority order):
+Settings are read in this order, and a later source wins:
 
-1. Per-profile JSON at `~/.hermes/hyatlas.json`:
-   ```json
-   {
-     "server_host": "127.0.0.1",
-     "server_port": 19528,
-     "user_id": "default",
-     "agent_id": "default",
-     "auto_start": false
-   }
-   ```
+1. Built-in defaults.
+2. `$HERMES_HOME/hyatlas.json`, which the setup form writes.
+3. `plugins.hyatlas` and `plugins.entries.hyatlas.settings` in `config.yaml`.
+4. `HYATLAS_*` environment variables.
 
-2. Env vars (canonical 12-factor):
-   - `HYATLAS_SERVER_HOST` (default `127.0.0.1`)
-   - `HYATLAS_SERVER_PORT` (default `19528`)
-   - `HYATLAS_USER_ID`
-   - `HYATLAS_AGENT_ID`
-   - `HYATLAS_AUTO_START` (`1`/`true` to enable)
-   - `HYATLAS_BINARY_PATH` (path to the Go binary if not in PATH)
+The keys and their environment variables are in the README's Settings table. The
+LLM key is never read from these files: set it through `hermes memory setup`
+(which writes it to `.env`) or export `HYATLAS_LLM_KEY`.
 
-3. The Go binary itself reads (separately, from the binary's process env):
-   - `HYATLAS_LLM_BASE` — OpenAI-compatible endpoint
-   - `HYATLAS_LLM_MODEL` — model name (e.g. `poolside/laguna-s-2.1:free`)
-   - `HYATLAS_LLM_KEY` — bearer token for the LLM endpoint
+## Extraction mode
 
-   **All three are unset by default and extraction stays off until you set
-   them.** With none configured the server makes no LLM call: writes keep the
-   raw trace plus local embeddings, and status reports `llm: "unconfigured"`.
-   The installer and `hermes memory setup` offer a free endpoint as a starting
-   value you can overwrite. See the README's disclosure for what leaves the
-   machine and when.
+`mode` decides what the server does with each write:
+
+- `lite`: no LLM call. Raw text and local embeddings only. This is the only mode
+  where no conversation text goes to an LLM.
+- `pro`: one LLM call per write. Fills 5 of 7 layers.
+- `ultra` (default): `pro`, plus a consolidation pass every 6 hours. Fills all 7 layers.
+
+`sync` decides whether a write waits for extraction. Unset, `pro` waits and `ultra`
+does not.
 
 ## Updating
 
@@ -83,35 +91,10 @@ hermes plugins check-updates     # read-only
 hermes plugins update hyatlas    # then restart the gateway
 ```
 
-This moves the plugin only. The `hyatlas-go` server binary is separate and
-yours to update from the [project releases](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases).
-
-## Switching between v3.5 and v4
-
-The plugin's HTTP wire contract is identical between v3.5 (port 19527)
-and v4 (port 19528). To switch:
-
-```yaml
-# Use v4 (current)
-plugins:
-  hyatlas:
-    server_port: 19528
-
-# Use v3.5 (legacy)
-plugins:
-  hyatlas:
-    server_port: 19527
-```
-
-Restart the gateway after changing the port.
-
-## Verifying the plugin
-
-In a fresh session, ask the agent about something you've talked
-about before. If the agent finds it, the plugin is working. The
-prefetched context should appear in the agent's first turn.
+This updates the plugin only. The `hyatlas-go` binary is separate: update it with
+the server's installer or by replacing the binary with a newer release.
 
 ## Logs
 
-- v4 server logs: `~/.hermes/logs/hyatlas.log` (when auto-started)
-- Plugin errors: see `~/.hermes/logs/errors.log` filtered for `hyatlas`
+- Server output, when the plugin starts the server: `$HERMES_HOME/logs/hyatlas.log`.
+- Plugin messages go to Hermes' own log output.

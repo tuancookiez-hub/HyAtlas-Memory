@@ -96,30 +96,23 @@ def _identity(provider: Any) -> "tuple[str, str]":
 
 
 def _launcher(cfg: dict) -> "Path | None":
-    """A user-supplied launcher script, when one exists.
+    """The user-configured launcher script, when one is set and exists.
 
-    Some installs ship a ``hyatlas-go.ps1`` next to the server binary that owns
-    the full server env (data dir, LLM configuration, log redirect). Running it
-    keeps a CLI-started server identical to that install's own start shim.
+    Some installs ship a ``hyatlas-go.ps1`` that owns the full server env (data
+    dir, LLM configuration, log redirect). When ``launcher_path`` names one,
+    ``hermes hyatlas start|stop`` runs it instead of spawning the binary.
 
-    The script is the user's own server-side tooling, not part of this plugin:
-    nothing here reads credentials or configures an LLM. Only explicit paths are
-    consulted — ``launcher_path`` from config, then a launcher sitting beside
-    the resolved binary — so no machine-specific location is baked in and a
-    catalog install with no launcher simply spawns the binary directly.
+    The script is never discovered implicitly: a script that runs a shell is only
+    executed when the user names it in ``launcher_path``. The script itself is the
+    user's tooling and is not part of this plugin; it may read other tools'
+    credentials (the repository's ``hyatlas-go.ps1`` reads Hermes' ``auth.json``).
+    With no ``launcher_path`` the binary is spawned directly.
     """
     if sys.platform != "win32":
         return None
-    candidates = []
     configured = str(cfg.get("launcher_path") or "").strip()
-    if configured:
-        candidates.append(Path(configured))
-    bp = str(cfg.get("binary_path") or "").strip()
-    if bp:
-        candidates.append(Path(bp).parent / "hyatlas-go.ps1")
-    for cand in candidates:
-        if cand.is_file():
-            return cand
+    if configured and Path(configured).is_file():
+        return Path(configured)
     return None
 
 
@@ -237,7 +230,8 @@ def _cmd_start(args: argparse.Namespace) -> int:
     proc = process_mod.HyatlasProcess(provider._config)
     try:
         proc.start()
-    except FileNotFoundError as e:
+    except (FileNotFoundError, ValueError) as e:
+        # ValueError: an invalid mode or sync setting, rejected before spawning.
         _print({"ok": False, "error": str(e)})
         return 1
     client = provider._ensure_client()

@@ -504,6 +504,23 @@ def test_launcher_resolution_needs_an_explicit_path():
     assert cli._launcher({"launcher_path": "/nonexistent/hyatlas-go.ps1"}) is None
 
 
+def test_launcher_is_never_discovered_beside_the_binary(monkeypatch, tmp_path):
+    """A script that runs a shell only executes when the user names it.
+
+    Forces the Windows branch so the check is meaningful on every platform.
+    """
+    cli = _load_sibling("cli")
+    monkeypatch.setattr(sys, "platform", "win32")
+    script = tmp_path / "hyatlas-go.ps1"
+    script.write_text("", encoding="utf-8")
+    binary = tmp_path / "hyatlas-go.exe"
+    binary.write_text("", encoding="utf-8")
+    # a sibling script next to the binary is ignored
+    assert cli._launcher({"binary_path": str(binary)}) is None
+    # only an explicit launcher_path is used
+    assert cli._launcher({"launcher_path": str(script)}) == script
+
+
 def test_launcher_path_is_configurable(monkeypatch, tmp_path):
     """`launcher_path` reaches the config from both the JSON and env layers."""
     cfg = mod._load_config()

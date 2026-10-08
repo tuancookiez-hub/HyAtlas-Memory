@@ -66,8 +66,10 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
     {
         "key": "launcher_path", "type": "str", "default": "",
         "label": "Launcher script",
-        "description": "Optional path to a hyatlas-go.ps1 that owns the server "
-                       "environment (Windows; empty = spawn the binary directly)",
+        "description": "Windows only. Optional hyatlas-go.ps1 that `hermes hyatlas "
+                       "start|stop` runs instead of spawning the binary. Run as "
+                       "given, so only point it at a script you trust. Empty = "
+                       "spawn the binary directly.",
     },
     {
         "key": "request_timeout", "type": "float", "default": 15.0,
@@ -77,9 +79,10 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
     {
         "key": "data_dir", "type": "str", "default": "",
         "label": "Data directory",
-        "description": "Where the server keeps its vector store and graph; used "
-                       "by `hermes backup` to include provider state. Empty = "
-                       "HYATLAS_GO_DATA, then the conventional defaults.",
+        "description": "Server data directory (vector store, graph). Passed to a "
+                       "spawned server as HYATLAS_GO_DATA and used by `hermes "
+                       "backup`. Empty = HYATLAS_GO_DATA, then the conventional "
+                       "defaults.",
     },
     {
         "key": "llm_base", "type": "str", "default": "",
@@ -101,21 +104,22 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
         "env_var": "HYATLAS_LLM_KEY",
         "label": "LLM API key",
         "url": "https://platform.openai.com/api-keys",
-        "description": "API key for the endpoint above. Stored in Hermes' .env "
-                       "(0600), never in hyatlas.json, and never logged. Not "
+        "description": "API key for the endpoint above. The setup wizard stores it "
+                       "in Hermes' .env (0600) as HYATLAS_LLM_KEY, never in "
+                       "hyatlas.json. The plugin never reads or logs it. Not "
                        "needed in lite mode.",
     },
     {
         "key": "mode", "type": "str", "default": "",
         "label": "Extraction mode", "choices": ["", "lite", "pro", "ultra"],
         "description": "Passed to a spawned server as HYATLAS_MODE. lite makes "
-                       "no LLM call, so conversation text never leaves the "
-                       "machine; pro extracts per write and reasons within that "
-                       "one turn; ultra adds a periodic consolidation pass that "
-                       "reasons across memories. Empty = the server's own "
-                       "default (ultra). The server's "
-                       "/api/v1/status `mode` field is authoritative at "
-                       "runtime, since a manually started server may differ.",
+                       "no LLM call, so no conversation text goes to an LLM; "
+                       "pro sends each write to the LLM endpoint and reasons "
+                       "within that turn; ultra also runs a periodic consolidation "
+                       "pass over stored facts. Empty = the server's own default "
+                       "(ultra). The server's /api/v1/status `mode` field is "
+                       "authoritative at runtime, since a manually started server "
+                       "may differ.",
     },
     {
         "key": "sync", "type": "str", "default": "",
@@ -275,7 +279,13 @@ def load() -> Dict[str, Any]:
             logger.debug("ignoring %s: %s", profile, e)
 
     try:
-        import yaml  # hermes core dependency
+        try:
+            # Current Hermes parses YAML with ruamel through hermes_yaml and no
+            # longer ships PyYAML; without this the config.yaml layer would be
+            # silently skipped.
+            import hermes_yaml as yaml
+        except ImportError:
+            import yaml  # older Hermes releases
 
         cfg_path = home() / "config.yaml"
         if cfg_path.exists():

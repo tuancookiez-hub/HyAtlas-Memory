@@ -1,13 +1,14 @@
 """Subprocess lifecycle for the HyAtlas v4 Go binary.
 
 The Go binary (``hyatlas-go`` / ``hyatlas-go.exe``) is the actual memory
-server. The plugin can optionally auto-start it as a subprocess when
-``auto_start: true`` is set in config.
+server. The plugin can optionally start it as a child process when
+``auto_start: true`` is set in config, or when ``hermes hyatlas start`` is run.
 
-This is a thin wrapper — the canonical pattern (Hindsight-style) is
-to spawn the binary detached, capture logs to a file, and stop it on
-plugin unload. The embedded `models/` are resolved relative to the
-binary's CWD.
+The child's stdout and stderr are appended to ``$HERMES_HOME/logs/hyatlas.log``,
+its PID is written to ``hyatlas.pid``, and its working directory is the binary's
+folder. It is not stopped when the agent exits: the provider's ``shutdown()``
+leaves it running, and ``hermes hyatlas stop`` stops it. The model files are
+resolved relative to the binary's directory.
 """
 
 from __future__ import annotations
@@ -290,8 +291,15 @@ class HyatlasProcess:
                     capture_output=True, text=True, timeout=10,
                 )
                 return "hyatlas-go" in (r.stdout or "").lower()
-            cmdline = Path(f"/proc/{pid}/comm").read_text(encoding="utf-8", errors="replace")
-            return cmdline.strip().startswith("hyatlas-go")
+            if Path("/proc").is_dir():
+                comm = Path(f"/proc/{pid}/comm").read_text(encoding="utf-8", errors="replace")
+                return comm.strip().startswith("hyatlas-go")
+            # macOS has no /proc: ask ps for the executable's name instead.
+            r = subprocess.run(
+                ["ps", "-o", "comm=", "-p", str(pid)],
+                capture_output=True, text=True, timeout=10,
+            )
+            return Path((r.stdout or "").strip()).name.startswith("hyatlas-go")
         except (OSError, ValueError, subprocess.SubprocessError):
             return False
 
