@@ -8,13 +8,55 @@ let l5State = {
   selectedEntity: null,  // null = show all
 };
 
+// /api/l5/graph emits nodes {id,label,type,user_id,agent_id,props} and
+// relations {from,to,relation,weight,sources,...}, where from/to are node ids.
+// The view reads name/entity_type/a/b/relation_type and the *_distribution
+// counts, so build that shape here. Fields the server does not send (aliases,
+// mention_count, created_at, ...) fall back to empty values.
+function normalizeL5(raw) {
+  const nodes = (raw.nodes || []).map(n => {
+    const props = n.props || {};
+    return {
+      id: n.id,
+      name: n.name || n.label || n.id || '',
+      entity_type: n.entity_type || n.type || 'entity',
+      aliases: n.aliases || [],
+      mention_count: n.mention_count || 1,
+      source: n.source || props.source || '',
+      created_at: n.created_at || props.created_at || '',
+    };
+  });
+  const nameById = new Map(nodes.map(n => [n.id, n.name]));
+  const relations = (raw.relations || []).map(r => ({
+    a: nameById.get(r.from) || r.a || r.from || '',
+    b: nameById.get(r.to) || r.b || r.to || '',
+    relation_type: r.relation || r.relation_type || '',
+    confidence: r.confidence ?? r.weight ?? 0,
+    sources: r.sources || (r.source ? [r.source] : []),
+  }));
+  const countBy = (list, key) => list.reduce((acc, x) => {
+    const k = x[key] || '';
+    acc[k] = (acc[k] || 0) + 1;
+    return acc;
+  }, {});
+  return {
+    nodes,
+    relations,
+    node_count: nodes.length,
+    relation_count: relations.length,
+    exported_at: raw.exported_at || '',
+    type_distribution: countBy(nodes, 'entity_type'),
+    relation_type_distribution: countBy(relations, 'relation_type'),
+  };
+}
+
 async function initL5Page() {
   if (l5State.data && l5State.scope === currentAgentId) {
     renderL5();
     return;
   }
   try {
-    const data = await fetchJSON(scopedPath('/api/l5/graph', currentAgentId));
+    const data = normalizeL5(await fetchJSON(scopedPath('/api/l5/graph', currentAgentId)));
     l5State.data = data;
     l5State.scope = currentAgentId;
     renderL5();

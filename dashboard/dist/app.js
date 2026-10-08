@@ -21,6 +21,8 @@ let graphNodes = [];
 let graphRelations = [];
 let activityMemories = [];
 let observatoryMemories = [];
+let searchMode = 'semantic';  // Explore search mode: semantic | keyword | hybrid
+let searchResults = [];
 
 let layerCountsData = null;  // display counts: VDB L0-L3 + graph L5-L7 (Memory Composition bar)
 let layerHealthData = null;  // per-user/agent counts from /api/layer-health
@@ -239,9 +241,10 @@ async function loadAllData() {
   try {
     const [coreResult, opsResult, graphResult, qualityResult] = await Promise.all([
       fetchResult('core', Promise.all([
-        fetchJSON('/api/status'),
+        fetchJSON('/api/v1/status'),
         fetchJSON('/api/info'),
-        fetchJSON(scopedPath('/api/memories?limit=100', agentId)),
+        // The Go handler reads user_id/agent_id literally, so agent_id=all matches nothing; omit it for all profiles.
+        fetchJSON(agentId === 'all' ? '/api/memories?limit=100' : scopedPath('/api/memories?limit=100', agentId)),
         fetchJSON(scopedPath('/api/layer-counts', agentId)),
       ])),
       fetchResult('operations', Promise.all([
@@ -262,9 +265,11 @@ async function loadAllData() {
     ]);
     if (!coreResult.ok) throw coreResult.error;
     const [status, info, memories, layerCounts] = coreResult.data;
-    const [storage, metrics, codingCount, codingPayload] = opsResult.ok
+    const [storage, metrics, codingCountRaw, codingPayload] = opsResult.ok
       ? opsResult.data
       : [storageData, metricsData, codingCountData, {memories: codingMemories}];
+    // /api/coding-count emits {count}; the rest of the dashboard reads {total}.
+    const codingCount = codingCountRaw && {...codingCountRaw, total: codingCountRaw.total ?? codingCountRaw.count ?? 0};
     const [graphCounts, layerHealth, l6Schemas, l5, l6, l7] = graphResult.ok
       ? graphResult.data
       : [layerCountsData?.graph_counts, layerHealthData, l6SchemasData, l5Graph, null, null];
@@ -367,24 +372,28 @@ async function loadAllData() {
         'l7_intention': 'l7_intention',
       };
       return {
-        memory_id:        'graph_' + n.node_id,
+        memory_id:        'graph_' + (n.node_id || n.id),
         user_id:          'graph',
         agent_id:         n.agent_id || agentId || 'default',
         layer:            layerMap[rawLayer] || 'l5_knowledge',
-        content:          n.name,
+        content:          n.name || n.label || '',
         gmt_created:      ts,
         gmt_updated:      ts,
         score:            null,
         session_id:       'graph',
         confidence:       n.confidence || 0.95,
-        entity_type:      n.entity_type,
+        entity_type:      n.entity_type || n.type,
         mention_count:    n.mention_count || 1,
         aliases:          n.aliases || [],
         _source:          'kuzu_graph',
       };
     });
 
-    vdbMemories = memories.memories || [];
+    // /api/memories emits {memories: {profile, proactive, normal}}; flatten it to one list.
+    const memBuckets = memories.memories || {};
+    vdbMemories = Array.isArray(memBuckets) ? memBuckets : [
+      ...(memBuckets.profile || []), ...(memBuckets.proactive || []), ...(memBuckets.normal || []),
+    ];
     codingMemories = codingMems;
     graphNodes = graphMems;
     graphRelations = l5Graph?.relations || [];
@@ -805,7 +814,7 @@ async function performSearch() {
     };
     if (days) body.created_after = Date.now() / 1000 - days * 86400;
 
-    const resp = await fetchJSON('/api/search', {
+    const resp = await fetchJSON('/api/v1/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -836,6 +845,25 @@ async function performSearch() {
       `<div class="text-muted">Search failed: ${escapeHtml(err.message || String(err))}</div>`;
   }
 }
+
+// Explore wiring: search-as-you-type, mode tabs, and filter controls.
+document.getElementById('search-input').addEventListener('input', debounce(performSearch, 300));
+document.querySelectorAll('#page-explore .tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('#page-explore .tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    searchMode = tab.dataset.mode;
+    performSearch();
+  });
+});
+document.getElementById('clear-filters').addEventListener('click', () => {
+  document.getElementById('filter-layer').value = '';
+  document.getElementById('filter-time').value = '';
+  performSearch();
+});
+['filter-layer', 'filter-time', 'sort-by'].forEach(id => {
+  document.getElementById(id).addEventListener('change', performSearch);
+});
 
 function renderSearchResults() {
   document.getElementById('results-count').textContent = `RESULTS (${searchResults.length})`;
@@ -1460,7 +1488,7 @@ function renderSystem() {
     </div>
     <div class="kv-item">
       <div class="kv-label">Status</div>
-      <div class="kv-value">${infoData?.status || '—'}</div>
+      <div class="kv-value">${statusData?.status || '—'}</div>
     </div>
     <div class="kv-item">
       <div class="kv-label">Uptime</div>
@@ -1472,7 +1500,7 @@ function renderSystem() {
     </div>
     <div class="kv-item">
       <div class="kv-label">Platform</div>
-      <div class="kv-value">Windows (local)</div>
+      <div class="kv-value">${escapeHtml((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "unknown")} (browser)</div>
     </div>
     <div class="kv-item">
       <div class="kv-label">VDB Provider</div>
@@ -1486,7 +1514,7 @@ function renderSystem() {
       <div class="kv-label">Last Memory</div>
       <div class="kv-value">${lastMemory}</div>
     </div>
-    ${layerHealthData ? `
+    ${layerHealthData && layerHealthData.user_id ? `
     <div class="kv-item">
       <div class="kv-label">Digest namespace</div>
       <div class="kv-value font-mono text-sm">${escapeHtml(layerHealthData.user_id)} / ${escapeHtml(layerHealthData.agent_id)}</div>
@@ -1514,9 +1542,9 @@ function renderSystem() {
     ` : ''}
     ${l6SchemasData && l6SchemasData.schemas && l6SchemasData.schemas.length ? `
     <div class="kv-item" style="grid-column:1/-1">
-      <div class="kv-label">L6 schemas (sample ${l6SchemasData.count} / ${l6SchemasData.graph_l6_total ?? '—'} in graph)</div>
+      <div class="kv-label">L6 schemas (sample ${l6SchemasData.total ?? l6SchemasData.schemas.length} / ${l6SchemasData.graph_l6_total ?? '—'} in graph)</div>
       <ul class="text-sm" style="margin:8px 0 0;padding-left:18px;line-height:1.45">
-        ${l6SchemasData.schemas.map(s => `<li style="margin-bottom:8px"><span class="font-mono text-xs text-muted">${escapeHtml((s.node_id || '').slice(0,8))}</span> ${escapeHtml((s.name || '').slice(0,220))}${(s.name || '').length > 220 ? '…' : ''}</li>`).join('')}
+        ${l6SchemasData.schemas.map(s => { const id = s.memory_id || s.node_id || ''; const text = s.content || s.name || ''; return `<li style="margin-bottom:8px"><span class="font-mono text-xs text-muted">${escapeHtml(id.slice(0,8))}</span> ${escapeHtml(text.slice(0,220))}${text.length > 220 ? '…' : ''}</li>`; }).join('')}
       </ul>
     </div>
     ` : ''}
@@ -1558,7 +1586,7 @@ function renderSystem() {
     <div>
       <div class="flex justify-between mb-2">
         <div class="text-sm">Disk Usage</div>
-        <div class="text-sm font-mono">${storageData?.files ? Object.values(storageData.files).join(', ') : '—'}</div>
+        <div class="text-sm font-mono">${Array.isArray(storageData?.files) ? `${fmtCount(storageData.files.length)} files · ${(storageData.files.reduce((a, f) => a + (Number(f.size) || 0), 0) / 1048576).toFixed(2)} MB` : '—'}</div>
       </div>
     </div>
   `;
@@ -1574,6 +1602,8 @@ function renderSystem() {
   
   const state = c => c.status === 'ok'
     ? { dot: '', color: 'var(--green)', label: 'Healthy' }
+    : (c.name === 'LLM Service' && c.status === 'unused')
+      ? { dot: 'degraded', color: 'var(--muted)', label: 'Not used in this mode' }
     : (c.name === 'LLM Service' && String(c.status || '').match(/rate_limited|warning/i))
       ? { dot: 'degraded', color: 'var(--accent)', label: 'Limited' }
       : { dot: 'error', color: 'var(--red)', label: 'Error' };
@@ -1726,7 +1756,7 @@ function renderQuality() {
     const grade = glance.grade || '—';
     const health = glance.health_label || '';
     const tone = glance.tone || 'neutral';
-    const headline = glance.headline || '';
+    const headline = glance.headline || (root.available === false ? (root.reason || '') : '');
     const pulse = glance.pulse || [];
     const highlights = glance.highlights || [];
     const visit = glance.since_last_visit;

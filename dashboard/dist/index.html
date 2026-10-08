@@ -4,17 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HyAtlas Dashboard</title>
-<link rel="icon" type="image/png" sizes="32x32" href="/assets/hy-memory-favicon.png?v=4">
-<link rel="icon" type="image/png" sizes="16x16" href="/assets/hy-memory-favicon.png?v=4">
-<link rel="icon" type="image/png" sizes="48x48" href="/assets/hy-memory-favicon.png?v=4">
-<link rel="icon" type="image/x-icon" href="/assets/hy-memory-favicon.png?v=4">
-<link rel="apple-touch-icon" sizes="180x180" href="/assets/hy-memory-favicon.png?v=4">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/hy-memory-favicon.png?v=4">
+<link rel="icon" type="image/png" sizes="16x16" href="assets/hy-memory-favicon.png?v=4">
+<link rel="icon" type="image/png" sizes="48x48" href="assets/hy-memory-favicon.png?v=4">
+<link rel="icon" type="image/x-icon" href="assets/hy-memory-favicon.png?v=4">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/hy-memory-favicon.png?v=4">
 <meta name="theme-color" content="#050505">
-<meta property="og:image" content="/assets/hy-memory-favicon.png?v=4">
+<meta property="og:image" content="assets/hy-memory-favicon.png?v=4">
 <meta property="og:title" content="HyAtlas Dashboard">
 <meta property="og:description" content="AI memory atlas — zvec + Kuzu cognitive store">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -28,7 +27,7 @@
 <!-- Left Sidebar -->
 <div class="sidebar">
   <div class="sidebar-logo">
-    <img class="brand-mark" src="/assets/hy-memory-icon.png?v=2" alt="Hy-Memory">
+    <img class="brand-mark" src="assets/hy-memory-icon.png?v=2" alt="Hy-Memory">
     <div>
       <h1>HyAtlas</h1>
       <div class="tagline">AI MEMORY ATLAS</div>
@@ -473,7 +472,7 @@
   </div>
 </div>
 
-<script>window.REFRESH_S = __REFRESH_S__; window.USER_IDS = __USER_IDS__;</script>
+<script>window.REFRESH_S = window.REFRESH_S || 30; window.USER_IDS = window.USER_IDS || [];</script>
 <script src="app.js"></script>
 <script src="js/l5.js"></script>
 <script src="js/observatory-stub.js"></script>
