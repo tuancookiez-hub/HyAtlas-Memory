@@ -100,7 +100,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         self._agent_id: str = ""
         self._prefetch_lock = threading.Lock()
         self._prefetch_result: str = ""
-        self._version = "4.3.3"
+        self._version = "4.4.0"
         # Message count already synced per session, so _build_turn_text sends
         # only what the server has not seen. Bounded: a long-lived gateway
         # touches far more sessions than it can hold, and the cost of evicting

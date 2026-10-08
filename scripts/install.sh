@@ -26,7 +26,7 @@
 #      environment are saved to $HERMES_HOME/.env (default ~/.hermes/.env, 0600).
 #
 # Environment variables (all optional):
-#   HYATLAS_VERSION   — release tag to install (default: v4.3.3). A source build
+#   HYATLAS_VERSION   — release tag to install (default: v4.4.0). A source build
 #                       clones this tag. If the tag is missing, the default branch
 #                       is built with a loud warning, unless HYATLAS_VERSION is set
 #                       explicitly; then the install fails instead.
@@ -54,7 +54,7 @@
 set -euo pipefail
 
 REPO="tuancookiez-hub/HyAtlas-Memory"
-VERSION="${HYATLAS_VERSION:-v4.3.3}"
+VERSION="${HYATLAS_VERSION:-v4.4.0}"
 INSTALL_DIR="${HYATLAS_INSTALL_DIR:-}"
 MODEL_DIR="${HYATLAS_MODEL_DIR:-}"
 NO_MODEL="${HYATLAS_NO_MODEL:-0}"
@@ -551,6 +551,8 @@ verify_install() {
     HYATLAS_LLM_KEY="probe" \
         "$INSTALL_DIR/$BINARY_NAME" >/dev/null 2>&1 &
     pid=$!
+    PROBE_PID="$pid"
+    PROBE_DIR="$data_dir"
 
     # Wait up to 15s (model load can take a few seconds). If our server has exited,
     # stop waiting: whatever else answers on the port is not this install.
@@ -564,6 +566,7 @@ verify_install() {
                 kill "$pid" 2>/dev/null || true
                 wait "$pid" 2>/dev/null || true
                 rm -rf "$data_dir"
+                PROBE_PID=""; PROBE_DIR=""
                 if [ "$embed" = "bge" ]; then
                     VERIFY_STATUS="ok"
                 else
@@ -582,6 +585,7 @@ verify_install() {
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     rm -rf "$data_dir"
+    PROBE_PID=""; PROBE_DIR=""
     VERIFY_STATUS="failed"
     warn "NOT verified: the server did not answer /healthz on 127.0.0.1:$probe_port."
     warn "Start it by hand to see its error: $INSTALL_DIR/$BINARY_NAME"
@@ -687,10 +691,13 @@ ask_secret() {
         return 0
     fi
     printf '  %s (input hidden): ' "$prompt"
+    # Ctrl-C at this prompt must not leave the terminal with echo off.
+    trap 'stty echo 2>/dev/null; printf "\n"; exit 130' INT TERM
     if command -v stty >/dev/null 2>&1; then stty -echo 2>/dev/null || true; fi
     IFS= read -r val || val=""
     val="$(strip_cr "$val")"
     if command -v stty >/dev/null 2>&1; then stty echo 2>/dev/null || true; fi
+    trap 'exit 130' INT TERM
     printf '\n'
     [ -n "$val" ] && printf -v "$name" '%s' "$val"
     return 0
@@ -698,11 +705,18 @@ ask_secret() {
 
 # choose_mode — present the three tiers by what they actually do.
 choose_mode() {
-    [ -n "${HYATLAS_MODE:-}" ] && return 0
+    if [ -n "${HYATLAS_MODE:-}" ]; then
+        # The server refuses to start on an unknown mode, so an exported typo must
+        # not be written to the .env.
+        case "$HYATLAS_MODE" in
+            lite|pro|ultra) return 0 ;;
+            *) err "HYATLAS_MODE=$HYATLAS_MODE is not a mode (lite, pro or ultra)" ;;
+        esac
+    fi
     printf '\n'
     info "Extraction mode"
     printf '    1) lite   no LLM call; raw + local embeddings only.\n'
-    printf '              Conversation text never leaves the machine.\n'
+    printf '              No text is sent to an LLM.\n'
     printf '    2) pro    one extraction per write; reasons within that single turn.\n'
     printf '              Fills L1-L4 and L7.\n'
     printf '    3) ultra  pro, plus the slow path: periodic consolidation that reasons\n'
@@ -890,7 +904,12 @@ main() {
     if [ "$PLATFORM_OS" = "windows" ]; then
         TMP_DIR="$(cd "$TMP_DIR" && pwd -W 2>/dev/null || echo "$TMP_DIR")"
     fi
-    trap 'rm -rf "$TMP_DIR"' EXIT
+    # The verification probe runs in the background, where Ctrl-C does not reach
+    # it; stop it and remove its data dir on any exit.
+    PROBE_PID=""
+    PROBE_DIR=""
+    trap 'rm -rf "$TMP_DIR"; [ -n "$PROBE_PID" ] && kill "$PROBE_PID" 2>/dev/null; [ -n "$PROBE_DIR" ] && rm -rf "$PROBE_DIR"; true' EXIT
+    trap 'exit 130' INT TERM
 
     if ! try_download_binary; then
         check_build_prereqs

@@ -1,5 +1,5 @@
 name: hyatlas
-version: 4.3.3
+version: 4.4.0
 manifest_version: 2
 api_version: 1
 description: "HyAtlas v4 memory for Hermes: a 7-layer memory server (hyatlas-go, pure Go, runs on your machine) with four tools (hyatlas_status, hyatlas_search, hyatlas_recent, hyatlas_add), a Desktop pane and a web dashboard. Lite mode makes no LLM call; pro and ultra send memory text to the LLM endpoint you configure."
