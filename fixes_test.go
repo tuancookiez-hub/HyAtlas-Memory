@@ -238,7 +238,7 @@ func TestDeleteAllRejectsNonDeleteMethods(t *testing.T) {
 	h := srv.routes()
 	for _, method := range []string{"GET", "PUT", "PATCH"} {
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest(method, "/api/v1/delete_all?all=true", nil))
+		h.ServeHTTP(w, localRequest(method, "/api/v1/delete_all?all=true", nil))
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s delete_all: want 405, got %d", method, w.Code)
 		}
@@ -251,7 +251,7 @@ func TestDeleteAllRejectsNonDeleteMethods(t *testing.T) {
 	}
 	// DELETE with a real scope is allowed.
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("DELETE", "/api/v1/delete_all?user_id=u", nil))
+	h.ServeHTTP(w, localRequest("DELETE", "/api/v1/delete_all?user_id=u", nil))
 	if w.Code != http.StatusOK || srv.store.TotalMemories() != 0 {
 		t.Errorf("DELETE scoped: code %d, docs %d; want 200 and 0", w.Code, srv.store.TotalMemories())
 	}
@@ -270,7 +270,7 @@ func TestDeleteAllRequiresFilterOrAll(t *testing.T) {
 	// layer=* is "everything" and must not bypass the guard.
 	for _, target := range []string{"/api/v1/delete_all", "/api/v1/delete_all?layer=*"} {
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest("POST", target, nil))
+		h.ServeHTTP(w, localRequest("POST", target, nil))
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("POST %s: want 400, got %d", target, w.Code)
 		}
@@ -281,7 +281,7 @@ func TestDeleteAllRequiresFilterOrAll(t *testing.T) {
 
 	// all=true in the body is the explicit wipe.
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/delete_all", strings.NewReader(`{"all":true}`)))
+	h.ServeHTTP(w, localRequest("POST", "/api/v1/delete_all", strings.NewReader(`{"all":true}`)))
 	if w.Code != http.StatusOK {
 		t.Errorf("body all=true: want 200, got %d", w.Code)
 	}
@@ -296,7 +296,7 @@ func TestRequestBodyIsBounded(t *testing.T) {
 	srv := newTestServer(t, "test", "test")
 	big := `{"text":"` + strings.Repeat("a", maxRequestBody) + `"}`
 	w := httptest.NewRecorder()
-	srv.routes().ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/add", strings.NewReader(big)))
+	srv.routes().ServeHTTP(w, localRequest("POST", "/api/v1/add", strings.NewReader(big)))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("oversized add: want 400, got %d", w.Code)
 	}
@@ -397,9 +397,11 @@ func TestConcurrentAddsKeepIndexValid(t *testing.T) {
 	}
 }
 
-// A web page in the user's browser must not be able to drive the API: a
-// cross-origin request is refused, and a loopback-bound server refuses a
-// non-local Host (DNS rebinding). The plugin and curl send no Origin.
+// A web page in the user's browser must not be able to drive the API. The guard
+// applies on every bind address: a DNS-name Host is refused (DNS rebinding), a
+// cross-origin Origin is refused (including the opaque "null"), and a request the
+// browser marks Sec-Fetch-Site: cross-site is refused even with no Origin. The
+// plugin and curl send none of these headers, and a same-origin request is fine.
 func TestGuardLocalRefusesBrowserOriginsAndRebinding(t *testing.T) {
 	srv := newTestServer(t, "test", "test")
 	if err := srv.store.Add(memory.L2Raw, "doc-1", "text", map[string]string{
@@ -407,54 +409,90 @@ func TestGuardLocalRefusesBrowserOriginsAndRebinding(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	srv.bindHost = "127.0.0.1"
 	h := srv.routes()
 
-	do := func(host, origin string) int {
-		r := httptest.NewRequest("POST", "/api/v1/delete_all?all=true", nil)
+	send := func(method, path, host string, hdr map[string]string) int {
+		r := httptest.NewRequest(method, path, nil)
 		r.Host = host
-		if origin != "" {
-			r.Header.Set("Origin", origin)
+		for k, v := range hdr {
+			r.Header.Set(k, v)
 		}
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		return w.Code
 	}
-	for _, c := range []struct{ host, origin string }{
-		{"127.0.0.1:19528", "https://evil.example"},
-		{"127.0.0.1:19528", "null"},
-		{"evil.example:19528", ""},
-		{"evil.example", "http://evil.example"},
-	} {
-		if got := do(c.host, c.origin); got != http.StatusForbidden {
-			t.Errorf("host=%q origin=%q: want 403, got %d", c.host, c.origin, got)
+	const wipe = "/api/v1/delete_all?all=true"
+
+	// Each of these would be a destructive call if it got through.
+	refused := []struct {
+		name string
+		host string
+		hdr  map[string]string
+	}{
+		{"cross-origin page", "127.0.0.1:19528", map[string]string{"Origin": "https://evil.example"}},
+		{"Origin null", "127.0.0.1:19528", map[string]string{"Origin": "null"}},
+		{"DNS-name Host, no origin", "evil.example:19528", nil},
+		{"DNS-name Host, matching origin", "evil.example", map[string]string{"Origin": "http://evil.example"}},
+		{"DNS name on the 0.0.0.0 bind", "hyatlas.lan:19528", nil},
+		{"other LAN IP as origin", "192.168.1.5:19528", map[string]string{"Origin": "http://192.168.1.9:19528"}},
+		{"cross-site fetch metadata, no origin", "127.0.0.1:19528", map[string]string{"Sec-Fetch-Site": "cross-site"}},
+	}
+	for _, c := range refused {
+		if got := send("POST", wipe, c.host, c.hdr); got != http.StatusForbidden {
+			t.Errorf("%s (host=%q hdr=%v): want 403, got %d", c.name, c.host, c.hdr, got)
 		}
 	}
 	if srv.store.TotalMemories() != 1 {
 		t.Fatalf("a refused request deleted data: %d left", srv.store.TotalMemories())
 	}
 
-	// The server's own dashboard, and clients that send no Origin, still work.
-	for _, c := range []struct{ host, origin string }{
-		{"localhost:19528", "http://localhost:19528"},
-		{"[::1]:19528", ""},
-	} {
-		r := httptest.NewRequest("GET", "/api/v1/status", nil)
-		r.Host = c.host
-		if c.origin != "" {
-			r.Header.Set("Origin", c.origin)
-		}
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, r)
-		if w.Code != http.StatusOK {
-			t.Errorf("host=%q origin=%q: want 200, got %d", c.host, c.origin, w.Code)
+	// Allowed without any allowlist: loopback names, IP literals, same-origin,
+	// the server's own pages, and clients that send no Origin.
+	allowed := []struct {
+		name   string
+		method string
+		path   string
+		host   string
+		hdr    map[string]string
+	}{
+		{"localhost with its origin", "GET", "/api/v1/status", "localhost:19528",
+			map[string]string{"Origin": "http://localhost:19528"}},
+		{"bracketed IPv6, no origin", "GET", "/api/v1/status", "[::1]:19528", nil},
+		{"trailing-dot localhost", "GET", "/api/v1/status", "localhost.:19528",
+			map[string]string{"Origin": "http://localhost.:19528"}},
+		{"same-origin POST from a LAN IP", "POST", "/api/v1/list", "192.168.1.5:19528",
+			map[string]string{"Origin": "http://192.168.1.5:19528"}},
+		{"same-origin fetch metadata", "POST", "/api/v1/list", "localhost:19528",
+			map[string]string{"Sec-Fetch-Site": "same-origin", "Origin": "http://localhost:19528"}},
+		{"LAN IP, no origin (0.0.0.0 bind)", "GET", "/api/v1/status", "192.168.1.5:19528", nil},
+	}
+	for _, c := range allowed {
+		if got := send(c.method, c.path, c.host, c.hdr); got != http.StatusOK {
+			t.Errorf("%s (host=%q): want 200, got %d", c.name, c.host, got)
 		}
 	}
 
-	// Bound to all interfaces (Docker), Host is not checked but Origin still is.
-	srv.bindHost = "0.0.0.0"
+	// HYATLAS_ALLOWED_HOSTS names extra hostnames. Case and a trailing dot do not
+	// matter, and the listed name is accepted as Host and as Origin host. An
+	// unlisted name is still refused.
+	srv.allowedHosts = parseHostList(" Hyatlas.LAN , other.example. ")
 	h = srv.routes()
-	if got := do("192.168.1.5:19528", ""); got != http.StatusOK {
-		t.Errorf("0.0.0.0 bind, LAN host, no origin: want 200, got %d", got)
+	for _, c := range []struct {
+		name string
+		host string
+		hdr  map[string]string
+		want int
+	}{
+		{"allowlisted Host", "hyatlas.lan:19528", nil, http.StatusOK},
+		{"allowlisted Host, trailing dot and case", "OTHER.example.:19528", nil, http.StatusOK},
+		{"allowlisted origin on a loopback Host", "localhost:19528",
+			map[string]string{"Origin": "http://other.example"}, http.StatusOK},
+		{"unlisted origin on an allowlisted Host", "hyatlas.lan:19528",
+			map[string]string{"Origin": "http://notlisted.example"}, http.StatusForbidden},
+		{"unlisted Host", "notlisted.example:19528", nil, http.StatusForbidden},
+	} {
+		if got := send("GET", "/api/v1/status", c.host, c.hdr); got != c.want {
+			t.Errorf("%s: host=%q hdr=%v: want %d, got %d", c.name, c.host, c.hdr, c.want, got)
+		}
 	}
 }

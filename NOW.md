@@ -7,6 +7,12 @@
 - Plugin: `hyatlas` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hyatlas\` + Hermes Desktop pane
 - Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`)
 
+## Unreleased (branch claude/busy-faraday-3tvefr)
+- **Plugin start/stop are truthful:** `hermes hyatlas start` does not spawn over a server that already answers (reports `already_running` and the pid when known); the pidfile is written only once the child is seen alive; `stop` returns `ok:false` for a server it did not start.
+- **Installer:** a failed BGE model download no longer aborts the install; release binaries (embedded) skip the download entirely.
+- **Plugin:** `on_memory_write` is documented as a raw (L2) write, not an L1 mirror; the `llm_key` settings link is removed.
+- See CHANGELOG.md `[Unreleased]` for the full list.
+
 ## Done (v4.3.x — slow path)
 - **Consolidation pass detached from the request (v4.3.2):** `POST /api/v1/digest` runs on its own context, still bounded by `consolidateTimeout` (10 min), so a client that stops waiting no longer cancels a pass. Passes are single-flight.
 - **LLM client has no global timeout (v4.3.3):** a hidden 180s cap on the shared HTTP client was overriding the 600s consolidation bound. Each call path now sets its own deadline on the context.

@@ -24,10 +24,32 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/tuancookiez-hub/hyatlas-v4/graph"
 	"github.com/tuancookiez-hub/hyatlas-v4/memory"
 )
+
+// graphOwner reads the owner filter the graph endpoints accept as user_id and
+// agent_id. An empty value, and "all" (which the dashboard sends for every
+// agent), both mean no filter.
+func graphOwner(userID, agentID string) (string, string) {
+	return ownerFilter(userID), ownerFilter(agentID)
+}
+
+func ownerFilter(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "all" {
+		return ""
+	}
+	return v
+}
+
+// graphScope is the graph.Scope for an owner filter read by graphOwner.
+func graphScope(uid, aid string) graph.Scope {
+	return graph.Scope{UserID: uid, AgentID: aid}
+}
 
 // gmtCreated converts an RFC3339 ts string to unix seconds (dashboard expects a number).
 func gmtCreated(ts string) int64 {
@@ -194,14 +216,15 @@ func (s *Server) handleDashL5Graph(w http.ResponseWriter, r *http.Request) {
 	layer := r.URL.Query().Get("layer")
 	n := atoi(r.URL.Query().Get("n"), 500)
 	wantRels := r.URL.Query().Get("rels") != "false"
+	uid, aid := graphOwner(r.URL.Query().Get("user_id"), r.URL.Query().Get("agent_id"))
 
 	if layer == "" || layer == "l5_knowledge" {
-		nodes, rels := s.store.Graph().Snapshot(n)
+		nodes, rels := s.store.Graph().SnapshotScoped(graphScope(uid, aid), n)
 		writeJSON(w, 200, map[string]any{"nodes": nodes, "relations": rels, "total": len(nodes)})
 		return
 	}
 	// L6/L7 views render their layer items as pseudo-nodes (real content, real layer)
-	items, _ := s.store.List(memory.Layer(layer), "", "", n, 0, false)
+	items, _ := s.store.List(memory.Layer(layer), uid, aid, n, 0, false)
 	type node struct {
 		ID    string `json:"id"`
 		Label string `json:"label"`

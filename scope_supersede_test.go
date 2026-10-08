@@ -416,8 +416,11 @@ func TestMergeSupersedesInsteadOfDeleting(t *testing.T) {
 }
 
 // The next pass reasons only over live facts: superseded ones are not in its ask().
+// The owner must have changed since the previous pass, or that pass is skipped,
+// so a new live fact is added first.
 func TestSupersededFactsAreNotFedToNextPass(t *testing.T) {
 	c := mergeAndDrop(t)
+	fresh := seedSourced(t, c.srv.store, "u", "a", "raw-new", "a new live fact")
 
 	var log promptLog
 	mock := scopeMock(t, &log, func(string) (int, string) {
@@ -437,9 +440,9 @@ func TestSupersededFactsAreNotFedToNextPass(t *testing.T) {
 	for _, id := range factIDs(prompts[0]) {
 		got[id] = true
 	}
-	want := map[string]bool{c.merged: true, c.e: true}
-	if len(got) != len(want) || !got[c.merged] || !got[c.e] {
-		t.Errorf("next pass saw %v, want exactly the live merged and untouched facts", got)
+	want := map[string]bool{c.merged: true, c.e: true, fresh: true}
+	if len(got) != len(want) || !got[c.merged] || !got[c.e] || !got[fresh] {
+		t.Errorf("next pass saw %v, want exactly the live merged, untouched and new facts", got)
 	}
 }
 
@@ -640,23 +643,31 @@ func TestMergedFactKeepsCorroboration(t *testing.T) {
 		})
 	})
 	defer mock2.Close()
+	// The owner must have changed since the first pass, or that pass's watermark
+	// skips it. A new fact is that change; it is not part of the evidence.
+	seedSourced(t, srv.store, "u", "a", "raw-3", "fact three")
 	c2 := NewConsolidator(srv.store, NewLLMClient(mock2.URL, "k", "m"), time.Hour, 0, 200)
 	rep, err := c2.Once(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Edges != 2 {
-		t.Fatalf("Edges = %d, want 2: the merged fact spans raw-1 and raw-2", rep.Edges)
+	if rep.Edges != 1 {
+		t.Fatalf("Edges = %d, want 1: one relation, corroborated by the merged fact's raw-1 and raw-2", rep.Edges)
 	}
 	// The edge must cite L2 conversations. Citing the merged fact's own ID would
-	// leave decayRaw with nothing to protect.
+	// leave decayRaw with nothing to protect. Both conversations must be kept.
 	_, edges := srv.store.Graph().Snapshot(0)
-	if len(edges) == 0 {
-		t.Fatal("no edge written")
+	if len(edges) != 1 {
+		t.Fatalf("edges = %d, want 1", len(edges))
 	}
-	for _, e := range edges {
-		if e.Source != "raw-1" && e.Source != "raw-2" {
-			t.Errorf("edge cites %q, want an L2 conversation (raw-1 or raw-2)", e.Source)
+	got := map[string]bool{}
+	for _, src := range edges[0].Sources {
+		if src != "raw-1" && src != "raw-2" {
+			t.Errorf("edge cites %q, want an L2 conversation (raw-1 or raw-2)", src)
 		}
+		got[src] = true
+	}
+	if !got["raw-1"] || !got["raw-2"] {
+		t.Errorf("edge sources = %v, want both raw-1 and raw-2", edges[0].Sources)
 	}
 }

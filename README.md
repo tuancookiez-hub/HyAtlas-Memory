@@ -2,7 +2,7 @@
 
 # HyAtlas Memory — Pure-Go Memory Core
 
-> **One binary. Seven layers. Three extraction modes. Cross-platform.** Single 17.6 MB Go binary, no Python at runtime, in-process BGE embeddings, 7-layer memory model fully active. **Linux ✅ · macOS ✅ · Windows ✅.**
+> **One binary. Seven layers. Three extraction modes. Cross-platform.** One Go binary (the embedded release build is ~160 MB because it carries the BGE model), no Python at runtime, in-process BGE embeddings, 7-layer memory model fully active. **Linux ✅ · macOS ✅ · Windows ✅.**
 
 HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It replaces the Python floor (venv, zvec, Kuzu, FastAPI, HTTP embed subprocess) with a single binary: an embedded Chromem vector store, in-process BGE-small embeddings via onnxruntime-go, and LLM fact extraction, where `HYATLAS_MODE` sets how much the server reasons and `HYATLAS_SYNC_EXTRACT` sets whether a write waits for extraction. The 7-layer memory model (Profile · Raw · Fact · Summary · Knowledge · Schema · Intention) is fully active — including L4 Summary extraction which was dormant in v3.5.
 
@@ -21,9 +21,13 @@ curl -fsSL https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main
 ```
 
 The script downloads a prebuilt release binary for your platform (or builds
-from source if none exists yet), fetches the BGE-small embedding model (~133 MB),
-installs to a directory on your `PATH`, and verifies the install by starting the
-server and probing `/healthz`.
+from source if none exists yet), installs to a directory on your `PATH`, and
+verifies the install by starting the server and probing `/healthz`. Release
+binaries are embedded builds and already carry the BGE-small embedding model, so
+nothing else is downloaded for them. A source build fetches the model (~133 MB)
+and onnxruntime. If that fetch fails (for example HuggingFace is blocked), the
+binary is still installed, the manual steps are printed, and the script exits
+non-zero at the end.
 
 Useful env vars:
 
@@ -62,8 +66,8 @@ Useful env vars:
 ```bash
 git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 cd HyAtlas-Memory
-go build -o hyatlas-go .                     # plain build (~17 MB, reads ./models/ at runtime)
-go build -tags embedded -o hyatlas-go .       # embedded build (one binary, model bundled in)
+go build -o hyatlas-go .                     # plain build (small; reads the model from a models/ folder at runtime)
+go build -tags embedded -o hyatlas-go .       # embedded build (~160 MB, model and onnxruntime bundled in)
 ```
 
 > **For the embedded build to work**, drop the platform-matching onnxruntime library into `./models/` before compiling (see [Model assets](#model-assets) below). The `go:embed` directives are platform-aware: Windows expects `models/onnxruntime.dll`, Linux expects `models/libonnxruntime.so`, macOS expects `models/libonnxruntime.dylib`.
@@ -74,8 +78,8 @@ go build -tags embedded -o hyatlas-go .       # embedded build (one binary, mode
 <summary><strong>Step 3 — Run</strong></summary>
 
 ```bash
-# Local BGE embeddings (the "no Python" path) are the default. Set these if the
-# model is not in ./models next to the binary:
+# Local BGE embeddings (the "no Python" path) are the default. Set HYATLAS_MODEL_DIR
+# only if the model is not found by the search order in "Model assets" below:
 export HYATLAS_EMBED_BASE=bge
 export HYATLAS_MODEL_DIR=/path/to/models
 
@@ -93,7 +97,9 @@ The server listens on `127.0.0.1:19528` (loopback only — no external surface).
 It has no authentication, so keep it there. Requests from a web page (any
 non-local `Origin`) and, on a loopback bind, requests naming a non-local `Host`
 (DNS rebinding) are refused with 403, so a page open in your browser cannot read
-or wipe your memories.
+or wipe your memories. By default only `localhost` and IP literals are accepted
+in `Host` and `Origin`. To accept extra hostnames, for example behind a reverse
+proxy, set `HYATLAS_ALLOWED_HOSTS` to a comma-separated list.
 
 Each write returns an `extraction_status`: `pending` (extraction runs in the
 background), `done` or `failed` (the write waited for extraction), `unconfigured`
@@ -161,9 +167,16 @@ Ultra-only tuning:
 | `HYATLAS_RAW_RETENTION` | *(unset = never delete)* | age after which uncited L2 Raw is decayed |
 
 `HYATLAS_CONSOLIDATE_EVERY` accepts a Go duration (`6h`, `30m`) or a number of
-seconds. `HYATLAS_RAW_RETENTION` is opt-in because it deletes. Raw memories cited by a
-live L5 graph edge are always protected, so decay cannot leave the knowledge
-graph pointing at a memory that no longer exists.
+seconds. `HYATLAS_RAW_RETENTION` is opt-in because it deletes. Raw rows that still back a
+live fact or a live graph edge are kept, not only the ones an edge cites directly,
+so decay cannot leave a fact or the knowledge graph pointing at evidence that no
+longer exists. A long-lived user's raw history therefore does not age out while it
+is still the evidence for something the server remembers; raw text is the
+evidence, so this is intended.
+
+Facts that the ultra pass merges or drops are superseded, not deleted: they keep
+`invalid_at` and `superseded_by`, and `GET /api/v1/list` returns them only with
+`include_superseded=true`.
 
 The `7 / 7` above is steady state, not the first minute. A fresh ultra install
 sits at 5/7 until the slow path first runs, which is up to `6h` away by default.
@@ -178,7 +191,9 @@ The response reports exactly what the pass changed (`facts_in`, `merged`,
 `edges`, `dropped`, `schemas`, `arc`, plus `pruned_raw` and `protected_raw`), and
 `/api/v1/status` carries `consolidations` (the number of completed passes) and
 `last_consolidated` (the last report), so "the slow path ran" is checkable rather
-than something you have to take on faith. A pass that finds
+than something you have to take on faith. Both counters reset when the server
+restarts, so they count passes since the current process started. `consolidations`
+is `-1` when the mode has no slow path (`lite` and `pro`). A pass that finds
 nothing to reconcile still reports as run with zero changes, which is what
 distinguishes it from a pass that never happened.
 
@@ -210,11 +225,12 @@ the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
 |---|---|---|
 | `HYATLAS_GO_PORT` | `19528` | HTTP listen port |
 | `HYATLAS_GO_HOST` | `127.0.0.1` | Bind address (loopback only by default) |
+| `HYATLAS_ALLOWED_HOSTS` | *(empty)* | Comma-separated extra hostnames accepted in the `Host` and `Origin` headers. By default only `localhost` and IP literals pass, which blocks DNS rebinding. Add a name here only if you reach the server through it, such as a reverse proxy. |
 | `HYATLAS_GO_DATA` | `./data` | Where chromem collections + graph.json live |
 | `HYATLAS_EMBED_BASE` | `bge` | `bge` = local in-process BGE embedder (no network). Set to a URL for an OpenAI-compatible embedder, or `local` for a deterministic stub. |
 | `HYATLAS_EMBED_MODEL` | `text-embedding-3-small` | Model name sent to an OpenAI-compatible embedder. Used only when `HYATLAS_EMBED_BASE` is a URL. |
 | `HYATLAS_EMBED_KEY` | (empty) | Bearer token for that embedder. Used only when `HYATLAS_EMBED_BASE` is a URL. |
-| `HYATLAS_MODEL_DIR` | `./models` | Where the BGE model lives |
+| `HYATLAS_MODEL_DIR` | *(unset: search order below)* | Where the BGE model lives. When set, it is the only place searched. When unset, the server looks in `<cwd>/models`, then `<exe dir>/models`, then the installer's default `~/.hyatlas/models` (Windows `%LOCALAPPDATA%\hyatlas\models`). |
 | `HYATLAS_MODE` | `ultra` | `lite` \| `pro` \| `ultra`. An unrecognised value is fatal at startup. See the mode table above. |
 | `HYATLAS_SYNC_EXTRACT` | *(follows the mode)* | `on` \| `off`. Whether a write waits for extraction. An unrecognised value is fatal at startup. |
 | `HYATLAS_CONSOLIDATE_EVERY` | `6h` | Ultra only: interval between slow-path passes. Must be positive in ultra (zero or negative is fatal at startup); use `pro` to run without the pass. |
@@ -261,7 +277,7 @@ scripts\hyatlas-v4-start.bat
 |---|---|---|
 | Retrieval quality | 0.33 | **0.80** |
 | Processes | 5+ (venv, zvec, Kuzu, FastAPI, embed) | **1** |
-| Binary size | ~1 GB (Python venv) | **17.6 MB** |
+| Binary size | ~1 GB (Python venv) | **~160 MB** embedded release (model included); a plain build is small and needs a model folder |
 | Ports | 3 (19527, 19526, 19525) | **1** (19528) |
 | L4 Summary | Dormant | **Active** |
 | Linux/macOS support | Same (Python) | **Yes** (Go binary, no Python) |
@@ -271,7 +287,15 @@ scripts\hyatlas-v4-start.bat
 
 ## Model assets
 
-The BGE-small model + the platform-matching onnxruntime shared library live in `models/` (gitignored). For a plain build, the server reads them at runtime. For an embedded build, `go:embed` bundles them into the binary at compile time.
+The BGE-small model + the platform-matching onnxruntime shared library live in `models/` (gitignored). For a plain build, the server reads them at runtime. For an embedded build, `go:embed` bundles them into the binary at compile time, so the release binary (built with `-tags embedded`) needs no model folder at all.
+
+**Where a plain build looks** (when `HYATLAS_MODEL_DIR` is unset), in order:
+
+1. `<cwd>/models` (a checkout run from the repo root)
+2. `<exe dir>/models` (the folder the binary sits in)
+3. the installer's default: `~/.hyatlas/models`, or `%LOCALAPPDATA%\hyatlas\models` on Windows
+
+If `HYATLAS_MODEL_DIR` is set, that directory is the only one searched. A source-built binary without a model in one of these places refuses to start and names every directory it checked.
 
 **Directory layout (per platform):**
 
@@ -298,7 +322,7 @@ The BGE-small model + the platform-matching onnxruntime shared library live in `
 
 ## What changed since v3.5.0
 
-- **Pure Go rewrite** — single 17.6 MB binary, no Python venv, no zvec, no Kuzu, no FastAPI
+- **Pure Go rewrite** — single binary (~160 MB embedded release), no Python venv, no zvec, no Kuzu, no FastAPI
 - **In-process BGE embeddings** via onnxruntime-go (cgo) — no HTTP embed subprocess
 - **L4 Summary enabled** — was dormant in v3.5
 - **L5 bitemporal graph (v4.1.0+)** — every fact carries a citation back to its source L2 memory plus a bitemporal timestamp; the new `/api/v1/graph-as-of?ts=<unix>` endpoint lets you rewind the graph to any past moment.
@@ -315,14 +339,14 @@ Base URL: `http://127.0.0.1:19528`
 | `GET` | `/api/v1/metrics` | Total memories, per-layer counts, graph node and edge counts |
 | `POST` | `/api/v1/add` | Add memory (text + user_id + agent_id + session_id). Returns `memory_id` and `extraction_status` |
 | `POST` | `/api/v1/search` | Vector search — returns `memories` split into profile / proactive / normal channels |
-| `GET` | `/api/v1/list` | List live memories, filterable by `user_id`, `agent_id`, `layer`; paged with `limit` / `offset`. `include_superseded=true` also returns facts the ultra pass merged or dropped, with `invalid_at` and `superseded_by` |
+| `GET` | `/api/v1/list` | List live memories, filterable by `user_id`, `agent_id`, `layer`; paged with `limit` / `offset`. Filters are applied the same way on `/api/v1/edges` and `/api/v1/graph`. `include_superseded=true` also returns facts the ultra pass merged or dropped, with `invalid_at` and `superseded_by` |
 | `POST` | `/api/v1/list` | Same as GET but body for clients that send POST |
 | `POST` or `DELETE` | `/api/v1/delete_all` | Bulk delete. Requires at least one of `id`, `layer`, `user_id`, `agent_id`, or `all=true`; an unscoped call is refused |
 | `POST` | `/api/v1/reprocess` | Re-run extraction on unprocessed raw entries (or on `ids`). Reports nothing to do in `lite` |
 | `GET` | `/api/v1/digest` | Report on the slow path: completed passes and the last report |
 | `POST` | `/api/v1/digest` | Run one slow-path pass now (ultra only): merges, L5 edges, L6 schemas, arc |
-| `POST` | `/api/v1/graph` | Neighbours of one L5 node, body `{"node": "<id>"}`, with node and edge counts |
-| `GET` | `/api/v1/edges` | L5 knowledge edges plus semantic edges (`n`, `k_semantic`) |
+| `POST` | `/api/v1/graph` | Neighbours of one L5 node, body `{"node": "<id>"}`, with node and edge counts. Accepts `user_id` and `agent_id`; edges are per owner, with several sources per edge |
+| `GET` | `/api/v1/edges` | L5 knowledge edges plus semantic edges (`n`, `k_semantic`). Accepts `user_id` and `agent_id` filters. Edges are per owner, and one edge can have several source memories |
 | `GET` | `/api/v1/learning/graph` | Starmap feed for the Mind Palace view (`n`, `k_semantic`) |
 | `GET` | `/api/v1/graph-as-of?ts=<unix>&n=500` | Bitemporal query — returns L5 nodes and relations as they were at unix time `ts` (world validity + recording axes) |
 

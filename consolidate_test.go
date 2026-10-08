@@ -194,7 +194,7 @@ func TestDecayRawProtectsCitedMemories(t *testing.T) {
 		}
 	}
 	// A live edge citing one of them.
-	if err := srv.store.Graph().AddEdgeWithSource("skyhook", "listens_on", "4471", cited); err != nil {
+	if err := srv.store.Graph().AddEdgeWithSource("", "", "skyhook", "listens_on", "4471", cited); err != nil {
 		t.Fatalf("edge: %v", err)
 	}
 
@@ -252,7 +252,7 @@ func TestConsolidateWritesSchemasAndArc(t *testing.T) {
 	arc := "over three weeks the work moved from scaffolding to release hardening"
 	calls := 0
 	mock := mockConsolidationServer(t, &calls, Consolidation{
-		Schemas: []Schema{{Pattern: "ports are always declared explicitly", Context: "service config"}},
+		Schemas: []ConsolidatedSchema{{Pattern: "ports are always declared explicitly", Context: "service config"}},
 		Arc:     &arc,
 	})
 	defer mock.Close()
@@ -703,8 +703,9 @@ func TestConsolidateSynthesisesCorroboratedEdges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Edges != 2 {
-		t.Errorf("Edges = %d, want 2 (one per evidence citation)", rep.Edges)
+	// Both citations belong to one relation, so it is one edge carrying two sources.
+	if rep.Edges != 1 {
+		t.Errorf("Edges = %d, want 1 (one relation, two cited conversations)", rep.Edges)
 	}
 	_, edges := srv.store.Graph().Snapshot(0)
 	if len(edges) == 0 {
@@ -729,7 +730,7 @@ func TestConsolidateCorroborationCountsTurnsNotFacts(t *testing.T) {
 		wantEdges int
 	}{
 		{"same source turn is one observation", []string{"turn-a", "turn-a"}, 0},
-		{"two source turns corroborate", []string{"turn-a", "turn-b"}, 2},
+		{"two source turns corroborate", []string{"turn-a", "turn-b"}, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -868,7 +869,7 @@ func TestSlowPathOwnsL5AndL6(t *testing.T) {
 	// The slow path does write both.
 	calls := 0
 	mock := mockConsolidationServer(t, &calls, Consolidation{
-		Schemas: []Schema{{Pattern: "generalised", Context: "ctx"}},
+		Schemas: []ConsolidatedSchema{{Pattern: "generalised", Context: "ctx"}},
 		Knowledge: []CitedRelation{{From: "p", Relation: "q", To: "r",
 			Evidence: []string{"will-be-ignored"}}},
 	})

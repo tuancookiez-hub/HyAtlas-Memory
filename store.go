@@ -47,6 +47,15 @@ type MemoryStore struct {
 
 	mu    sync.RWMutex
 	index map[string]DocIndex
+	// superseded is the set of index ids that are superseded, with their layer, and
+	// hidden counts those per layer. Search reads hidden to decide how far to
+	// over-fetch, and checks membership in superseded, so neither scans the index.
+	// Every index write goes through putLocked or forgetLocked to keep them in step.
+	superseded map[string]memory.Layer
+	hidden     map[memory.Layer]int
+	// supMu serializes Supersede passes. It is separate from mu so Adds and
+	// Searches do not wait on the chromem rewrites a pass makes.
+	supMu sync.Mutex
 	// persisted index path (same dir as the chromem DB)
 	indexPath string
 	// usage counters — atomic so reads from /api/v1/status never block writes.
@@ -82,6 +91,7 @@ func NewMemoryStore(ctx context.Context, dir string, embed Embedder, graphPath s
 	}
 	s := &MemoryStore{db: db, g: g, embed: embed, ctx: ctx,
 		cols: map[memory.Layer]*chromem.Collection{}, index: map[string]DocIndex{},
+		superseded: map[string]memory.Layer{}, hidden: map[memory.Layer]int{},
 		indexPath:  filepath.Join(dir, "doc_index.json"),
 		countsPath: filepath.Join(dir, "usage.json")}
 	// load persisted counters before rebuildIndex so writes/searches survive restart.
@@ -127,6 +137,7 @@ func (s *MemoryStore) loadIndex() bool {
 		return false
 	}
 	s.index = idx
+	s.rebuildSupersededLocked()
 	return true
 }
 
@@ -144,7 +155,7 @@ func (s *MemoryStore) Add(layer memory.Layer, id, content string, meta map[strin
 		return err
 	}
 	s.mu.Lock()
-	s.index[id] = docIndexFrom(id, string(layer), content, meta)
+	s.putLocked(docIndexFrom(id, string(layer), content, meta))
 	s.mu.Unlock()
 	s.writes.Add(1)
 	s.persistUsageAsync()
@@ -178,25 +189,16 @@ func (s *MemoryStore) Search(query string, limit int, layer memory.Layer, userID
 		where = nil
 	}
 
-	// Superseded rows still sit in chromem, so they can occupy nearest-neighbour
-	// slots. Snapshot them, and ask for as many extra neighbours as the layer has
-	// superseded rows, so the filtered result still fills the limit.
-	s.mu.RLock()
-	dead := map[string]bool{}
-	hidden := map[memory.Layer]int{}
-	for id, d := range s.index {
-		if isSuperseded(d) {
-			dead[id] = true
-			hidden[memory.Layer(d.Layer)]++
-		}
-	}
-	s.mu.RUnlock()
-
+	// Superseded rows still sit in chromem, so they can take nearest-neighbour
+	// slots. The store keeps a per-layer count of them, so each layer asks chromem
+	// for that many extra neighbours and the live results still fill the limit.
 	var hits []SearchHit
 	for _, l := range layers {
 		col := s.cols[l]
 		n := col.Count()
-		k := limit + hidden[l] // note: chromem requires k <= n; guard below
+		s.mu.RLock()
+		k := limit + s.hidden[l] // note: chromem requires k <= n; guard below
+		s.mu.RUnlock()
 		if k > n {
 			k = n
 		}
@@ -207,13 +209,15 @@ func (s *MemoryStore) Search(query string, limit int, layer memory.Layer, userID
 		if err != nil {
 			return nil, err
 		}
+		s.mu.RLock()
 		for _, r := range res {
-			if dead[r.ID] {
+			if _, dead := s.superseded[r.ID]; dead {
 				continue
 			}
 			hits = append(hits, SearchHit{ID: r.ID, Content: r.Content,
 				Score: r.Similarity, Layer: memory.Layer(l), Meta: r.Metadata})
 		}
+		s.mu.RUnlock()
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
 	if len(hits) > limit {
@@ -316,7 +320,7 @@ func (s *MemoryStore) Delete(ids []string, layer memory.Layer, userID, agentID s
 		if col, ok := s.cols[memory.Layer(d.Layer)]; ok {
 			_ = col.Delete(s.ctx, nil, nil, id)
 		}
-		delete(s.index, id)
+		s.forgetLocked(id)
 		deleted++
 	}
 	return deleted, s.persistIndexLocked()
@@ -359,42 +363,83 @@ func (s *MemoryStore) TotalMemories() int {
 // Supersede marks live docs as replaced by `by`, or as dropped when by is empty,
 // instead of deleting them. The row keeps its content, vector and provenance, so
 // history stays reachable through ListAll. Returns how many docs were marked.
+//
+// The chromem rewrites are disk writes, so they run without s.mu. Adds and
+// Searches keep moving while a pass is in flight; only the index update takes the
+// write lock.
 func (s *MemoryStore) Supersede(ids []string, by string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.supMu.Lock()
+	defer s.supMu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339)
-	marked := 0
-	var firstErr error
+
+	// 1. Snapshot the live rows and build their new metadata under the read lock.
+	// Each copy gets its own meta map, so nothing shared with the index is written.
+	s.mu.RLock()
+	var todo []DocIndex
+	seen := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		d, ok := s.index[id]
-		if !ok || isSuperseded(d) {
+		if !ok || isSuperseded(d) || seen[id] {
 			continue
 		}
-		meta := make(map[string]string, len(d.Meta)+2)
+		seen[id] = true
+		meta := make(map[string]string, len(d.Meta)+3)
 		for k, v := range d.Meta {
 			meta[k] = v
 		}
 		meta["invalid_at"] = now
 		meta["superseded_by"] = by
 		meta["layer"] = d.Layer
-		if col, ok := s.cols[memory.Layer(d.Layer)]; ok {
-			// chromem has no metadata update, but AddDocument on an existing ID
-			// overwrites the row. Passing the stored vector back means no embedding
-			// call is made.
-			if old, err := col.GetByID(s.ctx, id); err != nil {
-				if firstErr == nil {
-					firstErr = err
-				}
-			} else if err := col.AddDocument(s.ctx, chromem.Document{
-				ID: id, Content: old.Content, Embedding: old.Embedding, Metadata: meta,
-			}); err != nil && firstErr == nil {
+		d.Meta = meta
+		todo = append(todo, d)
+	}
+	s.mu.RUnlock()
+
+	// 2. Rewrite the chromem rows without s.mu.
+	var firstErr error
+	for _, d := range todo {
+		col, ok := s.cols[memory.Layer(d.Layer)]
+		if !ok {
+			continue
+		}
+		// chromem has no metadata update, but AddDocument on an existing ID
+		// overwrites the row. Passing the stored vector back means no embedding
+		// call is made.
+		old, err := col.GetByID(s.ctx, d.ID)
+		if err != nil {
+			if firstErr == nil {
 				firstErr = err
 			}
+			continue
 		}
-		// The exact index is what live reads filter on, so it is updated even when
-		// the chromem row could not be rewritten.
-		d.Meta = meta
-		s.index[id] = d
+		if err := col.AddDocument(s.ctx, chromem.Document{
+			ID: d.ID, Content: old.Content, Embedding: old.Embedding, Metadata: d.Meta,
+		}); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	// 3. Update the exact index under the write lock. Live reads filter on it, so
+	// it is updated even when a chromem row could not be rewritten.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	marked := 0
+	for _, d := range todo {
+		cur, ok := s.index[d.ID]
+		if !ok {
+			// Deleted while the rewrite was in flight. The rewrite may have
+			// re-created the chromem row, so remove it again; otherwise it would
+			// come back on the next rebuild.
+			if col, ok := s.cols[memory.Layer(d.Layer)]; ok {
+				_ = col.Delete(s.ctx, nil, nil, d.ID)
+			}
+			continue
+		}
+		if isSuperseded(cur) {
+			continue
+		}
+		cur.Meta = d.Meta
+		s.putLocked(cur)
 		marked++
 	}
 	if err := s.persistIndexLocked(); err != nil && firstErr == nil {
@@ -403,13 +448,38 @@ func (s *MemoryStore) Supersede(ids []string, by string) (int, error) {
 	return marked, firstErr
 }
 
+// MirrorsOf returns the live ids of the rows in layer that carry the same
+// source_id and the same content. It finds the L1 Profile rows that mirror an L3
+// preference: promoteExtraction writes both from one fact, so they share both.
+// Superseded rows are excluded. An empty sourceID matches nothing, because rows
+// without provenance do not show a mirror. The ids are sorted.
+func (s *MemoryStore) MirrorsOf(layer memory.Layer, sourceID, content string) []string {
+	if sourceID == "" {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var ids []string
+	for id, d := range s.index {
+		if d.Layer != string(layer) || d.Content != content || isSuperseded(d) {
+			continue
+		}
+		if d.Meta["source_id"] != sourceID {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 // SetExtracted marks a doc as extracted (used after successful promotion).
 func (s *MemoryStore) SetExtracted(id string, v bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if d, ok := s.index[id]; ok {
 		d.Extracted = v
-		s.index[id] = d
+		s.putLocked(d)
 	}
 	return s.persistIndexLocked()
 }
@@ -530,6 +600,45 @@ func docIndexFrom(id, layer, content string, meta map[string]string) DocIndex {
 	return d
 }
 
+// putLocked stores d in the exact index and keeps the superseded set and the
+// per-layer counts in step. The caller holds s.mu for writing.
+func (s *MemoryStore) putLocked(d DocIndex) {
+	s.forgetLocked(d.ID)
+	s.index[d.ID] = d
+	if isSuperseded(d) {
+		l := memory.Layer(d.Layer)
+		s.superseded[d.ID] = l
+		s.hidden[l]++
+	}
+}
+
+// forgetLocked removes id from the exact index and from the superseded
+// bookkeeping. The caller holds s.mu for writing.
+func (s *MemoryStore) forgetLocked(id string) {
+	if l, ok := s.superseded[id]; ok {
+		delete(s.superseded, id)
+		s.hidden[l]--
+		if s.hidden[l] <= 0 {
+			delete(s.hidden, l)
+		}
+	}
+	delete(s.index, id)
+}
+
+// rebuildSupersededLocked recomputes the superseded set and per-layer counts from
+// the whole index. It runs once after the index is loaded from disk.
+func (s *MemoryStore) rebuildSupersededLocked() {
+	s.superseded = map[string]memory.Layer{}
+	s.hidden = map[memory.Layer]int{}
+	for id, d := range s.index {
+		if isSuperseded(d) {
+			l := memory.Layer(d.Layer)
+			s.superseded[id] = l
+			s.hidden[l]++
+		}
+	}
+}
+
 // persistIndex takes the write lock, not a read lock. Concurrent Adds (the
 // background extraction goroutines) all write the same doc_index.json.tmp path,
 // and two readers holding RLock would interleave those writes and rename a
@@ -579,7 +688,7 @@ func (s *MemoryStore) rebuildIndex() error {
 			}
 		}
 		for _, r := range res {
-			s.index[r.ID] = docIndexFrom(r.ID, string(l), r.Content, r.Metadata)
+			s.putLocked(docIndexFrom(r.ID, string(l), r.Content, r.Metadata))
 		}
 	}
 	return s.persistIndex()

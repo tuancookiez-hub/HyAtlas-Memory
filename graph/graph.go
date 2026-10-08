@@ -4,6 +4,11 @@
 // The graph is exact-match traversal (find edges for a node), not similarity
 // search, so a vector store is the wrong shape. Nodes/edges live in an
 // in-memory index guarded by a mutex, flushed atomically to a JSON file.
+//
+// Every node and edge belongs to an owner (user_id, agent_id). The same label
+// under two owners is two nodes, and an edge's dedupe key is
+// (owner, from, relation, to). Rows written before owners existed carry the
+// empty owner ("", ""), which only the unscoped reads return.
 package graph
 
 import (
@@ -17,23 +22,39 @@ import (
 
 // Node is an L5 knowledge entity.
 type Node struct {
-	ID    string            `json:"id"`
-	Label string            `json:"label"` // canonical display name
-	Type  string            `json:"type"`  // entity/domain/artifact/...
-	Props map[string]string `json:"props,omitempty"`
+	ID      string            `json:"id"`
+	Label   string            `json:"label"` // canonical display name
+	Type    string            `json:"type"`  // entity/domain/artifact/...
+	UserID  string            `json:"user_id,omitempty"`
+	AgentID string            `json:"agent_id,omitempty"`
+	Props   map[string]string `json:"props,omitempty"`
 }
 
 // Edge is a directed relation between two nodes.
 type Edge struct {
-	From          string  `json:"from"`
-	To            string  `json:"to"`
-	Relation      string  `json:"relation"` // e.g. "depends_on", "fixed_by", "part_of"
-	Weight        float64 `json:"weight"`
-	Source        string  `json:"source,omitempty"`         // source_memory_id (L2) — evidence citation
-	RecordedAt    int64   `json:"recorded_at,omitempty"`    // unix seconds — when the system learned this
-	ValidFrom     int64   `json:"valid_from,omitempty"`     // unix seconds — when it became true in the world
-	ValidTo       int64   `json:"valid_to,omitempty"`       // unix seconds — when it stopped being true (0 = ongoing)
-	InvalidatedAt int64   `json:"invalidated_at,omitempty"` // unix seconds — when a correction superseded this edge
+	From          string   `json:"from"`
+	To            string   `json:"to"`
+	Relation      string   `json:"relation"` // e.g. "depends_on", "fixed_by", "part_of"
+	Weight        float64  `json:"weight"`
+	UserID        string   `json:"user_id,omitempty"`
+	AgentID       string   `json:"agent_id,omitempty"`
+	Source        string   `json:"source,omitempty"`         // primary source_memory_id (L2) — the first citation recorded
+	Sources       []string `json:"sources,omitempty"`        // every source_memory_id (L2) that evidences the edge, primary first
+	RecordedAt    int64    `json:"recorded_at,omitempty"`    // unix seconds — when the system learned this
+	ValidFrom     int64    `json:"valid_from,omitempty"`     // unix seconds — when it became true in the world
+	ValidTo       int64    `json:"valid_to,omitempty"`       // unix seconds — when it stopped being true (0 = ongoing)
+	InvalidatedAt int64    `json:"invalidated_at,omitempty"` // unix seconds — when a correction superseded this edge
+}
+
+// Scope selects the owner whose rows a read returns. An empty field matches any
+// owner, so the zero Scope is the whole graph.
+type Scope struct {
+	UserID  string
+	AgentID string
+}
+
+func (sc Scope) matches(userID, agentID string) bool {
+	return (sc.UserID == "" || sc.UserID == userID) && (sc.AgentID == "" || sc.AgentID == agentID)
 }
 
 // Store holds the graph and persists to a JSON file.
@@ -45,6 +66,8 @@ type Store struct {
 }
 
 // New creates a graph store rooted at path (a .json file). Loads existing state.
+// Edges written before multi-source citations carry only Source; they load with
+// Sources = [Source], so every reader can rely on Sources.
 func New(path string) (*Store, error) {
 	s := &Store{
 		path:  path,
@@ -64,9 +87,19 @@ func New(path string) (*Store, error) {
 		}
 		if state.Edges != nil {
 			s.edges = state.Edges
+			for i := range s.edges {
+				normalizeEdge(&s.edges[i])
+			}
 		}
 	}
 	return s, nil
+}
+
+func normalizeEdge(e *Edge) {
+	e.Sources = cleanSources(e.Source, e.Sources)
+	if e.Source == "" && len(e.Sources) > 0 {
+		e.Source = e.Sources[0]
+	}
 }
 
 func (s *Store) persistLocked() error {
@@ -97,57 +130,81 @@ func (s *Store) UpsertNode(node Node) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if node.ID == "" {
-		// derive a stable id from the label so re-upserts collapse
-		node.ID = idForLabel(node.Label)
+		// derive a stable id from the owner and label so re-upserts collapse
+		node.ID = nodeID(node.UserID, node.AgentID, node.Label)
 	}
 	s.nodes[node.ID] = node
 	return node.ID, s.persistLocked()
 }
 
-// AddEdgeWithSource adds or updates a directed relation with a source citation.
-// Source is the L2 memory id that produced the L5 triple. RecordedAt is the
-// unix-second timestamp the system learned the relation. ValidFrom defaults
-// to RecordedAt (a new fact is valid from when we learned it).
-func (s *Store) AddEdgeWithSource(fromLabel, rel, toLabel, sourceID string) error {
+// AddEdgeWithSource records one citation of a relation for one owner. It is
+// AddEdgeWithSources with a single source.
+func (s *Store) AddEdgeWithSource(userID, agentID, fromLabel, rel, toLabel, sourceID string) error {
+	_, err := s.AddEdgeWithSources(userID, agentID, fromLabel, rel, toLabel, []string{sourceID})
+	return err
+}
+
+// AddEdgeWithSources records a relation for one owner, citing every source in
+// sourceIDs. The dedupe key is (owner, from, relation, to): a repeat call adds
+// its sources that are new to the existing edge, so the edge keeps all of its
+// evidence. Source (the first citation) never changes, and neither do the
+// bitemporal anchors ValidFrom/ValidTo/InvalidatedAt, which move only via the
+// dedicated mutation path. It reports whether the edge was newly created.
+func (s *Store) AddEdgeWithSources(userID, agentID, fromLabel, rel, toLabel string, sourceIDs []string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	fromID := s.ensureNodeLocked(fromLabel, "")
-	toID := s.ensureNodeLocked(toLabel, "")
+	fromID := s.ensureNodeLocked(userID, agentID, fromLabel)
+	toID := s.ensureNodeLocked(userID, agentID, toLabel)
 	now := time.Now().Unix()
+	srcs := cleanSources("", sourceIDs)
 
-	// If edge exists, only update source if the new one is non-empty.
-	// Don't change ValidFrom/ValidTo/InvalidatedAt on update — those are
-	// bitemporal anchors that move only via the dedicated mutation path.
-	for i, e := range s.edges {
-		if e.From == fromID && e.To == toID && e.Relation == rel {
-			if sourceID != "" {
-				s.edges[i].Source = sourceID
-				s.edges[i].RecordedAt = now
-				if s.edges[i].ValidFrom == 0 {
-					s.edges[i].ValidFrom = now
-				}
-			}
-			return s.persistLocked()
+	for i := range s.edges {
+		e := &s.edges[i]
+		if e.UserID != userID || e.AgentID != agentID || e.From != fromID || e.To != toID || e.Relation != rel {
+			continue
 		}
+		added := false
+		for _, src := range srcs {
+			if !containsString(e.Sources, src) {
+				e.Sources = append(e.Sources, src)
+				added = true
+			}
+		}
+		if added {
+			e.RecordedAt = now
+			if e.ValidFrom == 0 {
+				e.ValidFrom = now
+			}
+		}
+		normalizeEdge(e)
+		return false, s.persistLocked()
 	}
-	s.edges = append(s.edges, Edge{
+	e := Edge{
 		From: fromID, To: toID, Relation: rel, Weight: 1.0,
-		Source: sourceID, RecordedAt: now, ValidFrom: now,
-	})
-	return s.persistLocked()
+		UserID: userID, AgentID: agentID,
+		Sources:    srcs,
+		RecordedAt: now, ValidFrom: now,
+	}
+	if len(srcs) > 0 {
+		e.Source = srcs[0]
+	}
+	s.edges = append(s.edges, e)
+	return true, s.persistLocked()
 }
 
-// AddEdge adds a directed relation between two node labels (auto-creating nodes).
+// AddEdge adds an unowned relation between two node labels, auto-creating the
+// nodes. It is the owner-less form kept for callers with no owner. It stamps no
+// citation or validity time, as before, so the edge is valid at every instant; a
+// repeat is a no-op.
 func (s *Store) AddEdge(fromLabel, rel, toLabel string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	fromID := s.ensureNodeLocked(fromLabel, "")
-	toID := s.ensureNodeLocked(toLabel, "")
-	// dedupe
+	fromID := s.ensureNodeLocked("", "", fromLabel)
+	toID := s.ensureNodeLocked("", "", toLabel)
 	for _, e := range s.edges {
-		if e.From == fromID && e.To == toID && e.Relation == rel {
+		if e.UserID == "" && e.AgentID == "" && e.From == fromID && e.To == toID && e.Relation == rel {
 			return nil
 		}
 	}
@@ -155,76 +212,126 @@ func (s *Store) AddEdge(fromLabel, rel, toLabel string) error {
 	return s.persistLocked()
 }
 
-func (s *Store) ensureNodeLocked(label, typ string) string {
+// ensureNodeLocked returns the id of the node for label under the owner,
+// creating it if needed. Two owners' nodes never collide: the id is derived
+// from the owner as well, and a hash collision with a different node is probed
+// past rather than overwriting it.
+func (s *Store) ensureNodeLocked(userID, agentID, label string) string {
 	for id, n := range s.nodes {
-		if n.Label == label {
+		if n.Label == label && n.UserID == userID && n.AgentID == agentID {
 			return id
 		}
 	}
-	id := idForLabel(label)
-	s.nodes[id] = Node{ID: id, Label: label, Type: typ}
+	id := nodeID(userID, agentID, label)
+	for {
+		if _, taken := s.nodes[id]; !taken {
+			break
+		}
+		id += "+"
+	}
+	s.nodes[id] = Node{ID: id, Label: label, UserID: userID, AgentID: agentID}
 	return id
 }
 
-// Neighbors returns nodes connected to the given node (by label or id),
-// both directions, with the relation labeled.
+// Neighbor is one edge seen from a node: the other end's label, the relation,
+// and which way it points.
 type Neighbor struct {
 	Label    string `json:"label"`
 	Relation string `json:"relation"`
 	Incoming bool   `json:"incoming"` // true if edge points TO this node
 }
 
+// Neighbors returns nodes connected to the given node (by label or id) across
+// every owner, both directions, with the relation labeled.
 func (s *Store) Neighbors(label string) []Neighbor {
+	return s.NeighborsScoped(Scope{}, label)
+}
+
+// NeighborsScoped is Neighbors restricted to the owner named by sc: only nodes
+// and edges that belong to that owner take part.
+func (s *Store) NeighborsScoped(sc Scope, label string) []Neighbor {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	id := ""
+	ids := map[string]bool{}
 	for nid, n := range s.nodes {
-		if n.Label == label || nid == label {
-			id = nid
-			break
+		if (n.Label == label || nid == label) && sc.matches(n.UserID, n.AgentID) {
+			ids[nid] = true
 		}
 	}
-	if id == "" {
+	if len(ids) == 0 {
 		return nil
 	}
 	var out []Neighbor
 	for _, e := range s.edges {
-		if e.From == id {
+		if !sc.matches(e.UserID, e.AgentID) {
+			continue
+		}
+		if ids[e.From] {
 			out = append(out, Neighbor{Label: s.nodes[e.To].Label, Relation: e.Relation, Incoming: false})
 		}
-		if e.To == id {
+		if ids[e.To] {
 			out = append(out, Neighbor{Label: s.nodes[e.From].Label, Relation: e.Relation, Incoming: true})
 		}
 	}
 	return out
 }
 
-// NodeCount returns the number of distinct entities.
+// NodeCount returns the number of distinct entities, across all owners.
 func (s *Store) NodeCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.nodes)
 }
 
-// EdgeCount returns the number of relations.
+// EdgeCount returns the number of relations, across all owners.
 func (s *Store) EdgeCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.edges)
 }
 
-// SnapshotAsOf returns nodes + edges that were true at unix time t.
+// CountsScoped returns how many nodes and relations belong to the owner named by sc.
+func (s *Store) CountsScoped(sc Scope) (nodes, edges int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, n := range s.nodes {
+		if sc.matches(n.UserID, n.AgentID) {
+			nodes++
+		}
+	}
+	for _, e := range s.edges {
+		if sc.matches(e.UserID, e.AgentID) {
+			edges++
+		}
+	}
+	return nodes, edges
+}
+
+// SnapshotAsOf returns nodes + edges that were true at unix time t, across all owners.
 // "True at t" means both axes:
 //
 //	world:     valid_from <= t  AND (valid_to == 0 OR valid_to > t)
 //	recorded:  recorded_at <= t AND (invalidated_at == 0 OR invalidated_at > t)
 func (s *Store) SnapshotAsOf(t int64, maxNodes int) ([]Node, []Edge) {
+	return s.SnapshotAsOfScoped(Scope{}, t, maxNodes)
+}
+
+// SnapshotAsOfScoped is SnapshotAsOf restricted to the owner named by sc.
+func (s *Store) SnapshotAsOfScoped(sc Scope, t int64, maxNodes int) ([]Node, []Edge) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	nodes := make([]Node, 0, len(s.nodes))
 	for _, n := range s.nodes {
-		nodes = append(nodes, n)
+		if sc.matches(n.UserID, n.AgentID) {
+			nodes = append(nodes, n)
+		}
 	}
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].Label != nodes[j].Label {
+			return nodes[i].Label < nodes[j].Label
+		}
+		return nodes[i].ID < nodes[j].ID
+	})
 	if maxNodes > 0 && len(nodes) > maxNodes {
 		nodes = nodes[:maxNodes]
 	}
@@ -234,6 +341,9 @@ func (s *Store) SnapshotAsOf(t int64, maxNodes int) ([]Node, []Edge) {
 	}
 	rels := make([]Edge, 0, len(s.edges))
 	for _, e := range s.edges {
+		if !sc.matches(e.UserID, e.AgentID) {
+			continue
+		}
 		if e.RecordedAt > t || (e.InvalidatedAt != 0 && e.InvalidatedAt <= t) {
 			continue
 		}
@@ -246,22 +356,34 @@ func (s *Store) SnapshotAsOf(t int64, maxNodes int) ([]Node, []Edge) {
 		if _, ok := keep[e.To]; !ok {
 			continue
 		}
-		rels = append(rels, e)
+		rels = append(rels, cloneEdge(e))
 	}
 	return nodes, rels
 }
 
-// Snapshot returns bounded node + relation lists for the dashboard graph view.
-// Edges that point at a node outside the bound are dropped so the client never
-// receives dangling from/to ids.
+// Snapshot returns bounded node + relation lists for the dashboard graph view,
+// across all owners. Edges that point at a node outside the bound are dropped so
+// the client never receives dangling from/to ids.
 func (s *Store) Snapshot(maxNodes int) ([]Node, []Edge) {
+	return s.SnapshotScoped(Scope{}, maxNodes)
+}
+
+// SnapshotScoped is Snapshot restricted to the owner named by sc.
+func (s *Store) SnapshotScoped(sc Scope, maxNodes int) ([]Node, []Edge) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	nodes := make([]Node, 0, len(s.nodes))
 	for _, n := range s.nodes {
-		nodes = append(nodes, n)
+		if sc.matches(n.UserID, n.AgentID) {
+			nodes = append(nodes, n)
+		}
 	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Label < nodes[j].Label })
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].Label != nodes[j].Label {
+			return nodes[i].Label < nodes[j].Label
+		}
+		return nodes[i].ID < nodes[j].ID
+	})
 	if maxNodes > 0 && len(nodes) > maxNodes {
 		nodes = nodes[:maxNodes]
 	}
@@ -271,15 +393,27 @@ func (s *Store) Snapshot(maxNodes int) ([]Node, []Edge) {
 	}
 	rels := make([]Edge, 0, len(s.edges))
 	for _, e := range s.edges {
+		if !sc.matches(e.UserID, e.AgentID) {
+			continue
+		}
 		if _, ok := keep[e.From]; !ok {
 			continue
 		}
 		if _, ok := keep[e.To]; !ok {
 			continue
 		}
-		rels = append(rels, e)
+		rels = append(rels, cloneEdge(e))
 	}
 	return nodes, rels
+}
+
+// nodeID is the stable id for a label under an owner. An unowned label keeps
+// the original id, so an existing graph.json still resolves.
+func nodeID(userID, agentID, label string) string {
+	if userID == "" && agentID == "" {
+		return idForLabel(label)
+	}
+	return idForLabel(userID + "\x00" + agentID + "\x00" + label)
 }
 
 func idForLabel(label string) string {
@@ -302,4 +436,33 @@ func fnv(s string) string {
 		h >>= 4
 	}
 	return string(digits)
+}
+
+// cleanSources returns the non-empty, de-duplicated sources with primary first.
+func cleanSources(primary string, srcs []string) []string {
+	var out []string
+	for _, s := range append([]string{primary}, srcs...) {
+		if s != "" && !containsString(out, s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// cloneEdge copies an edge so a snapshot does not share its Sources backing
+// array with the store.
+func cloneEdge(e Edge) Edge {
+	if e.Sources != nil {
+		e.Sources = append([]string(nil), e.Sources...)
+	}
+	return e
 }

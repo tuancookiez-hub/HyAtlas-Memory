@@ -1,5 +1,73 @@
 # Changelog
 
+## [Unreleased]
+
+Everything on `claude/busy-faraday-3tvefr` since v4.3.3. Several items are
+behaviour changes that a client or script may notice.
+
+### Removed
+
+- The Docker setup is gone. Build or download the binary instead (see README).
+
+### Changed (server)
+
+- **`delete_all` needs `POST` or `DELETE` and a scope.** It requires at least one
+  of `id`, `layer`, `user_id`, `agent_id`, or `all=true`. An unscoped call is refused.
+- **Request bodies are capped at 8 MiB.**
+- **Browser requests are refused.** A request whose `Origin` is not local gets 403,
+  and on a loopback bind so does a `Host` that names a non-local host (DNS rebinding).
+  New `HYATLAS_ALLOWED_HOSTS` (comma-separated) adds extra accepted hostnames.
+- **Ultra refuses to start when `HYATLAS_CONSOLIDATE_EVERY` is zero or negative.**
+  This is fatal at startup. Use `HYATLAS_MODE=pro` to run without the slow path.
+- **Consolidation is per owner.** A pass groups facts by `user_id` / `agent_id`
+  and never merges across owners.
+- **Facts are superseded, not deleted.** An ultra merge or drop sets `invalid_at`
+  and `superseded_by`. `GET /api/v1/list` returns them with `include_superseded=true`.
+- **L5 relations need at least two distinct turns** of corroboration before they
+  become graph edges. A single turn no longer creates one.
+- **The graph is owner-scoped with multiple sources.** `/api/v1/edges`,
+  `/api/v1/graph` and `/api/v1/list` accept `user_id` and `agent_id`. An edge
+  keeps every source memory that supports it.
+- **Raw retention keeps evidence.** With `HYATLAS_RAW_RETENTION` set, raw rows that
+  still back a live fact or edge are kept, not only rows an edge cites directly.
+- **`/api/v1/status` consolidation fields.** `consolidations` and
+  `last_consolidated` reset on restart. `consolidations` is `-1` when the mode has
+  no slow path (`lite`, `pro`).
+- **`session_id` is stored on add.**
+- **Model directory search order** when `HYATLAS_MODEL_DIR` is unset:
+  `<cwd>/models`, then `<exe dir>/models`, then the installer default
+  (`~/.hyatlas/models`, or `%LOCALAPPDATA%\hyatlas\models` on Windows).
+
+### Changed (Hermes plugin)
+
+- `config.yaml` is read through `hermes_yaml`.
+- A server the plugin spawns defaults to `sync: off`, so a Hermes turn never waits
+  on the LLM. An exported `HYATLAS_SYNC_EXTRACT` still wins.
+- On Windows, the `launcher_path` script runs only when it is configured. It is never discovered.
+- `on_memory_write` stores a plain raw (L2) add, tagged with its target. It no
+  longer claims an L1 Profile mirror. L1 fills through extraction in `pro` and `ultra`.
+- The `llm_key` setting no longer carries a platform link. Any OpenAI-compatible
+  key works.
+
+### Fixed
+
+- **`hermes hyatlas start` no longer double-spawns.** It reports `already_running`
+  (with the pid when the pidfile is valid) and never writes over a live pidfile.
+- **The pidfile is written only after the child is seen alive.** A child that
+  dies on startup is reported as `ok: false` and leaves no pidfile.
+- **`hermes hyatlas stop` reports the truth.** It returns `ok: false` when the
+  server still answers but was not started by the plugin. It no longer reports
+  `stopped: true` for a dead pid.
+- **`/hyatlas start` and `/hyatlas stop` work when the server is down.** They ran
+  the availability check first, so they could never start or stop anything.
+- **The unreachable hint says `hermes hyatlas start`,** and notes that the
+  `hermes hyatlas` command appears only once `memory.provider` is `hyatlas`.
+- **The installer keeps going when the model download fails.** A source build
+  still installs the binary, prints the manual steps, and exits non-zero at the end.
+  Release binaries are embedded, so they skip the model download.
+- **README size claims corrected.** The embedded release binary is about 160 MB
+  because it carries the model. The plain build is small and needs a model folder.
+
 ## [4.3.3] — 2026-10-08
 
 Two defects in the shared LLM call path, both found by running a real

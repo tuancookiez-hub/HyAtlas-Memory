@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +30,14 @@ const (
 	// defaultBatch caps facts per consolidation call so the prompt cannot grow
 	// without bound as memory accumulates.
 	defaultBatch = 200
+
+	// maxPromptSchemas caps how many of an owner's existing schemas are shown to
+	// the model, so the refinement list cannot grow the prompt without bound.
+	maxPromptSchemas = 20
+
+	// consolidateStateFile holds the per-owner watermarks and the rotation cursor.
+	// It sits next to doc_index.json, in the data dir.
+	consolidateStateFile = "consolidate_state.json"
 )
 
 // Consolidation is the slow path. Extraction reasons about ONE turn; this
@@ -58,11 +67,19 @@ type CitedRelation struct {
 	Evidence []string `json:"evidence"`
 }
 
+// ConsolidatedSchema is a schema the slow path proposes. Supersedes names the
+// owner's existing schemas that this one refines; they are retired once it is written.
+type ConsolidatedSchema struct {
+	Pattern    string   `json:"pattern"`
+	Context    string   `json:"context,omitempty"`
+	Supersedes []string `json:"supersedes,omitempty"`
+}
+
 // Consolidation is the JSON contract for one consolidation call.
 type Consolidation struct {
-	Merges  []Merge  `json:"merges"`
-	Drops   []string `json:"drops"`
-	Schemas []Schema `json:"schemas"`
+	Merges  []Merge              `json:"merges"`
+	Drops   []string             `json:"drops"`
+	Schemas []ConsolidatedSchema `json:"schemas"`
 	// Knowledge are L5 graph edges. The slow path owns L5: a relation worth
 	// keeping is one corroborated across memories, and only this pass can see
 	// more than one. Each triple carries the fact IDs that evidence it, so the
@@ -77,8 +94,18 @@ type Consolidation struct {
 // and logged by the worker, so "the slow path ran" is checkable rather than
 // assumed — the previous digest handler returned a hardcoded success.
 type Report struct {
-	FactsIn    int      `json:"facts_in"`
-	Merged     int      `json:"merged"`
+	FactsIn int `json:"facts_in"`
+	// OwnersRun counts owners that were sent to the model this pass.
+	OwnersRun int `json:"owners_run"`
+	// OwnersUnchanged counts owners whose facts had not changed since their last
+	// successful pass, so they were not sent again.
+	OwnersUnchanged int `json:"owners_unchanged"`
+	// SkippedOwners names owners that still had work but were not reached because
+	// the pass's context ended first. The next pass starts from them.
+	SkippedOwners []string `json:"skipped_owners,omitempty"`
+	Merged        int      `json:"merged"`
+	// Edges counts distinct L5 edges this pass created. Re-citing an edge that
+	// already exists adds evidence to it and is not counted.
 	Edges      int      `json:"edges"`
 	Dropped    int      `json:"dropped"`
 	Schemas    int      `json:"schemas"`
@@ -87,6 +114,13 @@ type Report struct {
 	Protected  int      `json:"protected_raw"`
 	DurationMs int64    `json:"duration_ms"`
 	Errors     []string `json:"errors,omitempty"`
+}
+
+// consolidateState is what survives a restart: which owners are already
+// consolidated, at which facts fingerprint, and where the next pass starts.
+type consolidateState struct {
+	Cursor int               `json:"cursor"`
+	Owners map[string]string `json:"owners"`
 }
 
 // Consolidator owns the slow path.
@@ -108,6 +142,14 @@ type Consolidator struct {
 	// LLM spend and race each other's merges and edge writes.
 	gate sync.Mutex
 
+	// done maps an owner (scopeKey.String) to the fingerprint of its live facts
+	// after its last successful pass. cursor is where the next pass starts in
+	// the owner order. Both are read and written only under gate, and are
+	// persisted to statePath.
+	done      map[string]string
+	cursor    int
+	statePath string
+
 	mu     sync.Mutex
 	last   *Report
 	lastAt time.Time
@@ -118,12 +160,20 @@ type Consolidator struct {
 // that means for them: the ticker skips the tick, the digest endpoint says so.
 var errBusy = errors.New("a consolidation pass is already running")
 
-// NewConsolidator wires the slow path. retention <= 0 disables raw decay.
+// NewConsolidator wires the slow path. retention <= 0 disables raw decay. The
+// per-owner watermarks are loaded from the data dir, so a restart does not
+// re-run owners whose facts have not changed.
 func NewConsolidator(store *MemoryStore, llm *LLMClient, every, retention time.Duration, batch int) *Consolidator {
 	if batch <= 0 {
 		batch = 200
 	}
-	return &Consolidator{store: store, llm: llm, every: every, retention: retention, batch: batch}
+	c := &Consolidator{store: store, llm: llm, every: every, retention: retention, batch: batch,
+		done: map[string]string{}}
+	if store != nil && store.indexPath != "" {
+		c.statePath = filepath.Join(filepath.Dir(store.indexPath), consolidateStateFile)
+	}
+	c.loadState()
+	return c
 }
 
 // Stats is the /api/v1/status view of the slow path.
@@ -174,6 +224,10 @@ func (k scopeKey) String() string { return fmt.Sprintf("user_id=%q agent_id=%q",
 // Live facts are grouped by owner (user_id, agent_id), and each owner with at
 // least two facts is consolidated on its own. The model never sees two people's
 // memories in one prompt, so no merge, L5 edge, schema or arc can mix them.
+//
+// Owners are visited from a cursor that moves between passes, so a pass cut
+// short by its deadline does not always stop at the same owners. An owner whose
+// facts have not changed since its last successful pass is not sent again.
 func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 	// Single flight: the loser is told so rather than queued, because the work
 	// it would have done is covered by the pass already in flight.
@@ -191,33 +245,78 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 	facts := c.listAllLive(memory.L3Fact)
 	rep.FactsIn = len(facts)
 
-	// Group under each owner in List's newest-first order, then visit owners in a
-	// fixed order so a pass is reproducible.
-	byOwner := map[scopeKey][]DocIndex{}
-	var owners []scopeKey
-	for _, f := range facts {
-		k := scopeKey{user: f.UserID, agent: f.AgentID}
-		if _, seen := byOwner[k]; !seen {
-			owners = append(owners, k)
-		}
-		byOwner[k] = append(byOwner[k], f)
-	}
-	sort.Slice(owners, func(i, j int) bool {
-		if owners[i].user != owners[j].user {
-			return owners[i].user < owners[j].user
-		}
-		return owners[i].agent < owners[j].agent
-	})
+	byOwner, owners := groupByOwner(facts)
+	// A single fact has nothing to reconcile against, so its owner sits this pass out.
+	var work []scopeKey
 	for _, k := range owners {
-		scope := byOwner[k]
-		// A single fact has nothing to reconcile against, so its owner sits this pass out.
-		if len(scope) < 2 {
+		if len(byOwner[k]) >= 2 {
+			work = append(work, k)
+		}
+	}
+
+	n := len(work)
+	first := 0
+	if n > 0 {
+		first = c.cursor % n
+	}
+	next := first + 1 // a pass that reaches every owner starts one owner later next time
+	ran := map[scopeKey]bool{}
+	for i := 0; i < n; i++ {
+		k := work[(first+i)%n]
+		if err := ctx.Err(); err != nil {
+			next = first + i
+			var skipped []string
+			for j := i; j < n; j++ {
+				sk := work[(first+j)%n]
+				if c.done[sk.String()] != factsFingerprint(byOwner[sk]) {
+					skipped = append(skipped, sk.String())
+				}
+			}
+			if len(skipped) > 0 {
+				rep.SkippedOwners = skipped
+				rep.Errors = append(rep.Errors, fmt.Sprintf(
+					"pass stopped (%v) before %d owner(s) were consolidated; they run next pass", err, len(skipped)))
+			}
+			break
+		}
+		fp := factsFingerprint(byOwner[k])
+		if c.done[k.String()] == fp {
+			rep.OwnersUnchanged++
 			continue
 		}
+		scope := byOwner[k]
 		if len(scope) > c.batch {
 			scope = scope[:c.batch]
 		}
-		c.consolidateScope(ctx, k, scope, rep)
+		rep.OwnersRun++
+		if c.consolidateScope(ctx, k, scope, rep) {
+			ran[k] = true
+		}
+	}
+	if n > 0 {
+		c.cursor = next % n
+	}
+
+	// Record each owner that completed, at the fingerprint its facts have now,
+	// which includes this pass's own merges. Owners that failed keep their old
+	// watermark, so they are retried next pass.
+	if len(ran) > 0 {
+		post, _ := groupByOwner(c.listAllLive(memory.L3Fact))
+		for k := range ran {
+			c.done[k.String()] = factsFingerprint(post[k])
+		}
+	}
+	present := map[string]bool{}
+	for _, k := range owners {
+		present[k.String()] = true
+	}
+	for key := range c.done {
+		if !present[key] {
+			delete(c.done, key)
+		}
+	}
+	if err := c.saveState(); err != nil {
+		rep.Errors = append(rep.Errors, "state: "+err.Error())
 	}
 
 	// Raw decay runs once per pass. Its citation guard already reads every
@@ -232,15 +331,17 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 // owner's newest batch, and everything written carries the owner's scope.
 //
 // Only IDs in facts are acted on. An ID that belongs to another owner, or one the
-// model invented, fails the live-set guard and changes nothing.
-func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, facts []DocIndex, rep *Report) {
+// model invented, fails the live-set guard and changes nothing. It reports
+// whether the model answered, which is what makes the owner's watermark advance.
+func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, facts []DocIndex, rep *Report) bool {
 	fail := func(msg string) {
 		rep.Errors = append(rep.Errors, owner.String()+": "+msg)
 	}
-	cons, err := c.ask(ctx, facts)
+	schemas := c.liveOf(memory.L6Schema, owner)
+	cons, err := c.ask(ctx, facts, schemas)
 	if err != nil {
 		fail(err.Error())
-		return
+		return false
 	}
 
 	live := liveIDs(facts)
@@ -252,8 +353,8 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 	byID := byIDOf(facts)
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	// Apply merges first: write the replacement, then supersede what it absorbed.
-	// Only IDs in this owner's batch count, so a hallucinated ID changes nothing.
+	// Apply merges first. Only IDs in this owner's batch count, so a hallucinated
+	// ID changes nothing.
 	for _, m := range cons.Merges {
 		text := strings.TrimSpace(m.Text)
 		if text == "" {
@@ -277,60 +378,41 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		if label == "" {
 			label = "consolidated"
 		}
-		// The merged fact inherits the conversations it absorbed, so L5
-		// corroboration and the raw-decay citation guard still see them.
-		srcs := distinctSources(absorbed)
-		meta := map[string]string{
-			"user_id": owner.user, "agent_id": owner.agent,
-			"source_layer_label": label, "ts": now, "consolidated": "true",
-		}
-		if len(srcs) > 0 {
-			meta["source_id"] = srcs[0]
-			meta["source_ids"] = strings.Join(srcs, ",")
-		}
-		mergedID := newID()
-		if err := c.store.Add(memory.L3Fact, mergedID, text, meta); err != nil {
-			fail("merge add: " + err.Error())
-			continue
-		}
-		ids := make([]string, len(absorbed))
-		for i, d := range absorbed {
-			ids[i] = d.ID
-		}
-		n, err := c.store.Supersede(ids, mergedID)
-		if err != nil {
-			fail("merge supersede: " + err.Error())
-		}
-		rep.Merged++
-		rep.Dropped += n
-		for _, id := range ids {
-			delete(live, id)
-		}
+		c.applyMerge(owner, text, label, absorbed, now, live, rep, fail)
 	}
 
 	// Explicit drops: facts the model judged stale or superseded. Same
 	// live-set guard, so only facts it was actually shown can be superseded.
 	var drops []string
+	dropped := map[string]bool{}
 	for _, id := range cons.Drops {
-		if live[id] {
+		if live[id] && !dropped[id] {
+			dropped[id] = true
 			drops = append(drops, id)
-			delete(live, id)
 		}
 	}
 	if len(drops) > 0 {
 		// An empty mergedID means dropped rather than replaced.
-		n, err := c.store.Supersede(drops, "")
+		_, err := c.store.Supersede(drops, "")
+		marked := c.supersededOf(drops)
+		for _, id := range marked {
+			delete(live, id)
+		}
+		rep.Dropped += len(marked)
+		if err := c.retireMirrors(c.store.GetMany(marked), ""); err != nil {
+			fail("drop mirror: " + err.Error())
+		}
 		if err != nil {
 			fail("drop: " + err.Error())
 		}
-		rep.Dropped += n
 	}
 
 	// L5 knowledge graph. The slow path owns this layer: a relation worth
 	// keeping is one corroborated by more than one memory, and only this pass
 	// can see more than one. Edges are cited against the L2 raw rows behind the
 	// evidence, not the fact rows, so decayRaw's citation guard still protects
-	// the conversations the graph depends on.
+	// the conversations the graph depends on. Edges belong to this owner, so the
+	// same entity name under another owner stays a separate node.
 	for _, rel := range cons.Knowledge {
 		if strings.TrimSpace(rel.From) == "" || strings.TrimSpace(rel.Relation) == "" ||
 			strings.TrimSpace(rel.To) == "" {
@@ -343,7 +425,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		// rows: two facts extracted from one write share a source_id and are one
 		// observation. Legacy rows without a source_id count as their own turn.
 		turns := map[string]bool{}
-		cites := make([]string, 0, len(rel.Evidence))
+		var cites []string
 		for _, id := range rel.Evidence {
 			if !batch[id] {
 				continue
@@ -365,21 +447,37 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		if len(turns) < 2 {
 			continue
 		}
-		for _, src := range cites {
-			if err := c.store.Graph().AddEdgeWithSource(rel.From, rel.Relation, rel.To, src); err != nil {
-				fail("edge: " + err.Error())
-				break
-			}
+		// One call per relation, carrying every corroborating conversation, so the
+		// edge keeps all of its citations and is counted once.
+		created, err := c.store.Graph().AddEdgeWithSources(owner.user, owner.agent, rel.From, rel.Relation, rel.To, cites)
+		if err != nil {
+			fail("edge: " + err.Error())
+			continue
+		}
+		if created {
 			rep.Edges++
 		}
 	}
 
 	// Generalised schemas: patterns that only become visible across many turns.
+	// A pattern whose normalised text matches a live schema of this owner is
+	// already known and is not written again. A schema may refine existing ones,
+	// which it then supersedes.
+	known := map[string]bool{}
+	existing := map[string]bool{}
+	for _, sc := range schemas {
+		known[normalizeText(sc.Content)] = true
+		existing[sc.ID] = true
+	}
 	for _, sc := range cons.Schemas {
-		if strings.TrimSpace(sc.Pattern) == "" {
+		pattern := strings.TrimSpace(sc.Pattern)
+		key := normalizeText(pattern)
+		if pattern == "" || known[key] {
 			continue
 		}
-		if err := c.store.Add(memory.L6Schema, newID(), sc.Pattern, map[string]string{
+		known[key] = true
+		id := newID()
+		if err := c.store.Add(memory.L6Schema, id, pattern, map[string]string{
 			"user_id": owner.user, "agent_id": owner.agent,
 			"context": sc.Context, "ts": now, "consolidated": "true",
 		}); err != nil {
@@ -387,20 +485,160 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 			continue
 		}
 		rep.Schemas++
+		var retire []string
+		for _, old := range sc.Supersedes {
+			if existing[old] && old != id && !containsID(retire, old) {
+				retire = append(retire, old)
+			}
+		}
+		if len(retire) > 0 {
+			if _, err := c.store.Supersede(retire, id); err != nil {
+				fail("schema supersede: " + err.Error())
+			}
+		}
 	}
 
 	// The cross-session arc: one L4 summary that spans many, which no single
-	// turn's extraction could have produced.
+	// turn's extraction could have produced. A new arc replaces this owner's
+	// previous consolidation arc, so arcs do not accumulate one per pass.
 	if cons.Arc != nil && strings.TrimSpace(*cons.Arc) != "" {
-		if err := c.store.Add(memory.L4Summary, newID(), *cons.Arc, map[string]string{
+		var prevArcs []string
+		for _, d := range c.liveOf(memory.L4Summary, owner) {
+			if d.Meta["kind"] == "arc" {
+				prevArcs = append(prevArcs, d.ID)
+			}
+		}
+		arcID := newID()
+		if err := c.store.Add(memory.L4Summary, arcID, strings.TrimSpace(*cons.Arc), map[string]string{
 			"user_id": owner.user, "agent_id": owner.agent,
-			"ts": now, "consolidated": "true",
+			"ts": now, "consolidated": "true", "kind": "arc",
 		}); err != nil {
 			fail("arc: " + err.Error())
 		} else {
 			rep.Arc = true
+			if len(prevArcs) > 0 {
+				if _, err := c.store.Supersede(prevArcs, arcID); err != nil {
+					fail("arc supersede: " + err.Error())
+				}
+			}
 		}
 	}
+	return true
+}
+
+// applyMerge writes one consolidated fact and retires the facts it absorbed.
+//
+// The replacement is written before anything is superseded, so a failed write
+// touches no original. Supersede marks the originals as replaced by the new ID.
+// Only the originals the store reports as marked are counted and removed from
+// live. If some were not marked, the replacement is retracted, so no live
+// original is left beside it.
+func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed []DocIndex, now string,
+	live map[string]bool, rep *Report, fail func(string)) {
+	srcs := distinctSources(absorbed)
+	// The merged fact inherits the conversations it absorbed, so L5
+	// corroboration and the raw-decay citation guard still see them.
+	meta := map[string]string{
+		"user_id": owner.user, "agent_id": owner.agent,
+		"source_layer_label": label, "ts": now, "consolidated": "true",
+	}
+	if len(srcs) > 0 {
+		meta["source_id"] = srcs[0]
+		meta["source_ids"] = strings.Join(srcs, ",")
+	}
+	mergedID := newID()
+	if err := c.store.Add(memory.L3Fact, mergedID, text, meta); err != nil {
+		fail("merge add: " + err.Error())
+		return
+	}
+	ids := make([]string, len(absorbed))
+	for i, d := range absorbed {
+		ids[i] = d.ID
+	}
+	_, supErr := c.store.Supersede(ids, mergedID)
+
+	// Count what the store marked, not what was asked for.
+	marked := c.supersededOf(ids)
+	for _, id := range marked {
+		delete(live, id)
+	}
+	rep.Dropped += len(marked)
+	if len(marked) < len(ids) {
+		_, retractErr := c.store.Supersede([]string{mergedID}, "")
+		msg := fmt.Sprintf("merge supersede: %d of %d absorbed facts marked; replacement retracted", len(marked), len(ids))
+		if retractErr != nil {
+			msg += ": retract: " + retractErr.Error()
+		}
+		fail(msg)
+		return
+	}
+	if supErr != nil {
+		fail("merge supersede: " + supErr.Error())
+	}
+	rep.Merged++
+
+	// The L1 profile mirror of a superseded preference is superseded with it, so
+	// the profile does not keep an old phrasing. A preference that survives the
+	// merge is mirrored again under the new text.
+	if err := c.retireMirrors(c.store.GetMany(marked), mergedID); err != nil {
+		fail("merge mirror: " + err.Error())
+	}
+	if label == "user_preferences" && len(srcs) > 0 {
+		if err := c.store.Add(memory.L1Profile, newID(), text, map[string]string{
+			"user_id": owner.user, "agent_id": owner.agent,
+			"source_id": srcs[0], "ts": now,
+		}); err != nil {
+			fail("merge mirror add: " + err.Error())
+		}
+	}
+}
+
+// retireMirrors supersedes the L1 Profile rows that mirror superseded
+// user_preferences facts. promoteExtraction writes such a fact to L1 with the
+// same source_id and content, which is how the mirror is found.
+func (c *Consolidator) retireMirrors(docs []DocIndex, by string) error {
+	var ids []string
+	seen := map[string]bool{}
+	for _, d := range docs {
+		if d.Meta["source_layer_label"] != "user_preferences" {
+			continue
+		}
+		for _, id := range c.store.MirrorsOf(memory.L1Profile, d.Meta["source_id"], d.Content) {
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := c.store.Supersede(ids, by)
+	return err
+}
+
+// supersededOf returns those of ids that the store now reports as superseded.
+func (c *Consolidator) supersededOf(ids []string) []string {
+	var out []string
+	for _, d := range c.store.GetMany(ids) {
+		if isSuperseded(d) {
+			out = append(out, d.ID)
+		}
+	}
+	return out
+}
+
+// liveOf returns the live docs in layer that belong to exactly this owner, newest
+// first. List's filters cannot be used: an empty user or agent means "any" there,
+// which would pull in other owners.
+func (c *Consolidator) liveOf(layer memory.Layer, owner scopeKey) []DocIndex {
+	var out []DocIndex
+	for _, d := range c.listAllLive(layer) {
+		if d.UserID == owner.user && d.AgentID == owner.agent {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // listAllLive returns every live doc in a layer, not one page of it.
@@ -418,8 +656,48 @@ func (c *Consolidator) finish(rep *Report, start time.Time) *Report {
 	return rep
 }
 
+// loadState restores the watermarks. A missing or unreadable file starts clean:
+// the cost is one extra pass over each owner, not lost data.
+func (c *Consolidator) loadState() {
+	if c.statePath == "" {
+		return
+	}
+	b, err := os.ReadFile(c.statePath)
+	if err != nil || len(b) == 0 {
+		return
+	}
+	var st consolidateState
+	if err := json.Unmarshal(b, &st); err != nil {
+		log.Printf("consolidate: ignoring unreadable %s: %v", c.statePath, err)
+		return
+	}
+	if st.Owners != nil {
+		c.done = st.Owners
+	}
+	c.cursor = st.Cursor
+}
+
+// saveState persists the watermarks with a write-then-rename, as the doc index does.
+func (c *Consolidator) saveState() error {
+	if c.statePath == "" {
+		return nil
+	}
+	b, err := json.MarshalIndent(consolidateState{Cursor: c.cursor, Owners: c.done}, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(c.statePath), 0o755); err != nil {
+		return err
+	}
+	tmp := c.statePath + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, c.statePath)
+}
+
 // decayRaw removes old L2 raw memories, but never one that a live L5 edge
-// cites. Every graph edge stores its source memory ID as evidence, so deleting
+// cites. Every graph edge stores its source memory IDs as evidence, so deleting
 // a cited row would leave the knowledge graph pointing at a memory that no
 // longer exists — a dangling citation is worse than the disk space it saves.
 func (c *Consolidator) decayRaw() (pruned, protected int) {
@@ -429,10 +707,14 @@ func (c *Consolidator) decayRaw() (pruned, protected int) {
 	cutoff := time.Now().UTC().Add(-c.retention)
 
 	cited := map[string]bool{}
+	// Every citation of every live edge is protected, not only the first.
 	if _, edges := c.store.Graph().Snapshot(0); len(edges) > 0 {
 		for _, e := range edges {
 			if e.Source != "" {
 				cited[e.Source] = true
+			}
+			for _, src := range e.Sources {
+				cited[src] = true
 			}
 		}
 	}
@@ -477,8 +759,9 @@ func (c *Consolidator) decayRaw() (pruned, protected int) {
 	return n, protected
 }
 
-// ask sends the current fact set to the LLM and parses a Consolidation.
-func (c *Consolidator) ask(ctx context.Context, facts []DocIndex) (*Consolidation, error) {
+// ask sends the current fact set, and the owner's existing schemas, to the LLM
+// and parses a Consolidation.
+func (c *Consolidator) ask(ctx context.Context, facts, schemas []DocIndex) (*Consolidation, error) {
 	var b strings.Builder
 	for _, f := range facts {
 		// turn names the conversation the fact came from, so the model can tell
@@ -489,25 +772,35 @@ func (c *Consolidator) ask(ctx context.Context, facts []DocIndex) (*Consolidatio
 		}
 		fmt.Fprintf(&b, "- id=%s | turn=%s | %s\n", f.ID, turn, truncate(f.Content, 400))
 	}
+	var existing strings.Builder
+	if len(schemas) > 0 {
+		existing.WriteString("\nSchemas already stored for these facts (schema_id | pattern). Do not repeat them:\n")
+		for i, sc := range schemas {
+			if i >= maxPromptSchemas {
+				break
+			}
+			fmt.Fprintf(&existing, "- schema_id=%s | %s\n", sc.ID, truncate(sc.Content, 200))
+		}
+	}
 	system := `You are a memory consolidation engine. Below are durable facts already stored, each with its id and the turn it came from. Reason ACROSS them — not about any single one — and output a JSON object with EXACTLY these keys:
 {
   "merges": [{"text": "<one fact that replaces several>", "layer": "user_preferences|project_state|technical_lesson|decision|negative_knowledge", "supersedes": ["<id>", "<id>"]}],
   "drops": ["<id>"],
-  "schemas": [{"pattern": "<a recurring pattern only visible across many facts>", "context": "<when it applies>"}],
+  "schemas": [{"pattern": "<a recurring pattern only visible across many facts>", "context": "<when it applies>", "supersedes": ["<schema_id>"]}],
   "knowledge": [{"from": "<entity>", "relation": "<relation>", "to": "<entity>", "evidence": ["<id>", "<id>"]}],
   "arc": "<1-3 sentences: what these facts say about the user's work over time>"
 }
 Rules:
 - merges: ONLY combine facts that genuinely say the same thing or contradict each other. For a contradiction, keep the newer statement and supersede the older. supersedes MUST list at least 2 ids. Use only ids from the input.
 - drops: ids of facts that are stale, trivially obvious, or fully absorbed by a merge. Be conservative — deleting memory is irreversible.
-- schemas: 0-3 patterns that generalise beyond the individual facts.
+- schemas: 0-3 patterns that generalise beyond the individual facts. Do not repeat a schema already stored (listed below, if any). To refine a stored schema, return the refined pattern and list the schema_id it replaces in "supersedes"; otherwise leave "supersedes" empty.
 - knowledge: 0-5 entity-relation-entity edges, each corroborated in "evidence" by fact ids from AT LEAST 2 different turns. A triple resting on one turn is just that turn restated — do not emit it. Use only ids from the input.
 - arc: null if the facts are too few or too unrelated to synthesise.
 - Never invent an id. Never reference a fact not listed.
 Return ONLY valid JSON, no prose, no markdown fences.
 
 Facts:
-` + b.String()
+` + b.String() + existing.String()
 
 	messages := []map[string]string{
 		{"role": "system", "content": system},
@@ -536,6 +829,55 @@ func parseConsolidation(content string) (*Consolidation, error) {
 		return nil, err
 	}
 	return &cons, nil
+}
+
+// groupByOwner splits facts by owner. The owners come back in a fixed sorted
+// order, so the pass order is reproducible before the cursor rotates it.
+func groupByOwner(facts []DocIndex) (map[scopeKey][]DocIndex, []scopeKey) {
+	byOwner := map[scopeKey][]DocIndex{}
+	var owners []scopeKey
+	for _, f := range facts {
+		k := scopeKey{user: f.UserID, agent: f.AgentID}
+		if _, seen := byOwner[k]; !seen {
+			owners = append(owners, k)
+		}
+		byOwner[k] = append(byOwner[k], f)
+	}
+	sort.Slice(owners, func(i, j int) bool {
+		if owners[i].user != owners[j].user {
+			return owners[i].user < owners[j].user
+		}
+		return owners[i].agent < owners[j].agent
+	})
+	return byOwner, owners
+}
+
+// factsFingerprint identifies an owner's live facts: how many there are and the
+// newest timestamp. A new fact, a merge or a drop changes one of the two.
+func factsFingerprint(facts []DocIndex) string {
+	newest := ""
+	for _, f := range facts {
+		if f.Ts > newest {
+			newest = f.Ts
+		}
+	}
+	return strconv.Itoa(len(facts)) + "@" + newest
+}
+
+// normalizeText is the comparison key for schemas: case, runs of whitespace and
+// the punctuation at either end do not make a different schema.
+func normalizeText(s string) string {
+	s = strings.ToLower(strings.Join(strings.Fields(s), " "))
+	return strings.Trim(s, " .,;:!?\"'`*-()[]")
+}
+
+func containsID(ids []string, id string) bool {
+	for _, v := range ids {
+		if v == id {
+			return true
+		}
+	}
+	return false
 }
 
 // byIDOf indexes the batch so evidence lookups do not rescan it.
