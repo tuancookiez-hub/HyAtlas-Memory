@@ -224,3 +224,275 @@ func TestReprocessByIds(t *testing.T) {
 		}
 	}
 }
+
+// delete_all is destructive, so only POST and DELETE may reach it. A GET from a
+// link prefetcher must get 405 and must not touch the store, even when it
+// carries a scope that would otherwise be valid.
+func TestDeleteAllRejectsNonDeleteMethods(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	if err := srv.store.Add(memory.L2Raw, "doc-1", "text", map[string]string{
+		"user_id": "u", "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	h := srv.routes()
+	for _, method := range []string{"GET", "PUT", "PATCH"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, localRequest(method, "/api/v1/delete_all?all=true", nil))
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s delete_all: want 405, got %d", method, w.Code)
+		}
+		if w.Header().Get("Allow") == "" {
+			t.Errorf("%s delete_all: 405 without an Allow header", method)
+		}
+	}
+	if srv.store.TotalMemories() != 1 {
+		t.Errorf("refused methods changed the store: %d docs", srv.store.TotalMemories())
+	}
+	// DELETE with a real scope is allowed.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, localRequest("DELETE", "/api/v1/delete_all?user_id=u", nil))
+	if w.Code != http.StatusOK || srv.store.TotalMemories() != 0 {
+		t.Errorf("DELETE scoped: code %d, docs %d; want 200 and 0", w.Code, srv.store.TotalMemories())
+	}
+}
+
+// A call with no filter is refused, and only an explicit all=true wipes.
+func TestDeleteAllRequiresFilterOrAll(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	if err := srv.store.Add(memory.L2Raw, "doc-1", "text", map[string]string{
+		"user_id": "u", "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	h := srv.routes()
+
+	// layer=* is "everything" and must not bypass the guard.
+	for _, target := range []string{"/api/v1/delete_all", "/api/v1/delete_all?layer=*"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, localRequest("POST", target, nil))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("POST %s: want 400, got %d", target, w.Code)
+		}
+	}
+	if srv.store.TotalMemories() != 1 {
+		t.Fatalf("refused unscoped delete removed docs: %d left", srv.store.TotalMemories())
+	}
+
+	// all=true in the body is the explicit wipe.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, localRequest("POST", "/api/v1/delete_all", strings.NewReader(`{"all":true}`)))
+	if w.Code != http.StatusOK {
+		t.Errorf("body all=true: want 200, got %d", w.Code)
+	}
+	if srv.store.TotalMemories() != 0 {
+		t.Errorf("body all=true left %d docs", srv.store.TotalMemories())
+	}
+}
+
+// Request bodies are capped. A body over the limit is refused before it is
+// decoded, so nothing is stored.
+func TestRequestBodyIsBounded(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	big := `{"text":"` + strings.Repeat("a", maxRequestBody) + `"}`
+	w := httptest.NewRecorder()
+	srv.routes().ServeHTTP(w, localRequest("POST", "/api/v1/add", strings.NewReader(big)))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("oversized add: want 400, got %d", w.Code)
+	}
+	if srv.store.TotalMemories() != 0 {
+		t.Errorf("oversized add stored %d docs", srv.store.TotalMemories())
+	}
+}
+
+// The dashboard status must report the configured mode and the same LLM state
+// as /api/v1/status, not a hardcoded "ok".
+func TestDashStatusReportsModeAndLLMState(t *testing.T) {
+	cases := []struct {
+		mode    Mode
+		withKey bool
+		wantLLM string
+	}{
+		{ModeLite, true, "unused"},
+		{ModeUltra, false, "unconfigured"},
+		{ModePro, true, "ok"},
+	}
+	for _, c := range cases {
+		srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+		srv.mode = c.mode
+		if c.withKey {
+			srv.llm = NewLLMClient("http://127.0.0.1:1/v1", "k", "m")
+		}
+		w := httptest.NewRecorder()
+		srv.handleDashStatus(w, httptest.NewRequest("GET", "/api/status", nil))
+		var st map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		if st["mode"] != string(c.mode) {
+			t.Errorf("%s: dash mode = %v", c.mode, st["mode"])
+		}
+		if st["llm"] != c.wantLLM {
+			t.Errorf("%s: dash llm = %v, want %q", c.mode, st["llm"], c.wantLLM)
+		}
+	}
+}
+
+// The dashboard status reads the extraction error that background goroutines
+// write. Run with -race: this must not read the field unsynchronised.
+func TestDashStatusConcurrentWithExtractErr(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			srv.setExtractErr("boom")
+			srv.setExtractErr("")
+		}()
+		go func() {
+			defer wg.Done()
+			w := httptest.NewRecorder()
+			srv.handleDashStatus(w, httptest.NewRequest("GET", "/api/status", nil))
+		}()
+	}
+	wg.Wait()
+}
+
+// Concurrent Adds all persist the same doc index. The index file must stay
+// valid JSON and every add must succeed.
+func TestConcurrentAddsKeepIndexValid(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	var wg sync.WaitGroup
+	errs := make(chan error, 80)
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 10; i++ {
+				id := "doc-" + string(rune('a'+g)) + "-" + string(rune('a'+i))
+				if err := srv.store.Add(memory.L2Raw, id, "text", map[string]string{
+					"user_id": "u", "ts": "2026-10-06T00:00:00Z",
+				}); err != nil {
+					errs <- err
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent add: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(srv.store.indexPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idx map[string]DocIndex
+	if err := json.Unmarshal(b, &idx); err != nil {
+		t.Fatalf("doc_index.json is not valid after concurrent writes: %v", err)
+	}
+	if len(idx) != 80 {
+		t.Errorf("index has %d docs on disk, want 80", len(idx))
+	}
+}
+
+// A web page in the user's browser must not be able to drive the API. The guard
+// applies on every bind address: a DNS-name Host is refused (DNS rebinding), a
+// cross-origin Origin is refused (including the opaque "null"), and a request the
+// browser marks Sec-Fetch-Site: cross-site is refused even with no Origin. The
+// plugin and curl send none of these headers, and a same-origin request is fine.
+func TestGuardLocalRefusesBrowserOriginsAndRebinding(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	if err := srv.store.Add(memory.L2Raw, "doc-1", "text", map[string]string{
+		"user_id": "u", "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	h := srv.routes()
+
+	send := func(method, path, host string, hdr map[string]string) int {
+		r := httptest.NewRequest(method, path, nil)
+		r.Host = host
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code
+	}
+	const wipe = "/api/v1/delete_all?all=true"
+
+	// Each of these would be a destructive call if it got through.
+	refused := []struct {
+		name string
+		host string
+		hdr  map[string]string
+	}{
+		{"cross-origin page", "127.0.0.1:19528", map[string]string{"Origin": "https://evil.example"}},
+		{"Origin null", "127.0.0.1:19528", map[string]string{"Origin": "null"}},
+		{"DNS-name Host, no origin", "evil.example:19528", nil},
+		{"DNS-name Host, matching origin", "evil.example", map[string]string{"Origin": "http://evil.example"}},
+		{"DNS name on the 0.0.0.0 bind", "hyatlas.lan:19528", nil},
+		{"other LAN IP as origin", "192.168.1.5:19528", map[string]string{"Origin": "http://192.168.1.9:19528"}},
+		{"cross-site fetch metadata, no origin", "127.0.0.1:19528", map[string]string{"Sec-Fetch-Site": "cross-site"}},
+	}
+	for _, c := range refused {
+		if got := send("POST", wipe, c.host, c.hdr); got != http.StatusForbidden {
+			t.Errorf("%s (host=%q hdr=%v): want 403, got %d", c.name, c.host, c.hdr, got)
+		}
+	}
+	if srv.store.TotalMemories() != 1 {
+		t.Fatalf("a refused request deleted data: %d left", srv.store.TotalMemories())
+	}
+
+	// Allowed without any allowlist: loopback names, IP literals, same-origin,
+	// the server's own pages, and clients that send no Origin.
+	allowed := []struct {
+		name   string
+		method string
+		path   string
+		host   string
+		hdr    map[string]string
+	}{
+		{"localhost with its origin", "GET", "/api/v1/status", "localhost:19528",
+			map[string]string{"Origin": "http://localhost:19528"}},
+		{"bracketed IPv6, no origin", "GET", "/api/v1/status", "[::1]:19528", nil},
+		{"trailing-dot localhost", "GET", "/api/v1/status", "localhost.:19528",
+			map[string]string{"Origin": "http://localhost.:19528"}},
+		{"same-origin POST from a LAN IP", "POST", "/api/v1/list", "192.168.1.5:19528",
+			map[string]string{"Origin": "http://192.168.1.5:19528"}},
+		{"same-origin fetch metadata", "POST", "/api/v1/list", "localhost:19528",
+			map[string]string{"Sec-Fetch-Site": "same-origin", "Origin": "http://localhost:19528"}},
+		{"LAN IP, no origin (0.0.0.0 bind)", "GET", "/api/v1/status", "192.168.1.5:19528", nil},
+	}
+	for _, c := range allowed {
+		if got := send(c.method, c.path, c.host, c.hdr); got != http.StatusOK {
+			t.Errorf("%s (host=%q): want 200, got %d", c.name, c.host, got)
+		}
+	}
+
+	// HYATLAS_ALLOWED_HOSTS names extra hostnames. Case and a trailing dot do not
+	// matter, and the listed name is accepted as Host and as Origin host. An
+	// unlisted name is still refused.
+	srv.allowedHosts = parseHostList(" Hyatlas.LAN , other.example. ")
+	h = srv.routes()
+	for _, c := range []struct {
+		name string
+		host string
+		hdr  map[string]string
+		want int
+	}{
+		{"allowlisted Host", "hyatlas.lan:19528", nil, http.StatusOK},
+		{"allowlisted Host, trailing dot and case", "OTHER.example.:19528", nil, http.StatusOK},
+		{"allowlisted origin on a loopback Host", "localhost:19528",
+			map[string]string{"Origin": "http://other.example"}, http.StatusOK},
+		{"unlisted origin on an allowlisted Host", "hyatlas.lan:19528",
+			map[string]string{"Origin": "http://notlisted.example"}, http.StatusForbidden},
+		{"unlisted Host", "notlisted.example:19528", nil, http.StatusForbidden},
+	} {
+		if got := send("GET", "/api/v1/status", c.host, c.hdr); got != c.want {
+			t.Errorf("%s: host=%q hdr=%v: want %d, got %d", c.name, c.host, c.hdr, c.want, got)
+		}
+	}
+}

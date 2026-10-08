@@ -16,9 +16,10 @@ import (
 // one before it:
 //
 //	lite  — no reasoning. Raw text plus local embeddings only. No LLM call is
-//	        ever made, so conversation text never leaves the machine.
-//	pro   — reasons WITHIN one turn. One extraction call per write fills all
-//	        seven layers from that turn. Nothing runs after the write returns.
+//	        ever made, so no conversation text goes to an LLM. Embeddings are
+//	        local by default; see HYATLAS_EMBED_BASE for the one remote path.
+//	pro   — reasons WITHIN one turn. One extraction call per write fills
+//	        L1, L2, L3, L4 and L7 from that turn. Nothing runs after the write returns.
 //	ultra — reasons ACROSS time. Everything pro does, plus the slow path: a
 //	        periodic consolidation pass that merges contradicting facts,
 //	        generalises schemas visible only across many turns, synthesises a
@@ -93,8 +94,9 @@ func (m Mode) OrDefault() Mode {
 	return defaultMode
 }
 
-// UsesLLM reports whether this mode calls an LLM at all. Lite does not, which is
-// the only mode where conversation text never leaves the machine.
+// UsesLLM reports whether this mode calls an LLM at all. Lite does not, so no
+// conversation text is sent to an LLM. Embeddings still leave the machine if
+// HYATLAS_EMBED_BASE points at a remote endpoint.
 func (m Mode) UsesLLM() bool { return m.OrDefault() != ModeLite }
 
 // Consolidates reports whether this mode runs the slow path. This — not blocking
@@ -154,7 +156,7 @@ func System2Layers() []memory.Layer {
 func (m Mode) Describe() string {
 	switch m.OrDefault() {
 	case ModeLite:
-		return "lite (raw + local embeddings, no LLM call, nothing leaves the machine)"
+		return "lite (raw + local embeddings, no LLM call, no text sent to an LLM)"
 	case ModePro:
 		return "pro (per-write extraction: L1-L4 + L7, no slow path)"
 	default:

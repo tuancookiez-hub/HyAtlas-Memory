@@ -15,7 +15,7 @@ import (
 
 func TestResolveModelDirKeepsAbsolutePath(t *testing.T) {
 	dir := t.TempDir()
-	got := resolveModelDir(dir)
+	got, _ := resolveModelDir(dir)
 	if !filepath.IsAbs(got) {
 		t.Fatalf("absolute input came back relative: %q", got)
 	}
@@ -40,45 +40,12 @@ func TestResolveModelDirFindsModelsInCWD(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := resolveModelDir("./models")
+	got, _ := resolveModelDir("./models")
 	if !filepath.IsAbs(got) {
 		t.Fatalf("relative ./models stayed relative: %q", got)
 	}
 	if filepath.Clean(got) != filepath.Clean(models) {
 		t.Fatalf("resolved to the wrong directory: got %q want %q", got, models)
-	}
-}
-
-func TestResolveModelDirFindsModelsBesideExecutable(t *testing.T) {
-	// Installers put the model beside the binary while the process runs from
-	// some other cwd. The exe location is the fallback that makes that work.
-	exe, err := os.Executable()
-	if err != nil {
-		t.Skipf("cannot locate test executable: %v", err)
-	}
-	exeDir := filepath.Dir(exe)
-	models := filepath.Join(exeDir, "models-resolver-test")
-	if err := os.MkdirAll(models, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(models) })
-
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	empty := t.TempDir()
-	t.Cleanup(func() { _ = os.Chdir(wd) })
-	if err := os.Chdir(empty); err != nil {
-		t.Fatal(err)
-	}
-
-	got := resolveModelDir("./models-resolver-test")
-	if !filepath.IsAbs(got) {
-		t.Fatalf("exe-adjacent candidate stayed relative: %q", got)
-	}
-	if filepath.Clean(got) != filepath.Clean(models) {
-		t.Fatalf("did not fall back to the executable directory: got %q want %q", got, models)
 	}
 }
 
@@ -95,7 +62,7 @@ func TestResolveModelDirMissingStillAbsolute(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := resolveModelDir("./models-absent")
+	got, _ := resolveModelDir("./models-absent")
 	if !filepath.IsAbs(got) {
 		t.Fatalf("missing dir came back relative: %q", got)
 	}

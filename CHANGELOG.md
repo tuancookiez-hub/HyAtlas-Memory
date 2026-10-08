@@ -1,5 +1,174 @@
 # Changelog
 
+## [4.4.0] — 2026-10-08
+
+Everything on `claude/busy-faraday-3tvefr` since v4.3.3. Several items are
+behaviour changes that a client or script may notice.
+
+### Security
+
+- **Dashboard XSS fixed.** Server-derived values (memory content, layer names,
+  owner keys, search results, L5 labels) reached `innerHTML` unescaped. Every such
+  value now goes through `escapeHtml` or `escapeAttr`, and CSS class names go through
+  `cssToken`. Quotes are escaped too, so the escaping holds inside attribute values.
+  (`dashboard/dist/app.js`, `dashboard/dist/js/l5.js`)
+- **DNS-rebinding and cross-site guard.** A `Host` that names a DNS name gets 403 on
+  every bind address and every route, including `/healthz`, unless the name is in
+  `HYATLAS_ALLOWED_HOSTS` (comma-separated hostnames; a port in an entry is ignored).
+  Localhost and IP literals always pass. An `Origin` that is not loopback, not the
+  request's own host and not allowlisted gets 403, and so does `Origin: null` or a
+  non-http(s) origin. A `Sec-Fetch-Site: cross-site` request gets 403. Requests with
+  no `Origin` (curl, the Hermes plugin) are not affected by the `Origin` rule. A
+  plugin `server_host` that is a DNS name needs the same allowlist entry on the
+  server, or the plugin reports it unreachable. (`server.go` `guardLocal`,
+  `originAllowed`)
+
+### Removed
+
+- The Docker setup is gone. Build or download the binary instead (see README).
+
+### Changed (server)
+
+- **`delete_all` needs `POST` or `DELETE` and a scope.** It requires at least one
+  of `id`, `layer`, `user_id`, `agent_id`, or `all=true`. An unscoped call is refused.
+- **Request bodies are capped at 8 MiB.**
+- **Graph data without an owner stays visible.** Rows written before owners were
+  recorded carry no `user_id` / `agent_id`. They appear under every owner filter, so
+  single-user data from older releases keeps working.
+- **Consolidation batches run in windows.** An owner with more facts than
+  `HYATLAS_CONSOLIDATE_BATCH` is consolidated in successive windows across passes,
+  not only its first batch each time.
+- **Ultra refuses to start when `HYATLAS_CONSOLIDATE_EVERY` is zero or negative.**
+  This is fatal at startup. Use `HYATLAS_MODE=pro` to run without the slow path.
+- **Consolidation is per owner.** A pass groups facts by `user_id` / `agent_id`
+  and never merges across owners.
+- **Facts are superseded, not deleted.** An ultra merge or drop sets `invalid_at`
+  and `superseded_by`. `GET /api/v1/list` returns them with `include_superseded=true`.
+- **L5 relations need at least two distinct turns** of corroboration before they
+  become graph edges. A single turn no longer creates one.
+- **The graph is owner-scoped with multiple sources.** `/api/v1/edges`,
+  `/api/v1/graph` and `/api/v1/list` accept `user_id` and `agent_id`. An edge
+  keeps every source memory that supports it.
+- **Raw retention keeps evidence.** With `HYATLAS_RAW_RETENTION` set, raw rows that
+  still back a live fact or edge are kept, not only rows an edge cites directly.
+- **`/api/v1/status` consolidation fields.** `consolidations` and
+  `last_consolidated` reset on restart. `consolidations` is `-1` when the mode has
+  no slow path (`lite`, `pro`).
+- **`session_id` is stored on add.**
+- **Model directory search order** when `HYATLAS_MODEL_DIR` is unset:
+  `<cwd>/models`, then `<exe dir>/models`, then the installer default
+  (`~/.hyatlas/models`, or `%LOCALAPPDATA%\hyatlas\models` on Windows).
+- **`/api/v1/reprocess` walks unextracted rows oldest first.** Without `ids`, it takes
+  up to `max` raw rows that extraction has not reached, ordered by `ts` then `id`.
+  Extracted rows are removed before the cut, so they cannot hide an older backlog.
+  `skipped` is 0 on this path. With `ids`, extracted rows are re-extracted.
+  (`server.go` `unextractedRaw`)
+- **`GET /api/v1/graph` reads `node`, `user_id` and `agent_id` from the query string.**
+  The JSON body still wins when both are sent. (`server.go` `handleGraph`)
+- **`agent_id=all` on `/api/memories` and `/api/l6-schemas`** means no owner filter,
+  as it does on the graph endpoints. (`dashapi.go` `graphOwner`)
+- **Consolidation fingerprint format changed.** An owner's watermark is now a hash of
+  its sorted fact IDs. A watermark written in the old `count@timestamp` form never
+  matches, so each owner runs once after upgrading. (`consolidate.go`
+  `idsFingerprint`)
+- **Consolidation windows alternate and recover.** After an owner's facts change, a
+  pass alternates between the newest window and the next window of the walk. An
+  owner stays due until every window has been covered since the change. A window
+  that fails three passes in a row is skipped and reported in `errors`. The count
+  applies to the walk position only.
+  (`consolidate.go` `Once`, `maxWindowFails`)
+- **Soft and fatal write failures.** An LLM call or reply failure, and a failed merge
+  or supersede, keep the owner due for a retry. A failed arc, schema, L5 edge or L1
+  mirror write is reported in `errors` and is not retried, because the facts were
+  already reconciled. An owner with nothing due makes no LLM call.
+  (`consolidate.go` `consolidateScope`)
+- **Embedding runs outside the write lock.** `Add` computes the embedding before it
+  takes `rowMu`, so a slow embedder no longer stalls writes and supersedes.
+  (`store.go` `Add`)
+- **Re-citing an L5 edge keeps `recorded_at`.** New sources are appended; the first
+  record time stays, so earlier as-of snapshots keep the edge. (`graph/graph.go`)
+
+### Changed (Hermes plugin)
+
+- `config.yaml` is read through `hermes_yaml`.
+- A server the plugin spawns defaults to `sync: off`, so a Hermes turn never waits
+  on the LLM. An exported `HYATLAS_SYNC_EXTRACT` still wins.
+- On Windows, the `launcher_path` script runs only when it is configured. It is never discovered.
+- `on_memory_write` stores a plain raw (L2) add, tagged with its target. It no
+  longer claims an L1 Profile mirror. L1 fills through extraction in `pro` and `ultra`.
+- The `llm_key` setting no longer carries a platform link. Any OpenAI-compatible
+  key works.
+- **Auto-start takes a lock.** When two Hermes sessions auto-start at the same time,
+  only one starts the server. The other finds it running.
+- **Recent memories include raw rows in lite.** `hermes hyatlas recent` and the
+  `hyatlas_recent` tool include L2 raw rows by default in `lite`, its only stored
+  layer. `--include-raw` / `--no-include-raw` and the tool's `include_raw` argument
+  override the default. Other modes leave raw rows out by default.
+- **Start lock falls back on filesystems without locking.** If the filesystem cannot
+  lock at all, the start proceeds unlocked with a logged warning.
+- **Setting descriptions say what an empty value means.** `llm_base`, `llm_model`,
+  `llm_key`, `mode` and `sync` now state what the server does when they are empty, and
+  where the key is kept. (`plugins/hyatlas/settings.py`, `plugin.yaml`)
+- **Source-build installer picks onnxruntime for the CPU.** On a source build,
+  `scripts/install.sh` fetches the onnxruntime 1.28.1 package that matches the CPU:
+  Linux x64 or aarch64, macOS arm64, Windows x64 or arm64 (Intel macOS stops with
+  a clear error: there is no onnxruntime package for it). Release binaries skip
+  this step.
+
+### Changed (dashboard and installer)
+
+- **Dashboard owner selector.** It lists the `(user_id, agent_id)` pairs seen in the
+  most recent 1000 memories, with "All owners" as the default. The choice is kept in
+  `localStorage`, and a choice that no longer exists falls back to All owners.
+- **Dashboard Explore search** is wired to `/api/v1/search`. The day filter is applied
+  in the browser. The semantic, keyword and hybrid tabs are sent as `reader`, which the
+  server does not read yet, so they return the same results.
+- **Installer runs its questions on `/dev/tty`.** Under `curl | bash`, the mode,
+  endpoint and key are asked on the terminal. With no terminal at all, exported
+  `HYATLAS_MODE`, `HYATLAS_LLM_BASE`, `HYATLAS_LLM_MODEL` and `HYATLAS_LLM_KEY` are
+  saved to `$HERMES_HOME/.env` (default `~/.hermes/.env`), created with mode 0600
+  under `umask 077`.
+- **Installer verification has four outcomes**, each with its own final line and exit
+  code: `installed and verified` (0), `binary verified, model missing` (1), `NOT
+  verified` (1), and `skipped, not verified` (0, a source build with
+  `HYATLAS_NO_MODEL=1`).
+- **Source builds clone `HYATLAS_VERSION`.** The default branch is built only when that
+  tag is missing and `HYATLAS_VERSION` is not set, with a warning. The installer
+  requires Go 1.26 or newer for a source build.
+- **Installer refuses a bad exported mode.** An exported `HYATLAS_MODE` that is not
+  `lite`, `pro` or `ultra` stops the installer with an error. It is no longer written
+  to `.env`, where the server would refuse to start.
+- **Installer PATH and Windows paths.** It does not add a `PATH` line when the install
+  directory is already in the shell rc file, and it converts the install path with
+  `cygpath` under Git Bash.
+
+### Fixed
+
+- **Installer restores terminal echo on Ctrl-C** at the hidden key prompt. The
+  background verification probe is also stopped, and its data directory removed, on any
+  exit, including Ctrl-C.
+- **The dashboard renders again.** The L5 page referenced `currentAgentId`, which the
+  owner-scope rewrite had removed, so it threw. It now uses `currentOwnerKey`, and its
+  stats render escaped values. (`dashboard/dist/js/l5.js`, `dashboard/dist/app.js`)
+- **`HYATLAS_GO_HOST` accepts IPv6.** Brackets are optional, and the listen address is
+  built with `net.JoinHostPort`. (`server.go`)
+- **`hermes hyatlas start` no longer double-spawns.** It reports `already_running`
+  (with the pid when the pidfile is valid) and never writes over a live pidfile.
+- **The pidfile is written only after the child is seen alive.** A child that
+  dies on startup is reported as `ok: false` and leaves no pidfile.
+- **`hermes hyatlas stop` reports the truth.** It returns `ok: false` when the
+  server still answers but was not started by the plugin. It no longer reports
+  `stopped: true` for a dead pid.
+- **`/hyatlas start` and `/hyatlas stop` work when the server is down.** They ran
+  the availability check first, so they could never start or stop anything.
+- **The unreachable hint says `hermes hyatlas start`,** and notes that the
+  `hermes hyatlas` command appears only once `memory.provider` is `hyatlas`.
+- **The installer keeps going when the model download fails.** A source build
+  still installs the binary, prints the manual steps, and exits non-zero at the end.
+  Release binaries are embedded, so they skip the model download.
+- **README size claims corrected.** The embedded release binary is about 160 MB
+  because it carries the model. The plain build is small and needs a model folder.
+
 ## [4.3.3] — 2026-10-08
 
 Two defects in the shared LLM call path, both found by running a real

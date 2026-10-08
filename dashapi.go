@@ -24,10 +24,32 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/tuancookiez-hub/hyatlas-v4/graph"
 	"github.com/tuancookiez-hub/hyatlas-v4/memory"
 )
+
+// graphOwner reads the owner filter the graph endpoints accept as user_id and
+// agent_id. An empty value, and "all" (which the dashboard sends for every
+// agent), both mean no filter.
+func graphOwner(userID, agentID string) (string, string) {
+	return ownerFilter(userID), ownerFilter(agentID)
+}
+
+func ownerFilter(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "all" {
+		return ""
+	}
+	return v
+}
+
+// graphScope is the graph.Scope for an owner filter read by graphOwner.
+func graphScope(uid, aid string) graph.Scope {
+	return graph.Scope{UserID: uid, AgentID: aid}
+}
 
 // gmtCreated converts an RFC3339 ts string to unix seconds (dashboard expects a number).
 func gmtCreated(ts string) int64 {
@@ -43,14 +65,17 @@ func writeJSON(w http.ResponseWriter, code int, v any) { jsonResponse(w, code, v
 
 func (s *Server) handleDashStatus(w http.ResponseWriter, r *http.Request) {
 	write := "ok"
-	if s.lastExtractErr != "" {
-		write = "degraded: " + s.lastExtractErr
+	if errStr := s.extractErr(); errStr != "" {
+		write = "degraded: " + errStr
 	}
 	writeJSON(w, 200, map[string]any{
-		"status":   "ok",
-		"vdb":      "ok",
-		"embed":    "ok",
-		"llm":      "ok",
+		"status": "ok",
+		"vdb":    "ok",
+		"embed":  "ok",
+		// Same gate as /api/v1/status, so the dashboard cannot show a healthy LLM
+		// in lite (which never calls one) or in a mode with no credential.
+		"llm":      s.llmState(),
+		"mode":     string(s.mode.OrDefault()),
 		"layers":   s.store.LayerCounts(),
 		"total":    s.store.TotalMemories(),
 		"pipeline": write,
@@ -75,7 +100,9 @@ func (s *Server) handleDashInfo(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDashMemories(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit := atoi(q.Get("limit"), 100)
-	items, _ := s.store.List(memory.Layer(q.Get("layer")), q.Get("user_id"), q.Get("agent_id"), limit, atoi(q.Get("offset"), 0), false)
+	// "all" from the dashboard means no owner filter, as on the graph endpoints.
+	uid, aid := graphOwner(q.Get("user_id"), q.Get("agent_id"))
+	items, _ := s.store.List(memory.Layer(q.Get("layer")), uid, aid, limit, atoi(q.Get("offset"), 0), false)
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {
 		out = append(out, map[string]any{
@@ -174,7 +201,8 @@ func (s *Server) handleDashLayerHealth(w http.ResponseWriter, r *http.Request) {
 // handleDashL6Schemas lists L6 schema items.
 func (s *Server) handleDashL6Schemas(w http.ResponseWriter, r *http.Request) {
 	n := atoi(r.URL.Query().Get("n"), 6)
-	items, _ := s.store.List(memory.L6Schema, "", "", n, 0, false)
+	uid, aid := graphOwner(r.URL.Query().Get("user_id"), r.URL.Query().Get("agent_id"))
+	items, _ := s.store.List(memory.L6Schema, uid, aid, n, 0, false)
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {
 		out = append(out, map[string]any{
@@ -191,14 +219,15 @@ func (s *Server) handleDashL5Graph(w http.ResponseWriter, r *http.Request) {
 	layer := r.URL.Query().Get("layer")
 	n := atoi(r.URL.Query().Get("n"), 500)
 	wantRels := r.URL.Query().Get("rels") != "false"
+	uid, aid := graphOwner(r.URL.Query().Get("user_id"), r.URL.Query().Get("agent_id"))
 
 	if layer == "" || layer == "l5_knowledge" {
-		nodes, rels := s.store.Graph().Snapshot(n)
+		nodes, rels := s.store.Graph().SnapshotScoped(graphScope(uid, aid), n)
 		writeJSON(w, 200, map[string]any{"nodes": nodes, "relations": rels, "total": len(nodes)})
 		return
 	}
 	// L6/L7 views render their layer items as pseudo-nodes (real content, real layer)
-	items, _ := s.store.List(memory.Layer(layer), "", "", n, 0, false)
+	items, _ := s.store.List(memory.Layer(layer), uid, aid, n, 0, false)
 	type node struct {
 		ID    string `json:"id"`
 		Label string `json:"label"`

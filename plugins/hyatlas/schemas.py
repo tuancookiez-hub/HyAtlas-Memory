@@ -95,8 +95,7 @@ HYATLAS_RECENT_SCHEMA: Dict[str, Any] = {
             },
             "include_raw": {
                 "type": "boolean",
-                "description": "Include L2 raw (the unprocessed input). Default false; set true to see what was just typed.",
-                "default": False,
+                "description": "Include L2 raw (the unprocessed input, what was just typed). Omit it to use the server's mode: lite includes raw (its only stored layer), other modes do not. Set true or false to force it.",
             },
         },
         "required": [],

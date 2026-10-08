@@ -6,9 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,7 +27,7 @@ import (
 // It is exposed on /api/v1/status and /api/info so every client (Desktop pane,
 // web dashboard, CLI) reports the real running version instead of hardcoding
 // a "v4" badge that silently goes stale on each release. Bump in one place.
-const Version = "4.3.3"
+const Version = "4.4.0"
 
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {
@@ -36,6 +40,9 @@ type Server struct {
 	cons     *Consolidator
 	start    time.Time
 	dataDir  string
+	// allowedHosts are the extra hostnames (HYATLAS_ALLOWED_HOSTS) a request may
+	// name in Host or Origin, beyond localhost and IP literals (see guardLocal).
+	allowedHosts []string
 
 	// mu guards lastExtractErr: the extraction goroutines write it from
 	// background contexts while /api/v1/status reads it on request.
@@ -224,6 +231,11 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	meta["user_id"] = body.UserID
 	meta["agent_id"] = body.AgentID
+	// The top-level session_id is what plugin clients send. Keep an explicit
+	// metadata.session_id if the caller set one, so it is never clobbered.
+	if body.Session != "" && meta["session_id"] == "" {
+		meta["session_id"] = body.Session
+	}
 	meta["layer"] = string(memory.L2Raw)
 	meta["ts"] = time.Now().UTC().Format(time.RFC3339)
 
@@ -361,14 +373,17 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	limit := atoi(q.Get("limit"), 20)
 	offset := atoi(q.Get("offset"), 0)
 	includeRaw := q.Get("include_raw")
+	// Superseded rows are history. They stay hidden unless the caller asks.
+	includeSuperseded := q.Get("include_superseded") == "true"
 	if r.Method == http.MethodPost {
 		var body struct {
-			Limit      int    `json:"limit"`
-			Offset     int    `json:"offset"`
-			Layer      string `json:"layer"`
-			UserID     string `json:"user_id"`
-			AgentID    string `json:"agent_id"`
-			IncludeRaw *bool  `json:"include_raw"`
+			Limit             int    `json:"limit"`
+			Offset            int    `json:"offset"`
+			Layer             string `json:"layer"`
+			UserID            string `json:"user_id"`
+			AgentID           string `json:"agent_id"`
+			IncludeRaw        *bool  `json:"include_raw"`
+			IncludeSuperseded bool   `json:"include_superseded"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
 			if body.Limit > 0 {
@@ -383,9 +398,14 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 			if body.IncludeRaw != nil {
 				includeRaw = map[bool]string{true: "true", false: "false"}[*body.IncludeRaw]
 			}
+			includeSuperseded = includeSuperseded || body.IncludeSuperseded
 		}
 	}
-	items, total := s.store.List(memory.Layer(layer), userID, agentID, limit, offset, includeRaw == "false" && layer == "")
+	list := s.store.List
+	if includeSuperseded {
+		list = s.store.ListAll
+	}
+	items, total := list(memory.Layer(layer), userID, agentID, limit, offset, includeRaw == "false" && layer == "")
 
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {
@@ -396,6 +416,11 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		if it.Meta != nil {
 			m["session_id"] = it.Meta["session_id"]
+		}
+		// A superseded row says what replaced it, so history can be followed.
+		if isSuperseded(it) {
+			m["invalid_at"] = it.Meta["invalid_at"]
+			m["superseded_by"] = it.Meta["superseded_by"]
 		}
 		out = append(out, m)
 	}
@@ -420,6 +445,13 @@ func atoi(s string, def int) int {
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	// A delete is destructive, so only the verbs that name one are accepted. A
+	// GET from a link prefetcher or a crawler must not reach the wipe path.
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		w.Header().Set("Allow", "POST, DELETE")
+		jsonResponse(w, 405, map[string]any{"deleted_count": 0, "error": "method not allowed: use POST or DELETE"})
+		return
+	}
 	// Scoping may arrive as query params (curl style) OR as a JSON body
 	// (the hyatlas plugin's client style). Read both, query wins.
 	var body struct {
@@ -427,6 +459,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		Layer   string `json:"layer"`
 		UserID  string `json:"user_id"`
 		AgentID string `json:"agent_id"`
+		All     bool   `json:"all"`
 		Confirm string `json:"confirm"`
 	}
 	if r.Body != nil {
@@ -442,7 +475,9 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	layer := first(q.Get("layer"), body.Layer)
 	userID := first(q.Get("user_id"), body.UserID)
 	agentID := first(q.Get("agent_id"), body.AgentID)
-	confirm := first(q.Get("confirm"), body.Confirm) == "wipe-all"
+	// all=true is the explicit wipe. confirm=wipe-all is the older spelling of
+	// the same opt-in, kept so existing callers keep working.
+	all := q.Get("all") == "true" || body.All || first(q.Get("confirm"), body.Confirm) == "wipe-all"
 	ids := []string{}
 	if idStr := first(q.Get("id"), body.ID); idStr != "" {
 		ids = append(ids, idStr)
@@ -451,11 +486,12 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	if layer == "*" {
 		layer = ""
 	}
-	// Guard: an unscoped call is a full-store wipe. Require an explicit opt-in.
-	if len(ids) == 0 && layer == "" && userID == "" && agentID == "" && !confirm {
+	// Guard: a call with no filter is a full-store wipe. Require at least one
+	// scope, or an explicit all=true.
+	if len(ids) == 0 && layer == "" && userID == "" && agentID == "" && !all {
 		jsonResponse(w, 400, map[string]any{
 			"deleted_count": 0,
-			"error":         "unscoped delete refused: pass layer/user_id/agent_id/id, or confirm=wipe-all to wipe the entire store",
+			"error":         "unscoped delete refused: pass layer/user_id/agent_id/id, or all=true to wipe the entire store",
 		})
 		return
 	}
@@ -530,8 +566,8 @@ func (s *Server) handleDigest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 	// Optional body: {"ids": [...], "max": N}. With explicit ids the caller has
 	// already chosen the exact rows (e.g. backfilling an outage window), so the
-	// extracted-skip does not apply; otherwise walk up to `max` (default 200)
-	// oldest unextracted raw rows.
+	// extracted-skip does not apply. Otherwise up to `max` (default 200) raw rows
+	// that were never extracted are processed, oldest first (see unextractedRaw).
 	var body struct {
 		IDs []string `json:"ids"`
 		Max int      `json:"max"`
@@ -546,7 +582,7 @@ func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 		if max <= 0 {
 			max = 200
 		}
-		raw, _ = s.store.List(memory.L2Raw, "", "", max, 0, false)
+		raw = s.unextractedRaw(max)
 	}
 	// Lite has no extraction to reprocess, so say so instead of silently
 	// reporting zero work done.
@@ -559,10 +595,6 @@ func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 	}
 	reprocessed, failed, skipped := 0, 0, 0
 	for _, it := range raw {
-		if len(body.IDs) == 0 && it.Extracted {
-			skipped++
-			continue
-		}
 		if s.llm == nil {
 			failed++
 			continue
@@ -576,6 +608,32 @@ func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 		reprocessed++
 	}
 	jsonResponse(w, 200, map[string]any{"reprocessed": reprocessed, "failed": failed, "skipped": skipped})
+}
+
+// unextractedRaw returns up to max raw rows that extraction has not reached, oldest
+// first (ts, then id, so equal timestamps order the same way each time). Extracted
+// rows are removed before the cut: a page of already-extracted rows must not hide
+// older unextracted ones, and the newest rows must not be re-picked while an old
+// backlog starves.
+func (s *Server) unextractedRaw(max int) []DocIndex {
+	_, total := s.store.List(memory.L2Raw, "", "", 1, 0, false)
+	all, _ := s.store.List(memory.L2Raw, "", "", total, 0, false)
+	out := make([]DocIndex, 0, len(all))
+	for _, d := range all {
+		if !d.Extracted {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Ts != out[j].Ts {
+			return out[i].Ts < out[j].Ts
+		}
+		return out[i].ID < out[j].ID
+	})
+	if len(out) > max {
+		out = out[:max]
+	}
+	return out
 }
 
 func errStr(err error) string {
@@ -612,10 +670,11 @@ func (s *Server) handleStarmapGraph(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit := atoi(q.Get("n"), 500)
 	kSem := atoi(q.Get("k_semantic"), 2)
+	uid, aid := graphOwner(q.Get("user_id"), q.Get("agent_id"))
 
 	// 1. Nodes: all L3 facts + a sampled set of L2 raw entries. Layer type
 	//    becomes the visual "kind" (memory in the starmap sense).
-	items, _ := s.store.List("", "", "", limit, 0, false)
+	items, _ := s.store.List("", uid, aid, limit, 0, false)
 	nodes := make([]map[string]any, 0, len(items))
 	memCards := make([]map[string]any, 0, len(items))
 	for _, it := range items {
@@ -647,7 +706,7 @@ func (s *Server) handleStarmapGraph(w http.ResponseWriter, r *http.Request) {
 	edges := []map[string]any{}
 
 	// knowledge
-	graphNodes, graphRels := s.store.Graph().Snapshot(limit)
+	graphNodes, graphRels := s.store.Graph().SnapshotScoped(graphScope(uid, aid), limit)
 	_ = graphNodes
 	for _, e := range graphRels {
 		edges = append(edges, map[string]any{
@@ -661,7 +720,7 @@ func (s *Server) handleStarmapGraph(w http.ResponseWriter, r *http.Request) {
 	// co_session
 	sessionBuckets := map[string][]string{}
 	for _, l := range []string{"l2_raw", "l3_fact", "l4_summary", "l5_knowledge", "l6_schema", "l7_intention"} {
-		lItems, _ := s.store.List(memory.Layer(l), "", "", 200, 0, false)
+		lItems, _ := s.store.List(memory.Layer(l), uid, aid, 200, 0, false)
 		for _, it := range lItems {
 			sid := ""
 			if it.Meta != nil {
@@ -696,12 +755,12 @@ func (s *Server) handleStarmapGraph(w http.ResponseWriter, r *http.Request) {
 	if kSem < 1 {
 		kSem = 2
 	}
-	recent, _ := s.store.List(memory.L3Fact, "", "", 20, 0, false)
+	recent, _ := s.store.List(memory.L3Fact, uid, aid, 20, 0, false)
 	for _, it := range recent {
 		if semCount >= maxSem {
 			break
 		}
-		hits, err := s.store.Search(it.Content, kSem+1, "", "", "")
+		hits, err := s.store.Search(it.Content, kSem+1, "", uid, aid)
 		if err != nil {
 			continue
 		}
@@ -745,13 +804,15 @@ func (s *Server) handleGraphEdges(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	semanticK := atoi(q.Get("k_semantic"), 3)
 	limitAll := atoi(q.Get("n"), 500)
+	uid, aid := graphOwner(q.Get("user_id"), q.Get("agent_id"))
 
-	// 1. Knowledge: L5 explicit edges
-	nodes, rels := s.store.Graph().Snapshot(limitAll)
+	// 1. Knowledge: L5 explicit edges, for the owner named by the filter (all owners when none)
+	nodes, rels := s.store.Graph().SnapshotScoped(graphScope(uid, aid), limitAll)
 	nodesArr := make([]map[string]any, 0, len(nodes))
 	for _, n := range nodes {
 		nodesArr = append(nodesArr, map[string]any{
 			"id": n.ID, "label": n.Label, "type": n.Type,
+			"user_id": n.UserID, "agent_id": n.AgentID,
 		})
 	}
 	knowledge := make([]map[string]any, 0, len(rels))
@@ -760,6 +821,9 @@ func (s *Server) handleGraphEdges(w http.ResponseWriter, r *http.Request) {
 			"from": e.From, "to": e.To,
 			"relation": e.Relation, "weight": e.Weight,
 			"source":      e.Source,
+			"sources":     e.Sources,
+			"user_id":     e.UserID,
+			"agent_id":    e.AgentID,
 			"recorded_at": e.RecordedAt,
 			"valid_from":  e.ValidFrom,
 			"valid_to":    e.ValidTo,
@@ -774,7 +838,7 @@ func (s *Server) handleGraphEdges(w http.ResponseWriter, r *http.Request) {
 		_ = layer
 	}
 	for _, l := range []string{"l2_raw", "l3_fact", "l4_summary", "l5_knowledge", "l6_schema", "l7_intention"} {
-		items, _ := s.store.List(memory.Layer(l), "", "", 200, 0, false)
+		items, _ := s.store.List(memory.Layer(l), uid, aid, 200, 0, false)
 		for _, it := range items {
 			sid := it.Meta["session_id"]
 			if sid == "" {
@@ -814,12 +878,12 @@ func (s *Server) handleGraphEdges(w http.ResponseWriter, r *http.Request) {
 	}
 	// iterate only the most recent 20 L3 memories (kept fast; full-graph
 	// similarity is a separate scan). Coalesces well to ~20 VDB queries.
-	recent, _ := s.store.List(memory.L3Fact, "", "", 20, 0, false)
+	recent, _ := s.store.List(memory.L3Fact, uid, aid, 20, 0, false)
 	for _, it := range recent {
 		if semCount >= maxSem {
 			break
 		}
-		hits, err := s.store.Search(it.Content, semanticK+1, "", "", "")
+		hits, err := s.store.Search(it.Content, semanticK+1, "", uid, aid)
 		if err != nil {
 			continue
 		}
@@ -851,27 +915,47 @@ func (s *Server) handleGraphEdges(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
+	// The node and owner filter may come in the JSON body or the query string; the
+	// body wins.
 	var body struct {
-		Node string `json:"node"`
+		Node    string `json:"node"`
+		UserID  string `json:"user_id"`
+		AgentID string `json:"agent_id"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	neighbors := s.store.Graph().Neighbors(body.Node)
+	q := r.URL.Query()
+	node := firstNonEmpty(body.Node, q.Get("node"))
+	uid, aid := graphOwner(firstNonEmpty(body.UserID, q.Get("user_id")), firstNonEmpty(body.AgentID, q.Get("agent_id")))
+	scope := graphScope(uid, aid)
+	neighbors := s.store.Graph().NeighborsScoped(scope, node)
 	if neighbors == nil {
 		neighbors = []graph.Neighbor{}
 	}
+	nodeCount, edgeCount := s.store.Graph().CountsScoped(scope)
 	jsonResponse(w, 200, map[string]any{
-		"node":        body.Node,
+		"node":        node,
 		"neighbors":   neighbors,
-		"node_count":  s.store.Graph().NodeCount(),
-		"edge_count":  s.store.Graph().EdgeCount(),
+		"node_count":  nodeCount,
+		"edge_count":  edgeCount,
 		"extract_err": s.extractErr(),
 	})
+}
+
+// firstNonEmpty returns the first of its arguments that is not empty.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func (s *Server) handleGraphAsOf(w http.ResponseWriter, r *http.Request) {
 	ts := atoi(r.URL.Query().Get("ts"), int(time.Now().Unix()))
 	n := atoi(r.URL.Query().Get("n"), 500)
-	nodes, rels := s.store.Graph().SnapshotAsOf(int64(ts), n)
+	uid, aid := graphOwner(r.URL.Query().Get("user_id"), r.URL.Query().Get("agent_id"))
+	nodes, rels := s.store.Graph().SnapshotAsOfScoped(graphScope(uid, aid), int64(ts), n)
 	jsonResponse(w, 200, map[string]any{
 		"nodes":     nodes,
 		"relations": rels,
@@ -895,6 +979,7 @@ func jsonResponse(w http.ResponseWriter, code int, v any) {
 // are something a test can assert on instead of something only visible by
 // running the binary.
 type runtimeCfg struct {
+	Host       string
 	Port       string
 	DataDir    string
 	GraphPath  string
@@ -903,8 +988,14 @@ type runtimeCfg struct {
 	EmbedBase  string
 	EmbedModel string
 	ModelDir   string
-	Mode       Mode
-	Sync       Sync
+	// ModelTried lists the directories searched for the BGE model, in order, so
+	// the fatal message can name every place that was checked.
+	ModelTried []string
+	// AllowedHosts is HYATLAS_ALLOWED_HOSTS: extra hostnames a request may name
+	// in Host or Origin (see guardLocal). Empty means loopback and IP literals only.
+	AllowedHosts []string
+	Mode         Mode
+	Sync         Sync
 	// Slow-path (ultra) tuning. Zero retention means raw history is never decayed.
 	Consolidate time.Duration
 	Retention   time.Duration
@@ -934,30 +1025,35 @@ const (
 
 const (
 	defaultPort       = "19528"
+	defaultHost       = "127.0.0.1"
 	defaultDataDir    = "./data"
 	defaultLLMBase    = ""
 	defaultLLMModel   = ""
 	defaultEmbedBase  = "bge"
 	defaultEmbedModel = "text-embedding-3-small"
-	defaultModelDir   = "./models"
 )
 
 func resolveRuntime() runtimeCfg {
 	dataDir := envOr("HYATLAS_GO_DATA", defaultDataDir)
+	mode := resolveMode()
+	modelDir, modelTried := resolveModelDir(envOr("HYATLAS_MODEL_DIR", ""))
 	return runtimeCfg{
-		Mode:        resolveMode(),
-		Sync:        resolveSync(),
-		Consolidate: parseDuration("HYATLAS_CONSOLIDATE_EVERY", defaultConsolidate),
-		Retention:   parseDuration("HYATLAS_RAW_RETENTION", 0),
-		Batch:       envInt("HYATLAS_CONSOLIDATE_BATCH", defaultBatch),
-		Port:        envOr("HYATLAS_GO_PORT", defaultPort),
-		DataDir:     dataDir,
-		GraphPath:   envOr("HYATLAS_GRAPH_PATH", filepath.Join(dataDir, "graph.json")),
-		LLMBase:     envOr("HYATLAS_LLM_BASE", defaultLLMBase),
-		LLMModel:    envOr("HYATLAS_LLM_MODEL", defaultLLMModel),
-		EmbedBase:   envOr("HYATLAS_EMBED_BASE", defaultEmbedBase),
-		EmbedModel:  envOr("HYATLAS_EMBED_MODEL", defaultEmbedModel),
-		ModelDir:    resolveModelDir(envOr("HYATLAS_MODEL_DIR", defaultModelDir)),
+		Mode:         mode,
+		Sync:         resolveSync(),
+		Consolidate:  resolveConsolidate(mode),
+		Retention:    parseDuration("HYATLAS_RAW_RETENTION", 0),
+		Batch:        envInt("HYATLAS_CONSOLIDATE_BATCH", defaultBatch),
+		Host:         strings.Trim(envOr("HYATLAS_GO_HOST", defaultHost), "[]"),
+		Port:         envOr("HYATLAS_GO_PORT", defaultPort),
+		DataDir:      dataDir,
+		GraphPath:    envOr("HYATLAS_GRAPH_PATH", filepath.Join(dataDir, "graph.json")),
+		LLMBase:      envOr("HYATLAS_LLM_BASE", defaultLLMBase),
+		LLMModel:     envOr("HYATLAS_LLM_MODEL", defaultLLMModel),
+		EmbedBase:    envOr("HYATLAS_EMBED_BASE", defaultEmbedBase),
+		EmbedModel:   envOr("HYATLAS_EMBED_MODEL", defaultEmbedModel),
+		ModelDir:     modelDir,
+		ModelTried:   modelTried,
+		AllowedHosts: parseHostList(envOr("HYATLAS_ALLOWED_HOSTS", "")),
 	}
 }
 
@@ -971,6 +1067,28 @@ func resolveMode() Mode {
 		log.Fatal(err)
 	}
 	return m
+}
+
+// resolveConsolidate reads HYATLAS_CONSOLIDATE_EVERY. Fatal when ultra is given a
+// zero or negative interval: that silently turns ultra into pro, because the
+// slow path never ticks. Pro and lite have no slow path, so there it is ignored.
+func resolveConsolidate(m Mode) time.Duration {
+	d := parseDuration("HYATLAS_CONSOLIDATE_EVERY", defaultConsolidate)
+	if err := checkConsolidateEvery(m, d); err != nil {
+		log.Fatal(err)
+	}
+	return d
+}
+
+// checkConsolidateEvery is the pure rule behind resolveConsolidate, split out so
+// a test can assert it without the process exiting.
+func checkConsolidateEvery(m Mode, d time.Duration) error {
+	if m.Consolidates() && d <= 0 {
+		return fmt.Errorf("HYATLAS_CONSOLIDATE_EVERY must be a positive duration in ultra mode (got %s): "+
+			"a zero interval disables the slow path, so ultra would silently behave like pro; "+
+			"unset it for the 6h default, or set HYATLAS_MODE=pro", d)
+	}
+	return nil
 }
 
 // resolveSync reads HYATLAS_SYNC_EXTRACT. Fatal on an invalid value, for the
@@ -1016,7 +1134,8 @@ func main() {
 	rt := resolveRuntime()
 	port := rt.Port
 	dir := rt.DataDir
-	// LLM: any OpenAI-compatible endpoint. Default is a Nous Portal :free model.
+	// LLM: any OpenAI-compatible endpoint. No default: extraction stays off until
+	// HYATLAS_LLM_BASE, HYATLAS_LLM_MODEL and HYATLAS_LLM_KEY are all set.
 	llmBase := rt.LLMBase
 	llmKey := os.Getenv("HYATLAS_LLM_KEY")
 	// Optional: read the key live from a file each call, for rotating
@@ -1037,8 +1156,8 @@ func main() {
 		// Resolved to an absolute path before use. A relative "./models" is not
 		// portable on Windows: the onnxruntime loader and the directory check
 		// disagree about what it is relative to, so the same path can find the
-		// model and then fail on the shared library. Absolute paths work from
-		// any cwd, so prefer the cwd, then the executable's own directory.
+		// model and then fail on the shared library. resolveModelDir returns
+		// absolute paths, searched in order (see findModelDir).
 		modelDir := rt.ModelDir
 		if useEmbeddedAssets {
 			modelDir = materializeAssets()
@@ -1052,15 +1171,17 @@ func main() {
 			// directory lands here on first run.
 			log.Fatalf("bge embedder: %v\n\n"+
 				"The in-process embedder needs the BGE model next to the binary.\n"+
+				"Searched for bge-small-en-v1.5.onnx in:\n    %s\n"+
 				"Fix one of:\n"+
 				"  1. install via scripts/install.sh (fetches the model for you)\n"+
 				"  2. download a release binary built with -tags embedded, which\n"+
 				"     carries the model inside it\n"+
-				"  3. put bge-small-en-v1.5.onnx and onnxruntime.<ext> in %s,\n"+
-				"     or point HYATLAS_MODEL_DIR at a directory that has them\n"+
+				"  3. put bge-small-en-v1.5.onnx and onnxruntime.<ext> in one of\n"+
+				"     the directories above, or point HYATLAS_MODEL_DIR at a directory\n"+
+				"     that has them (then only that directory is searched)\n"+
 				"Or set HYATLAS_EMBED_BASE to an OpenAI-compatible embeddings URL\n"+
 				"(memory text would then leave the machine) or to \"local\" for the\n"+
-				"offline deterministic stub.\n", err, modelDir)
+				"offline deterministic stub.\n", err, strings.Join(rt.ModelTried, "\n    "))
 		}
 		embedder = b
 	case strings.EqualFold(embedBase, "local"):
@@ -1080,43 +1201,187 @@ func main() {
 
 	srv.attachSlowPath(ctx, rt)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", srv.handleHealthz)
-	mux.HandleFunc("/api/v1/status", srv.handleStatus)
-	mux.HandleFunc("/api/v1/add", srv.handleAdd)
-	mux.HandleFunc("/api/v1/search", srv.handleSearch)
-	mux.HandleFunc("/api/v1/list", srv.handleList)
-	mux.HandleFunc("/api/v1/graph", srv.handleGraph)
-	mux.HandleFunc("/api/v1/graph-as-of", srv.handleGraphAsOf)
-	mux.HandleFunc("/api/v1/edges", srv.handleGraphEdges)
-	mux.HandleFunc("/api/v1/learning/graph", srv.handleStarmapGraph)
-	mux.HandleFunc("/api/v1/delete_all", srv.handleDelete)
-	mux.HandleFunc("/api/v1/metrics", srv.handleMetrics)
-	mux.HandleFunc("/api/v1/digest", srv.handleDigest)
-	mux.HandleFunc("/api/v1/reprocess", srv.handleReprocess)
-	// Dashboard UI (embedded single-file frontend)
-	// --- v3.5 dashboard adapter endpoints (real v4 data, v3.5 shapes) ---
-	mux.HandleFunc("/api/status", srv.handleDashStatus)
-	mux.HandleFunc("/api/info", srv.handleDashInfo)
-	mux.HandleFunc("/api/memories", srv.handleDashMemories)
-	mux.HandleFunc("/api/layer-counts", srv.handleDashLayerCounts)
-	mux.HandleFunc("/api/storage", srv.handleDashStorage)
-	mux.HandleFunc("/api/metrics", srv.handleDashMetrics)
-	mux.HandleFunc("/api/graph-counts", srv.handleDashGraphCounts)
-	mux.HandleFunc("/api/layer-health", srv.handleDashLayerHealth)
-	mux.HandleFunc("/api/l6-schemas", srv.handleDashL6Schemas)
-	mux.HandleFunc("/api/l5/graph", srv.handleDashL5Graph)
-	mux.HandleFunc("/api/quality-metrics", srv.handleDashQuality)
-	mux.HandleFunc("/api/coding-count", srv.handleDashCodingCount)
-	mux.HandleFunc("/api/coding-memories", srv.handleDashCodingMemories)
-	mux.Handle("/dashboard/", http.StripPrefix("/dashboard/", srv.handleDashboard()))
-
 	if w := startupWarning(rt, llm); w != "" {
 		log.Print(w)
 	}
 	log.Print(listeningLine(rt))
-	host := envOr("HYATLAS_GO_HOST", "127.0.0.1")
-	log.Fatal(http.ListenAndServe(host+":"+port, mux))
+	srv.allowedHosts = rt.AllowedHosts
+	hs := &http.Server{Addr: net.JoinHostPort(rt.Host, port), Handler: srv.routes(), ReadHeaderTimeout: readHeaderTimeout}
+	log.Fatal(hs.ListenAndServe())
+}
+
+// routes is the complete HTTP surface. Lifted out of main so the body limit and
+// method guards are exercised by the same mux the server serves, not a copy.
+func (s *Server) routes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", s.handleHealthz)
+	mux.HandleFunc("/api/v1/status", s.handleStatus)
+	mux.HandleFunc("/api/v1/add", s.handleAdd)
+	mux.HandleFunc("/api/v1/search", s.handleSearch)
+	mux.HandleFunc("/api/v1/list", s.handleList)
+	mux.HandleFunc("/api/v1/graph", s.handleGraph)
+	mux.HandleFunc("/api/v1/graph-as-of", s.handleGraphAsOf)
+	mux.HandleFunc("/api/v1/edges", s.handleGraphEdges)
+	mux.HandleFunc("/api/v1/learning/graph", s.handleStarmapGraph)
+	mux.HandleFunc("/api/v1/delete_all", s.handleDelete)
+	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)
+	mux.HandleFunc("/api/v1/digest", s.handleDigest)
+	mux.HandleFunc("/api/v1/reprocess", s.handleReprocess)
+	// Dashboard UI (embedded single-file frontend)
+	// --- v3.5 dashboard adapter endpoints (real v4 data, v3.5 shapes) ---
+	mux.HandleFunc("/api/status", s.handleDashStatus)
+	mux.HandleFunc("/api/info", s.handleDashInfo)
+	mux.HandleFunc("/api/memories", s.handleDashMemories)
+	mux.HandleFunc("/api/layer-counts", s.handleDashLayerCounts)
+	mux.HandleFunc("/api/storage", s.handleDashStorage)
+	mux.HandleFunc("/api/metrics", s.handleDashMetrics)
+	mux.HandleFunc("/api/graph-counts", s.handleDashGraphCounts)
+	mux.HandleFunc("/api/layer-health", s.handleDashLayerHealth)
+	mux.HandleFunc("/api/l6-schemas", s.handleDashL6Schemas)
+	mux.HandleFunc("/api/l5/graph", s.handleDashL5Graph)
+	mux.HandleFunc("/api/quality-metrics", s.handleDashQuality)
+	mux.HandleFunc("/api/coding-count", s.handleDashCodingCount)
+	mux.HandleFunc("/api/coding-memories", s.handleDashCodingMemories)
+	mux.Handle("/dashboard/", http.StripPrefix("/dashboard/", s.handleDashboard()))
+	return guardLocal(s.allowedHosts, limitBody(mux))
+}
+
+// guardLocal refuses requests a web page could make on the user's behalf. The
+// API has no authentication; binding to loopback keeps other machines out, but
+// not a page open in the user's own browser. Such a page can POST to
+// 127.0.0.1 without a CORS preflight (delete_all, add) and, through DNS
+// rebinding, read responses under its own hostname. So the guard applies on
+// every bind address:
+//
+//   - Host must be localhost, an IP literal, or listed in allowed (see
+//     HYATLAS_ALLOWED_HOSTS). A DNS name is how a rebinding page reaches a
+//     server bound to 0.0.0.0, so DNS names are refused unless listed.
+//   - Origin, when present, must be loopback, the request's own host:port
+//     (same-origin), or an allowed hostname. "null" and non-http(s) are refused.
+//   - Sec-Fetch-Site: cross-site is refused. Browsers send it even when Origin
+//     is absent, as on a simple GET.
+//
+// Requests without an Origin (the plugin, curl) and the server's own
+// /dashboard/ pages are unaffected.
+func guardLocal(allowed []string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !hostAllowed(r.Host, allowed) {
+			jsonResponse(w, http.StatusForbidden, map[string]any{"error": "non-local Host refused"})
+			return
+		}
+		if strings.EqualFold(r.Header.Get("Sec-Fetch-Site"), "cross-site") {
+			jsonResponse(w, http.StatusForbidden, map[string]any{"error": "cross-site request refused"})
+			return
+		}
+		if o := r.Header.Get("Origin"); o != "" && !originAllowed(o, r.Host, allowed) {
+			jsonResponse(w, http.StatusForbidden, map[string]any{"error": "cross-origin request refused"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// hostAllowed reports whether a Host header names an address this server may
+// answer: loopback, an IP literal, or an allowlisted hostname. The port is ignored.
+func hostAllowed(host string, allowed []string) bool {
+	// No Host header at all (HTTP/1.0 without one) names no other host, so it is local.
+	if strings.TrimSpace(host) == "" {
+		return true
+	}
+	h := hostOnly(host)
+	if isLoopbackHost(h) || net.ParseIP(h) != nil {
+		return true
+	}
+	return hostListed(h, allowed)
+}
+
+// originAllowed reports whether an Origin header may make a request to a server
+// that the Host header addresses as reqHost.
+func originAllowed(origin, reqHost string, allowed []string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	if isLoopbackHost(u.Hostname()) {
+		return true
+	}
+	if strings.EqualFold(u.Host, reqHost) {
+		return true
+	}
+	return hostListed(u.Hostname(), allowed)
+}
+
+// hostOnly strips the port from a host[:port] string, and the brackets from an
+// IPv6 literal, so "[::1]:19528", "localhost:19528" and "evil.example" all reduce
+// to a bare name.
+func hostOnly(hp string) string {
+	if h, _, err := net.SplitHostPort(hp); err == nil {
+		return h
+	}
+	return strings.Trim(hp, "[]")
+}
+
+// hostListed reports whether h is one of the allowlisted hostnames. Comparison
+// ignores case and a trailing dot.
+func hostListed(h string, allowed []string) bool {
+	h = normHost(h)
+	if h == "" {
+		return false
+	}
+	for _, a := range allowed {
+		if normHost(a) == h {
+			return true
+		}
+	}
+	return false
+}
+
+// normHost lower-cases a hostname and drops one trailing dot, so "Example.COM."
+// and "example.com" compare equal.
+func normHost(h string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
+}
+
+// parseHostList reads HYATLAS_ALLOWED_HOSTS: comma-separated hostnames. An entry
+// may carry a port ("myhost:8080" is "myhost"), as a Host header does. Entries are
+// lower-cased with any trailing dot dropped, and empty ones are dropped.
+func parseHostList(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if h := normHost(hostOnly(strings.TrimSpace(part))); h != "" {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// isLoopbackHost reports whether h names this machine: localhost (with or without
+// a trailing dot) or a loopback IP literal (brackets allowed).
+func isLoopbackHost(h string) bool {
+	h = normHost(strings.Trim(h, "[]"))
+	if h == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+// maxRequestBody caps every request body. Raw memories can be large session
+// dumps (see utf8Trunc), so the cap is generous. Without it, decoding read
+// whatever a client sent into memory.
+const maxRequestBody = 8 << 20
+
+// readHeaderTimeout stops a client from holding a connection open by trickling
+// request headers one byte at a time.
+const readHeaderTimeout = 10 * time.Second
+
+func limitBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func envOr(k, def string) string {
@@ -1126,45 +1391,131 @@ func envOr(k, def string) string {
 	return def
 }
 
-// resolveModelDir turns a configured model directory into an absolute path.
-//
-// The relative default "./models" cannot be handed straight to the embedder: the
-// onnxruntime loader and the directory-existence check resolve it against
-// different bases on Windows, so the same path finds the model file and then
-// fails looking for onnxruntime.dll. Trying the cwd first and the executable's
-// directory second keeps the documented default working from either layout,
-// because installers put the model beside the binary while a dev checkout runs
-// from the repo root.
-func resolveModelDir(dir string) string {
-	if filepath.IsAbs(dir) {
-		return filepath.Clean(dir)
+// modelFileName is the file the in-process embedder cannot start without. A
+// directory counts as a model home only if it holds this file.
+const modelFileName = "bge-small-en-v1.5.onnx"
+
+// resolveModelDir picks the directory the BGE model is loaded from, given the
+// HYATLAS_MODEL_DIR value (empty when unset). It returns the chosen directory and
+// every directory searched, in order, for the fatal message.
+func resolveModelDir(override string) (string, []string) {
+	cwd, _ := os.Getwd()
+	exeDir := ""
+	if exe, err := os.Executable(); err == nil {
+		exeDir = filepath.Dir(exe)
 	}
-	for _, base := range modelBaseDirs() {
-		cand := filepath.Join(base, dir)
-		if fi, err := os.Stat(cand); err == nil && fi.IsDir() {
-			if abs, err := filepath.Abs(cand); err == nil {
-				return abs
-			}
-			return filepath.Clean(cand)
-		}
-	}
-	// Nothing on disk matched; return an absolute cwd-relative path so the
-	// error the user sees names one real location instead of two possible ones.
-	if abs, err := filepath.Abs(dir); err == nil {
-		return abs
-	}
-	return filepath.Clean(dir)
+	return findModelDir(override, cwd, exeDir, installModelDir(runtime.GOOS))
 }
 
-func modelBaseDirs() []string {
-	bases := make([]string, 0, 2)
-	if wd, err := os.Getwd(); err == nil {
-		bases = append(bases, wd)
+// findModelDir is the search behind resolveModelDir, with the base directories
+// passed in so a test can use temp dirs.
+//
+// An explicit override is the only candidate. Falling back to another copy of
+// the model would load a file the user did not name. Without one, the order is
+// <cwd>/models, then <exe dir>/models, then the installer's default. The cwd
+// comes first because a dev checkout runs from the repo root, and the executable
+// directory second because installers put the model beside the binary while a
+// plugin-spawned server runs from some other cwd.
+//
+// The result is always absolute. The relative "./models" cannot be handed to the
+// embedder directly: the onnxruntime loader and the directory check resolve it
+// against different bases on Windows. When nothing holds the model, the first
+// candidate is returned so the error names one real location.
+func findModelDir(override, cwd, exeDir, installDir string) (string, []string) {
+	var cands []string
+	if override != "" {
+		cands = []string{absPath(override)}
+	} else {
+		for _, base := range []string{cwd, exeDir} {
+			if base != "" {
+				cands = append(cands, filepath.Join(base, "models"))
+			}
+		}
+		if installDir != "" {
+			cands = append(cands, installDir)
+		}
 	}
-	if exe, err := os.Executable(); err == nil {
-		bases = append(bases, filepath.Dir(exe))
+	for _, d := range cands {
+		if hasModelFile(d) {
+			return d, cands
+		}
 	}
-	return bases
+	if len(cands) == 0 {
+		return "", nil
+	}
+	return cands[0], cands
+}
+
+// installModelDir is where scripts/install.sh caches the model when no directory
+// is given: %LOCALAPPDATA%\hyatlas\models on Windows, ~/.hyatlas/models elsewhere.
+// Keep the two in step.
+func installModelDir(goos string) string {
+	if goos == "windows" {
+		base := os.Getenv("LOCALAPPDATA")
+		if base == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return ""
+			}
+			base = filepath.Join(home, "AppData", "Local")
+		}
+		return filepath.Join(base, "hyatlas", "models")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".hyatlas", "models")
+}
+
+// onnxRuntimeLibName is the onnxruntime shared library the BGE loader looks for
+// first on each platform. It matches bge.runtimeLibName.
+func onnxRuntimeLibName(goos string) string {
+	switch goos {
+	case "windows":
+		return "onnxruntime.dll"
+	case "darwin":
+		return "libonnxruntime.dylib"
+	default:
+		return "libonnxruntime.so"
+	}
+}
+
+// hasModelFile reports whether dir holds everything the BGE embedder loads: the
+// model, its vocab, and an onnxruntime shared library. The library may have the
+// platform's name or, as bge.New also accepts, any onnxruntime* file.
+func hasModelFile(dir string) bool {
+	if !isRegularFile(filepath.Join(dir, modelFileName)) || !isRegularFile(filepath.Join(dir, "vocab.txt")) {
+		return false
+	}
+	if isRegularFile(filepath.Join(dir, onnxRuntimeLibName(runtime.GOOS))) {
+		return true
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if !e.IsDir() && (strings.HasPrefix(n, "onnxruntime") || strings.HasPrefix(n, "libonnxruntime")) {
+			return true
+		}
+	}
+	return false
+}
+
+// isRegularFile reports whether p exists and is not a directory.
+func isRegularFile(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && !fi.IsDir()
+}
+
+// absPath makes p absolute, falling back to a cleaned p when that fails.
+func absPath(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return filepath.Clean(p)
 }
 
 // describeEmbed names the embedder actually in use, for the startup log.
@@ -1189,8 +1540,8 @@ func listeningLine(rt runtimeCfg) string {
 	if llm == "" {
 		llm = "unset"
 	}
-	return fmt.Sprintf("HyAtlas-Go listening on :%s (data=%s embed=%s llm=%s mode=%s)",
-		rt.Port, rt.DataDir, describeEmbed(rt.EmbedBase, rt.EmbedModel), llm, rt.Mode.OrDefault())
+	return fmt.Sprintf("HyAtlas-Go listening on %s (data=%s embed=%s llm=%s mode=%s)",
+		net.JoinHostPort(rt.Host, rt.Port), rt.DataDir, describeEmbed(rt.EmbedBase, rt.EmbedModel), llm, rt.Mode.OrDefault())
 }
 
 // startupWarning returns a human-readable setup message for the one state that

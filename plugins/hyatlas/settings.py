@@ -66,8 +66,10 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
     {
         "key": "launcher_path", "type": "str", "default": "",
         "label": "Launcher script",
-        "description": "Optional path to a hyatlas-go.ps1 that owns the server "
-                       "environment (Windows; empty = spawn the binary directly)",
+        "description": "Windows only. Optional hyatlas-go.ps1 that `hermes hyatlas "
+                       "start|stop` runs instead of spawning the binary. Run as "
+                       "given, so only point it at a script you trust. Empty = "
+                       "spawn the binary directly.",
     },
     {
         "key": "request_timeout", "type": "float", "default": 15.0,
@@ -77,9 +79,10 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
     {
         "key": "data_dir", "type": "str", "default": "",
         "label": "Data directory",
-        "description": "Where the server keeps its vector store and graph; used "
-                       "by `hermes backup` to include provider state. Empty = "
-                       "HYATLAS_GO_DATA, then the conventional defaults.",
+        "description": "Server data directory (vector store, graph). Passed to a "
+                       "spawned server as HYATLAS_GO_DATA and used by `hermes "
+                       "backup`. Empty = HYATLAS_GO_DATA, then the conventional "
+                       "defaults.",
     },
     {
         "key": "llm_base", "type": "str", "default": "",
@@ -87,35 +90,37 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
         "description": "Base URL of any OpenAI-compatible chat-completions API, "
                        "used for fact extraction and (in ultra) consolidation. "
                        "Forwarded to the server as HYATLAS_LLM_BASE. Not used in "
-                       "lite mode, which makes no LLM call. Leave empty to use "
-                       "the server's default.",
+                       "lite mode, which makes no LLM call. The server has no "
+                       "default endpoint: empty leaves extraction unconfigured "
+                       "(pro/ultra report llm=unconfigured).",
     },
     {
         "key": "llm_model", "type": "str", "default": "",
         "label": "LLM model",
         "description": "Model id at that endpoint, e.g. a `:free` tier. Forwarded "
-                       "as HYATLAS_LLM_MODEL. Leave empty for the server default.",
+                       "as HYATLAS_LLM_MODEL. The server has no default model: "
+                       "empty leaves extraction unconfigured.",
     },
     {
         "key": "llm_key", "type": "str", "default": "", "secret": True,
         "env_var": "HYATLAS_LLM_KEY",
         "label": "LLM API key",
-        "url": "https://platform.openai.com/api-keys",
-        "description": "API key for the endpoint above. Stored in Hermes' .env "
-                       "(0600), never in hyatlas.json, and never logged. Not "
+        "description": "API key for the endpoint above. The setup wizard stores it "
+                       "in Hermes' .env (0600) as HYATLAS_LLM_KEY, never in "
+                       "hyatlas.json. The plugin never reads or logs it. Not "
                        "needed in lite mode.",
     },
     {
         "key": "mode", "type": "str", "default": "",
         "label": "Extraction mode", "choices": ["", "lite", "pro", "ultra"],
         "description": "Passed to a spawned server as HYATLAS_MODE. lite makes "
-                       "no LLM call, so conversation text never leaves the "
-                       "machine; pro extracts per write and reasons within that "
-                       "one turn; ultra adds a periodic consolidation pass that "
-                       "reasons across memories. Empty = the server's own "
-                       "default (ultra). The server's "
-                       "/api/v1/status `mode` field is authoritative at "
-                       "runtime, since a manually started server may differ.",
+                       "no LLM call, so no conversation text goes to an LLM; "
+                       "pro sends each write to the LLM endpoint and reasons "
+                       "within that turn; ultra also runs a periodic consolidation "
+                       "pass over stored facts. Empty = the server's own default "
+                       "(ultra). The server's /api/v1/status `mode` field is "
+                       "authoritative at runtime, since a manually started server "
+                       "may differ.",
     },
     {
         "key": "sync", "type": "str", "default": "",
@@ -123,9 +128,9 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
         "description": "Passed to a spawned server as HYATLAS_SYNC_EXTRACT. on "
                        "makes the write wait for extraction and report done or "
                        "failed; off returns immediately and extracts behind it. "
-                       "Empty follows the mode: pro blocks, ultra does not. This "
-                       "is a latency choice and does not change what the mode can "
-                       "reason about.",
+                       "Empty means off for a server this plugin spawns, so a "
+                       "Hermes turn never waits on the LLM. This is a latency "
+                       "choice and does not change what the mode can reason about.",
     },
 )
 
@@ -212,8 +217,14 @@ LEGACY_ENV = ("HY_MEMORY_HOST", "HY_MEMORY_PORT")
 
 
 def home() -> Path:
-    """The Hermes home the plugin is operating against."""
-    return Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+    """The Hermes home the plugin is operating against.
+
+    HERMES_HOME when it is non-blank, else ~/.hermes. An empty HERMES_HOME counts
+    as unset, as in hermes_constants.get_hermes_home(); taking "" as a path would
+    quietly put config and logs in the working directory.
+    """
+    val = os.environ.get("HERMES_HOME", "").strip()
+    return Path(val) if val else Path.home() / ".hermes"
 
 
 class _Skip:
@@ -275,7 +286,13 @@ def load() -> Dict[str, Any]:
             logger.debug("ignoring %s: %s", profile, e)
 
     try:
-        import yaml  # hermes core dependency
+        try:
+            # Current Hermes parses YAML with ruamel through hermes_yaml and no
+            # longer ships PyYAML; without this the config.yaml layer would be
+            # silently skipped.
+            import hermes_yaml as yaml
+        except ImportError:
+            import yaml  # older Hermes releases
 
         cfg_path = home() / "config.yaml"
         if cfg_path.exists():
@@ -356,7 +373,7 @@ def sync(cfg: Dict[str, Any] | None = None) -> str:
     if v not in _SYNC_ALIASES:
         raise ValueError(
             f"invalid hyatlas sync {v!r}; valid values are {', '.join(VALID_SYNC)} "
-            f"(or leave it empty to follow the mode)"
+            f"(or leave it empty for the default)"
         )
     return _SYNC_ALIASES[v]
 

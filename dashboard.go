@@ -7,8 +7,9 @@ import (
 )
 
 // HTTP frontend for HyAtlas v4. A single-page dashboard that renders from the
-// real /api/v1 endpoints — no mock data. Tabs: Overview, Layers, Explore,
-// Graph, Activity. Night-mode-first (dark) like the rest of the workspace.
+// real API endpoints — no mock data. Pages: Overview, Today, Layers, Explore,
+// L5, Observatory, Quality, System. Night-mode-first (dark) like the rest of
+// the workspace.
 //
 //go:embed dashboard/dist
 var dashboardFS embed.FS

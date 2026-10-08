@@ -13,6 +13,8 @@ or from the package root:
 
 from __future__ import annotations
 
+import argparse
+import errno
 import importlib.util
 import json
 import os
@@ -76,8 +78,10 @@ class _V4Handler(BaseHTTPRequestHandler):
         if path == "/healthz":
             return self._json(200, {"status": "ok"})
         if path == "/api/v1/status":
+            self.store["status_calls"] = self.store.get("status_calls", 0) + 1
             return self._json(200, {"status": "ok", "vdb": "ok", "embed": "ok",
-                                    "llm": "ok", "layers": {"l3_fact": 1}})
+                                    "llm": "ok", "layers": {"l3_fact": 1},
+                                    "mode": self.store.get("mode", "ultra")})
         if path == "/api/v1/boom":
             return self._json(500, {"error": "kaboom"})
         return self._json(404, {"error": "not found"})
@@ -98,6 +102,7 @@ class _V4Handler(BaseHTTPRequestHandler):
             return self._json(200, {"memories": {"normal": [
                 {**m, "score": 0.9} for m in hits]}})
         if path == "/api/v1/list":
+            self.store.setdefault("list_bodies", []).append(body)
             return self._json(200, {"total": len(self.store["memories"]),
                                     "memories": self.store["memories"]})
         if path == "/api/v1/delete_all":
@@ -504,6 +509,23 @@ def test_launcher_resolution_needs_an_explicit_path():
     assert cli._launcher({"launcher_path": "/nonexistent/hyatlas-go.ps1"}) is None
 
 
+def test_launcher_is_never_discovered_beside_the_binary(monkeypatch, tmp_path):
+    """A script that runs a shell only executes when the user names it.
+
+    Forces the Windows branch so the check is meaningful on every platform.
+    """
+    cli = _load_sibling("cli")
+    monkeypatch.setattr(sys, "platform", "win32")
+    script = tmp_path / "hyatlas-go.ps1"
+    script.write_text("", encoding="utf-8")
+    binary = tmp_path / "hyatlas-go.exe"
+    binary.write_text("", encoding="utf-8")
+    # a sibling script next to the binary is ignored
+    assert cli._launcher({"binary_path": str(binary)}) is None
+    # only an explicit launcher_path is used
+    assert cli._launcher({"launcher_path": str(script)}) == script
+
+
 def test_launcher_path_is_configurable(monkeypatch, tmp_path):
     """`launcher_path` reaches the config from both the JSON and env layers."""
     cfg = mod._load_config()
@@ -631,6 +653,18 @@ def test_data_dir_setting_reaches_the_server(monkeypatch):
     # Empty means "let the server use its own default", so nothing is set.
     env2 = proc_mod.HyatlasProcess({})._env()
     assert "HYATLAS_GO_DATA" not in env2, "an empty data_dir must not override the server default"
+
+
+def test_spawned_server_defaults_to_background_extraction(monkeypatch):
+    """A spawned server must not make Hermes turns wait on the LLM by default."""
+    proc_mod = _load_sibling("process")
+    _poison(monkeypatch, {"PATH": "/usr/bin", "HOME": "/home/u"})
+    assert proc_mod.HyatlasProcess({})._env()["HYATLAS_SYNC_EXTRACT"] == "off"
+    assert proc_mod.HyatlasProcess({"sync": "on"})._env()["HYATLAS_SYNC_EXTRACT"] == "on"
+
+    _poison(monkeypatch, {"PATH": "/usr/bin", "HOME": "/home/u",
+                          "HYATLAS_SYNC_EXTRACT": "on"})
+    assert proc_mod.HyatlasProcess({})._env()["HYATLAS_SYNC_EXTRACT"] == "on"
 
 
 def test_explicit_env_beats_config_for_the_forwarded_settings(monkeypatch):
@@ -853,15 +887,17 @@ def test_pidfile_written_on_start_and_removed_on_cleanup(monkeypatch, tmp_path):
     monkeypatch.setattr(proc_mod, "PID_FILE", tmp_path / "hyatlas.pid")
     monkeypatch.setattr(proc_mod, "LOG_FILE", tmp_path / "hyatlas.log")
 
-    proc = proc_mod.HyatlasProcess({"binary_path": str(fake), "server_port": 19528})
+    proc = proc_mod.HyatlasProcess({"binary_path": str(fake), "server_port": _free_port()})
     try:
         proc.start()
         pidfile = tmp_path / "hyatlas.pid"
-        assert pidfile.exists(), "start() did not write the pidfile"
+        assert not pidfile.exists(), "pidfile written before the child was seen alive"
+        # Nothing answers on this port, so the child is alive but not serving.
+        assert proc.wait_started(timeout=1.0) == "starting"
+        assert pidfile.exists(), "wait_started did not record the live child's pid"
         assert pidfile.read_text().strip() == str(proc._proc.pid)
-        # The pidfile alone proves nothing: start() writes it whether or not the
-        # child survived. A fixture whose shebang or line endings are broken exits
-        # instantly and the test still passes, so assert the child is really alive.
+        # The pidfile alone proves nothing. A fixture whose shebang or line endings
+        # are broken exits instantly, so assert the child is really alive.
         assert proc._proc.poll() is None, (
             f"fake server exited immediately (rc={proc._proc.returncode}); the "
             f"fixture is not a runnable script on this platform")
@@ -884,10 +920,267 @@ def test_stop_running_refuses_to_kill_a_recycled_pid(monkeypatch, tmp_path):
                         lambda *a, **k: killed.append(a) or __import__("types").SimpleNamespace(stdout=""))
     monkeypatch.setattr(proc_mod.HyatlasProcess, "_is_server", staticmethod(lambda pid: False))
 
-    proc_mod.HyatlasProcess.stop_running()
+    result = proc_mod.HyatlasProcess.stop_running({"server_port": _free_port()})
 
     assert not killed, "stop_running force-killed a pid that is not hyatlas-go"
     assert not (tmp_path / "hyatlas.pid").exists(), "stale pidfile was left behind"
+    assert result["ok"] is True and result["stopped"] is False
+
+
+# ---------------------------------------------------------------------------
+# Start/stop truthfulness: a second start must not spawn over a live server,
+# and stop must say what it actually stopped.
+# ---------------------------------------------------------------------------
+
+_FAKE_HEALTH_SERVER = """#!{python}
+import http.server, os
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b'{{"status": "ok"}}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a):
+        pass
+http.server.ThreadingHTTPServer(("127.0.0.1", int(os.environ["HYATLAS_GO_PORT"])), H).serve_forever()
+"""
+
+
+def _redirect_process_files(monkeypatch, proc_mod, tmp_path):
+    monkeypatch.setattr(proc_mod, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(proc_mod, "PID_FILE", tmp_path / "hyatlas.pid")
+    monkeypatch.setattr(proc_mod, "LOG_FILE", tmp_path / "hyatlas.log")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="shebang fixtures are POSIX")
+def test_start_refuses_to_spawn_over_a_serving_server(monkeypatch, tmp_path):
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    srv = FakeV4Server()
+    try:
+        port = int(srv.base.rsplit(":", 1)[1])
+        (tmp_path / "hyatlas.pid").write_text("424242")  # someone else's pidfile
+        cfg = {"server_port": port, "binary_path": str(tmp_path / "missing-binary")}
+
+        with pytest.raises(proc_mod.ServerAlreadyRunning) as info:
+            proc_mod.HyatlasProcess(cfg).start()
+        assert info.value.serving is True
+
+        result = proc_mod.start_server(cfg)
+        assert result["ok"] is True and result["already_running"] is True
+        assert result["reachable"] is True and result["started"] is False
+        assert (tmp_path / "hyatlas.pid").read_text() == "424242", \
+            "a second start overwrote the existing pidfile"
+    finally:
+        srv.stop()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="shebang fixtures are POSIX")
+def test_start_reports_a_child_that_dies_during_startup(monkeypatch, tmp_path):
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    fake = tmp_path / "hyatlas-go"
+    fake.write_text("#!/bin/sh\nexit 3\n")
+    os.chmod(fake, 0o755)
+
+    result = proc_mod.start_server({"binary_path": str(fake), "server_port": _free_port()},
+                                   timeout=10.0)
+
+    assert result["ok"] is False and result["started"] is False
+    assert "exited during startup" in result["error"]
+    assert not (tmp_path / "hyatlas.pid").exists(), "a dead child left a pidfile behind"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="shebang fixtures are POSIX")
+def test_start_then_stop_a_real_child_reports_truthfully(monkeypatch, tmp_path):
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    fake = tmp_path / "hyatlas-go"
+    fake.write_text(_FAKE_HEALTH_SERVER.format(python=sys.executable))
+    os.chmod(fake, 0o755)
+    cfg = {"binary_path": str(fake), "server_port": _free_port()}
+
+    started = proc_mod.start_server(cfg, timeout=20.0)
+    assert started["ok"] is True and started["reachable"] is True, started
+    pid = int(started["pid"])
+    assert (tmp_path / "hyatlas.pid").read_text().strip() == str(pid)
+
+    again = proc_mod.start_server(cfg, timeout=5.0)
+    assert again["already_running"] is True and again["started"] is False
+
+    stopped = proc_mod.HyatlasProcess.stop_running(cfg)
+    assert stopped["ok"] is True and stopped["stopped"] is True, stopped
+    assert not (tmp_path / "hyatlas.pid").exists()
+
+
+def test_stop_reports_a_server_it_did_not_start(monkeypatch, tmp_path):
+    """Health answers but no pidfile: stop must refuse and say so, not claim success."""
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    srv = FakeV4Server()
+    try:
+        port = int(srv.base.rsplit(":", 1)[1])
+        result = proc_mod.HyatlasProcess.stop_running({"server_port": port})
+    finally:
+        srv.stop()
+    assert result["ok"] is False and result["stopped"] is False
+    assert result["running"] is True
+    assert "not started by this plugin" in result["error"]
+    assert f"127.0.0.1:{port}" in result["error"]
+
+
+def test_stop_with_dead_pid_and_no_server_is_not_a_stop(monkeypatch, tmp_path):
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    (tmp_path / "hyatlas.pid").write_text("999999")
+    result = proc_mod.HyatlasProcess.stop_running({"server_port": _free_port()})
+    assert result["ok"] is True and result["stopped"] is False and result["running"] is False
+    assert not (tmp_path / "hyatlas.pid").exists()
+
+
+def test_cleanup_never_removes_another_servers_pidfile(monkeypatch, tmp_path):
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    (tmp_path / "hyatlas.pid").write_text("777777")
+    hp = proc_mod.HyatlasProcess({})
+    hp._pid = 111111
+    hp._cleanup()
+    assert (tmp_path / "hyatlas.pid").read_text() == "777777"
+
+
+# ---------------------------------------------------------------------------
+# Concurrent starts, a child that loses the bind, spawn failures, lock bounds.
+# ---------------------------------------------------------------------------
+
+def _spawn_count(path: Path) -> int:
+    return len(path.read_text().splitlines()) if path.exists() else 0
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="shebang fixtures are POSIX")
+def test_concurrent_starts_spawn_exactly_one_server(monkeypatch, tmp_path):
+    """Two starts race on a cold port: one spawns, the other waits and reports it."""
+    import time as _time
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    spawn_log = tmp_path / "spawns.txt"
+    fake = tmp_path / "hyatlas-go"
+    # Log each spawn's pid before serving, so a double spawn is visible as two lines.
+    fake.write_text(_FAKE_HEALTH_SERVER.format(python=sys.executable).replace(
+        "import http.server, os\n",
+        f"import http.server, os\nopen({str(spawn_log)!r}, 'a').write(str(os.getpid()) + chr(10))\n",
+        1))
+    os.chmod(fake, 0o755)
+    cfg = {"binary_path": str(fake), "server_port": _free_port()}
+
+    results: list = []
+    barrier = threading.Barrier(2)
+
+    def race():
+        barrier.wait()
+        results.append(proc_mod.start_server(cfg, timeout=20.0))
+
+    threads = [threading.Thread(target=race) for _ in range(2)]
+    try:
+        for t in threads:
+            t.start()
+        deadline = _time.monotonic() + 60
+        for t in threads:
+            t.join(max(0.0, deadline - _time.monotonic()))
+        assert not any(t.is_alive() for t in threads), "a start hung past its bound"
+        assert _spawn_count(spawn_log) == 1, \
+            f"{_spawn_count(spawn_log)} servers were spawned for two starts"
+        assert len(results) == 2 and all(r["ok"] for r in results), results
+        started = [r for r in results if r.get("started")]
+        waited = [r for r in results if r.get("already_running")]
+        assert len(started) == 1 and len(waited) == 1, results
+        assert (tmp_path / "hyatlas.pid").read_text().strip() == str(started[0]["pid"])
+    finally:
+        stopped = proc_mod.HyatlasProcess.stop_running(cfg)
+    assert stopped["ok"] is True and stopped["stopped"] is True, stopped
+    assert not (tmp_path / "hyatlas.pid").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="shebang fixtures are POSIX")
+def test_child_that_exits_after_health_is_not_recorded(monkeypatch, tmp_path):
+    """Health answers, then the child dies inside the settle: the port is another
+    server's, so no pidfile names the dead child and the start reports it as running."""
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    fake = tmp_path / "hyatlas-go"
+    fake.write_text("#!/bin/sh\nsleep 0.3\n")
+    os.chmod(fake, 0o755)
+    probes = {"n": 0}
+
+    def nothing_then_another_server(config):
+        probes["n"] += 1
+        return probes["n"] > 1  # start()'s own check sees nothing; wait_started sees health
+
+    monkeypatch.setattr(proc_mod, "_serving", nothing_then_another_server)
+
+    result = proc_mod.start_server({"binary_path": str(fake), "server_port": _free_port()},
+                                   timeout=10.0)
+
+    assert result["ok"] is True and result["started"] is False, result
+    assert result["already_running"] is True and result["reachable"] is True, result
+    assert not (tmp_path / "hyatlas.pid").exists(), "a dead child was recorded as the server"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX exec permissions")
+def test_start_reports_a_binary_the_os_cannot_execute(monkeypatch, tmp_path):
+    """Popen raising PermissionError must come back as ok:false, not a traceback."""
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    fake = tmp_path / "hyatlas-go"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    os.chmod(fake, 0o644)  # no execute bit
+
+    result = proc_mod.start_server({"binary_path": str(fake), "server_port": _free_port()})
+
+    assert result["ok"] is False and result["started"] is False, result
+    assert "could not start hyatlas-go" in result["error"], result
+    assert not (tmp_path / "hyatlas.pid").exists()
+    # The failed start must release the start lock, or every later start stalls.
+    fd = proc_mod._acquire_start_lock(0)
+    proc_mod._release_start_lock(fd)
+
+
+def test_start_lock_wait_is_bounded(monkeypatch, tmp_path):
+    """A start behind a held lock gives up at its bound instead of waiting forever."""
+    import time as _time
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    held = proc_mod._acquire_start_lock(0)
+    try:
+        assert (tmp_path / "hyatlas.start.lock").exists()
+        t0 = _time.monotonic()
+        result = proc_mod.start_server(
+            {"binary_path": str(tmp_path / "missing"), "server_port": _free_port()},
+            timeout=60.0, lock_wait=0.5)
+        elapsed = _time.monotonic() - t0
+    finally:
+        proc_mod._release_start_lock(held)
+
+    assert result["ok"] is False and result["started"] is False, result
+    assert "another hyatlas start" in result["error"], result
+    assert elapsed < 5.0, f"waited {elapsed:.1f}s against a 0.5s bound"
+    assert not (tmp_path / "hyatlas.pid").exists()
+
+
+def test_empty_hermes_home_is_treated_as_unset(monkeypatch):
+    """HERMES_HOME="" must mean the default, not the working directory."""
+    settings_mod = _load_sibling("settings")
+    monkeypatch.setenv("HERMES_HOME", "")
+    assert settings_mod.home() == Path.home() / ".hermes"
+    monkeypatch.setenv("HERMES_HOME", "   ")
+    assert settings_mod.home() == Path.home() / ".hermes"
+    monkeypatch.setenv("HERMES_HOME", "/srv/hermes-test")
+    assert settings_mod.home() == Path("/srv/hermes-test")
+
+    monkeypatch.setenv("HERMES_HOME", "")
+    proc_mod = _load_sibling("process")
+    assert proc_mod.LOG_DIR == Path.home() / ".hermes" / "logs"
 
 
 @requires_fastapi
@@ -1116,14 +1409,6 @@ def test_spawner_forwards_validated_sync_only():
     assert env.get("HYATLAS_MODE") == "ultra"
 
 
-def test_spawner_omits_sync_when_unset():
-    proc = _load_sibling("process")
-    hp = proc.HyatlasProcess({})
-    hp._mode = hp._sync = ""
-    os.environ.pop("HYATLAS_SYNC_EXTRACT", None)
-    assert "HYATLAS_SYNC_EXTRACT" not in hp._env(), "empty must not pin the child"
-
-
 def test_spawner_start_rejects_invalid_sync():
     proc = _load_sibling("process")
     hp = proc.HyatlasProcess({"sync": "maybe"})
@@ -1156,7 +1441,6 @@ def test_llm_key_is_declared_secret_with_env_var():
     key = fields["llm_key"]
     assert key.get("secret") is True
     assert key.get("env_var") == "HYATLAS_LLM_KEY"
-    assert key.get("url"), "a secret field should say where to get one"
     # The non-secret pair must NOT be masked.
     for name in ("llm_base", "llm_model"):
         assert not fields[name].get("secret"), f"{name} should not be secret"
@@ -1555,3 +1839,205 @@ def test_config_schema_drops_manifest_only_fields():
     key = {f["key"]: f for f in settings.config_schema()}["llm_key"]
     assert key["secret"] is True
     assert key["env_var"] == "HYATLAS_LLM_KEY"
+
+
+def test_unreachable_hint_names_the_real_command():
+    """`hyatlas start` is not a command; the hint must say `hermes hyatlas start`."""
+    p = HyatlasMemoryProvider()
+    p._config = dict(p._config, server_port=_free_port())
+    reason = p.unavailable_reason()
+    assert "`hermes hyatlas start`" in reason
+    assert "Start it with `hyatlas start`" not in reason
+
+
+# ---------------------------------------------------------------------------
+# recent: raw rows follow the server's mode (lite stores only raw)
+# ---------------------------------------------------------------------------
+
+def test_recent_default_follows_server_mode():
+    srv = FakeV4Server()
+    try:
+        c = HyatlasClient(base_url=srv.base, timeout=5.0)
+        srv.store["mode"] = "lite"
+        c.list_memories(user_id="u", agent_id="a")
+        assert srv.store["list_bodies"][-1]["include_raw"] is True
+        assert srv.store["status_calls"] == 1          # one status read per call
+        srv.store["mode"] = "ultra"
+        c.list_memories(user_id="u", agent_id="a")
+        assert srv.store["list_bodies"][-1]["include_raw"] is False
+        assert srv.store["status_calls"] == 2
+        # Explicit flags win in both modes, and do not read the status.
+        c.list_memories(user_id="u", agent_id="a", include_raw=True)
+        assert srv.store["list_bodies"][-1]["include_raw"] is True
+        srv.store["mode"] = "lite"
+        c.list_memories(user_id="u", agent_id="a", include_raw=False)
+        assert srv.store["list_bodies"][-1]["include_raw"] is False
+        assert srv.store["status_calls"] == 2
+    finally:
+        srv.stop()
+
+
+def test_recent_tool_in_lite_asks_for_raw_and_flag_still_wins():
+    srv = FakeV4Server()
+    try:
+        srv.store["mode"] = "lite"
+        p = _provider_at(srv.base)
+        json.loads(p.handle_tool_call("hyatlas_recent", {}))
+        assert srv.store["list_bodies"][-1]["include_raw"] is True
+        json.loads(p.handle_tool_call("hyatlas_recent", {"include_raw": False}))
+        assert srv.store["list_bodies"][-1]["include_raw"] is False
+        srv.store["mode"] = "ultra"
+        json.loads(p.handle_tool_call("hyatlas_recent", {}))
+        assert srv.store["list_bodies"][-1]["include_raw"] is False
+    finally:
+        srv.stop()
+
+
+def test_recent_cli_flag_defaults_to_mode_and_flags_override():
+    cli = _load_sibling("cli")
+    parser = argparse.ArgumentParser()
+    cli.register_cli(parser)
+    assert parser.parse_args(["recent"]).include_raw is None
+    assert parser.parse_args(["recent", "--include-raw"]).include_raw is True
+    assert parser.parse_args(["recent", "--no-include-raw"]).include_raw is False
+
+
+def test_recent_schema_no_longer_pins_raw_off():
+    sch = _load_sibling("schemas")
+    props = sch.HYATLAS_RECENT_SCHEMA["parameters"]["properties"]["include_raw"]
+    assert "default" not in props
+    assert "lite" in props["description"]
+
+
+def test_llm_settings_do_not_claim_a_server_default():
+    """The server has no default LLM endpoint or model; the descriptions must say so."""
+    st = _load_sibling("settings")
+    by_key = {f["key"]: f for f in st.SCHEMA}
+    for key in ("llm_base", "llm_model"):
+        desc = by_key[key]["description"]
+        assert "server's default" not in desc and "server default" not in desc, key
+        assert "unconfigured" in desc, key
+
+
+# ---------------------------------------------------------------------------
+# Start lock: retry only on real contention; other lock errors start unlocked
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def lock_mod(monkeypatch, tmp_path):
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    return proc_mod
+
+
+def test_lock_retries_while_another_starter_holds_it(lock_mod, monkeypatch):
+    fc = lock_mod.fcntl
+    if fc is None:
+        pytest.skip("POSIX flock only")
+    calls = {"n": 0}
+    real = fc.flock
+
+    def flaky(fd, op):
+        if op & fc.LOCK_NB:
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise BlockingIOError(errno.EAGAIN, "held by another starter")
+        return real(fd, op)
+
+    monkeypatch.setattr(fc, "flock", flaky)
+    fd = lock_mod._acquire_start_lock(5.0)
+    assert calls["n"] == 3
+    lock_mod._release_start_lock(fd)
+
+
+def test_busy_lock_still_times_out(lock_mod, monkeypatch):
+    fc = lock_mod.fcntl
+    if fc is None:
+        pytest.skip("POSIX flock only")
+
+    def busy(fd, op):
+        if op & fc.LOCK_NB:
+            raise BlockingIOError(errno.EAGAIN, "held")
+        return None
+
+    monkeypatch.setattr(fc, "flock", busy)
+    with pytest.raises(lock_mod.StartLockBusy):
+        lock_mod._acquire_start_lock(0.3)
+
+
+def test_unsupported_filesystem_lock_does_not_wait_or_report_busy(lock_mod, monkeypatch, caplog):
+    fc = lock_mod.fcntl
+    if fc is None:
+        pytest.skip("POSIX flock only")
+    import logging
+    import time as _time
+    for code in (errno.ENOLCK, errno.EOPNOTSUPP):
+        def no_locks(fd, op, code=code):
+            if op & fc.LOCK_NB:
+                raise OSError(code, "locking not supported here")
+            return None
+
+        monkeypatch.setattr(fc, "flock", no_locks)
+        caplog.clear()
+        t0 = _time.monotonic()
+        with caplog.at_level(logging.WARNING):
+            fd = lock_mod._acquire_start_lock(45.0)
+        assert _time.monotonic() - t0 < 1.0, "must not wait out the 45 s bound"
+        assert any("start lock unavailable" in r.getMessage() for r in caplog.records), code
+        lock_mod._release_start_lock(fd)
+
+
+class _FakeMsvcrt:
+    LK_NBLCK = 2
+    LK_UNLCK = 0
+
+    def __init__(self, errs):
+        self.errs = list(errs)   # errnos raised by successive locking attempts
+        self.attempts = 0
+
+    def locking(self, fd, mode, n):
+        if mode == self.LK_NBLCK:
+            self.attempts += 1
+            if self.errs:
+                raise OSError(self.errs.pop(0), "locked")
+
+
+def test_windows_contention_errnos_are_retried(lock_mod, monkeypatch):
+    monkeypatch.setattr(lock_mod, "fcntl", None)
+    fm = _FakeMsvcrt([errno.EACCES, errno.EACCES])
+    monkeypatch.setattr(lock_mod, "msvcrt", fm, raising=False)
+    fd = lock_mod._acquire_start_lock(5.0)
+    assert fm.attempts == 3
+    lock_mod._release_start_lock(fd)
+
+
+def test_windows_other_errno_proceeds_unlocked(lock_mod, monkeypatch, caplog):
+    import logging
+    monkeypatch.setattr(lock_mod, "fcntl", None)
+    fm = _FakeMsvcrt([errno.EINVAL])
+    monkeypatch.setattr(lock_mod, "msvcrt", fm, raising=False)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        fd = lock_mod._acquire_start_lock(45.0)
+    assert fm.attempts == 1, "a non-contention error must not be retried"
+    assert any("start lock unavailable" in r.getMessage() for r in caplog.records)
+    lock_mod._release_start_lock(fd)
+
+
+def test_second_start_reuses_held_lock_instead_of_leaking(lock_mod, monkeypatch):
+    calls = []
+    real_acquire = lock_mod._acquire_start_lock
+
+    def counting(wait):
+        calls.append(wait)
+        return real_acquire(wait)
+
+    monkeypatch.setattr(lock_mod, "_acquire_start_lock", counting)
+    monkeypatch.setattr(lock_mod, "_serving", lambda cfg: True)  # refuse to spawn
+    p = lock_mod.HyatlasProcess({"server_port": 1})
+    held = real_acquire(0)
+    p._lock_fd = held
+    with pytest.raises(lock_mod.ServerAlreadyRunning):
+        p.start(lock_wait=0.1)
+    assert calls == [], "start() must reuse the lock it already holds"
+    assert p._lock_fd is None, "the held lock is released on the refusal path"

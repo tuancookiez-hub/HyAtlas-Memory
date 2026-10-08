@@ -75,8 +75,11 @@ def register_cli(plugin_parser: argparse.ArgumentParser) -> None:
     p_recent = sub.add_parser("recent", help="List recent memories")
     p_recent.add_argument("--layer", default="")
     p_recent.add_argument("--limit", type=int, default=20)
-    p_recent.add_argument("--include-raw", action="store_true")
-    p_recent.set_defaults(func=_cmd_recent)
+    # Default (unset): the server's mode decides. Lite includes raw rows, since
+    # they are the only rows lite stores. --include-raw / --no-include-raw override.
+    p_recent.add_argument("--include-raw", dest="include_raw", action="store_true")
+    p_recent.add_argument("--no-include-raw", dest="include_raw", action="store_false")
+    p_recent.set_defaults(include_raw=None, func=_cmd_recent)
 
     p_start = sub.add_parser("start", help="Start the v4 Go server (canonical launcher when present)")
     p_start.set_defaults(func=_cmd_start)
@@ -96,30 +99,23 @@ def _identity(provider: Any) -> "tuple[str, str]":
 
 
 def _launcher(cfg: dict) -> "Path | None":
-    """A user-supplied launcher script, when one exists.
+    """The user-configured launcher script, when one is set and exists.
 
-    Some installs ship a ``hyatlas-go.ps1`` next to the server binary that owns
-    the full server env (data dir, LLM configuration, log redirect). Running it
-    keeps a CLI-started server identical to that install's own start shim.
+    Some installs ship a ``hyatlas-go.ps1`` that owns the full server env (data
+    dir, LLM configuration, log redirect). When ``launcher_path`` names one,
+    ``hermes hyatlas start|stop`` runs it instead of spawning the binary.
 
-    The script is the user's own server-side tooling, not part of this plugin:
-    nothing here reads credentials or configures an LLM. Only explicit paths are
-    consulted — ``launcher_path`` from config, then a launcher sitting beside
-    the resolved binary — so no machine-specific location is baked in and a
-    catalog install with no launcher simply spawns the binary directly.
+    The script is never discovered implicitly: a script that runs a shell is only
+    executed when the user names it in ``launcher_path``. The script itself is the
+    user's tooling and is not part of this plugin; it may read other tools'
+    credentials (the repository's ``hyatlas-go.ps1`` reads Hermes' ``auth.json``).
+    With no ``launcher_path`` the binary is spawned directly.
     """
     if sys.platform != "win32":
         return None
-    candidates = []
     configured = str(cfg.get("launcher_path") or "").strip()
-    if configured:
-        candidates.append(Path(configured))
-    bp = str(cfg.get("binary_path") or "").strip()
-    if bp:
-        candidates.append(Path(bp).parent / "hyatlas-go.ps1")
-    for cand in candidates:
-        if cand.is_file():
-            return cand
+    if configured and Path(configured).is_file():
+        return Path(configured)
     return None
 
 
@@ -161,7 +157,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
         client = _client_from_args(args)
         if not client.is_reachable():
             _print({"error": "server unreachable",
-                    "hint": "Start it with `hyatlas start` or `hermes hyatlas start`"})
+                    "hint": "Start it with `hermes hyatlas start`. The `hermes hyatlas` command "
+                            "exists only while memory.provider is hyatlas (`hermes memory setup`)."})
             return 1
         _print(client.status())
         return 0
@@ -233,20 +230,13 @@ def _cmd_start(args: argparse.Namespace) -> int:
     # No canonical launcher (non-Windows / custom layout): spawn the binary
     # directly. Set HYATLAS_GO_DATA when the binary does not sit next to its
     # data/ dir — the server otherwise creates a fresh store beside itself.
+    # start_server refuses to spawn over a server that already answers, reports a
+    # child that died during startup as ok:false, and rejects an invalid mode or
+    # sync setting before spawning.
     from . import process as process_mod
-    proc = process_mod.HyatlasProcess(provider._config)
-    try:
-        proc.start()
-    except FileNotFoundError as e:
-        _print({"ok": False, "error": str(e)})
-        return 1
-    client = provider._ensure_client()
-    if client.wait_until_reachable(timeout=30.0):
-        _print({"ok": True, "started": True, "reachable": True})
-        return 0
-    _print({"ok": True, "started": True, "reachable": False,
-            "hint": "binary started but not reachable on the configured port"})
-    return 0
+    result = process_mod.start_server(provider._config, timeout=30.0)
+    _print(result)
+    return 0 if result.get("ok") else 1
 
 
 def _cmd_stop(args: argparse.Namespace) -> int:
@@ -255,9 +245,9 @@ def _cmd_stop(args: argparse.Namespace) -> int:
     if ps1 is not None:
         return _run_launcher(ps1, "stop", timeout=60)
     from . import process as process_mod
-    process_mod.HyatlasProcess.stop_running()
-    _print({"ok": True, "stopped": True})
-    return 0
+    result = process_mod.HyatlasProcess.stop_running(provider._config)
+    _print(result)
+    return 0 if result.get("ok") else 1
 
 
 def _main_standalone(argv: Any = None) -> int:

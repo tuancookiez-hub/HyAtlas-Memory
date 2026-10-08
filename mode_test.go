@@ -14,7 +14,7 @@ import (
 )
 
 // The mode selector is a privacy boundary, not a cosmetic setting: lite is the
-// only mode where conversation text never leaves the machine. These tests pin
+// only mode where no conversation text is sent to an LLM. These tests pin
 // both the parsing and the behaviour, because a mode that parses but does not
 // change what the server does would be worse than no selector at all.
 
@@ -235,7 +235,7 @@ func TestSyncDescribeMatchesBlocks(t *testing.T) {
 	}
 }
 
-// Lite is the privacy guarantee: no LLM call, so no text leaves the machine.
+// Lite is the privacy guarantee: no LLM call, so no text is sent to one.
 func TestExtractForModeLiteMakesNoLLMCall(t *testing.T) {
 	calls := 0
 	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -277,11 +277,18 @@ func TestExtractForModeUltraIsAsync(t *testing.T) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{}"}}]}`))
 	}))
 	defer mock.Close()
-	defer close(release)
 
 	srv := newTestServer(t, "test-model", mock.URL)
 	srv.mode = ModeUltra
 	srv.llm = NewLLMClient(mock.URL, "k", "test-model")
+	// The raw row must exist so its extracted flag can signal that the background
+	// pass has finished writing. Without this wait the test returns while the
+	// goroutine still writes, and TempDir cleanup races it.
+	if err := srv.store.Add(memory.L2Raw, "id1", "text", map[string]string{
+		"user_id": "u", "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	start := time.Now()
 	status := srv.extractForMode("text", "u", "a", "id1")
@@ -300,6 +307,15 @@ func TestExtractForModeUltraIsAsync(t *testing.T) {
 	case <-called:
 	case <-time.After(2 * time.Second):
 		t.Error("background extraction never called the LLM")
+	}
+	// Let the held LLM reply, so the background pass can finish.
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for !srv.store.GetMany([]string{"id1"})[0].Extracted {
+		if time.Now().After(deadline) {
+			t.Fatal("background extraction never finished")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
