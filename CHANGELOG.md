@@ -33,6 +33,17 @@
 
 ### Added
 
+- **Maintenance endpoints for stores written before this release.** Both are POST
+  and default to a dry run; `{"dry_run": false}` applies.
+  - `/api/v1/admin/compact_raw` rewrites each raw row to what the plugin stores now:
+    user and assistant text only, compaction summaries dropped, 4,000 bytes per
+    message and 12,000 per turn. IDs, metadata and the extracted flag are kept, and
+    the index is written once. On a real store: 522 rows, 241 MB of text to 5.7 MB;
+    the data dir went from 491 MB to 29 MB and startup RAM from 1.15 GB to 180 MB.
+  - `/api/v1/admin/dedupe_facts` applies the write-time de-dup rule to facts already
+    stored: per owner, newest first, an older fact at or above the threshold
+    (default `HYATLAS_DEDUPE_SCORE`) is superseded by the newer one. On a real
+    store: 280 of 2,687 facts.
 - **Hybrid search.** `/api/v1/search` now fuses the vector ranking with a BM25 keyword
   ranking (reciprocal rank fusion, k 60). Embeddings blur exact identifiers: on a real
   store, `HYATLAS_SYNC_EXTRACT`, `19528`, `RSI(2)` and `Reg-T` each found none of the
