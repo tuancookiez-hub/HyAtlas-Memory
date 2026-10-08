@@ -1,5 +1,49 @@
 # Changelog
 
+## [4.3.3] — 2026-10-08
+
+Two defects in the shared LLM call path, both found by running a real
+consolidation pass against a live store and endpoint instead of a fixture.
+
+### Fixed
+
+- **A hardcoded 180s client cap silently overrode every longer bound.** The
+  shared HTTP client carried `Timeout: 180 * time.Second`, which became the real
+  bound for every call while the two callers need different ones: extraction is
+  bounded at `extractTimeout` (180s), a consolidation pass at
+  `consolidateTimeout` (600s), because a pass reasons over a whole batch of
+  facts in one call. Measured against a live store: a pass died at exactly 180s
+  with `Client.Timeout exceeded while awaiting headers` on a 200-fact prompt,
+  and `consolidations` stayed at 0 — the declared 600s bound could never apply,
+  so no digest could ever complete. This is the same class of defect v3.5 hit
+  when an OpenAI SDK default silently overrode its configured timeout. The
+  client now sets no Timeout; every call path already puts its own deadline on
+  the context, so the hidden minimum is gone without letting anything run
+  unbounded.
+- **A reasoning-only reply failed as a parse error.** Once the pass could run to
+  completion it spent 8 minutes and reported `consolidation parse failed
+  (raw )` with no work done: the reply arrived with an empty `content` and the
+  text in `reasoning_content`, which the Go client never read. The v3.5 floor
+  captured that field deliberately — its changelog says *"when content is empty
+  but reasoning_content has text, the provider falls back to reasoning_content
+  as content"* — and the Go rewrite dropped it, so every such reply became an
+  empty string. `chat()` now falls back to `reasoning_content`, and the tolerant
+  JSON extraction downstream picks the object out of it. When both fields are
+  empty the error says so plainly, because "answered badly" and "answered with
+  nothing" want different fixes.
+
+Both are covered by tests that fail against the previous code: the client must
+carry no global Timeout (a re-added cap silently overrides a longer bound, which
+is how this shipped), and a pass given a bounded deadline must stop on it and
+record it rather than wait for the endpoint.
+
+### Notes
+
+- A consolidation pass against a slow or free-tier endpoint can legitimately
+  take several minutes. It is bounded by `consolidateTimeout`, and a caller that
+  stops waiting no longer cancels it — but the caller does lose the report, so
+  wait longer than the bound if you want the counts.
+
 ## [4.3.2] — 2026-10-08
 
 Fixes two ways a consolidation pass could be lost or duplicated.
