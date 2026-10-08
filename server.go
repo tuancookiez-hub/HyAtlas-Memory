@@ -153,8 +153,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		GraphNodes:       s.store.Graph().NodeCount(),
 		GraphEdges:       s.store.Graph().EdgeCount(),
 		Mode:             s.mode.OrDefault(),
-		ModeDetail:       s.mode.Describe(),
-		UsesLLM:          s.mode.UsesLLM(),
+		ModeDetail:       s.modeDetail(),
+		UsesLLM:         s.mode.UsesLLM(),
 		ExtractSync:      s.sync.Describe(s.mode),
 		Consolidations:   consRuns,
 		LastConsolidated: lastCons,
@@ -1107,6 +1107,9 @@ type runtimeCfg struct {
 	Consolidate time.Duration
 	Retention   time.Duration
 	Batch       int
+	// Graph is HYATLAS_CONSOLIDATE_GRAPH: whether consolidation also writes L5
+	// knowledge edges and the cross-session arc. Off unless set to on/true/1/yes.
+	Graph bool
 }
 
 // Defaults that decide what leaves the machine:
@@ -1150,6 +1153,7 @@ func resolveRuntime() runtimeCfg {
 		Consolidate:  resolveConsolidate(mode),
 		Retention:    parseDuration("HYATLAS_RAW_RETENTION", 0),
 		Batch:        envInt("HYATLAS_CONSOLIDATE_BATCH", defaultBatch),
+		Graph:        envOn("HYATLAS_CONSOLIDATE_GRAPH"),
 		Host:         strings.Trim(envOr("HYATLAS_GO_HOST", defaultHost), "[]"),
 		Port:         envOr("HYATLAS_GO_PORT", defaultPort),
 		DataDir:      dataDir,
@@ -1222,8 +1226,28 @@ func (s *Server) attachSlowPath(ctx context.Context, rt runtimeCfg) bool {
 		return false
 	}
 	s.cons = NewConsolidator(s.store, s.llm, rt.Consolidate, rt.Retention, rt.Batch)
+	s.cons.graph = rt.Graph
 	go s.cons.Run(ctx)
 	return true
+}
+
+// modeDetail is the mode's description, noting when the slow path runs without the
+// L5 graph and arc (HYATLAS_CONSOLIDATE_GRAPH off), which Describe cannot know.
+func (s *Server) modeDetail() string {
+	d := s.mode.Describe()
+	if s.cons != nil && !s.cons.graph {
+		d += "; L5 graph and arc writing off (HYATLAS_CONSOLIDATE_GRAPH)"
+	}
+	return d
+}
+
+// envOn reports whether key is set to on, true, 1 or yes (any case).
+func envOn(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "on", "true", "1", "yes":
+		return true
+	}
+	return false
 }
 
 // envFloat reads key as a float64. Unset, blank or unparsable means def.

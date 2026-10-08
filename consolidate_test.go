@@ -130,7 +130,7 @@ func TestConsolidateIgnoresUnknownIDs(t *testing.T) {
 	calls := 0
 	mock := mockConsolidationServer(t, &calls, Consolidation{
 		Merges: []Merge{{Text: "merged", Supersedes: []string{"m-fabricated-1", "m-fabricated-2"}}},
-		Drops:  []string{"m-fabricated-3", ids[0], "m-fabricated-4"},
+		Drops:  []Drop{{ID: "m-fabricated-3", Reason: "stale"}, {ID: ids[0], Reason: "stale"}, {ID: "m-fabricated-4", Reason: "stale"}},
 	})
 	defer mock.Close()
 

@@ -59,6 +59,26 @@ type Merge struct {
 	Supersedes []string `json:"supersedes"`
 }
 
+// Drop is one fact the model judged stale or trivially obvious, with its reason. A
+// drop without a reason is not applied: the reason is what makes a drop auditable,
+// and it is stored on the dropped row as drop_reason.
+type Drop struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
+}
+
+// UnmarshalJSON accepts a drop object or, from a model that ignores the format, a
+// bare id string, which carries no reason and so is not applied.
+func (d *Drop) UnmarshalJSON(b []byte) error {
+	var id string
+	if err := json.Unmarshal(b, &id); err == nil {
+		*d = Drop{ID: id}
+		return nil
+	}
+	type plain Drop
+	return json.Unmarshal(b, (*plain)(d))
+}
+
 // CitedRelation is an L5 edge plus the fact IDs that evidence it. Unlike the
 // per-turn triple, it must be corroborated by more than one memory — that is
 // what makes it a System2 product rather than a restatement of one turn.
@@ -80,7 +100,7 @@ type ConsolidatedSchema struct {
 // Consolidation is the JSON contract for one consolidation call.
 type Consolidation struct {
 	Merges  []Merge              `json:"merges"`
-	Drops   []string             `json:"drops"`
+	Drops   []Drop               `json:"drops"`
 	Schemas []ConsolidatedSchema `json:"schemas"`
 	// Knowledge are L5 graph edges. The slow path owns L5: a relation worth
 	// keeping is one corroborated across memories, and only this pass can see
@@ -161,6 +181,12 @@ type Consolidator struct {
 	// cannot grow without bound as memory accumulates.
 	batch int
 
+	// graph is whether a pass asks for and writes L5 knowledge edges and the
+	// cross-session arc. NewConsolidator turns it on; the server sets it from
+	// HYATLAS_CONSOLIDATE_GRAPH, which defaults to off: nothing a Hermes turn reads
+	// uses either, and leaving them out shortens a slow model's reply.
+	graph bool
+
 	// gate makes a pass single-flight. The ticker and a manual POST /digest can
 	// both ask for one, and two passes over the same batch would duplicate the
 	// LLM spend and race each other's merges and edge writes.
@@ -194,7 +220,7 @@ func NewConsolidator(store *MemoryStore, llm *LLMClient, every, retention time.D
 		batch = 200
 	}
 	c := &Consolidator{store: store, llm: llm, every: every, retention: retention, batch: batch,
-		done: map[string]string{}, windows: map[string]windowCursor{}}
+		graph: true, done: map[string]string{}, windows: map[string]windowCursor{}}
 	if store != nil && store.indexPath != "" {
 		c.statePath = filepath.Join(filepath.Dir(store.indexPath), consolidateStateFile)
 	}
@@ -504,6 +530,11 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		fatal(err.Error())
 		return false, nil
 	}
+	if !c.graph {
+		// With the graph off the prompt does not ask for edges or an arc, and
+		// anything a model sends for them anyway is ignored.
+		cons.Knowledge, cons.Arc = nil, nil
+	}
 
 	live := liveIDs(facts)
 	// batch is the immutable membership of what the LLM was shown. Evidence is
@@ -546,18 +577,28 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 	}
 
 	// Explicit drops: facts the model judged stale or superseded. Same
-	// live-set guard, so only facts it was actually shown can be superseded.
+	// live-set guard, so only facts it was actually shown can be superseded, and
+	// each needs a reason, which is kept on the dropped row.
 	var drops []string
 	dropped := map[string]bool{}
-	for _, id := range cons.Drops {
-		if live[id] && !dropped[id] {
-			dropped[id] = true
-			drops = append(drops, id)
+	var dropErr error
+	for _, d := range cons.Drops {
+		reason := strings.TrimSpace(d.Reason)
+		if !live[d.ID] || dropped[d.ID] {
+			continue
+		}
+		if reason == "" {
+			log.Printf("consolidate: %s: drop of %s has no reason; kept", owner, d.ID)
+			continue
+		}
+		dropped[d.ID] = true
+		drops = append(drops, d.ID)
+		// An empty supersededBy means dropped rather than replaced.
+		if _, e := c.store.supersedeWith([]string{d.ID}, "", map[string]string{"drop_reason": truncate(reason, 200)}); e != nil && dropErr == nil {
+			dropErr = e
 		}
 	}
 	if len(drops) > 0 {
-		// An empty mergedID means dropped rather than replaced.
-		_, err := c.store.Supersede(drops, "")
 		marked := c.supersededOf(drops)
 		for _, id := range marked {
 			delete(live, id)
@@ -566,8 +607,8 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		if err := c.retireMirrors(c.store.GetMany(marked), ""); err != nil {
 			soft("drop mirror: " + err.Error())
 		}
-		if err != nil {
-			fatal("drop: " + err.Error())
+		if dropErr != nil {
+			fatal("drop: " + dropErr.Error())
 		}
 	}
 
@@ -958,20 +999,27 @@ func (c *Consolidator) ask(ctx context.Context, facts, schemas []DocIndex) (*Con
 			fmt.Fprintf(&existing, "- schema_id=%s | %s\n", sc.ID, truncate(sc.Content, 200))
 		}
 	}
+	// The graph keys are asked for only when the graph is on, so a pass without it
+	// spends no reply tokens on edges or an arc.
+	graphKeys, graphRules := "", ""
+	if c.graph {
+		graphKeys = `,
+  "knowledge": [{"from": "<entity>", "relation": "<relation>", "to": "<entity>", "evidence": ["<id>", "<id>"]}],
+  "arc": "<1-3 sentences: what these facts say about the user's work over time>"`
+		graphRules = `
+- knowledge: 0-5 entity-relation-entity edges, each corroborated in "evidence" by fact ids from AT LEAST 2 different turns. A triple resting on one turn is just that turn restated — do not emit it. Use only ids from the input.
+- arc: null if the facts are too few or too unrelated to synthesise.`
+	}
 	system := `You are a memory consolidation engine. Below are durable facts already stored, each with its id and the turn it came from. Reason ACROSS them — not about any single one — and output a JSON object with EXACTLY these keys:
 {
   "merges": [{"text": "<one fact that replaces several>", "layer": "user_preferences|project_state|technical_lesson|decision|negative_knowledge", "supersedes": ["<id>", "<id>"]}],
-  "drops": ["<id>"],
-  "schemas": [{"pattern": "<a recurring pattern only visible across many facts>", "context": "<when it applies>", "supersedes": ["<schema_id>"]}],
-  "knowledge": [{"from": "<entity>", "relation": "<relation>", "to": "<entity>", "evidence": ["<id>", "<id>"]}],
-  "arc": "<1-3 sentences: what these facts say about the user's work over time>"
+  "drops": [{"id": "<id>", "reason": "<why this fact is stale or trivially obvious>"}],
+  "schemas": [{"pattern": "<a recurring pattern only visible across many facts>", "context": "<when it applies>", "supersedes": ["<schema_id>"]}]` + graphKeys + `
 }
 Rules:
 - merges: ONLY combine facts that genuinely say the same thing or contradict each other. For a contradiction, keep the newer statement and supersede the older. supersedes MUST list at least 2 ids. Use only ids from the input.
-- drops: ids of facts that are stale, trivially obvious, or fully absorbed by a merge. Be conservative — deleting memory is irreversible.
-- schemas: 0-3 patterns that generalise beyond the individual facts. Do not repeat a schema already stored (listed below, if any). To refine a stored schema, return the refined pattern and list the schema_id it replaces in "supersedes"; otherwise leave "supersedes" empty.
-- knowledge: 0-5 entity-relation-entity edges, each corroborated in "evidence" by fact ids from AT LEAST 2 different turns. A triple resting on one turn is just that turn restated — do not emit it. Use only ids from the input.
-- arc: null if the facts are too few or too unrelated to synthesise.
+- drops: facts that are stale (a temporary state that has since passed) or trivially obvious, each with a short reason. A durable fact — a preference, a decision, where something lives, how something works — is never stale just because it is old. A drop without a reason is ignored. Be conservative.
+- schemas: 0-3 patterns that generalise beyond the individual facts. Do not repeat a schema already stored (listed below, if any). To refine a stored schema, return the refined pattern and list the schema_id it replaces in "supersedes"; otherwise leave "supersedes" empty.` + graphRules + `
 - Never invent an id. Never reference a fact not listed.
 Return ONLY valid JSON, no prose, no markdown fences.
 

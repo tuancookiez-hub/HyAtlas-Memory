@@ -325,7 +325,7 @@ func mergeAndDrop(t *testing.T) consolidated {
 	mock := scopeMock(t, &log, func(string) (int, string) {
 		return http.StatusOK, chatBody(t, Consolidation{
 			Merges: []Merge{{Text: "the port is 4471", Supersedes: []string{c.a, c.b}}},
-			Drops:  []string{c.d},
+			Drops:  []Drop{{ID: c.d, Reason: "stale"}},
 		})
 	})
 	t.Cleanup(mock.Close)

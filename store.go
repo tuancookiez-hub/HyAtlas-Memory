@@ -217,9 +217,15 @@ func (s *MemoryStore) SearchOwners(query string, limit int, layer memory.Layer, 
 	if limit <= 0 {
 		limit = 5
 	}
+	// Embed once for every ID and layer; chromem's Query would embed the query
+	// again for each of them.
+	qv, err := s.embed.Embed(s.ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't create embedding of query: %w", err)
+	}
 	var merged []SearchHit
 	for _, id := range userIDs {
-		hits, err := s.search(query, limit, layer, id, agentID)
+		hits, err := s.searchVec(qv, limit, layer, id, agentID)
 		if err != nil {
 			return nil, err
 		}
@@ -246,6 +252,16 @@ func (s *MemoryStore) SearchOwners(query string, limit int, layer memory.Layer, 
 // search is the body of Search without the usage counter, so SearchOwners can
 // count a multi-ID search once.
 func (s *MemoryStore) search(query string, limit int, layer memory.Layer, userID, agentID string) ([]SearchHit, error) {
+	qv, err := s.embed.Embed(s.ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't create embedding of query: %w", err)
+	}
+	return s.searchVec(qv, limit, layer, userID, agentID)
+}
+
+// searchVec is search with the query already embedded, so one embedding serves
+// every layer (and, from SearchOwners, every user ID) instead of one per query.
+func (s *MemoryStore) searchVec(qv []float32, limit int, layer memory.Layer, userID, agentID string) ([]SearchHit, error) {
 	if limit <= 0 {
 		limit = 5
 	}
@@ -282,7 +298,7 @@ func (s *MemoryStore) search(query string, limit int, layer memory.Layer, userID
 		if k <= 0 {
 			continue
 		}
-		res, err := col.Query(s.ctx, query, k, where, nil)
+		res, err := col.QueryEmbedding(s.ctx, qv, k, where, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -448,6 +464,12 @@ func (s *MemoryStore) TotalMemories() int {
 // a same-id Add in the meantime is left as the newer write made it: a stale
 // snapshot is never written back, and a vanished row is skipped without error.
 func (s *MemoryStore) Supersede(ids []string, by string) (int, error) {
+	return s.supersedeWith(ids, by, nil)
+}
+
+// supersedeWith is Supersede that also records extra metadata on each marked row,
+// such as why a fact was dropped.
+func (s *MemoryStore) supersedeWith(ids []string, by string, extra map[string]string) (int, error) {
 	s.supMu.Lock()
 	defer s.supMu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -499,6 +521,9 @@ func (s *MemoryStore) Supersede(ids []string, by string) (int, error) {
 		}
 		meta["invalid_at"] = now
 		meta["superseded_by"] = by
+		for k, v := range extra {
+			meta[k] = v
+		}
 		meta["layer"] = d.Layer
 		if getErr != nil {
 			if firstErr == nil {

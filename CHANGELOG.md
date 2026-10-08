@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Consolidation no longer writes the L5 graph or the arc by default.** Nothing a
+  Hermes turn reads uses either, and on a real store L5 rows took none of the search
+  slots in a 70-slot probe. The prompt no longer asks for them, which shortens a slow
+  model's reply. `HYATLAS_CONSOLIDATE_GRAPH=on` restores both. `/api/v1/status`
+  `mode_detail` says when they are off. Merges, drops and L6 schemas are unchanged.
+- **A consolidation drop needs a reason.** The model returns
+  `{"id": ..., "reason": ...}`; a drop without a reason (including the old bare-id
+  form) is not applied, and the reason is kept on the dropped row as `drop_reason`.
+  The prompt now says a durable fact is never stale only because it is old.
+- **Search embeds the query once.** A search across aliased owners ran one vector
+  query per owner and layer, and chromem embedded the query text for each: 21
+  embeddings for three aliased IDs. Now one embedding serves them all.
+
 ### Fixed
 
 - **A turn is stored as the turn, not the transcript.** `sync_turn` receives the whole
