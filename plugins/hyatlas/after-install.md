@@ -3,21 +3,31 @@
 Install and enable the plugin, then restart the gateway so it loads:
 
 ```bash
-hermes plugins install hyatlas     # or: hermes plugins install tuancookiez-hub/HyAtlas-Memory/plugins/hyatlas
+hermes plugins install tuancookiez-hub/HyAtlas-Memory/plugins/hyatlas
 hermes plugins enable hyatlas
 hermes memory setup                # choose "hyatlas", then answer its prompts (see below)
 ```
 
+`hermes plugins install` takes a catalog name, a Git URL, or `owner/repo` with the
+plugin's subdirectory. The subdirectory is required, because the repository root
+is not the plugin. Equivalent forms: `tuancookiez-hub/HyAtlas-Memory#plugins/hyatlas`
+and `https://github.com/tuancookiez-hub/HyAtlas-Memory.git#plugins/hyatlas`. The
+bare name `hyatlas` works only once the plugin is in the Hermes catalog. Add
+`--enable` to the install command to enable it in the same step.
+
 ## What `hermes memory setup` does
 
-1. Shows the memory providers; pick `hyatlas`. Hermes installs the plugin's
-   dependencies (there are none beyond Hermes core).
-2. Prompts for each of the plugin's settings in turn. Press Enter to keep the
-   default. The ones that matter are the extraction `mode` (`lite`, `pro` or
-   `ultra`), `llm_base` and `llm_model` (any OpenAI-compatible endpoint), and
-   `llm_key`. The key is entered masked and written to Hermes' `.env` as
-   `HYATLAS_LLM_KEY`. The server host and port, user and agent ids, and the
-   auto-start options are also asked; their defaults work.
+1. Shows the memory providers and "Built-in only". Pick `hyatlas`. The plugin
+   declares no dependencies beyond Hermes core, so nothing is installed.
+2. Prompts for each of the plugin's 14 settings, in this order. Enter keeps the
+   default. The settings are: server host, server port, user ID, agent ID,
+   auto-start, binary path, launcher script, request timeout, data directory, LLM
+   endpoint, LLM model, LLM API key, extraction mode, and block on extraction.
+   Extraction mode and block on extraction are menus (`lite` / `pro` / `ultra`,
+   and `on` / `off`). The first entry of each menu is blank, which means "the
+   server's default". The ones that matter for an LLM setup are the mode, the
+   endpoint, the model and the key. The key is entered masked and written to
+   Hermes' `.env` as `HYATLAS_LLM_KEY`. The launcher script is Windows only.
 3. Writes `memory.provider: hyatlas` to `config.yaml`, the non-secret settings to
    `$HERMES_HOME/hyatlas.json`, and the key to `.env`.
 
@@ -46,9 +56,9 @@ hermes hyatlas add "I prefer short answers"
 hermes hyatlas search "answer style"
 ```
 
-`status` prints the server's JSON, including `version`, `mode`, and `llm`
-(`ok`, `unconfigured` or `unused`). The `search` results are grouped into the
-`profile`, `proactive` and `normal` channels.
+`status` prints the server's JSON, including `version`, `mode` and `llm`
+(`ok`, `unconfigured` or `unused`). `search` prints the server's `memories` object,
+grouped into the `profile`, `proactive` and `normal` channels.
 
 ## Start the server
 
@@ -58,24 +68,30 @@ The plugin does not install the server. Either run the binary yourself:
 hyatlas-go          # listens on 127.0.0.1:19528 by default
 ```
 
-A release binary is an embedded build and already contains the BGE model. A
-source-built binary needs the model folder: it looks in `HYATLAS_MODEL_DIR` if
-set, otherwise in `<cwd>/models`, then `<exe dir>/models`, then the installer's
-default `~/.hyatlas/models` (Windows `%LOCALAPPDATA%\hyatlas\models`).
+A release binary is an embedded build and already contains the BGE model; it
+ignores `HYATLAS_MODEL_DIR`. A source-built binary needs the model folder: it looks
+in `HYATLAS_MODEL_DIR` if set (and then nowhere else), otherwise in `<cwd>/models`,
+then `<exe dir>/models`, then the installer's default `~/.hyatlas/models` (Windows
+`%LOCALAPPDATA%\hyatlas\models`).
 
-or let the plugin start it:
+Or let the plugin start it:
 
 ```bash
 hermes hyatlas start    # spawns the binary (see binary_path), logs to ~/.hermes/logs/hyatlas.log
 hermes hyatlas stop     # stops a server the plugin started
 ```
 
+`/hyatlas start` and `/hyatlas stop` do the same, and work while the server is down.
+
 `start` spawns nothing if a server already answers at the configured host and
-port. It reports `already_running` with the existing pid when the pidfile names
-a live `hyatlas-go`, and `pid_known: false` when the server was started by hand.
+port. It returns `ok: true` with `already_running: true`. The `pid` is set, with
+`pid_known: true`, when the pidfile names a live `hyatlas-go`. It is `pid_known:
+false` when the server was started by hand.
+
 `stop` reports `ok: false` when the server answers but the plugin did not start
 it, because it cannot safely stop a pid it does not know. Stop that one from the
-process that started it.
+process that started it. With nothing running, `stop` returns `ok: true` with
+`running: false`.
 
 To have the plugin start the server automatically when it is unreachable, set
 `auto_start: true`:
@@ -92,8 +108,10 @@ plugins:
 
 With `auto_start` the plugin starts the binary during initialization, unless the
 run is a cron or flush context. It then waits up to 30 seconds for the server to
-answer. The server keeps running after Hermes exits; `hermes hyatlas stop` stops it.
-See the README's Disclosure section for the full list of what runs.
+answer. If two Hermes sessions start at once, a lock file means only one of them
+starts the server. The other finds it running. The server keeps running after
+Hermes exits; `hermes hyatlas stop` stops it. See the README's Disclosure section
+for the full list of what runs.
 
 ## Settings
 
@@ -105,8 +123,23 @@ Settings are read in this order, and a later source wins:
 4. `HYATLAS_*` environment variables.
 
 The keys and their environment variables are in the README's Settings table. The
-LLM key is never read from these files: set it through `hermes memory setup`
-(which writes it to `.env`) or export `HYATLAS_LLM_KEY`.
+setup wizard never writes the LLM key to `hyatlas.json` or `config.yaml`, and the
+plugin never forwards it from settings to the server. Set it through `hermes memory
+setup` (which writes it to `.env`) or export `HYATLAS_LLM_KEY`. If a key does end
+up in one of those files by hand, the plugin reads it but does not use it.
+
+Server-side variables such as `HYATLAS_ALLOWED_HOSTS` are not plugin settings. A
+server you start yourself reads them from its own environment. A server the plugin
+starts receives every `HYATLAS_*` variable exported in the agent's environment.
+
+### Reaching the server by a hostname
+
+If `server_host` is a DNS name (a LAN hostname, or a box that is not this
+machine), the server refuses the request with 403 unless that name is in the
+server's `HYATLAS_ALLOWED_HOSTS`. That includes `/healthz`, so the plugin reports
+the server as unreachable. Set the allowlist on the server, then set `server_host`.
+Use an IP literal or `127.0.0.1` otherwise. Entries are hostnames, and a port in an
+entry is ignored.
 
 ## Extraction mode
 
@@ -115,10 +148,14 @@ LLM key is never read from these files: set it through `hermes memory setup`
 - `lite`: no LLM call. Raw text and local embeddings only. This is the only mode
   where no conversation text goes to an LLM.
 - `pro`: one LLM call per write. Fills 5 of 7 layers.
-- `ultra` (default): `pro`, plus a consolidation pass every 6 hours. Fills all 7 layers.
+- `ultra` (default): `pro`, plus a consolidation pass every 6 hours. It fills L5 and
+  L6 only when a pass finds corroborated relations and recurring patterns, so
+  "7 of 7" is the steady state, not the first pass.
 
-`sync` decides whether a write waits for extraction. Unset, `pro` waits and `ultra`
-does not.
+`sync` decides whether a write waits for extraction. For a server the plugin
+starts, the default is `off` in every mode, so a Hermes turn does not wait on the
+LLM. For a server you start yourself, unset means `pro` waits and `ultra` does not.
+An exported `HYATLAS_SYNC_EXTRACT` overrides both.
 
 ## Updating
 

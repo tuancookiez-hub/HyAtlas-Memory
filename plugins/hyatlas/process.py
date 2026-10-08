@@ -26,13 +26,30 @@ from typing import Any, Dict, List, Optional
 from . import settings
 from .client import HyatlasClient
 
+# Advisory file locking for the start lock. fcntl on POSIX, msvcrt on Windows;
+# exactly one of the two is None.
+if sys.platform == "win32":
+    import msvcrt
+    fcntl = None  # type: ignore[assignment]
+else:
+    import fcntl
+    msvcrt = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 
 # Directory where the running subprocess logs go (matches the v3.5 convention)
-LOG_DIR = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "logs"
+LOG_DIR = settings.home() / "logs"
 LOG_FILE = LOG_DIR / "hyatlas.log"
 PID_FILE = LOG_DIR / "hyatlas.pid"
+# Serialises check-and-spawn across processes (two Hermes sessions with auto_start).
+START_LOCK_NAME = "hyatlas.start.lock"
+# Default bound on waiting for that lock. Never wait forever: an unattended run
+# must not hang behind a stuck starter.
+DEFAULT_LOCK_WAIT = 45.0
+# After health answers, a child must still be alive this long before its pid is
+# recorded. A child that binds a busy port dies within moments.
+SETTLE_SECONDS = 0.75
 
 # Environment passed to the spawned server. Everything else in the agent's
 # environment stays behind, so provider tokens and API keys never reach a child
@@ -124,6 +141,58 @@ def _wait_for(predicate: Any, timeout: float, interval: float = 0.25) -> bool:
         time.sleep(interval)
 
 
+class StartLockBusy(RuntimeError):
+    """Another start held the start lock for longer than the caller was willing to wait."""
+
+
+def _acquire_start_lock(wait: float) -> int:
+    """Take the exclusive start lock, waiting at most *wait* seconds.
+
+    Returns an open file descriptor that holds the lock; pass it to
+    :func:`_release_start_lock`. The lock is advisory and lives in LOG_DIR. The OS
+    drops it when the holder exits, so a crashed starter cannot leave it held.
+    Raises StartLockBusy when the wait runs out, and OSError if the lock file
+    cannot be created.
+    """
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    path = LOG_DIR / START_LOCK_NAME
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+    deadline = time.monotonic() + max(0.0, float(wait))
+    try:
+        while True:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                else:
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                return fd
+            except OSError:
+                # Held by another starter (flock raises BlockingIOError, msvcrt OSError).
+                if time.monotonic() >= deadline:
+                    raise StartLockBusy(
+                        f"another hyatlas start holds {path}; gave up after "
+                        f"{float(wait):g}s. Retry in a moment.")
+                time.sleep(0.1)
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _release_start_lock(fd: int) -> None:
+    """Release a lock taken by :func:`_acquire_start_lock` and close its descriptor."""
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        else:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass  # closing the descriptor releases it anyway
+    finally:
+        os.close(fd)
+
+
 class HyatlasProcess:
     """Lifecycle manager for the v4 Go binary subprocess."""
 
@@ -131,6 +200,7 @@ class HyatlasProcess:
         self._config = config
         self._proc: Optional[subprocess.Popen] = None
         self._log_handle: Optional[Any] = None
+        self._lock_fd: Optional[int] = None
         self._mode = ""
         self._sync = ""
         self._pid: Optional[int] = None
@@ -243,7 +313,7 @@ class HyatlasProcess:
         # like any other exported variable, and never through this code path.
         return env
 
-    def start(self) -> None:
+    def start(self, lock_wait: float = DEFAULT_LOCK_WAIT) -> None:
         """Spawn the v4 Go binary as a detached subprocess.
 
         Raises ValueError if a configured extraction mode or sync setting is not
@@ -255,6 +325,12 @@ class HyatlasProcess:
         Raises ServerAlreadyRunning, spawning nothing, when the configured origin
         already answers or a live hyatlas-go owns the pidfile. A second spawn would
         die on the port and, worse, overwrite the live server's pidfile.
+
+        The check and the spawn run under the start lock, so two concurrent starts
+        cannot both spawn. The lock is held until :meth:`wait_started` returns (or
+        this raises), so the second starter sees the first server's answer rather
+        than racing it. Raises StartLockBusy if the lock is not free within
+        *lock_wait* seconds, and OSError if the spawn itself fails.
 
         The pidfile is written by :meth:`wait_started`, once the child has been seen
         alive, not here.
@@ -269,61 +345,82 @@ class HyatlasProcess:
         self._mode = settings.mode(self._config)
         self._sync = settings.sync(self._config)
 
-        existing = _read_pid()
-        owner_alive = existing is not None and HyatlasProcess._is_server(existing)
-        serving = _serving(self._config)
-        if serving or owner_alive:
-            raise ServerAlreadyRunning(
-                _origin(self._config), existing if owner_alive else None, serving)
-
-        binary = self._config.get("binary_path") or self._discover_binary()
-        if not binary:
-            raise FileNotFoundError(
-                "hyatlas-go binary not found. Set `binary_path` in config "
-                "or add the binary to PATH."
-            )
-        if not Path(binary).exists():
-            raise FileNotFoundError(f"hyatlas-go binary not found at: {binary}")
-
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        # Open log file with errors='replace' to avoid surrogate crashes
-        self._log_handle = open(LOG_FILE, mode="a", encoding="utf-8", errors="replace")
-
-        env = self._env()
-
-        # Use CREATE_NEW_PROCESS_GROUP on Windows so we can kill the whole tree
-        creationflags = 0
-        if sys.platform == "win32":
-            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-
-        logger.info("starting hyatlas-go: %s", binary)
+        self._lock_fd = _acquire_start_lock(lock_wait)
         try:
-            self._proc = subprocess.Popen(
-                [binary],
-                stdout=self._log_handle,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                env=env,
-                cwd=str(Path(binary).parent),
-                creationflags=creationflags,
-            )
-        except OSError as e:
-            self._log_handle.close()
-            self._log_handle = None
+            existing = _read_pid()
+            owner_alive = existing is not None and HyatlasProcess._is_server(existing)
+            serving = _serving(self._config)
+            if serving or owner_alive:
+                raise ServerAlreadyRunning(
+                    _origin(self._config), existing if owner_alive else None, serving)
+
+            binary = self._config.get("binary_path") or self._discover_binary()
+            if not binary:
+                raise FileNotFoundError(
+                    "hyatlas-go binary not found. Set `binary_path` in config "
+                    "or add the binary to PATH."
+                )
+            if not Path(binary).exists():
+                raise FileNotFoundError(f"hyatlas-go binary not found at: {binary}")
+
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            # Open log file with errors='replace' to avoid surrogate crashes
+            self._log_handle = open(LOG_FILE, mode="a", encoding="utf-8", errors="replace")
+
+            env = self._env()
+
+            # Use CREATE_NEW_PROCESS_GROUP on Windows so we can kill the whole tree
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+            logger.info("starting hyatlas-go: %s", binary)
+            try:
+                self._proc = subprocess.Popen(
+                    [binary],
+                    stdout=self._log_handle,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    env=env,
+                    cwd=str(Path(binary).parent),
+                    creationflags=creationflags,
+                )
+            except OSError:
+                self._log_handle.close()
+                self._log_handle = None
+                raise
+            self._pid = self._proc.pid
+        except BaseException:
+            self._release_lock()
             raise
-        self._pid = self._proc.pid
+
+    def _release_lock(self) -> None:
+        """Release the start lock if this instance holds it. Safe to call repeatedly."""
+        if self._lock_fd is not None:
+            fd, self._lock_fd = self._lock_fd, None
+            _release_start_lock(fd)
 
     def wait_started(self, timeout: float = 30.0) -> str:
         """Wait for the spawned child to serve, or to die.
 
-        Returns ``"serving"`` (health answers), ``"starting"`` (still alive at the
-        deadline, not yet answering) or ``"exited"`` (the child died; nothing is
-        recorded and the log handle is closed).
+        Returns ``"serving"`` (health answers and the child is still alive after a
+        settle), ``"starting"`` (still alive at the deadline, not yet answering),
+        ``"already_running"`` (health answers but the child exited within the settle:
+        the port belongs to another server, so this child is not recorded) or
+        ``"exited"`` (the child died before health answered; nothing is recorded and
+        the log handle is closed).
 
         The pidfile is written only once the child is seen alive, so a child that
         dies on a busy port never leaves a pid behind, and ``stop_running()`` can
-        find a server that is alive but slow to answer.
+        find a server that is alive but slow to answer. The start lock taken by
+        :meth:`start` is released before this returns, whatever the outcome.
         """
+        try:
+            return self._wait_started(timeout)
+        finally:
+            self._release_lock()
+
+    def _wait_started(self, timeout: float) -> str:
         proc = self._proc
         if proc is None:
             return "exited"
@@ -334,8 +431,15 @@ class HyatlasProcess:
                 self._cleanup()
                 return "exited"
             if _serving(self._config):
-                _write_pidfile(proc.pid)
-                return "serving"
+                # Health answers, but it may be another server's. A child that lost
+                # the bind exits almost at once, so the settle tells the two apart.
+                time.sleep(SETTLE_SECONDS)
+                if proc.poll() is None:
+                    _write_pidfile(proc.pid)
+                    return "serving"
+                self._exit_code = proc.returncode
+                self._cleanup()
+                return "already_running"
             if time.monotonic() >= deadline:
                 break
             time.sleep(0.25)
@@ -374,6 +478,7 @@ class HyatlasProcess:
         return self._proc is not None and self._proc.poll() is None
 
     def _cleanup(self) -> None:
+        self._release_lock()
         if self._log_handle is not None:
             try:
                 self._log_handle.close()
@@ -460,17 +565,25 @@ class HyatlasProcess:
                 "message": f"no hyatlas-go server was running at {origin}"}
 
 
-def start_server(config: Optional[Dict[str, Any]], timeout: float = 30.0) -> Dict[str, Any]:
+def start_server(config: Optional[Dict[str, Any]], timeout: float = 30.0,
+                 lock_wait: Optional[float] = None) -> Dict[str, Any]:
     """Start the binary unless a server already owns the origin. Shared by the CLI,
     the ``/hyatlas start`` slash command and ``auto_start``.
 
+    *lock_wait* bounds how long this call waits for another start in progress
+    (default: *timeout* plus 15 s, so a starter that is still coming up is waited
+    for). It never waits forever.
+
     Returns a JSON-ready dict with ``ok``, ``started``, ``reachable`` and, where
-    relevant, ``already_running``, ``pid``, ``hint`` or ``error``.
+    relevant, ``already_running``, ``pid``, ``hint`` or ``error``. Never raises for
+    an environment problem: a spawn that the OS refuses is ``ok: False``.
     """
     origin = _origin(config)
+    if lock_wait is None:
+        lock_wait = timeout + 15.0
     proc = HyatlasProcess(config or {})
     try:
-        proc.start()
+        proc.start(lock_wait=lock_wait)
     except ServerAlreadyRunning as e:
         return {
             "ok": True, "started": False, "already_running": True,
@@ -479,9 +592,17 @@ def start_server(config: Optional[Dict[str, Any]], timeout: float = 30.0) -> Dic
             "message": ("a server already answers at " + origin) if e.serving else
                        f"a hyatlas-go (pid {e.pid}) is alive but not answering at {origin}",
         }
+    except StartLockBusy as e:
+        return {"ok": False, "started": False, "reachable": False, "origin": origin,
+                "error": str(e)}
     except (FileNotFoundError, ValueError) as e:
         return {"ok": False, "started": False, "reachable": False, "origin": origin,
                 "error": str(e)}
+    except OSError as e:
+        # PermissionError from a non-executable binary, ENOEXEC, a log directory
+        # that cannot be created, and so on. Report it; do not traceback the CLI.
+        return {"ok": False, "started": False, "reachable": False, "origin": origin,
+                "error": f"could not start hyatlas-go: {e}"}
 
     state = proc.wait_started(timeout=timeout)
     if state == "serving":
@@ -492,6 +613,13 @@ def start_server(config: Optional[Dict[str, Any]], timeout: float = 30.0) -> Dic
                 "pid": proc.pid, "origin": origin,
                 "hint": f"hyatlas-go is running but not answering at {origin} yet; "
                         f"check {LOG_FILE}"}
+    if state == "already_running":
+        # Health answered, but the child we spawned exited straight away, so the
+        # port is held by a server this call did not start. Nothing is recorded.
+        return {"ok": True, "started": False, "already_running": True,
+                "reachable": True, "origin": origin, "pid": None, "pid_known": False,
+                "message": f"a server already answers at {origin}; the process this "
+                           f"call started exited, so it was not recorded"}
     return {"ok": False, "started": False, "reachable": False, "origin": origin,
             "error": f"hyatlas-go exited during startup (exit code {proc.exit_code}). "
                      f"The port may be in use by another process, or the config is wrong. "

@@ -215,8 +215,14 @@ LEGACY_ENV = ("HY_MEMORY_HOST", "HY_MEMORY_PORT")
 
 
 def home() -> Path:
-    """The Hermes home the plugin is operating against."""
-    return Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+    """The Hermes home the plugin is operating against.
+
+    HERMES_HOME when it is non-blank, else ~/.hermes. An empty HERMES_HOME counts
+    as unset, as in hermes_constants.get_hermes_home(); taking "" as a path would
+    quietly put config and logs in the working directory.
+    """
+    val = os.environ.get("HERMES_HOME", "").strip()
+    return Path(val) if val else Path.home() / ".hermes"
 
 
 class _Skip:

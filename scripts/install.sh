@@ -218,8 +218,77 @@ print_manual_model_steps() {
     warn "looks in a models/ folder next to the binary."
 }
 
+# bge_present / ort_present — the two kinds of file the server needs in MODEL_DIR.
+# ort_present accepts any onnxruntime* / libonnxruntime* name, matching bge.go's
+# findLibFallback, so a library the user placed by hand counts.
+bge_present() {
+    [ -f "$MODEL_DIR/bge-small-en-v1.5.onnx" ] && [ -f "$MODEL_DIR/vocab.txt" ]
+}
+ort_present() {
+    # Glob test, not `ls a* b*`: ls exits non-zero when either pattern has no
+    # match, so a libonnxruntime.so alone would be reported as missing.
+    local f
+    for f in "$MODEL_DIR"/onnxruntime* "$MODEL_DIR"/libonnxruntime*; do
+        [ -e "$f" ] && return 0
+    done
+    return 1
+}
+
+# ort_lib_name — the file name this installer writes for the onnxruntime library.
+ort_lib_name() {
+    case "$PLATFORM_OS" in
+        windows) echo "onnxruntime.dll" ;;
+        macos)   echo "libonnxruntime.dylib" ;;
+        *)       echo "libonnxruntime.so" ;;
+    esac
+}
+
+# onnxruntime_package — set ORT_PKG to the release asset suffix for this OS and
+# arch (onnxruntime-<ORT_PKG>-<ORT_VERSION>.tgz|.zip). Asset names are the ones
+# microsoft/onnxruntime publishes for ORT_VERSION; an unlisted combination fails
+# here, before any download, instead of fetching the wrong library.
+onnxruntime_package() {
+    case "$PLATFORM_OS-$PLATFORM_ARCH" in
+        linux-amd64)   ORT_PKG="linux-x64" ;;
+        linux-arm64)   ORT_PKG="linux-aarch64" ;;
+        macos-arm64)   ORT_PKG="osx-arm64" ;;
+        windows-amd64) ORT_PKG="win-x64" ;;
+        windows-arm64) ORT_PKG="win-arm64" ;;
+        *)
+            soft_err "No onnxruntime ${ORT_VERSION} build is published for $PLATFORM_OS-$PLATFORM_ARCH."
+            soft_err "Install onnxruntime ${ORT_VERSION} yourself and put its shared library in the model folder."
+            return 1
+            ;;
+    esac
+}
+
+# extract_zip ARCHIVE DEST — bsdtar (Windows 10+) -> unzip -> PowerShell.
+# Every branch checks its own status: this runs inside `cmd || ...`, where set -e
+# is ignored, so a failed extraction must be caught here or it goes unnoticed.
+extract_zip() {
+    if tar -xf "$1" -C "$2" 2>/dev/null; then
+        return 0
+    fi
+    if command -v unzip >/dev/null 2>&1; then
+        unzip -o -q "$1" -d "$2" || return 1
+        return 0
+    fi
+    if command -v powershell >/dev/null 2>&1; then
+        powershell -NoProfile -Command \
+            "Expand-Archive -Force '$(cygpath -w "$1" 2>/dev/null || echo "$1")' '$(cygpath -w "$2" 2>/dev/null || echo "$2")'" \
+            || return 1
+        return 0
+    fi
+    soft_err "No unzip tool found (tried tar, unzip, powershell)."
+    return 1
+}
+
 # download_model — returns 1 (never exits) on failure, so main() can still install
 # the binary. Release binaries skip this entirely: they already carry the model.
+#
+# This runs as `download_model || MODEL_STATUS=$?`, and bash ignores set -e in
+# every function reached that way, so each fallible command below carries its
+# own failure check. "ready" is printed only after the files are confirmed.
 download_model() {
     if [ "$BINARY_EMBEDDED" = "1" ]; then
         ok "Release binary is embedded: the BGE model and onnxruntime are included, no download needed."
@@ -227,35 +296,44 @@ download_model() {
     fi
     [ "$NO_MODEL" = "1" ] && { warn "Skipping model download (HYATLAS_NO_MODEL=1)."; return 0; }
 
-    # Skip if the model AND the onnxruntime library are both already there
-    local need_download=0
-    for f in bge-small-en-v1.5.onnx vocab.txt; do
-        [ -f "$MODEL_DIR/$f" ] || need_download=1
-    done
-    if ! ls "$MODEL_DIR"/onnxruntime* "$MODEL_DIR"/libonnxruntime* >/dev/null 2>&1; then
-        need_download=1
-    fi
-    if [ "$need_download" = "0" ]; then
+    if bge_present && ort_present; then
         ok "Model + onnxruntime library already present in $MODEL_DIR"
-        return
+        return 0
+    fi
+
+    # Refuse an unsupported platform before fetching 133 MB of model for nothing.
+    # Only needed when this run has to fetch onnxruntime itself.
+    if ! ort_present && ! onnxruntime_package; then
+        print_manual_model_steps
+        return 1
     fi
 
     info "Downloading BGE-small embedding model (~133 MB) to $MODEL_DIR"
     info "This is required — the server cannot start without it."
     info "Press Ctrl+C to abort; you can re-run this installer later."
-    mkdir -p "$MODEL_DIR"
+    if ! mkdir -p "$MODEL_DIR"; then
+        soft_err "Cannot create model folder $MODEL_DIR"
+        print_manual_model_steps
+        return 1
+    fi
 
+    local pair remote local_name url
     for pair in "${MODEL_FILES[@]}"; do
-        local remote="${pair%%:*}" local_name="${pair##*:}"
-        local url="$MODEL_BASE/$remote"
+        remote="${pair%%:*}"
+        local_name="${pair##*:}"
+        url="$MODEL_BASE/$remote"
         info "  fetching $local_name"
         if ! curl -fsSL --retry 3 -o "$MODEL_DIR/$local_name.part" "$url"; then
-            rm -f "$MODEL_DIR/$local_name.part"
+            rm -f "$MODEL_DIR/$local_name.part" || true
             soft_err "Model download failed: $url"
             print_manual_model_steps
             return 1
         fi
-        mv "$MODEL_DIR/$local_name.part" "$MODEL_DIR/$local_name"
+        if ! mv "$MODEL_DIR/$local_name.part" "$MODEL_DIR/$local_name"; then
+            soft_err "Could not move the download into place: $MODEL_DIR/$local_name"
+            print_manual_model_steps
+            return 1
+        fi
     done
 
     # The onnxruntime shared library is also required — the embedder needs it.
@@ -264,64 +342,80 @@ download_model() {
         print_manual_model_steps
         return 1
     fi
+
+    # Final gate: say "ready" only when the files the server loads are on disk.
+    if ! bge_present; then
+        soft_err "Model files are missing from $MODEL_DIR after the download."
+        print_manual_model_steps
+        return 1
+    fi
+    if ! ort_present; then
+        soft_err "The onnxruntime library is missing from $MODEL_DIR after the download."
+        print_manual_model_steps
+        return 1
+    fi
     ok "Model + onnxruntime library ready in $MODEL_DIR"
+    return 0
 }
 
+# download_onnxruntime — fetch and install the onnxruntime shared library for
+# ORT_VERSION. Returns 1 with a message on any failure; see download_model for why
+# every command is checked explicitly.
 download_onnxruntime() {
-    # Already present under any accepted name? (bge.go has a findLibFallback
-    # that accepts onnxruntime* or libonnxruntime* prefixes.)
-    if ls "$MODEL_DIR"/onnxruntime* "$MODEL_DIR"/libonnxruntime* >/dev/null 2>&1; then
+    if ort_present; then
         ok "onnxruntime library already present"
-        return
+        return 0
     fi
 
-    local pkg base url
-    case "$PLATFORM_OS" in
-        windows) pkg="win-x64" ;;
-        macos)   pkg="osx-arm64" ;;
-        linux)   pkg="linux-x64" ;;
-    esac
-    base="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-${pkg}-${ORT_VERSION}"
+    onnxruntime_package || return 1
+    local base="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-${ORT_PKG}-${ORT_VERSION}"
+    local lib_name src url payload
 
-    info "Fetching onnxruntime ${ORT_VERSION} for ${PLATFORM_OS} (${pkg})..."
-    local payload="$TMP_DIR/ort_payload"
-    rm -rf "$payload"; mkdir -p "$payload"
+    info "Fetching onnxruntime ${ORT_VERSION} for ${PLATFORM_OS} (${ORT_PKG})..."
+    payload="$TMP_DIR/ort_payload"
+    if ! { rm -rf "$payload" && mkdir -p "$payload"; }; then
+        soft_err "Cannot create $payload"
+        return 1
+    fi
+    lib_name="$(ort_lib_name)"
 
-    case "$PLATFORM_OS" in
-        windows)
-            url="${base}.zip"
-            curl -fsSL --retry 3 -o "$payload/ort.zip" "$url" \
-                || { soft_err "onnxruntime download failed: $url"; return 1; }
-            # Extraction fallback chain: bsdtar (ships with Windows 10+ and
-            # reads zip natively) -> unzip -> PowerShell Expand-Archive.
-            if tar -xzf "$payload/ort.zip" -C "$payload" 2>/dev/null; then
-                :
-            elif command -v unzip >/dev/null 2>&1; then
-                unzip -o -q "$payload/ort.zip" -d "$payload"
-            elif command -v powershell >/dev/null 2>&1; then
-                powershell -NoProfile -Command \
-                    "Expand-Archive -Force '$(cygpath -w "$payload/ort.zip" 2>/dev/null || echo "$payload/ort.zip")' '$(cygpath -w "$payload" 2>/dev/null || echo "$payload")'"
-            else
-                soft_err "No unzip tool found (tried tar, unzip, powershell)."
-                soft_err "Download onnxruntime.dll manually from $url and place it in $MODEL_DIR/"
-                return 1
-            fi
-            cp "$payload/onnxruntime-${pkg}-${ORT_VERSION}/lib/onnxruntime.dll" "$MODEL_DIR/"
-            ;;
-        *)
-            url="${base}.tgz"
-            curl -fsSL --retry 3 -o "$payload/ort.tgz" "$url" \
-                || { soft_err "onnxruntime download failed: $url"; return 1; }
-            tar -xzf "$payload/ort.tgz" -C "$payload"
-            local src="$payload/onnxruntime-${pkg}-${ORT_VERSION}/lib"
-            if [ "$PLATFORM_OS" = "macos" ]; then
-                cp "$src/libonnxruntime.dylib" "$MODEL_DIR/"
-            else
-                cp "$src/libonnxruntime.so" "$MODEL_DIR/"
-            fi
-            ;;
-    esac
+    if [ "$PLATFORM_OS" = "windows" ]; then
+        url="${base}.zip"
+        if ! curl -fsSL --retry 3 -o "$payload/ort.zip" "$url"; then
+            soft_err "onnxruntime download failed: $url"
+            return 1
+        fi
+        if ! extract_zip "$payload/ort.zip" "$payload"; then
+            soft_err "Could not extract $url"
+            return 1
+        fi
+    else
+        url="${base}.tgz"
+        if ! curl -fsSL --retry 3 -o "$payload/ort.tgz" "$url"; then
+            soft_err "onnxruntime download failed: $url"
+            return 1
+        fi
+        if ! tar -xzf "$payload/ort.tgz" -C "$payload"; then
+            soft_err "Could not extract $url (truncated or corrupt archive?)"
+            return 1
+        fi
+    fi
+
+    src="$payload/onnxruntime-${ORT_PKG}-${ORT_VERSION}/lib/$lib_name"
+    if [ ! -f "$src" ]; then
+        soft_err "The onnxruntime archive has no $lib_name (expected it at lib/ inside onnxruntime-${ORT_PKG}-${ORT_VERSION})."
+        return 1
+    fi
+    if ! cp "$src" "$MODEL_DIR/"; then
+        soft_err "Could not copy $lib_name into $MODEL_DIR"
+        return 1
+    fi
+    if [ ! -f "$MODEL_DIR/$lib_name" ]; then
+        soft_err "$MODEL_DIR/$lib_name is missing after the copy."
+        return 1
+    fi
     ok "onnxruntime library installed"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -363,8 +457,7 @@ verify_install() {
     local pid=$!
 
     # Wait up to 15s for the server to come up (model load can take a few seconds)
-    local i
-    for i in $(seq 1 30); do
+    for _ in $(seq 1 30); do
         if curl -fsS "http://127.0.0.1:$probe_port/healthz" >/dev/null 2>&1; then
             ok "Server started and /healthz responded."
             kill $pid 2>/dev/null || true
@@ -427,7 +520,7 @@ $(printf '\033[0;32m' )HyAtlas-Memory v4 installed.$(printf '\033[0m')
               server_host: 127.0.0.1
               server_port: 19528
 
-  Or just run `hermes memory setup` and pick hyatlas; `hermes plugins install`
+  Or just run \`hermes memory setup\` and pick hyatlas; \`hermes plugins install\`
   plus that command is the whole path.
 
   Docs: https://github.com/$REPO#readme
@@ -560,35 +653,48 @@ configure_llm() {
 
 # write_hermes_env — persist what we collected so a spawned server inherits it.
 #
-# Appends to Hermes' own .env (the file `hermes memory setup` uses for secrets)
-# rather than inventing a second config location. 0600 from creation, and the key
-# is masked in the success message.
+# Hermes reads $HERMES_HOME/.env, where HERMES_HOME defaults to ~/.hermes (the
+# same rule as hermes_constants.get_hermes_home). The file is never $HOME/.env:
+# Hermes does not read that, so a key written there would silently do nothing.
+# 0600 from creation, and the key is masked in the success message.
+# Never fatal: a failure here is a warning, because the binary is already installed.
 write_hermes_env() {
-    # Split across two statements: on one line the second assignment expands
-    # $home before the first has taken effect, which is an unbound-variable
-    # error under `set -u`.
-    local home="${HERMES_HOME:-${HOME:-$HOME/.hermes}}"
+    local home="${HERMES_HOME:-}"
+    if [ -z "$home" ]; then
+        if [ -z "${HOME:-}" ]; then
+            warn "neither HERMES_HOME nor HOME is set; settings were not saved to a Hermes .env"
+            return 0
+        fi
+        home="$HOME/.hermes"
+    fi
     local envfile="$home/.env"
-    [ -d "$home" ] || return 0
     [ -n "${HYATLAS_LLM_KEY:-}${HYATLAS_MODE:-}${HYATLAS_LLM_BASE:-}" ] || return 0
-    mkdir -p "$home" 2>/dev/null || return 0
-    touch "$envfile" 2>/dev/null || { warn "cannot write $envfile"; return 0; }
+    if ! mkdir -p "$home" 2>/dev/null; then
+        warn "cannot create $home; settings were not saved to $envfile"
+        return 0
+    fi
+    if ! touch "$envfile" 2>/dev/null; then
+        warn "cannot write $envfile"
+        return 0
+    fi
     chmod 600 "$envfile" 2>/dev/null || true
 
-    local wrote=0
+    local wrote=0 failed=0
     _env_set() {
-        local k="$1" v="$2"
+        local k="$1" v="$2" tmp
         [ -z "$v" ] && return 0
         # Replace an existing line so a re-run updates instead of duplicating.
         if grep -q "^${k}=" "$envfile" 2>/dev/null; then
-            local tmp
-            tmp="$(mktemp)"
+            tmp="$(mktemp 2>/dev/null)" || { failed=1; return 0; }
             grep -v "^${k}=" "$envfile" > "$tmp" 2>/dev/null || true
-            printf '%s=%s\n' "$k" "$v" >> "$tmp"
-            mv "$tmp" "$envfile"
+            if ! printf '%s=%s\n' "$k" "$v" >> "$tmp" || ! mv "$tmp" "$envfile"; then
+                rm -f "$tmp"
+                failed=1
+                return 0
+            fi
             chmod 600 "$envfile" 2>/dev/null || true
         else
-            printf '%s=%s\n' "$k" "$v" >> "$envfile"
+            printf '%s=%s\n' "$k" "$v" >> "$envfile" 2>/dev/null || { failed=1; return 0; }
         fi
         wrote=1
     }
@@ -596,9 +702,12 @@ write_hermes_env() {
     _env_set HYATLAS_LLM_BASE  "${HYATLAS_LLM_BASE:-}"
     _env_set HYATLAS_LLM_MODEL "${HYATLAS_LLM_MODEL:-}"
     _env_set HYATLAS_LLM_KEY   "${HYATLAS_LLM_KEY:-}"
-    if [ "$wrote" = "1" ]; then
+    if [ "$failed" = "1" ]; then
+        warn "could not update $envfile; set the values above in Hermes' .env by hand"
+    elif [ "$wrote" = "1" ]; then
         ok "wrote settings to $envfile (0600)"
     fi
+    return 0
 }
 
 # onboarding runs only on an interactive terminal.
@@ -653,4 +762,8 @@ main() {
     fi
 }
 
-main "$@"
+# HYATLAS_INSTALL_LIB=1 sources the functions without running the installer
+# (used by the test harness). Unset for every real install, including curl | bash.
+if [ "${HYATLAS_INSTALL_LIB:-0}" != "1" ]; then
+    main "$@"
+fi

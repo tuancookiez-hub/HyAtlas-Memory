@@ -18,9 +18,9 @@ with a graph view, and a web dashboard panel. The server is a separate binary,
   keeps the raw text (L2) and, in `pro` and `ultra`, extracts profile, fact,
   summary and intention layers (L1, L3, L4, L7), plus knowledge and schema layers
   (L5, L6) in `ultra` (see the mode table below).
-- **Recall.** After each turn, Hermes queues the user's message (after stripping
-  its own scaffolding and redacting it) as a background search query. The plugin
-  asks the server for matching memories and makes them available to the next turn.
+- **Recall.** After each turn, Hermes calls the provider's `queue_prefetch` with the
+  user's message. The plugin runs a background search against the server and makes
+  the matches available to the next turn.
 - **Agent tools.** `hyatlas_status`, `hyatlas_search` (three channels: profile,
   proactive, normal), `hyatlas_recent`, `hyatlas_add`.
 - **Built-in `memory` tool.** An `add` through Hermes' `memory` tool is sent to
@@ -29,7 +29,7 @@ with a graph view, and a web dashboard panel. The server is a separate binary,
   later, when extraction labels the memory as a user preference (`pro` and
   `ultra`). `replace` and `remove` are not mirrored.
 - **Desktop pane.** Overview (health and layer counts), Graph, Memories, Search,
-  Add. Its keyboard shortcut is `mod+shift+h`.
+  Add. Its design is in [`desktop/SPEC.md`](desktop/SPEC.md).
 - **CLI and slash command.** `hermes hyatlas status|search|add|recent|start|stop`
   and `/hyatlas status|search <q>|add <text>|recent|start|stop`. The `hermes
   hyatlas` command appears only while `memory.provider` is `hyatlas`.
@@ -37,25 +37,27 @@ with a graph view, and a web dashboard panel. The server is a separate binary,
 ## Install
 
 The plugin needs the **HyAtlas v4 server** (`hyatlas-go`) running on this machine.
-Install the server from the project repository first. Its `scripts/install.sh`
-(one-line installer, see the repository README) fetches a prebuilt binary and the
-embedding model; see [Disclosure](#disclosure-what-this-plugin-does-on-your-machine)
-for what that installer downloads. A release binary is an embedded build (about
-160 MB) and already contains the model. A source build needs the model folder
-(its search order is in the server README's Model assets section). You can also
-build the server from source with Go 1.26 or newer.
+Install the server from the project repository first, with its `scripts/install.sh`
+(see the repository README). For a release binary, that script downloads the
+prebuilt build. A release binary is embedded and is about 160 MB (approximate),
+because it carries the embedding model. For a source build, the script fetches
+the model (about 133 MB) and the onnxruntime library that matches your CPU, and
+the server then needs the model folder (its search order is in the repository
+README's Model assets section). See [Disclosure](#disclosure-what-this-plugin-does-on-your-machine)
+for what the installer downloads.
 
 Then install and enable the plugin:
 
 ```bash
-# from the catalog, once the entry is merged:
-hermes plugins install hyatlas
-
 # or straight from the repository. The subdirectory must be part of the identifier:
 hermes plugins install tuancookiez-hub/HyAtlas-Memory/plugins/hyatlas
 
 hermes plugins enable hyatlas
 ```
+
+The bare name `hermes plugins install hyatlas` works only once the plugin is in
+the Hermes catalog. Equivalent forms: `tuancookiez-hub/HyAtlas-Memory#plugins/hyatlas`
+and `https://github.com/tuancookiez-hub/HyAtlas-Memory.git#plugins/hyatlas`.
 
 Select it as the memory provider, either with `hermes memory setup` or in
 `~/.hermes/config.yaml`:
@@ -67,10 +69,10 @@ memory:
 
 ### Setup
 
-`hermes memory setup` picks the provider, then prompts for each field in this
-plugin's config schema (Enter keeps the default). It writes `memory.provider` to
+`hermes memory setup` picks the provider, then prompts for each of the plugin's 14
+settings in turn (Enter keeps the default). It writes `memory.provider` to
 `config.yaml`, the non-secret settings to `hyatlas.json`, and the key to `.env`.
-It does not start the server. The fields that matter:
+It does not start the server. The settings that matter:
 
 1. **Extraction mode**: `lite`, `pro` or `ultra`. The default is `ultra`.
 2. **LLM endpoint**: any OpenAI-compatible base URL. Needed for `pro` and `ultra`.
@@ -94,7 +96,7 @@ still stored.
 
 | Key | Env var | Default | Purpose |
 |---|---|---|---|
-| `server_host` | `HYATLAS_SERVER_HOST` | `127.0.0.1` | Server host the plugin connects to |
+| `server_host` | `HYATLAS_SERVER_HOST` | `127.0.0.1` | Server host the plugin connects to. A DNS name is refused by the server with 403 unless the server's `HYATLAS_ALLOWED_HOSTS` lists it (see below). |
 | `server_port` | `HYATLAS_SERVER_PORT` | `19528` | Server port |
 | `user_id` | `HYATLAS_USER_ID` | `default` | Default user scope for memories |
 | `agent_id` | `HYATLAS_AGENT_ID` | `default` | Default agent scope (overridden per session) |
@@ -105,21 +107,34 @@ still stored.
 | `data_dir` | `HYATLAS_GO_DATA` | *(conventional)* | Server data directory. Also used by `hermes backup` |
 | `llm_base` | `HYATLAS_LLM_BASE` | *(none)* | Base URL of an OpenAI-compatible extraction endpoint |
 | `llm_model` | `HYATLAS_LLM_MODEL` | *(none)* | Model id at that endpoint |
-| `llm_key` | `HYATLAS_LLM_KEY` | *(none)* | **Secret.** Stored in `.env` (0600), never in `hyatlas.json` |
+| `llm_key` | *(none: the server reads `HYATLAS_LLM_KEY` from its environment)* | *(none)* | **Secret.** The setup wizard stores it in `.env` (0600), never in `hyatlas.json` |
 | `mode` | `HYATLAS_MODE` | *(server default: ultra)* | Extraction mode: `lite` \| `pro` \| `ultra` |
 | `sync` | `HYATLAS_SYNC_EXTRACT` | `off` for a spawned server | Whether a write waits for extraction: `on` \| `off` |
 
 All fourteen are editable in **Desktop → Settings → Plugins → hyatlas**, in
 `plugins.entries.hyatlas.settings` in `config.yaml`, or through the environment
 variables above (an environment variable wins). Empty or unset values mean the
-default. `llm_base` and `llm_model` are forwarded to a server the plugin starts,
-and so is `mode`. The plugin does not set `HYATLAS_LLM_KEY`; the server reads
-that from its environment (see Disclosure).
+default. `llm_base`, `llm_model` and `mode` are forwarded to a server the plugin
+starts. The plugin does not set `HYATLAS_LLM_KEY`; the server reads that from its
+environment (see Disclosure).
+
+Two notes on the table:
+
+- **Hostnames.** The server accepts only `localhost` and IP literals in the `Host`
+  header, unless the name is in its `HYATLAS_ALLOWED_HOSTS`. This applies to every
+  route, including `/healthz`. So a `server_host` that is a DNS name (a LAN name, or
+  a box that is not this machine) reports the server as unreachable until the
+  server's allowlist names it. `HYATLAS_ALLOWED_HOSTS` is a server setting. It is not
+  a plugin setting, so set it where the server runs. Entries are hostnames, and a
+  port in an entry is ignored.
+- **User scope.** Graph data written before owners were recorded has no owner. It
+  stays visible under every `user_id` filter, which is how single-user data from
+  older releases keeps working.
 
 The server accepts more `HYATLAS_*` variables than these (for example
 `HYATLAS_EMBED_BASE`, `HYATLAS_CONSOLIDATE_EVERY`, `HYATLAS_RAW_RETENTION`). The
-plugin passes any of them through to a server it starts, and the server's own
-documentation describes them.
+plugin passes any of them through to a server it starts. The server's own
+documentation, in the repository README and `.env.example`, describes them.
 
 ### Mode
 
@@ -127,18 +142,24 @@ documentation describes them.
 |---|---|---|---|---|
 | `lite` | none | none | **1 / 7**: L2 raw | no |
 | `pro` | one per write | within that one turn | **5 / 7**: L1, L2, L3, L4, L7 | no |
-| `ultra` *(default)* | one per write, plus a periodic batch | across memories and time | **7 / 7** | **yes**, every 6 hours |
+| `ultra` *(default)* | one per write, plus a periodic batch | across memories and time | **7 / 7** at steady state | **yes**, every 6 hours |
 
 L5 (knowledge) and L6 (schema) come only from the consolidation pass, because a
 relation needs corroboration from more than one turn and a schema is a pattern
-across many turns. So only `ultra` fills them.
+across many turns. So only `ultra` fills them, and only when a pass finds such
+relations and patterns.
 
 Whether a write waits for extraction is a separate setting, `HYATLAS_SYNC_EXTRACT`.
 A server the plugin spawns defaults to `off`, so a Hermes turn never waits on
 the LLM; `pro` still extracts every write, just behind the response. With
 `sync: on`, a write waits; the plugin's request timeout (`request_timeout`,
-15 s) still applies on the plugin side. A server you start yourself follows its
-own default (`pro` waits, `ultra` does not).
+15 s by default) still applies on the plugin side. A server you start yourself
+follows its own default (`pro` waits, `ultra` does not).
+
+Under `ultra`, each pass works on one owner (a `user_id` / `agent_id` pair) at a
+time, and only owners whose facts changed since their last pass are sent. An owner
+with more facts than `HYATLAS_CONSOLIDATE_BATCH` (default 200) is consolidated in
+successive windows across passes, not in one call.
 
 ### Updating
 
@@ -156,9 +177,6 @@ Restart the gateway afterwards so the new code loads. The Desktop pane's version
 badge reads the version from the running server's `/api/v1/status`, so a stale
 server shows up as a stale badge.
 
-Installing straight from the repository works the same way
-(`hermes plugins update hyatlas`).
-
 **The server binary is separate.** `hermes plugins update hyatlas` updates the
 plugin only. It does not change `hyatlas-go`. Re-run the server's installer, or
 replace the binary with a newer release asset, when you want to move the server.
@@ -166,61 +184,69 @@ replace the binary with a newer release asset, when you want to move the server.
 ### Requirements
 
 - Hermes Agent `>= 0.21.4`
-- The HyAtlas v4 server, prebuilt for Linux, macOS and Windows on amd64 or arm64,
-  or built from source with Go 1.26 or newer
+- The HyAtlas v4 server. Release assets are built for Linux amd64, macOS arm64 and
+  Windows amd64. On other platforms, the installer builds from source, which needs
+  Go 1.26 or newer and a C compiler.
 - No Python dependencies beyond Hermes core
 
 ## Disclosure: what this plugin does on your machine
 
-Every statement below was checked against the plugin source and the server
-source at the pinned commit.
+This section describes what the code in this repository does. The statements are
+checked against the plugin source and the server source at this commit.
 
 ### Network
 
 - **Plugin to server.** All plugin traffic goes to the server at
   `server_host:server_port` (default `127.0.0.1:19528`), over plain HTTP. The plugin
-  contacts no other host. After each turn, Hermes queues the user's message (stripped
-  of scaffolding and redacted) as a background search query to the server. Hermes also calls `sync_turn`
-  after each turn, which posts that turn to the server to be stored. Each
-  `hyatlas_*` tool call is also a request to the server. The Desktop pane polls
-  `/status` every 8 seconds while it is open.
+  contacts no other host. Hermes calls the provider's `queue_prefetch` after a turn,
+  and the plugin searches the server with the user's message. Hermes calls `sync_turn`
+  after each turn, which posts that turn (plus any earlier messages the plugin has
+  not yet sent in that session) to the server to be stored. Each `hyatlas_*` tool
+  call is also a request to the server.
 - **Server to an LLM endpoint.** The server calls an LLM only when `HYATLAS_LLM_BASE`,
   `HYATLAS_LLM_MODEL` and `HYATLAS_LLM_KEY` are all set, and only in `pro` or `ultra`.
   In `lite`, no LLM call is made.
   - In `pro` and `ultra`, each write's text is sent to that endpoint for extraction.
-    The plugin sends the current turn. If it missed earlier messages in the same
-    session, it includes those too.
-  - In `ultra` only, by default every 6 hours the server sends one consolidation
-    request to the same endpoint. It includes up to 200 stored facts, each cut to 400 characters.
-    These are facts already in memory, not just the current turn.
-  - There is no default endpoint. The plugin and the server both leave it empty,
-    and tests in the plugin check that no endpoint is hard-coded.
+    A failed call or an unparseable reply is retried once, so one write can cost
+    two requests.
+  - In `ultra` only, every 6 hours by default, the consolidation pass sends one
+    request per owner whose facts changed. Each request carries up to 200 of that
+    owner's live facts (`HYATLAS_CONSOLIDATE_BATCH`), each cut to 400 characters
+    with its fact ID and source turn ID. It also carries up to 20 of that owner's
+    existing schema patterns, each cut to 200 characters. These are facts already
+    in memory, not just the current turn. An owner's facts are never mixed with
+    another owner's in one request.
+  - There is no default endpoint. The plugin and the server both leave it empty.
+    The plugin's tests check that an unset endpoint is not forwarded.
 - **Server to an embedding endpoint.** By default embeddings are computed locally
   by the bundled BGE-small model. If `HYATLAS_EMBED_BASE` is set to an
-  OpenAI-compatible URL, the server sends each memory's text there to embed it.
-  This also applies in `lite`. The plugin has no setting for this variable and
-  does not set it. It reaches the server only if you export it.
-- **Server's web page.** If the server's built-in dashboard is served (at
-  `/dashboard/` on the server), its page loads a font from `fonts.googleapis.com`
-  and two scripts from `cdn.jsdelivr.net` in your browser when you open it. The
-  Desktop pane loads nothing from the network.
+  OpenAI-compatible URL, the server sends each memory's text, and each search query,
+  there to embed it. This applies in every mode, including `lite`. The plugin has no
+  setting for this variable and does not set it. It reaches the server only if you
+  export it.
+- **Server's web page.** The server serves a dashboard at `/dashboard/`. Its page
+  loads a font from `fonts.googleapis.com` and two scripts from `cdn.jsdelivr.net`
+  in your browser when you open it. The Desktop pane is part of the Hermes Desktop
+  app, and its network use is not in this repository.
 - **No telemetry.** The plugin has no analytics or usage reporting. The server's
   only outbound HTTP calls are the LLM and embedding requests listed above.
 
 ### Background process
 
 - Only when `auto_start` is `true` (default `false`), or when you run
-  `hermes hyatlas start`, the plugin starts the `hyatlas-go` binary as a child
-  process.
+  `hermes hyatlas start` (or `/hyatlas start`), does the plugin start the `hyatlas-go`
+  binary as a child process.
 - Binary lookup, in order: the `binary_path` setting; `hyatlas-go` on `PATH`; a
   `bin/` folder next to the plugin; `/usr/local/bin/hyatlas-go`;
   `/opt/hyatlas/hyatlas-go`; `~/hyatlas/hyatlas-go`; and on Windows
   `C:/hyatlas/hyatlas-go.exe` and `C:/Program Files/hyatlas/hyatlas-go.exe`.
 - `start` spawns nothing when a server already answers at `server_host:server_port`.
-  The result is `already_running: true`, with the existing pid when `hyatlas.pid`
-  names a live `hyatlas-go`. Nothing is written over a live pid.
-- The server's working directory is the binary's folder. Its stdin is closed. Its
-  stdout and stderr are appended to `$HERMES_HOME/logs/hyatlas.log`
+  The result is `ok: true` with `already_running: true`, and includes the existing
+  pid when `hyatlas.pid` names a live `hyatlas-go`. Nothing is written over a live pid.
+- Two Hermes sessions that auto-start at the same time share a lock file, so only
+  one of them starts the server.
+- The server's working directory is the binary's folder. Its stdin is `/dev/null`.
+  Its stdout and stderr are appended to `$HERMES_HOME/logs/hyatlas.log`
   (`HERMES_HOME` defaults to `~/.hermes`). Its PID is written to
   `$HERMES_HOME/logs/hyatlas.pid` only once the child is seen alive. A child that
   dies during startup (for example because the port is taken) is reported as
@@ -234,20 +260,26 @@ source at the pinned commit.
   with `running: true`: the server was not started by this plugin, its pid is
   unknown, and the plugin will not guess one. Stop it from the process that started
   it. With nothing running, `stop` returns `ok: true` with `running: false`.
-- The auto-start wait is bounded. The plugin waits up to 30 seconds (plus at most one
-  request timeout for the last probe), then logs a warning and carries on with the
-  server unreachable. Auto-start is skipped in cron and flush contexts.
+- The auto-start wait is bounded. The plugin waits up to 30 seconds, probing the
+  server's health endpoint every 0.25 s with a 2-second probe timeout. Then it logs
+  a warning and carries on with the server unreachable. Auto-start is skipped in
+  cron and flush contexts.
 
 ### Shell commands
 
-The plugin runs no shell commands except one case. On Windows, if `launcher_path`
-is set, `hermes hyatlas start` and `hermes hyatlas stop` run that script with
-`powershell -NoProfile -ExecutionPolicy Bypass -File <script> start|stop`, and its
-output goes to `hyatlas-launcher.out` in the system temp folder. The script is
-never discovered automatically. Only set `launcher_path` to a script you trust.
-The repository's `hyatlas-go.ps1` reads Hermes' `auth.json` to obtain a Nous
-Portal token (see Credentials). Do not point `launcher_path` at it unless you
-want that.
+The plugin runs no shell. It starts child processes in these cases only:
+
+- **Windows, `launcher_path` set.** `hermes hyatlas start` and `hermes hyatlas stop`
+  run that script with `powershell -NoProfile -ExecutionPolicy Bypass -File <script> start|stop`.
+  Its output goes to `hyatlas-launcher.out` in the system temp folder. The script is
+  never discovered automatically. Only set `launcher_path` to a script you trust.
+  The repository's `hyatlas-go.ps1` reads Hermes' `auth.json` to obtain a Nous
+  Portal token (see Credentials). Do not point `launcher_path` at it unless you
+  want that.
+- **Windows, stop and liveness checks.** The plugin runs `taskkill` to stop the
+  pidfile's process, and `tasklist` to confirm the pid is a `hyatlas-go`.
+- **macOS, liveness check.** The plugin runs `ps` to confirm the pid is a `hyatlas-go`.
+  On Linux it reads `/proc` instead.
 
 ### Files
 
@@ -257,6 +289,7 @@ Read:
 - `$HERMES_HOME/config.yaml`: the `plugins.hyatlas` block and the
   `plugins.entries.hyatlas.settings` block.
 - `HYATLAS_*` environment variables.
+- `$HERMES_HOME/logs/hyatlas.pid`, to find a server it started.
 - The data directory, only to check that it exists, for `hermes backup`.
 
 The plugin does not open `.env`, `auth.json`, any other tool's token store, or a
@@ -264,7 +297,8 @@ browser profile.
 
 Written:
 
-- `$HERMES_HOME/hyatlas.json`, mode 0600, when the setup form saves settings.
+- `$HERMES_HOME/hyatlas.json`, mode 0600 where the platform supports it, when the
+  setup form saves settings.
 - `$HERMES_HOME/logs/hyatlas.log` and `hyatlas.pid`, when the plugin starts the server.
 - `hyatlas-launcher.out` in the system temp folder, only with a Windows `launcher_path`.
 
@@ -276,8 +310,10 @@ starts it.
 ### Credentials
 
 - **`llm_key`** is declared secret. The setup wizard writes it to Hermes' `.env`
-  as `HYATLAS_LLM_KEY`, with mode 0600. The plugin never reads it from config,
-  never writes it to `hyatlas.json` (`save_config` strips it), and never logs it.
+  as `HYATLAS_LLM_KEY`, with mode 0600, and `save_config` strips it from
+  `hyatlas.json`. The plugin does not forward it to the server from settings, and
+  the plugin does not log it. If the key is written into `hyatlas.json` or
+  `config.yaml` by hand, the plugin reads it but does not use it.
 - **Environment passed to a started server.** It receives a short list of OS
   variables (such as `PATH`, `HOME`, TLS trust paths), every `HYATLAS_*` variable from
   your environment, and `HYATLAS_LLM_BASE`, `HYATLAS_LLM_MODEL`, `HYATLAS_GO_HOST`,
@@ -296,6 +332,8 @@ starts it.
 A started server listens on `HYATLAS_GO_HOST`:`HYATLAS_GO_PORT`. Unless you export
 those yourself, the plugin sets them from `server_host` and `server_port`, which
 default to `127.0.0.1:19528`. Keep it on loopback unless you have a reason not to.
+The server has no authentication. Its guard refuses browser-originated and
+DNS-name requests, as described in the repository README.
 
 ## Links
 

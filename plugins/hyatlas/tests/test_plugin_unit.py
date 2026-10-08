@@ -1045,6 +1045,139 @@ def test_cleanup_never_removes_another_servers_pidfile(monkeypatch, tmp_path):
     assert (tmp_path / "hyatlas.pid").read_text() == "777777"
 
 
+# ---------------------------------------------------------------------------
+# Concurrent starts, a child that loses the bind, spawn failures, lock bounds.
+# ---------------------------------------------------------------------------
+
+def _spawn_count(path: Path) -> int:
+    return len(path.read_text().splitlines()) if path.exists() else 0
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="shebang fixtures are POSIX")
+def test_concurrent_starts_spawn_exactly_one_server(monkeypatch, tmp_path):
+    """Two starts race on a cold port: one spawns, the other waits and reports it."""
+    import time as _time
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    spawn_log = tmp_path / "spawns.txt"
+    fake = tmp_path / "hyatlas-go"
+    # Log each spawn's pid before serving, so a double spawn is visible as two lines.
+    fake.write_text(_FAKE_HEALTH_SERVER.format(python=sys.executable).replace(
+        "import http.server, os\n",
+        f"import http.server, os\nopen({str(spawn_log)!r}, 'a').write(str(os.getpid()) + chr(10))\n",
+        1))
+    os.chmod(fake, 0o755)
+    cfg = {"binary_path": str(fake), "server_port": _free_port()}
+
+    results: list = []
+    barrier = threading.Barrier(2)
+
+    def race():
+        barrier.wait()
+        results.append(proc_mod.start_server(cfg, timeout=20.0))
+
+    threads = [threading.Thread(target=race) for _ in range(2)]
+    try:
+        for t in threads:
+            t.start()
+        deadline = _time.monotonic() + 60
+        for t in threads:
+            t.join(max(0.0, deadline - _time.monotonic()))
+        assert not any(t.is_alive() for t in threads), "a start hung past its bound"
+        assert _spawn_count(spawn_log) == 1, \
+            f"{_spawn_count(spawn_log)} servers were spawned for two starts"
+        assert len(results) == 2 and all(r["ok"] for r in results), results
+        started = [r for r in results if r.get("started")]
+        waited = [r for r in results if r.get("already_running")]
+        assert len(started) == 1 and len(waited) == 1, results
+        assert (tmp_path / "hyatlas.pid").read_text().strip() == str(started[0]["pid"])
+    finally:
+        stopped = proc_mod.HyatlasProcess.stop_running(cfg)
+    assert stopped["ok"] is True and stopped["stopped"] is True, stopped
+    assert not (tmp_path / "hyatlas.pid").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="shebang fixtures are POSIX")
+def test_child_that_exits_after_health_is_not_recorded(monkeypatch, tmp_path):
+    """Health answers, then the child dies inside the settle: the port is another
+    server's, so no pidfile names the dead child and the start reports it as running."""
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    fake = tmp_path / "hyatlas-go"
+    fake.write_text("#!/bin/sh\nsleep 0.3\n")
+    os.chmod(fake, 0o755)
+    probes = {"n": 0}
+
+    def nothing_then_another_server(config):
+        probes["n"] += 1
+        return probes["n"] > 1  # start()'s own check sees nothing; wait_started sees health
+
+    monkeypatch.setattr(proc_mod, "_serving", nothing_then_another_server)
+
+    result = proc_mod.start_server({"binary_path": str(fake), "server_port": _free_port()},
+                                   timeout=10.0)
+
+    assert result["ok"] is True and result["started"] is False, result
+    assert result["already_running"] is True and result["reachable"] is True, result
+    assert not (tmp_path / "hyatlas.pid").exists(), "a dead child was recorded as the server"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX exec permissions")
+def test_start_reports_a_binary_the_os_cannot_execute(monkeypatch, tmp_path):
+    """Popen raising PermissionError must come back as ok:false, not a traceback."""
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    fake = tmp_path / "hyatlas-go"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    os.chmod(fake, 0o644)  # no execute bit
+
+    result = proc_mod.start_server({"binary_path": str(fake), "server_port": _free_port()})
+
+    assert result["ok"] is False and result["started"] is False, result
+    assert "could not start hyatlas-go" in result["error"], result
+    assert not (tmp_path / "hyatlas.pid").exists()
+    # The failed start must release the start lock, or every later start stalls.
+    fd = proc_mod._acquire_start_lock(0)
+    proc_mod._release_start_lock(fd)
+
+
+def test_start_lock_wait_is_bounded(monkeypatch, tmp_path):
+    """A start behind a held lock gives up at its bound instead of waiting forever."""
+    import time as _time
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    held = proc_mod._acquire_start_lock(0)
+    try:
+        assert (tmp_path / "hyatlas.start.lock").exists()
+        t0 = _time.monotonic()
+        result = proc_mod.start_server(
+            {"binary_path": str(tmp_path / "missing"), "server_port": _free_port()},
+            timeout=60.0, lock_wait=0.5)
+        elapsed = _time.monotonic() - t0
+    finally:
+        proc_mod._release_start_lock(held)
+
+    assert result["ok"] is False and result["started"] is False, result
+    assert "another hyatlas start" in result["error"], result
+    assert elapsed < 5.0, f"waited {elapsed:.1f}s against a 0.5s bound"
+    assert not (tmp_path / "hyatlas.pid").exists()
+
+
+def test_empty_hermes_home_is_treated_as_unset(monkeypatch):
+    """HERMES_HOME="" must mean the default, not the working directory."""
+    settings_mod = _load_sibling("settings")
+    monkeypatch.setenv("HERMES_HOME", "")
+    assert settings_mod.home() == Path.home() / ".hermes"
+    monkeypatch.setenv("HERMES_HOME", "   ")
+    assert settings_mod.home() == Path.home() / ".hermes"
+    monkeypatch.setenv("HERMES_HOME", "/srv/hermes-test")
+    assert settings_mod.home() == Path("/srv/hermes-test")
+
+    monkeypatch.setenv("HERMES_HOME", "")
+    proc_mod = _load_sibling("process")
+    assert proc_mod.LOG_DIR == Path.home() / ".hermes" / "logs"
+
+
 @requires_fastapi
 def test_dashboard_api_reads_plugin_settings(monkeypatch, tmp_path):
     """The pane hardcoded 127.0.0.1:19528 instead of the configured server."""
