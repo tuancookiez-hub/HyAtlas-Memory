@@ -69,6 +69,23 @@ The plugin reads (in priority order):
    - `HYATLAS_LLM_MODEL` — model name (e.g. `poolside/laguna-s-2.1:free`)
    - `HYATLAS_LLM_KEY` — bearer token for the LLM endpoint
 
+   **All three are unset by default and extraction stays off until you set
+   them.** With none configured the server makes no LLM call: writes keep the
+   raw trace plus local embeddings, and status reports `llm: "unconfigured"`.
+   The installer and `hermes memory setup` offer a free endpoint as a starting
+   value you can overwrite. See the README's disclosure for what leaves the
+   machine and when.
+
+## Updating
+
+```bash
+hermes plugins check-updates     # read-only
+hermes plugins update hyatlas    # then restart the gateway
+```
+
+This moves the plugin only. The `hyatlas-go` server binary is separate and
+yours to update from the [project releases](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases).
+
 ## Switching between v3.5 and v4
 
 The plugin's HTTP wire contract is identical between v3.5 (port 19527)

@@ -123,6 +123,34 @@ own config, never set by the plugin.
 The Desktop pane loads automatically from this plugin's `desktop/plugin.js`
 (the unified-package door) — no separate install step.
 
+### Updating
+
+The plugin never updates itself. A catalog entry pins one exact commit, and that
+pin *is* the trust model: a self-updater would let an installed copy drift to a
+commit nobody reviewed. So updates arrive only when a re-pin PR lands in the
+catalog, and you apply them deliberately:
+
+```bash
+hermes plugins check-updates          # read-only: is anything newer available?
+hermes plugins update hyatlas         # apply it
+```
+
+Then restart the gateway so the new code loads. The version on the card matches
+the pinned code — `hermes plugins list` shows it, and the Desktop pane's badge
+reads it from the running server's `/api/v1/status`.
+
+If you installed straight from this repo instead of the catalog
+(`hermes plugins install tuancookiez-hub/HyAtlas-Memory/plugins/hyatlas`),
+`hermes plugins update hyatlas` works the same way; only the source of truth
+differs.
+
+**The server binary is a separate thing.** `hermes plugins update hyatlas`
+updates the *plugin* (the client). It does not touch `hyatlas-go`, which lives
+outside the plugin directory and is yours to manage — re-run the project's
+installer or drop in a newer release asset when you want to move it. The plugin
+reports whatever version the server it talks to actually is, so a stale server
+shows up as a stale badge rather than as a mismatch you have to guess at.
+
 ## Disclosure (what this plugin does at runtime)
 
 - **Conversation text leaves your machine only if you point it somewhere.**
