@@ -51,7 +51,37 @@ type BGE struct {
 	vocab      map[string]int64
 	mu         sync.Mutex
 	path       string // dir holding the model/vocab/dll
+	tokenTypes bool   // graph declares token_type_ids as an input
 	embedFuncr func(ctx context.Context, text string) ([]float32, error)
+}
+
+// inputNames returns the session's input tensors in the order Run expects them.
+func (b *BGE) inputNames() []string {
+	if b.tokenTypes {
+		return []string{"input_ids", "attention_mask", "token_type_ids"}
+	}
+	return []string{"input_ids", "attention_mask"}
+}
+
+// graphWantsTokenTypes reports whether the model declares token_type_ids as an
+// input. BERT exports disagree on this point and the disagreement is not
+// cosmetic: feeding a two-input session against a three-input graph makes
+// onnxruntime substitute an empty tensor for the missing input, which surfaces
+// at run time as `Gather node /embeddings/token_type_embeddings` failing with a
+// non-zero status. Every Embed call then errors, so every write and every
+// search on such a build 500s. Best-effort: a probe failure returns false and
+// the session keeps the two-input shape it had before.
+func graphWantsTokenTypes(modelPath string) bool {
+	ins, _, err := ort.GetInputOutputInfo(modelPath)
+	if err != nil {
+		return false
+	}
+	for _, in := range ins {
+		if in.Name == "token_type_ids" {
+			return true
+		}
+	}
+	return false
 }
 
 // runtimeLibName returns the platform-appropriate onnxruntime shared library
@@ -100,8 +130,10 @@ func New(baseDir string) (*BGE, error) {
 	// restore afterwards (the server serves from its own cwd).
 	priorWD, _ := os.Getwd()
 	_ = os.Chdir(filepath.Dir(modelPath))
+	tokenTypes := graphWantsTokenTypes(modelPath)
+	b := &BGE{vocab: nil, path: baseDir, tokenTypes: tokenTypes}
 	sess, err := ort.NewDynamicSession[int64, float32](modelPath,
-		[]string{"input_ids", "attention_mask"}, []string{"last_hidden_state"})
+		b.inputNames(), []string{"last_hidden_state"})
 	_ = os.Chdir(priorWD)
 	if err != nil {
 		_ = ort.DestroyEnvironment()
@@ -115,7 +147,9 @@ func New(baseDir string) (*BGE, error) {
 		return nil, err
 	}
 
-	return &BGE{sess: sess, vocab: vocab, path: baseDir}, nil
+	b.sess = sess
+	b.vocab = vocab
+	return b, nil
 }
 
 // findLibFallback looks in baseDir for any onnxruntime* shared library and
@@ -174,7 +208,20 @@ func (b *BGE) runMeanPool(ids, mask []int64) ([]float32, error) {
 	}
 
 	b.mu.Lock()
-	runErr := b.sess.Run([]*ort.Tensor[int64]{inT, maskT}, []*ort.Tensor[float32]{outT})
+	inputs := []*ort.Tensor[int64]{inT, maskT}
+	// Single-segment BERT inference: segment ids are all zero. Only fed when the
+	// graph declares the input (see graphWantsTokenTypes); the order must match
+	// inputNames().
+	if b.tokenTypes {
+		tt := make([]int64, seq)
+		ttT, ttErr := ort.NewTensor(shape, tt)
+		if ttErr != nil {
+			b.mu.Unlock()
+			return nil, ttErr
+		}
+		inputs = append(inputs, ttT)
+	}
+	runErr := b.sess.Run(inputs, []*ort.Tensor[float32]{outT})
 	b.mu.Unlock()
 	if runErr != nil {
 		return nil, runErr

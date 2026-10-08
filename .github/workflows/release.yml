@@ -114,6 +114,13 @@ jobs:
           DATA="$(mktemp -d)"
           # Start with a dead LLM endpoint on purpose: server must still boot
           # and serve /healthz (vdb + embed healthy, llm degraded).
+          #
+          # MODEL_DIR points at the model this job just fetched, i.e. the exact
+          # model the embedded build carries. That is deliberate: the two BERT
+          # exports disagree about token_type_ids (the CI one declares it, the
+          # dev one does not), and a session built for the wrong input set fails
+          # at the first embedding rather than at load. Booting proves nothing
+          # about that, so this test must write.
           HYATLAS_GO_PORT="$PORT" \
           HYATLAS_GO_DATA="$DATA" \
           HYATLAS_EMBED_BASE=bge \
@@ -124,20 +131,65 @@ jobs:
             "./$BIN" >/dev/null 2>&1 &
           PID=$!
           trap 'kill $PID 2>/dev/null || true; rm -rf "$DATA"' EXIT
+          ready=0
           for i in $(seq 1 40); do
             if curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then
               echo "healthz OK after ${i} tries"
-              STATUS="$(curl -fsS "http://127.0.0.1:$PORT/api/v1/status")"
-              echo "status: $STATUS"
-              kill $PID 2>/dev/null || true
-              rm -rf "$DATA"
-              trap - EXIT
-              exit 0
+              ready=1
+              break
             fi
             sleep 0.5
           done
-          echo "::error::binary did not become healthy within 20s"
-          exit 1
+          if [ "$ready" -ne 1 ]; then
+            echo "::error::binary did not become healthy within 20s"
+            exit 1
+          fi
+          echo "status: $(curl -fsS "http://127.0.0.1:$PORT/api/v1/status")"
+
+          # A write is the only thing that proves the embedder works end to end:
+          # it embeds the document, and the search below embeds the query. When
+          # the onnxruntime input set is wrong, both return 500 while /healthz
+          # stays green -- which is how a build that could not store a single
+          # memory passed this job once already.
+          #
+          # Bodies are captured in shell variables rather than temp files: this
+          # job runs under bash on three OSes, and `curl -o` with an MSYS-style
+          # temp path only resolves when the shell happens to translate it.
+          ADD_OUT="$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
+            -X POST "http://127.0.0.1:$PORT/api/v1/add" \
+            -H 'Content-Type: application/json' \
+            -d '{"text":"release smoke test memory about cobalt","user_id":"smoke","agent_id":"smoke"}')"
+          ADD_CODE="${ADD_OUT##*HTTP_STATUS:}"
+          ADD_BODY="${ADD_OUT%HTTP_STATUS:*}"
+          if [ "$ADD_CODE" != "200" ]; then
+            echo "::error::POST /api/v1/add returned $ADD_CODE, expected 200"
+            echo "$ADD_BODY"
+            exit 1
+          fi
+          echo "write OK"
+
+          SEARCH_OUT="$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
+            -X POST "http://127.0.0.1:$PORT/api/v1/search" \
+            -H 'Content-Type: application/json' \
+            -d '{"query":"cobalt","limit":5,"user_ids":["smoke"],"agent_ids":["smoke"]}')"
+          SEARCH_CODE="${SEARCH_OUT##*HTTP_STATUS:}"
+          SEARCH_BODY="${SEARCH_OUT%HTTP_STATUS:*}"
+          if [ "$SEARCH_CODE" != "200" ]; then
+            echo "::error::POST /api/v1/search returned $SEARCH_CODE, expected 200"
+            echo "$SEARCH_BODY"
+            exit 1
+          fi
+          case "$SEARCH_BODY" in
+            *cobalt*) echo "search OK (write was recalled)" ;;
+            *) echo "::error::search returned 200 but the written memory was not recalled"
+               echo "$SEARCH_BODY"
+               exit 1 ;;
+          esac
+
+          kill $PID 2>/dev/null || true
+          rm -rf "$DATA"
+          trap - EXIT
+          exit 0
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v3
