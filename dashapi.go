@@ -100,7 +100,9 @@ func (s *Server) handleDashInfo(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDashMemories(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit := atoi(q.Get("limit"), 100)
-	items, _ := s.store.List(memory.Layer(q.Get("layer")), q.Get("user_id"), q.Get("agent_id"), limit, atoi(q.Get("offset"), 0), false)
+	// "all" from the dashboard means no owner filter, as on the graph endpoints.
+	uid, aid := graphOwner(q.Get("user_id"), q.Get("agent_id"))
+	items, _ := s.store.List(memory.Layer(q.Get("layer")), uid, aid, limit, atoi(q.Get("offset"), 0), false)
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {
 		out = append(out, map[string]any{
@@ -199,7 +201,8 @@ func (s *Server) handleDashLayerHealth(w http.ResponseWriter, r *http.Request) {
 // handleDashL6Schemas lists L6 schema items.
 func (s *Server) handleDashL6Schemas(w http.ResponseWriter, r *http.Request) {
 	n := atoi(r.URL.Query().Get("n"), 6)
-	items, _ := s.store.List(memory.L6Schema, "", "", n, 0, false)
+	uid, aid := graphOwner(r.URL.Query().Get("user_id"), r.URL.Query().Get("agent_id"))
+	items, _ := s.store.List(memory.L6Schema, uid, aid, n, 0, false)
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {
 		out = append(out, map[string]any{

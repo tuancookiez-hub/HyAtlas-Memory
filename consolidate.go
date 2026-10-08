@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -116,11 +118,20 @@ type Report struct {
 	Errors     []string `json:"errors,omitempty"`
 }
 
-// consolidateState is what survives a restart: which owners are already
-// consolidated, at which facts fingerprint, and where the next pass starts.
+// consolidateState is what survives a restart. Owners holds, per owner, the
+// fingerprint of its live facts as of its last watermark; Windows holds where that
+// owner's window walk stands. Both are keyed by scopeKey.String().
 type consolidateState struct {
-	Cursor int               `json:"cursor"`
-	Owners map[string]string `json:"owners"`
+	Cursor  int                     `json:"cursor"`
+	Owners  map[string]string       `json:"owners"`
+	Windows map[string]windowCursor `json:"windows,omitempty"`
+}
+
+// windowCursor is an owner's position in its window walk. Next is the window the
+// next pass sends; Covered counts windows sent since the owner's watermark was set.
+type windowCursor struct {
+	Next    int `json:"next"`
+	Covered int `json:"covered"`
 }
 
 // Consolidator owns the slow path.
@@ -146,7 +157,9 @@ type Consolidator struct {
 	// after its last successful pass. cursor is where the next pass starts in
 	// the owner order. Both are read and written only under gate, and are
 	// persisted to statePath.
-	done      map[string]string
+	done map[string]string
+	// windows is each owner's position in its window walk, persisted with done.
+	windows   map[string]windowCursor
 	cursor    int
 	statePath string
 
@@ -168,7 +181,7 @@ func NewConsolidator(store *MemoryStore, llm *LLMClient, every, retention time.D
 		batch = 200
 	}
 	c := &Consolidator{store: store, llm: llm, every: every, retention: retention, batch: batch,
-		done: map[string]string{}}
+		done: map[string]string{}, windows: map[string]windowCursor{}}
 	if store != nil && store.indexPath != "" {
 		c.statePath = filepath.Join(filepath.Dir(store.indexPath), consolidateStateFile)
 	}
@@ -225,9 +238,14 @@ func (k scopeKey) String() string { return fmt.Sprintf("user_id=%q agent_id=%q",
 // least two facts is consolidated on its own. The model never sees two people's
 // memories in one prompt, so no merge, L5 edge, schema or arc can mix them.
 //
+// An owner with more facts than the batch cap is walked in windows (see
+// windowAt): each pass sends the next window, newest facts first and then older
+// ones, wrapping at the end, so every fact is reached in turn rather than only the
+// newest batch. An owner is due again when its live facts differ from its
+// watermark, or when not every window has been covered since the watermark was set.
+//
 // Owners are visited from a cursor that moves between passes, so a pass cut
-// short by its deadline does not always stop at the same owners. An owner whose
-// facts have not changed since its last successful pass is not sent again.
+// short by its deadline does not always stop at the same owners.
 func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 	// Single flight: the loser is told so rather than queued, because the work
 	// it would have done is covered by the pass already in flight.
@@ -246,6 +264,9 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 	rep.FactsIn = len(facts)
 
 	byOwner, owners := groupByOwner(facts)
+	for _, k := range owners {
+		sortNewestFirst(byOwner[k])
+	}
 	// A single fact has nothing to reconcile against, so its owner sits this pass out.
 	var work []scopeKey
 	for _, k := range owners {
@@ -260,7 +281,7 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 		first = c.cursor % n
 	}
 	next := first + 1 // a pass that reaches every owner starts one owner later next time
-	ran := map[scopeKey]bool{}
+	ran := map[scopeKey]cycleStep{}
 	for i := 0; i < n; i++ {
 		k := work[(first+i)%n]
 		if err := ctx.Err(); err != nil {
@@ -268,7 +289,7 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 			var skipped []string
 			for j := i; j < n; j++ {
 				sk := work[(first+j)%n]
-				if c.done[sk.String()] != factsFingerprint(byOwner[sk]) {
+				if c.due(sk, byOwner[sk]) {
 					skipped = append(skipped, sk.String())
 				}
 			}
@@ -279,31 +300,53 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 			}
 			break
 		}
-		fp := factsFingerprint(byOwner[k])
-		if c.done[k.String()] == fp {
+		facts := byOwner[k]
+		if !c.due(k, facts) {
 			rep.OwnersUnchanged++
 			continue
 		}
-		scope := byOwner[k]
-		if len(scope) > c.batch {
-			scope = scope[:c.batch]
+		key := k.String()
+		fp := factsFingerprint(facts)
+		w := c.windows[key]
+		if c.done[key] != fp {
+			// The owner's facts changed since its watermark: a new cycle starts at the newest window.
+			w = windowCursor{}
 		}
+		count := windowsOf(len(facts), c.batch)
+		idx := w.Next % count
 		rep.OwnersRun++
-		if c.consolidateScope(ctx, k, scope, rep) {
-			ran[k] = true
+		ok, created := c.consolidateScope(ctx, k, c.windowAt(facts, idx), rep)
+		if ok {
+			ran[k] = cycleStep{considered: idsOf(facts), created: created,
+				next: (idx + 1) % count, covered: w.Covered + 1}
 		}
 	}
 	if n > 0 {
 		c.cursor = next % n
 	}
 
-	// Record each owner that completed, at the fingerprint its facts have now,
-	// which includes this pass's own merges. Owners that failed keep their old
-	// watermark, so they are retried next pass.
+	// Record each owner that completed. The new watermark is built only from what
+	// the pass considered (the owner's rows at the start of the pass) and what the
+	// pass itself created, each kept only if it is still live. A fact that arrived
+	// mid-pass is in neither, so the owner stays due for the next pass. Owners whose
+	// pass failed keep their old watermark and are retried.
 	if len(ran) > 0 {
-		post, _ := groupByOwner(c.listAllLive(memory.L3Fact))
-		for k := range ran {
-			c.done[k.String()] = factsFingerprint(post[k])
+		live := idSetOf(c.listAllLive(memory.L3Fact))
+		for k, st := range ran {
+			key := k.String()
+			var keep []string
+			for _, id := range st.considered {
+				if live[id] {
+					keep = append(keep, id)
+				}
+			}
+			for _, id := range st.created {
+				if live[id] {
+					keep = append(keep, id)
+				}
+			}
+			c.done[key] = idsFingerprint(keep)
+			c.windows[key] = windowCursor{Next: st.next, Covered: st.covered}
 		}
 	}
 	present := map[string]bool{}
@@ -313,6 +356,11 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 	for key := range c.done {
 		if !present[key] {
 			delete(c.done, key)
+		}
+	}
+	for key := range c.windows {
+		if !present[key] {
+			delete(c.windows, key)
 		}
 	}
 	if err := c.saveState(); err != nil {
@@ -326,22 +374,63 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 	return c.finish(rep, start), nil
 }
 
-// consolidateScope is one LLM pass over a single owner's facts. It applies the
-// merges, drops, L5 edges, schemas and arc the model returned. facts is that
-// owner's newest batch, and everything written carries the owner's scope.
+// cycleStep is what a successful window pass hands back so Once can record it.
+type cycleStep struct {
+	considered []string // the owner's live fact ids at the start of the pass
+	created    []string // ids of facts this pass wrote
+	next       int      // window index the next pass starts from
+	covered    int      // windows covered in the current cycle
+}
+
+// windowsOf is how many windows of batch facts cover n facts.
+func windowsOf(n, batch int) int {
+	return (n + batch - 1) / batch
+}
+
+// windowAt returns window i of an owner's facts, which are newest first. Window i
+// starts at i*batch, except that the last window is pulled back to end at the
+// final fact, so every window is full when there are at least batch facts and the
+// last one never holds a single fact on its own. Facts facts are not copied.
+func (c *Consolidator) windowAt(facts []DocIndex, i int) []DocIndex {
+	n := len(facts)
+	if n <= c.batch {
+		return facts
+	}
+	lo := i * c.batch
+	if lo+c.batch > n {
+		lo = n - c.batch
+	}
+	return facts[lo : lo+c.batch]
+}
+
+// due reports whether an owner needs a pass: its live facts differ from its
+// watermark, or not every window has been covered since the watermark was set.
+func (c *Consolidator) due(k scopeKey, facts []DocIndex) bool {
+	key := k.String()
+	if c.done[key] != factsFingerprint(facts) {
+		return true
+	}
+	return c.windows[key].Covered < windowsOf(len(facts), c.batch)
+}
+
+// consolidateScope is one LLM pass over a window of a single owner's facts. It
+// applies the merges, drops, L5 edges, schemas and arc the model returned. facts
+// is that window, and everything written carries the owner's scope.
 //
 // Only IDs in facts are acted on. An ID that belongs to another owner, or one the
 // model invented, fails the live-set guard and changes nothing. It reports
-// whether the model answered, which is what makes the owner's watermark advance.
-func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, facts []DocIndex, rep *Report) bool {
+// whether the model answered and every write succeeded, which is what lets the
+// owner's watermark advance. It also returns the IDs of the facts it wrote.
+func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, facts []DocIndex, rep *Report) (bool, []string) {
 	fail := func(msg string) {
 		rep.Errors = append(rep.Errors, owner.String()+": "+msg)
 	}
+	errsBefore := len(rep.Errors)
 	schemas := c.liveOf(memory.L6Schema, owner)
 	cons, err := c.ask(ctx, facts, schemas)
 	if err != nil {
 		fail(err.Error())
-		return false
+		return false, nil
 	}
 
 	live := liveIDs(facts)
@@ -352,6 +441,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 	batch := liveIDs(facts)
 	byID := byIDOf(facts)
 	now := time.Now().UTC().Format(time.RFC3339)
+	var created []string
 
 	// Apply merges first. Only IDs in this owner's batch count, so a hallucinated
 	// ID changes nothing.
@@ -378,7 +468,9 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		if label == "" {
 			label = "consolidated"
 		}
-		c.applyMerge(owner, text, label, absorbed, now, live, rep, fail)
+		if id := c.applyMerge(owner, text, label, absorbed, now, live, rep, fail); id != "" {
+			created = append(created, id)
+		}
 	}
 
 	// Explicit drops: facts the model judged stale or superseded. Same
@@ -448,14 +540,14 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 			continue
 		}
 		// One call per relation, carrying every corroborating conversation, so the
-		// edge keeps all of its citations and is counted once.
-		created, err := c.store.Graph().AddEdgeWithSources(owner.user, owner.agent, rel.From, rel.Relation, rel.To, cites)
+		// edge keeps all of its citations and is counted once. The edge is in memory
+		// even when persisting it fails, so it is counted as created either way.
+		made, err := c.store.Graph().AddEdgeWithSources(owner.user, owner.agent, rel.From, rel.Relation, rel.To, cites)
+		if made {
+			rep.Edges++
+		}
 		if err != nil {
 			fail("edge: " + err.Error())
-			continue
-		}
-		if created {
-			rep.Edges++
 		}
 	}
 
@@ -523,18 +615,21 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 			}
 		}
 	}
-	return true
+	return len(rep.Errors) == errsBefore, created
 }
 
-// applyMerge writes one consolidated fact and retires the facts it absorbed.
+// applyMerge writes one consolidated fact and retires the facts it absorbed. It
+// returns the new fact's ID, or "" when no replacement stays live.
 //
 // The replacement is written before anything is superseded, so a failed write
 // touches no original. Supersede marks the originals as replaced by the new ID.
 // Only the originals the store reports as marked are counted and removed from
-// live. If some were not marked, the replacement is retracted, so no live
-// original is left beside it.
+// live. If none were marked the replacement is retracted, since nothing points at
+// it. If some were marked, it stays live: retracting it would leave those marked
+// originals superseded by a fact that no longer exists. The unmarked originals
+// stay live beside it, and the failure is reported so the owner is retried.
 func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed []DocIndex, now string,
-	live map[string]bool, rep *Report, fail func(string)) {
+	live map[string]bool, rep *Report, fail func(string)) string {
 	srcs := distinctSources(absorbed)
 	// The merged fact inherits the conversations it absorbed, so L5
 	// corroboration and the raw-decay citation guard still see them.
@@ -549,7 +644,7 @@ func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed [
 	mergedID := newID()
 	if err := c.store.Add(memory.L3Fact, mergedID, text, meta); err != nil {
 		fail("merge add: " + err.Error())
-		return
+		return ""
 	}
 	ids := make([]string, len(absorbed))
 	for i, d := range absorbed {
@@ -563,17 +658,21 @@ func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed [
 		delete(live, id)
 	}
 	rep.Dropped += len(marked)
-	if len(marked) < len(ids) {
+	if len(marked) == 0 {
 		_, retractErr := c.store.Supersede([]string{mergedID}, "")
-		msg := fmt.Sprintf("merge supersede: %d of %d absorbed facts marked; replacement retracted", len(marked), len(ids))
+		msg := fmt.Sprintf("merge supersede: 0 of %d absorbed facts marked; replacement retracted", len(ids))
 		if retractErr != nil {
 			msg += ": retract: " + retractErr.Error()
 		}
 		fail(msg)
-		return
+		return ""
 	}
-	if supErr != nil {
-		fail("merge supersede: " + supErr.Error())
+	if len(marked) < len(ids) || supErr != nil {
+		msg := fmt.Sprintf("merge supersede: %d of %d absorbed facts marked; replacement kept", len(marked), len(ids))
+		if supErr != nil {
+			msg += ": " + supErr.Error()
+		}
+		fail(msg)
 	}
 	rep.Merged++
 
@@ -591,6 +690,7 @@ func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed [
 			fail("merge mirror add: " + err.Error())
 		}
 	}
+	return mergedID
 }
 
 // retireMirrors supersedes the L1 Profile rows that mirror superseded
@@ -675,6 +775,9 @@ func (c *Consolidator) loadState() {
 		c.done = st.Owners
 	}
 	c.cursor = st.Cursor
+	if st.Windows != nil {
+		c.windows = st.Windows
+	}
 }
 
 // saveState persists the watermarks with a write-then-rename, as the doc index does.
@@ -682,7 +785,7 @@ func (c *Consolidator) saveState() error {
 	if c.statePath == "" {
 		return nil
 	}
-	b, err := json.MarshalIndent(consolidateState{Cursor: c.cursor, Owners: c.done}, "", "  ")
+	b, err := json.MarshalIndent(consolidateState{Cursor: c.cursor, Owners: c.done, Windows: c.windows}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -852,16 +955,55 @@ func groupByOwner(facts []DocIndex) (map[scopeKey][]DocIndex, []scopeKey) {
 	return byOwner, owners
 }
 
-// factsFingerprint identifies an owner's live facts: how many there are and the
-// newest timestamp. A new fact, a merge or a drop changes one of the two.
+// factsFingerprint identifies an owner's live facts by the IDs they hold. See
+// idsFingerprint.
 func factsFingerprint(facts []DocIndex) string {
-	newest := ""
-	for _, f := range facts {
-		if f.Ts > newest {
-			newest = f.Ts
-		}
+	return idsFingerprint(idsOf(facts))
+}
+
+// idsFingerprint is a hash of a set of fact IDs, taken over the sorted IDs. Any
+// add, remove or swap changes it, so a delete and an add in the same second
+// cannot collide the way a count and a newest timestamp could. A watermark written
+// before this format is a count@timestamp string, which never matches, so its
+// owner runs once.
+func idsFingerprint(ids []string) string {
+	s := append([]string(nil), ids...)
+	sort.Strings(s)
+	h := sha256.New()
+	for _, id := range s {
+		h.Write([]byte(id))
+		h.Write([]byte{'\n'})
 	}
-	return strconv.Itoa(len(facts)) + "@" + newest
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// idsOf lists the IDs of facts.
+func idsOf(facts []DocIndex) []string {
+	out := make([]string, 0, len(facts))
+	for _, f := range facts {
+		out = append(out, f.ID)
+	}
+	return out
+}
+
+// idSetOf is the set of IDs in facts.
+func idSetOf(facts []DocIndex) map[string]bool {
+	m := make(map[string]bool, len(facts))
+	for _, f := range facts {
+		m[f.ID] = true
+	}
+	return m
+}
+
+// sortNewestFirst orders an owner's facts by timestamp, newest first, then by ID,
+// so a window is the same set on every pass.
+func sortNewestFirst(facts []DocIndex) {
+	sort.Slice(facts, func(i, j int) bool {
+		if facts[i].Ts != facts[j].Ts {
+			return facts[i].Ts > facts[j].Ts
+		}
+		return facts[i].ID > facts[j].ID
+	})
 }
 
 // normalizeText is the comparison key for schemas: case, runs of whitespace and

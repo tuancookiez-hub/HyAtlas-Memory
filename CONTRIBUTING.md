@@ -4,22 +4,36 @@ Thanks for your interest. HyAtlas v4 is a pure-Go rewrite — contributions shou
 
 ## What to work on
 
-Open an issue before opening a PR for any non-trivial change. The `feat/l1-raw-transparency-and-system2-tuning` branch (in the v3.5 history, now archived) shows the kinds of changes the maintainer reviews.
+Open an issue before opening a PR for any non-trivial change. The `feat/l1-raw-transparency-and-system2-tuning` branch is a remote branch on origin (`origin/feat/l1-raw-transparency-and-system2-tuning`) and shows the kinds of changes the maintainer has reviewed before.
 
 ## Build
 
 ```bash
-# Embedded build (model weights bundled in the binary)
-go build -tags embedded -o hyatlas-go.exe .
+# Embedded build (BGE model and onnxruntime bundled in the binary).
+# Needs models/ populated first; see "Embedded build inputs" below.
+go build -tags embedded -o hyatlas-go .
 
-# Non-embedded build (reads models/ from disk)
-go build -o hyatlas-go.exe .
+# Plain build (small; reads the model from a models/ folder at runtime)
+go build -o hyatlas-go .
 ```
+
+On Windows, name the output `hyatlas-go.exe`.
 
 Requires:
 - Go 1.26+ (`go.mod` declares 1.26.5)
-- A C toolchain, since the build uses cgo for onnxruntime-go on every platform: gcc or clang on Linux and macOS, MinGW-W64 on Windows (`winget install BrechtSanders.WinLibs.POSIX.UCRT`)
-- onnxruntime 1.28.1 shared library at run time (`onnxruntime.dll`, `libonnxruntime.so` or `libonnxruntime.dylib`; matches `onnxruntime_go` v1.32.0's declared API)
+- A C toolchain, since the build uses cgo for onnxruntime-go: gcc or clang on Linux, Xcode command-line tools on macOS, MinGW-W64 on Windows (`winget install BrechtSanders.WinLibs.POSIX.UCRT`)
+- At run time, a plain build needs the onnxruntime 1.28.1 shared library (`onnxruntime.dll`, `libonnxruntime.so` or `libonnxruntime.dylib`) next to the model. It matches `onnxruntime_go` v1.32.0's declared API. The embedded build carries it.
+
+### Embedded build inputs
+
+`assets_embedded_<os>.go` uses `go:embed` on these files in `models/`, so the build fails without them:
+
+| File | Source used by CI (`.github/workflows/release.yml`) |
+|---|---|
+| `bge-small-en-v1.5.onnx` | `https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model.onnx` |
+| `bge-small-en-v1.5.onnx.data` | an empty file is fine (`: > models/bge-small-en-v1.5.onnx.data`) |
+| `vocab.txt` | `https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/vocab.txt` |
+| `libonnxruntime.so` / `.dylib` / `onnxruntime.dll` | the onnxruntime 1.28.1 release archive for your platform |
 
 ## Test
 
@@ -29,7 +43,7 @@ go test ./...
 go build ./...
 ```
 
-(End-to-end tests live in the user's own runtime, not in this repo.)
+CI (`.github/workflows/tests.yml`) runs these on Linux, plus a smoke test of a plain build with `HYATLAS_EMBED_BASE=local`, and a compile check of the embedded build on each OS. The release workflow smoke-tests the embedded binary against the real BGE model. Plugin tests (`plugins/hyatlas/tests`) run separately.
 
 ## Commit style
 
@@ -41,9 +55,9 @@ go build ./...
 
 - Standard `gofmt` formatting
 - Prefer stdlib over dependencies
-- All HTTP handlers return JSON, never HTML
-- Errors logged with context, never swallowed
-- Long-running operations: context.Context first parameter
+- API handlers return JSON. The one exception is the static dashboard under `/dashboard/`, which serves HTML, CSS and JS from the embedded `dashboard/dist`.
+- Errors logged with context, not silently dropped
+- Long-running operations take a `context.Context` as the first parameter
 
 ## License
 

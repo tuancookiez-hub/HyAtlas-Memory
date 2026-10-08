@@ -311,9 +311,10 @@ func TestLegacyGraphFileLoads(t *testing.T) {
 	if e.Source != "mem-old" || !equalStrings(e.Sources, []string{"mem-old"}) {
 		t.Errorf("legacy citations: source=%q sources=%v", e.Source, e.Sources)
 	}
-	// Unowned means visible to the unscoped view only.
-	if _, rels := s.SnapshotScoped(Scope{UserID: "alice"}, 0); len(rels) != 0 {
-		t.Errorf("legacy edge leaked into alice's scope")
+	// Owner-less rows predate owners and stay visible under every scope, so an
+	// upgraded install still shows its graph when a user filter is applied.
+	if _, rels := s.SnapshotScoped(Scope{UserID: "alice"}, 0); len(rels) != 1 {
+		t.Errorf("legacy edge hidden from alice's scope: got %d", len(rels))
 	}
 	// A new citation of the legacy triple, unowned, extends it rather than duplicating.
 	if err := s.AddEdgeWithSource("", "", "alpha", "depends_on", "bravo", "mem-new"); err != nil {
@@ -335,8 +336,10 @@ func TestLegacyGraphFileLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n, e := s2.CountsScoped(Scope{UserID: "alice"}); n != 2 || e != 1 {
-		t.Errorf("reloaded alice counts = %d/%d, want 2/1", n, e)
+	// Alice's own pair and edge, plus the owner-less alpha/bravo pair and edge
+	// that every scope sees.
+	if n, e := s2.CountsScoped(Scope{UserID: "alice"}); n != 4 || e != 2 {
+		t.Errorf("reloaded alice counts = %d/%d, want 4/2", n, e)
 	}
 }
 

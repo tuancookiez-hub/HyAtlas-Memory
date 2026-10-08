@@ -53,7 +53,14 @@ type Scope struct {
 	AgentID string
 }
 
+// matches reports whether a row owned by (userID, agentID) is visible under sc.
+// Owner-less rows (both fields empty) predate owners, so they belong to the one
+// install that wrote them and stay visible under every scope. Without this, a
+// user filter after upgrade would show an empty graph.
 func (sc Scope) matches(userID, agentID string) bool {
+	if userID == "" && agentID == "" {
+		return true
+	}
 	return (sc.UserID == "" || sc.UserID == userID) && (sc.AgentID == "" || sc.AgentID == agentID)
 }
 
@@ -171,8 +178,9 @@ func (s *Store) AddEdgeWithSources(userID, agentID, fromLabel, rel, toLabel stri
 				added = true
 			}
 		}
+		// RecordedAt is not moved: it is when the relation was first recorded, so
+		// earlier as-of snapshots keep the edge. New sources are appended above.
 		if added {
-			e.RecordedAt = now
 			if e.ValidFrom == 0 {
 				e.ValidFrom = now
 			}

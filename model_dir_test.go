@@ -4,17 +4,56 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
-// touchModel makes dir hold the BGE model file, as an installer would.
+// touchModel makes dir hold everything the BGE embedder loads, as an installer
+// would: the model, its vocab and the onnxruntime library for this platform.
 func touchModel(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, modelFileName), []byte("onnx"), 0o644); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{modelFileName, "vocab.txt", onnxRuntimeLibName(runtime.GOOS)} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A directory is a model home only with the model, the vocab and a runtime
+// library. Each missing piece must make it skipped, since the embedder would
+// otherwise fail to start from it.
+func TestHasModelFileNeedsEveryPiece(t *testing.T) {
+	write := func(t *testing.T, names ...string) string {
+		t.Helper()
+		dir := t.TempDir()
+		for _, n := range names {
+			if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	lib := onnxRuntimeLibName(runtime.GOOS)
+	cases := []struct {
+		name  string
+		files []string
+		want  bool
+	}{
+		{"model only", []string{modelFileName}, false},
+		{"model and vocab, no runtime library", []string{modelFileName, "vocab.txt"}, false},
+		{"model, vocab and platform library", []string{modelFileName, "vocab.txt", lib}, true},
+		{"renamed library is accepted as the loader's fallback", []string{modelFileName, "vocab.txt", "libonnxruntime.renamed"}, true},
+		{"library without the vocab", []string{modelFileName, lib}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := hasModelFile(write(t, c.files...)); got != c.want {
+				t.Errorf("hasModelFile = %v, want %v", got, c.want)
+			}
+		})
 	}
 }
 

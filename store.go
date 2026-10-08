@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -56,6 +57,13 @@ type MemoryStore struct {
 	// supMu serializes Supersede passes. It is separate from mu so Adds and
 	// Searches do not wait on the chromem rewrites a pass makes.
 	supMu sync.Mutex
+	// rowMu serializes each chromem row write made by Add with the rewrite of the
+	// same row made by Supersede. Held only around one row at a time.
+	rowMu sync.Mutex
+	// supersedeHook is a test seam. Supersede calls it with stage "rewrite" (id = the
+	// row about to be rewritten) and "commit" (once, before the index update), which
+	// are the points where a concurrent Add or Delete can interleave. Nil in production.
+	supersedeHook func(stage, id string)
 	// persisted index path (same dir as the chromem DB)
 	indexPath string
 	// usage counters — atomic so reads from /api/v1/status never block writes.
@@ -151,12 +159,20 @@ func (s *MemoryStore) Add(layer memory.Layer, id, content string, meta map[strin
 		doc.Metadata = map[string]string{}
 	}
 	doc.Metadata["layer"] = string(layer)
-	if err := s.cols[layer].AddDocument(s.ctx, doc); err != nil {
+	// rowMu keeps this write apart from a Supersede rewrite of the same row, so a
+	// rewrite can never put a stale row back over this one. The index update stays
+	// under it too, so a rewrite never sees a chromem row the index does not match.
+	s.rowMu.Lock()
+	err := s.cols[layer].AddDocument(s.ctx, doc)
+	if err == nil {
+		s.mu.Lock()
+		s.putLocked(docIndexFrom(id, string(layer), content, meta))
+		s.mu.Unlock()
+	}
+	s.rowMu.Unlock()
+	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.putLocked(docIndexFrom(id, string(layer), content, meta))
-	s.mu.Unlock()
 	s.writes.Add(1)
 	s.persistUsageAsync()
 	return s.persistIndex()
@@ -364,16 +380,20 @@ func (s *MemoryStore) TotalMemories() int {
 // instead of deleting them. The row keeps its content, vector and provenance, so
 // history stays reachable through ListAll. Returns how many docs were marked.
 //
-// The chromem rewrites are disk writes, so they run without s.mu. Adds and
-// Searches keep moving while a pass is in flight; only the index update takes the
-// write lock.
+// A pass runs in three steps: it snapshots the live rows it was asked about,
+// rewrites each chromem row with the new metadata, then updates the index. The
+// rewrite and the index update each hold the lock only briefly, so Adds and
+// Searches keep moving. Because Adds can land in between, a row is rewritten only
+// while the index still holds the version that was snapshotted, and it is marked
+// only if that version is still current at the end. A row deleted or replaced by
+// a same-id Add in the meantime is left as the newer write made it: a stale
+// snapshot is never written back, and a vanished row is skipped without error.
 func (s *MemoryStore) Supersede(ids []string, by string) (int, error) {
 	s.supMu.Lock()
 	defer s.supMu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	// 1. Snapshot the live rows and build their new metadata under the read lock.
-	// Each copy gets its own meta map, so nothing shared with the index is written.
+	// 1. Snapshot the live rows named by ids.
 	s.mu.RLock()
 	var todo []DocIndex
 	seen := make(map[string]bool, len(ids))
@@ -383,6 +403,37 @@ func (s *MemoryStore) Supersede(ids []string, by string) (int, error) {
 			continue
 		}
 		seen[id] = true
+		todo = append(todo, d)
+	}
+	s.mu.RUnlock()
+
+	// 2. Rewrite each chromem row, under rowMu, while the index still holds the
+	// snapshotted version. Content and vector come from chromem, read under the
+	// read lock so a Delete cannot land halfway through the read.
+	type rewrite struct {
+		snap DocIndex
+		meta map[string]string
+	}
+	var firstErr error
+	var done []rewrite
+	for _, d := range todo {
+		s.hook("rewrite", d.ID)
+		s.rowMu.Lock()
+		s.mu.RLock()
+		cur, ok := s.index[d.ID]
+		current := ok && !isSuperseded(cur) && sameVersion(cur, d)
+		col := s.cols[memory.Layer(d.Layer)]
+		var old chromem.Document
+		var getErr error
+		if current && col != nil {
+			old, getErr = col.GetByID(s.ctx, d.ID)
+		}
+		s.mu.RUnlock()
+		if !current || col == nil {
+			// Deleted, or replaced by a same-id Add: nothing to supersede.
+			s.rowMu.Unlock()
+			continue
+		}
 		meta := make(map[string]string, len(d.Meta)+3)
 		for k, v := range d.Meta {
 			meta[k] = v
@@ -390,55 +441,40 @@ func (s *MemoryStore) Supersede(ids []string, by string) (int, error) {
 		meta["invalid_at"] = now
 		meta["superseded_by"] = by
 		meta["layer"] = d.Layer
-		d.Meta = meta
-		todo = append(todo, d)
-	}
-	s.mu.RUnlock()
-
-	// 2. Rewrite the chromem rows without s.mu.
-	var firstErr error
-	for _, d := range todo {
-		col, ok := s.cols[memory.Layer(d.Layer)]
-		if !ok {
-			continue
-		}
-		// chromem has no metadata update, but AddDocument on an existing ID
-		// overwrites the row. Passing the stored vector back means no embedding
-		// call is made.
-		old, err := col.GetByID(s.ctx, d.ID)
-		if err != nil {
+		if getErr != nil {
 			if firstErr == nil {
-				firstErr = err
+				firstErr = getErr
 			}
-			continue
-		}
-		if err := col.AddDocument(s.ctx, chromem.Document{
-			ID: d.ID, Content: old.Content, Embedding: old.Embedding, Metadata: d.Meta,
+		} else if err := col.AddDocument(s.ctx, chromem.Document{
+			ID: d.ID, Content: old.Content, Embedding: old.Embedding, Metadata: meta,
 		}); err != nil && firstErr == nil {
 			firstErr = err
 		}
+		s.rowMu.Unlock()
+		done = append(done, rewrite{snap: d, meta: meta})
 	}
 
-	// 3. Update the exact index under the write lock. Live reads filter on it, so
-	// it is updated even when a chromem row could not be rewritten.
+	// 3. Update the exact index under the write lock. A row that changed since the
+	// snapshot is left alone: a same-id Add wrote both chromem and the index after
+	// our rewrite, so its version is the live one.
+	s.hook("commit", "")
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	marked := 0
-	for _, d := range todo {
-		cur, ok := s.index[d.ID]
+	for _, r := range done {
+		cur, ok := s.index[r.snap.ID]
 		if !ok {
 			// Deleted while the rewrite was in flight. The rewrite may have
-			// re-created the chromem row, so remove it again; otherwise it would
-			// come back on the next rebuild.
-			if col, ok := s.cols[memory.Layer(d.Layer)]; ok {
-				_ = col.Delete(s.ctx, nil, nil, d.ID)
+			// re-created the chromem row, so remove it again.
+			if col, ok := s.cols[memory.Layer(r.snap.Layer)]; ok {
+				_ = col.Delete(s.ctx, nil, nil, r.snap.ID)
 			}
 			continue
 		}
-		if isSuperseded(cur) {
+		if isSuperseded(cur) || !sameVersion(cur, r.snap) {
 			continue
 		}
-		cur.Meta = d.Meta
+		cur.Meta = r.meta
 		s.putLocked(cur)
 		marked++
 	}
@@ -446,6 +482,19 @@ func (s *MemoryStore) Supersede(ids []string, by string) (int, error) {
 		firstErr = err
 	}
 	return marked, firstErr
+}
+
+// sameVersion reports whether two index rows hold the same content and metadata,
+// which is how Supersede tells that a row has not been replaced since it was read.
+func sameVersion(a, b DocIndex) bool {
+	return a.Content == b.Content && maps.Equal(a.Meta, b.Meta)
+}
+
+// hook runs the supersedeHook test seam, if one is set.
+func (s *MemoryStore) hook(stage, id string) {
+	if s.supersedeHook != nil {
+		s.supersedeHook(stage, id)
+	}
 }
 
 // MirrorsOf returns the live ids of the rows in layer that carry the same

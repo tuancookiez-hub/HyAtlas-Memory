@@ -14,9 +14,18 @@ behaviour changes that a client or script may notice.
 - **`delete_all` needs `POST` or `DELETE` and a scope.** It requires at least one
   of `id`, `layer`, `user_id`, `agent_id`, or `all=true`. An unscoped call is refused.
 - **Request bodies are capped at 8 MiB.**
-- **Browser requests are refused.** A request whose `Origin` is not local gets 403,
-  and on a loopback bind so does a `Host` that names a non-local host (DNS rebinding).
-  New `HYATLAS_ALLOWED_HOSTS` (comma-separated) adds extra accepted hostnames.
+- **Browser and DNS-name requests are refused.** A request whose `Origin` is not
+  local gets 403. A `Host` that names a DNS name also gets 403, on every bind
+  address and on every route including `/healthz`, unless the name is in
+  `HYATLAS_ALLOWED_HOSTS` (comma-separated hostnames; a port in an entry is ignored).
+  Localhost and IP literals always pass. A plugin `server_host` that is a DNS name
+  needs the same allowlist entry on the server, or the plugin reports it unreachable.
+- **Graph data without an owner stays visible.** Rows written before owners were
+  recorded carry no `user_id` / `agent_id`. They appear under every owner filter, so
+  single-user data from older releases keeps working.
+- **Consolidation batches run in windows.** An owner with more facts than
+  `HYATLAS_CONSOLIDATE_BATCH` is consolidated in successive windows across passes,
+  not only its first batch each time.
 - **Ultra refuses to start when `HYATLAS_CONSOLIDATE_EVERY` is zero or negative.**
   This is fatal at startup. Use `HYATLAS_MODE=pro` to run without the slow path.
 - **Consolidation is per owner.** A pass groups facts by `user_id` / `agent_id`
@@ -48,6 +57,13 @@ behaviour changes that a client or script may notice.
   longer claims an L1 Profile mirror. L1 fills through extraction in `pro` and `ultra`.
 - The `llm_key` setting no longer carries a platform link. Any OpenAI-compatible
   key works.
+- **Auto-start takes a lock.** When two Hermes sessions auto-start at the same time,
+  only one starts the server. The other finds it running.
+- **Source-build installer picks onnxruntime for the CPU.** On a source build,
+  `scripts/install.sh` fetches the onnxruntime 1.28.1 package that matches the CPU:
+  Linux x64 or aarch64, macOS arm64, Windows x64 or arm64 (Intel macOS stops with
+  a clear error: there is no onnxruntime package for it). Release binaries skip
+  this step.
 
 ### Fixed
 

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -565,8 +566,8 @@ func (s *Server) handleDigest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 	// Optional body: {"ids": [...], "max": N}. With explicit ids the caller has
 	// already chosen the exact rows (e.g. backfilling an outage window), so the
-	// extracted-skip does not apply; otherwise walk up to `max` (default 200)
-	// oldest unextracted raw rows.
+	// extracted-skip does not apply. Otherwise up to `max` (default 200) raw rows
+	// that were never extracted are processed, oldest first (see unextractedRaw).
 	var body struct {
 		IDs []string `json:"ids"`
 		Max int      `json:"max"`
@@ -581,7 +582,7 @@ func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 		if max <= 0 {
 			max = 200
 		}
-		raw, _ = s.store.List(memory.L2Raw, "", "", max, 0, false)
+		raw = s.unextractedRaw(max)
 	}
 	// Lite has no extraction to reprocess, so say so instead of silently
 	// reporting zero work done.
@@ -594,10 +595,6 @@ func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 	}
 	reprocessed, failed, skipped := 0, 0, 0
 	for _, it := range raw {
-		if len(body.IDs) == 0 && it.Extracted {
-			skipped++
-			continue
-		}
 		if s.llm == nil {
 			failed++
 			continue
@@ -611,6 +608,32 @@ func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 		reprocessed++
 	}
 	jsonResponse(w, 200, map[string]any{"reprocessed": reprocessed, "failed": failed, "skipped": skipped})
+}
+
+// unextractedRaw returns up to max raw rows that extraction has not reached, oldest
+// first (ts, then id, so equal timestamps order the same way each time). Extracted
+// rows are removed before the cut: a page of already-extracted rows must not hide
+// older unextracted ones, and the newest rows must not be re-picked while an old
+// backlog starves.
+func (s *Server) unextractedRaw(max int) []DocIndex {
+	_, total := s.store.List(memory.L2Raw, "", "", 1, 0, false)
+	all, _ := s.store.List(memory.L2Raw, "", "", total, 0, false)
+	out := make([]DocIndex, 0, len(all))
+	for _, d := range all {
+		if !d.Extracted {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Ts != out[j].Ts {
+			return out[i].Ts < out[j].Ts
+		}
+		return out[i].ID < out[j].ID
+	})
+	if len(out) > max {
+		out = out[:max]
+	}
+	return out
 }
 
 func errStr(err error) string {
@@ -954,6 +977,7 @@ func jsonResponse(w http.ResponseWriter, code int, v any) {
 // are something a test can assert on instead of something only visible by
 // running the binary.
 type runtimeCfg struct {
+	Host       string
 	Port       string
 	DataDir    string
 	GraphPath  string
@@ -999,6 +1023,7 @@ const (
 
 const (
 	defaultPort       = "19528"
+	defaultHost       = "127.0.0.1"
 	defaultDataDir    = "./data"
 	defaultLLMBase    = ""
 	defaultLLMModel   = ""
@@ -1016,6 +1041,7 @@ func resolveRuntime() runtimeCfg {
 		Consolidate:  resolveConsolidate(mode),
 		Retention:    parseDuration("HYATLAS_RAW_RETENTION", 0),
 		Batch:        envInt("HYATLAS_CONSOLIDATE_BATCH", defaultBatch),
+		Host:         strings.Trim(envOr("HYATLAS_GO_HOST", defaultHost), "[]"),
 		Port:         envOr("HYATLAS_GO_PORT", defaultPort),
 		DataDir:      dataDir,
 		GraphPath:    envOr("HYATLAS_GRAPH_PATH", filepath.Join(dataDir, "graph.json")),
@@ -1176,9 +1202,8 @@ func main() {
 		log.Print(w)
 	}
 	log.Print(listeningLine(rt))
-	host := envOr("HYATLAS_GO_HOST", "127.0.0.1")
 	srv.allowedHosts = rt.AllowedHosts
-	hs := &http.Server{Addr: host + ":" + port, Handler: srv.routes(), ReadHeaderTimeout: readHeaderTimeout}
+	hs := &http.Server{Addr: net.JoinHostPort(rt.Host, port), Handler: srv.routes(), ReadHeaderTimeout: readHeaderTimeout}
 	log.Fatal(hs.ListenAndServe())
 }
 
@@ -1256,6 +1281,10 @@ func guardLocal(allowed []string, next http.Handler) http.Handler {
 // hostAllowed reports whether a Host header names an address this server may
 // answer: loopback, an IP literal, or an allowlisted hostname. The port is ignored.
 func hostAllowed(host string, allowed []string) bool {
+	// No Host header at all (HTTP/1.0 without one) names no other host, so it is local.
+	if strings.TrimSpace(host) == "" {
+		return true
+	}
 	h := hostOnly(host)
 	if isLoopbackHost(h) || net.ParseIP(h) != nil {
 		return true
@@ -1310,12 +1339,13 @@ func normHost(h string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
 }
 
-// parseHostList reads HYATLAS_ALLOWED_HOSTS: comma-separated hostnames. Entries
-// are normalised, and empty ones dropped.
+// parseHostList reads HYATLAS_ALLOWED_HOSTS: comma-separated hostnames. An entry
+// may carry a port ("myhost:8080" is "myhost"), as a Host header does. Entries are
+// lower-cased with any trailing dot dropped, and empty ones are dropped.
 func parseHostList(raw string) []string {
 	var out []string
 	for _, part := range strings.Split(raw, ",") {
-		if h := normHost(part); h != "" {
+		if h := normHost(hostOnly(strings.TrimSpace(part))); h != "" {
 			out = append(out, h)
 		}
 	}
@@ -1435,9 +1465,45 @@ func installModelDir(goos string) string {
 	return filepath.Join(home, ".hyatlas", "models")
 }
 
-// hasModelFile reports whether dir holds the BGE model file.
+// onnxRuntimeLibName is the onnxruntime shared library the BGE loader looks for
+// first on each platform. It matches bge.runtimeLibName.
+func onnxRuntimeLibName(goos string) string {
+	switch goos {
+	case "windows":
+		return "onnxruntime.dll"
+	case "darwin":
+		return "libonnxruntime.dylib"
+	default:
+		return "libonnxruntime.so"
+	}
+}
+
+// hasModelFile reports whether dir holds everything the BGE embedder loads: the
+// model, its vocab, and an onnxruntime shared library. The library may have the
+// platform's name or, as bge.New also accepts, any onnxruntime* file.
 func hasModelFile(dir string) bool {
-	fi, err := os.Stat(filepath.Join(dir, modelFileName))
+	if !isRegularFile(filepath.Join(dir, modelFileName)) || !isRegularFile(filepath.Join(dir, "vocab.txt")) {
+		return false
+	}
+	if isRegularFile(filepath.Join(dir, onnxRuntimeLibName(runtime.GOOS))) {
+		return true
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if !e.IsDir() && (strings.HasPrefix(n, "onnxruntime") || strings.HasPrefix(n, "libonnxruntime")) {
+			return true
+		}
+	}
+	return false
+}
+
+// isRegularFile reports whether p exists and is not a directory.
+func isRegularFile(p string) bool {
+	fi, err := os.Stat(p)
 	return err == nil && !fi.IsDir()
 }
 
@@ -1471,8 +1537,8 @@ func listeningLine(rt runtimeCfg) string {
 	if llm == "" {
 		llm = "unset"
 	}
-	return fmt.Sprintf("HyAtlas-Go listening on :%s (data=%s embed=%s llm=%s mode=%s)",
-		rt.Port, rt.DataDir, describeEmbed(rt.EmbedBase, rt.EmbedModel), llm, rt.Mode.OrDefault())
+	return fmt.Sprintf("HyAtlas-Go listening on %s (data=%s embed=%s llm=%s mode=%s)",
+		net.JoinHostPort(rt.Host, rt.Port), rt.DataDir, describeEmbed(rt.EmbedBase, rt.EmbedModel), llm, rt.Mode.OrDefault())
 }
 
 // startupWarning returns a human-readable setup message for the one state that

@@ -11,6 +11,12 @@
 - **Plugin start/stop are truthful:** `hermes hyatlas start` does not spawn over a server that already answers (reports `already_running` and the pid when known); the pidfile is written only once the child is seen alive; `stop` returns `ok:false` for a server it did not start.
 - **Installer:** a failed BGE model download no longer aborts the install; release binaries (embedded) skip the download entirely.
 - **Plugin:** `on_memory_write` is documented as a raw (L2) write, not an L1 mirror; the `llm_key` settings link is removed.
+- **Host guard:** a DNS-name `Host` gets 403 on every route, `/healthz` included, unless it is in `HYATLAS_ALLOWED_HOSTS` (hostnames only; a port in an entry is ignored). Plugin `server_host` set to a DNS name needs that entry on the server.
+- **Owner-less graph rows** (written before owners existed) stay visible under every user filter.
+- **Consolidation windows:** an owner with more facts than `HYATLAS_CONSOLIDATE_BATCH` is consolidated in successive windows across passes.
+- **Installer:** source builds fetch the onnxruntime package for the CPU (Linux x64/aarch64, macOS arm64, Windows x64/arm64; Intel macOS stops with a clear error).
+- **Plugin auto-start lock:** two Hermes sessions auto-starting at once start one server.
+- Status note: the `/api/v1/status` `graph_nodes` / `graph_edges`, and the `/api/graph-counts` `l5_knowledge` / `relation_count`, count all owners. Per-owner counts are in `/api/v1/graph` (`node_count` / `edge_count`).
 - See CHANGELOG.md `[Unreleased]` for the full list.
 
 ## Done (v4.3.x — slow path)
@@ -57,7 +63,7 @@
 - Outage-window backfill (2026-09-05 → 10-06): 60/63 rows re-extracted, +371 L3 facts, all 7 layers live
 - `/api/v1/reprocess` accepts explicit `ids`; list raw-filter applied before pagination
 - Plugin CLI fixed (import boot, launcher hang, start/stop delegation)
-- Mind Palace starmap updates: learning/graph API + `desktop/plugin.js` + dashboard dist assets
+- Mind Palace starmap updates: learning/graph API + the Desktop-side `plugin.js` (in the Hermes Desktop app, not in this repo) + dashboard dist assets
 - CI: actions bumped to node24 majors; windows embedded artifact fixed
 
 ## Next
