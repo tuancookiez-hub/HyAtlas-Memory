@@ -528,6 +528,9 @@ def test_launcher_is_never_discovered_beside_the_binary(monkeypatch, tmp_path):
 
 def test_launcher_path_is_configurable(monkeypatch, tmp_path):
     """`launcher_path` reaches the config from both the JSON and env layers."""
+    # Start from an empty Hermes home, not the developer's own hyatlas.json.
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.delenv("HYATLAS_LAUNCHER_PATH", raising=False)
     cfg = mod._load_config()
     assert cfg["launcher_path"] == ""
 
@@ -774,6 +777,82 @@ def test_sync_without_messages_reports_the_pair():
     LLM one run-together token instead of two roles."""
     provider = mod.HyatlasMemoryProvider()
     assert provider._build_turn_text("u", "a", None, session_id="s") == "USER: u\n\nASSISTANT: a"
+
+
+def test_sync_skips_tool_messages():
+    """Tool output is not a memory. A tool dump in the gap must not reach the server."""
+    provider = mod.HyatlasMemoryProvider()
+    provider._record_synced("s", 1)
+    messages = [
+        {"role": "user", "content": "old"},
+        {"role": "user", "content": "the question"},
+        {"role": "assistant", "content": ""},
+        {"role": "tool", "content": "TOOLDUMP " * 5000},
+        {"role": "assistant", "content": "the answer"},
+    ]
+
+    text = provider._build_turn_text("the question", "the answer", messages, session_id="s")
+
+    assert "the question" in text
+    assert "the answer" in text
+    assert "TOOLDUMP" not in text
+    assert "TOOL:" not in text
+
+
+def test_sync_skips_compaction_summary():
+    """A context-compaction summary is not a turn and must not be re-extracted."""
+    provider = mod.HyatlasMemoryProvider()
+    provider._record_synced("s", 0)
+    messages = [
+        {"role": "user", "content": "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted ... huge"},
+        {"role": "user", "content": "q2"},
+        {"role": "assistant", "content": "a2"},
+    ]
+
+    text = provider._build_turn_text("q2", "a2", messages, session_id="s")
+
+    assert "q2" in text
+    assert "a2" in text
+    assert "CONTEXT COMPACTION" not in text
+
+
+def test_sync_caps_message_and_turn_size():
+    """Each message and the whole turn are capped, so a huge reply cannot become a huge row."""
+    provider = mod.HyatlasMemoryProvider()
+    provider._record_synced("s", 0)
+    messages = [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": "x" * 50000}
+        for i in range(6)
+    ]
+
+    text = provider._build_turn_text("u", "a", messages, session_id="s")
+
+    assert len(text) <= mod._MAX_TURN_CHARS + 100
+    assert "truncated" in text
+    assert len(provider._build_turn_text("u" * 50000, "a", None, session_id="t")) < 4200
+
+
+def test_prefetch_searches_the_current_query():
+    """Recall is searched on the message it is asked about, not the previous turn's."""
+    srv = FakeV4Server()
+    try:
+        p = _provider_at(srv.base)
+        p._client.add(text="the launcher uses hyatlas start", user_id="u", agent_id="a")
+
+        out = p.prefetch("launcher", session_id="s1")
+
+        assert "the launcher uses hyatlas start" in out
+    finally:
+        srv.stop()
+
+
+def test_prefetch_falls_back_to_this_sessions_cache():
+    """With the server down, each session gets its own last recall and never another's."""
+    p = _provider_at(f"http://127.0.0.1:{_free_port()}")
+    p._store_prefetch("s1", "CACHED")
+
+    assert p.prefetch("anything", session_id="s1") == "CACHED"
+    assert p.prefetch("anything", session_id="s2") == ""
 
 
 def test_sync_handles_multimodal_content_blocks():

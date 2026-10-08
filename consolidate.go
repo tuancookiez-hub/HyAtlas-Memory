@@ -30,8 +30,10 @@ const (
 	consolidateTimeout = 10 * time.Minute
 
 	// defaultBatch caps facts per consolidation call so the prompt cannot grow
-	// without bound as memory accumulates.
-	defaultBatch = 200
+	// without bound as memory accumulates. 50, not 200: a free reasoning model took
+	// 4 to 10+ minutes on 200 facts and often missed consolidateTimeout, while 50
+	// came back in about two and a half. A larger owner is walked in more windows.
+	defaultBatch = 50
 
 	// maxPromptSchemas caps how many of an owner's existing schemas are shown to
 	// the model, so the refinement list cannot grow the prompt without bound.
@@ -59,6 +61,26 @@ type Merge struct {
 	Supersedes []string `json:"supersedes"`
 }
 
+// Drop is one fact the model judged stale or trivially obvious, with its reason. A
+// drop without a reason is not applied: the reason is what makes a drop auditable,
+// and it is stored on the dropped row as drop_reason.
+type Drop struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
+}
+
+// UnmarshalJSON accepts a drop object or, from a model that ignores the format, a
+// bare id string, which carries no reason and so is not applied.
+func (d *Drop) UnmarshalJSON(b []byte) error {
+	var id string
+	if err := json.Unmarshal(b, &id); err == nil {
+		*d = Drop{ID: id}
+		return nil
+	}
+	type plain Drop
+	return json.Unmarshal(b, (*plain)(d))
+}
+
 // CitedRelation is an L5 edge plus the fact IDs that evidence it. Unlike the
 // per-turn triple, it must be corroborated by more than one memory — that is
 // what makes it a System2 product rather than a restatement of one turn.
@@ -80,7 +102,7 @@ type ConsolidatedSchema struct {
 // Consolidation is the JSON contract for one consolidation call.
 type Consolidation struct {
 	Merges  []Merge              `json:"merges"`
-	Drops   []string             `json:"drops"`
+	Drops   []Drop               `json:"drops"`
 	Schemas []ConsolidatedSchema `json:"schemas"`
 	// Knowledge are L5 graph edges. The slow path owns L5: a relation worth
 	// keeping is one corroborated across memories, and only this pass can see
@@ -108,7 +130,12 @@ type Report struct {
 	Merged        int      `json:"merged"`
 	// Edges counts distinct L5 edges this pass created. Re-citing an edge that
 	// already exists adds evidence to it and is not counted.
-	Edges      int      `json:"edges"`
+	Edges int `json:"edges"`
+	// Absorbed counts facts a merge folded into its new fact. They are superseded,
+	// not lost: their content lives on in the merged fact.
+	Absorbed int `json:"absorbed"`
+	// Dropped counts facts the model dropped as stale or obvious, each with a
+	// reason. It used to include Absorbed, which made merges look like data loss.
 	Dropped    int      `json:"dropped"`
 	Schemas    int      `json:"schemas"`
 	Arc        bool     `json:"arc"`
@@ -161,6 +188,11 @@ type Consolidator struct {
 	// cannot grow without bound as memory accumulates.
 	batch int
 
+	// graph is whether a pass asks for and writes L5 knowledge edges and the
+	// cross-session arc. It is on by default; the server turns it off only when
+	// HYATLAS_CONSOLIDATE_GRAPH is off, which leaves ultra with six layers.
+	graph bool
+
 	// gate makes a pass single-flight. The ticker and a manual POST /digest can
 	// both ask for one, and two passes over the same batch would duplicate the
 	// LLM spend and race each other's merges and edge writes.
@@ -191,10 +223,10 @@ var errBusy = errors.New("a consolidation pass is already running")
 // re-run owners whose facts have not changed.
 func NewConsolidator(store *MemoryStore, llm *LLMClient, every, retention time.Duration, batch int) *Consolidator {
 	if batch <= 0 {
-		batch = 200
+		batch = defaultBatch
 	}
 	c := &Consolidator{store: store, llm: llm, every: every, retention: retention, batch: batch,
-		done: map[string]string{}, windows: map[string]windowCursor{}}
+		graph: true, done: map[string]string{}, windows: map[string]windowCursor{}}
 	if store != nil && store.indexPath != "" {
 		c.statePath = filepath.Join(filepath.Dir(store.indexPath), consolidateStateFile)
 	}
@@ -295,22 +327,28 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 	}
 	next := first + 1 // a pass that reaches every owner starts one owner later next time
 	ran := map[scopeKey]cycleStep{}
+	called := false // whether an earlier owner in this pass has made an LLM call
+	// stopAt ends the pass at owner i: the next pass starts there, and every owner
+	// from i on that still has work is reported as skipped.
+	stopAt := func(i int, err error) {
+		next = first + i
+		var skipped []string
+		for j := i; j < n; j++ {
+			sk := work[(first+j)%n]
+			if c.due(sk, byOwner[sk]) {
+				skipped = append(skipped, sk.String())
+			}
+		}
+		if len(skipped) > 0 {
+			rep.SkippedOwners = skipped
+			rep.Errors = append(rep.Errors, fmt.Sprintf(
+				"pass stopped (%v) before %d owner(s) were consolidated; they run next pass", err, len(skipped)))
+		}
+	}
 	for i := 0; i < n; i++ {
 		k := work[(first+i)%n]
 		if err := ctx.Err(); err != nil {
-			next = first + i
-			var skipped []string
-			for j := i; j < n; j++ {
-				sk := work[(first+j)%n]
-				if c.due(sk, byOwner[sk]) {
-					skipped = append(skipped, sk.String())
-				}
-			}
-			if len(skipped) > 0 {
-				rep.SkippedOwners = skipped
-				rep.Errors = append(rep.Errors, fmt.Sprintf(
-					"pass stopped (%v) before %d owner(s) were consolidated; they run next pass", err, len(skipped)))
-			}
+			stopAt(i, err)
 			break
 		}
 		facts := byOwner[k]
@@ -338,7 +376,22 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 			idx = 0
 		}
 		rep.OwnersRun++
-		ok, created := c.consolidateScope(ctx, k, c.windowAt(facts, idx), rep)
+		window := c.windowAt(facts, idx)
+		late := called
+		called = true
+		callStart := time.Now()
+		ok, created := c.consolidateScope(ctx, k, window, rep)
+		log.Printf("consolidate: %s window %d/%d (%d facts) ok=%v in %s",
+			k, idx+1, count, len(window), ok, time.Since(callStart).Round(time.Second))
+		if !ok && late && ctx.Err() != nil {
+			// The pass deadline cut this owner off after earlier owners' calls had
+			// spent the time. The window is not at fault, so its walk state is left
+			// as it was (the cut does not count toward maxWindowFails) and the next
+			// pass starts here, with the full budget. An owner cut while it had the
+			// whole budget still counts the cut as a failure below.
+			stopAt(i, ctx.Err())
+			break
+		}
 		w.LastFresh = fresh
 		if ok {
 			w.Fails, w.FailWin = 0, 0
@@ -483,6 +536,11 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		fatal(err.Error())
 		return false, nil
 	}
+	if !c.graph {
+		// With the graph off the prompt does not ask for edges or an arc, and
+		// anything a model sends for them anyway is ignored.
+		cons.Knowledge, cons.Arc = nil, nil
+	}
 
 	live := liveIDs(facts)
 	// batch is the immutable membership of what the LLM was shown. Evidence is
@@ -525,18 +583,28 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 	}
 
 	// Explicit drops: facts the model judged stale or superseded. Same
-	// live-set guard, so only facts it was actually shown can be superseded.
+	// live-set guard, so only facts it was actually shown can be superseded, and
+	// each needs a reason, which is kept on the dropped row.
 	var drops []string
 	dropped := map[string]bool{}
-	for _, id := range cons.Drops {
-		if live[id] && !dropped[id] {
-			dropped[id] = true
-			drops = append(drops, id)
+	var dropErr error
+	for _, d := range cons.Drops {
+		reason := strings.TrimSpace(d.Reason)
+		if !live[d.ID] || dropped[d.ID] {
+			continue
+		}
+		if reason == "" {
+			log.Printf("consolidate: %s: drop of %s has no reason; kept", owner, d.ID)
+			continue
+		}
+		dropped[d.ID] = true
+		drops = append(drops, d.ID)
+		// An empty supersededBy means dropped rather than replaced.
+		if _, e := c.store.supersedeWith([]string{d.ID}, "", map[string]string{"drop_reason": truncate(reason, 200)}); e != nil && dropErr == nil {
+			dropErr = e
 		}
 	}
 	if len(drops) > 0 {
-		// An empty mergedID means dropped rather than replaced.
-		_, err := c.store.Supersede(drops, "")
 		marked := c.supersededOf(drops)
 		for _, id := range marked {
 			delete(live, id)
@@ -545,8 +613,8 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		if err := c.retireMirrors(c.store.GetMany(marked), ""); err != nil {
 			soft("drop mirror: " + err.Error())
 		}
-		if err != nil {
-			fatal("drop: " + err.Error())
+		if dropErr != nil {
+			fatal("drop: " + dropErr.Error())
 		}
 	}
 
@@ -599,6 +667,12 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		}
 		if err != nil {
 			soft("edge: " + err.Error())
+		}
+		// The graph is what the starmap draws; the L5 document is what search finds.
+		// A re-cited edge is already indexed and is skipped.
+		if _, err := c.store.indexL5([]l5Edge{{user: owner.user, agent: owner.agent,
+			from: rel.From, rel: rel.Relation, to: rel.To, sources: cites}}); err != nil {
+			soft("edge index: " + err.Error())
 		}
 	}
 
@@ -709,7 +783,7 @@ func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed [
 	for _, id := range marked {
 		delete(live, id)
 	}
-	rep.Dropped += len(marked)
+	rep.Absorbed += len(marked)
 	if len(marked) == 0 {
 		_, retractErr := c.store.Supersede([]string{mergedID}, "")
 		msg := fmt.Sprintf("merge supersede: 0 of %d absorbed facts marked; replacement retracted", len(ids))
@@ -937,20 +1011,27 @@ func (c *Consolidator) ask(ctx context.Context, facts, schemas []DocIndex) (*Con
 			fmt.Fprintf(&existing, "- schema_id=%s | %s\n", sc.ID, truncate(sc.Content, 200))
 		}
 	}
+	// The graph keys are asked for only when the graph is on, so a pass without it
+	// spends no reply tokens on edges or an arc.
+	graphKeys, graphRules := "", ""
+	if c.graph {
+		graphKeys = `,
+  "knowledge": [{"from": "<entity>", "relation": "<relation>", "to": "<entity>", "evidence": ["<id>", "<id>"]}],
+  "arc": "<1-3 sentences: what these facts say about the user's work over time>"`
+		graphRules = `
+- knowledge: 0-5 entity-relation-entity edges, each corroborated in "evidence" by fact ids from AT LEAST 2 different turns. A triple resting on one turn is just that turn restated — do not emit it. Use only ids from the input.
+- arc: null if the facts are too few or too unrelated to synthesise.`
+	}
 	system := `You are a memory consolidation engine. Below are durable facts already stored, each with its id and the turn it came from. Reason ACROSS them — not about any single one — and output a JSON object with EXACTLY these keys:
 {
   "merges": [{"text": "<one fact that replaces several>", "layer": "user_preferences|project_state|technical_lesson|decision|negative_knowledge", "supersedes": ["<id>", "<id>"]}],
-  "drops": ["<id>"],
-  "schemas": [{"pattern": "<a recurring pattern only visible across many facts>", "context": "<when it applies>", "supersedes": ["<schema_id>"]}],
-  "knowledge": [{"from": "<entity>", "relation": "<relation>", "to": "<entity>", "evidence": ["<id>", "<id>"]}],
-  "arc": "<1-3 sentences: what these facts say about the user's work over time>"
+  "drops": [{"id": "<id>", "reason": "<why this fact is stale or trivially obvious>"}],
+  "schemas": [{"pattern": "<a recurring pattern only visible across many facts>", "context": "<when it applies>", "supersedes": ["<schema_id>"]}]` + graphKeys + `
 }
 Rules:
 - merges: ONLY combine facts that genuinely say the same thing or contradict each other. For a contradiction, keep the newer statement and supersede the older. supersedes MUST list at least 2 ids. Use only ids from the input.
-- drops: ids of facts that are stale, trivially obvious, or fully absorbed by a merge. Be conservative — deleting memory is irreversible.
-- schemas: 0-3 patterns that generalise beyond the individual facts. Do not repeat a schema already stored (listed below, if any). To refine a stored schema, return the refined pattern and list the schema_id it replaces in "supersedes"; otherwise leave "supersedes" empty.
-- knowledge: 0-5 entity-relation-entity edges, each corroborated in "evidence" by fact ids from AT LEAST 2 different turns. A triple resting on one turn is just that turn restated — do not emit it. Use only ids from the input.
-- arc: null if the facts are too few or too unrelated to synthesise.
+- drops: facts that are stale (a temporary state that has since passed) or trivially obvious, each with a short reason. A durable fact — a preference, a decision, where something lives, how something works — is never stale just because it is old. A drop without a reason is ignored. Be conservative.
+- schemas: 0-3 patterns that generalise beyond the individual facts. Do not repeat a schema already stored (listed below, if any). To refine a stored schema, return the refined pattern and list the schema_id it replaces in "supersedes"; otherwise leave "supersedes" empty.` + graphRules + `
 - Never invent an id. Never reference a fact not listed.
 Return ONLY valid JSON, no prose, no markdown fences.
 

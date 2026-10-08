@@ -277,6 +277,7 @@ func (l *LLMClient) chat(ctx context.Context, messages []map[string]string, temp
 				// ("consolidation parse failed (raw )") with nothing to show.
 				ReasoningContent string `json:"reasoning_content"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
@@ -296,7 +297,10 @@ func (l *LLMClient) chat(ctx context.Context, messages []map[string]string, temp
 		// Say so plainly: a parse error on an empty string reads as "the model
 		// answered badly" when the truth is "the model answered with nothing",
 		// and the two want different fixes.
-		return "", fmt.Errorf("LLM returned an empty message (no content, no reasoning_content)")
+		// finish_reason tells a reply cut off by the provider ("length") apart
+		// from one that simply came back blank.
+		return "", fmt.Errorf("LLM returned an empty message (no content, no reasoning_content, finish_reason=%q)",
+			out.Choices[0].FinishReason)
 	}
 	return msg.Content, nil
 }

@@ -1,13 +1,24 @@
 # HyAtlas v4 — NOW
 
-**v4.4.0** | 2026-10-08 | Release: tuancookiez-hub/HyAtlas-Memory
+**v4.5.0** | 2026-10-09 | Release: tuancookiez-hub/HyAtlas-Memory
 
 ## Running
-- Release is 4.4.0: `Version` const in server.go, `plugins/hyatlas/plugin.yaml`, and the install.sh default `HYATLAS_VERSION=v4.4.0` all say so. The latest tag in this checkout is v4.3.3; there is no v4.4.0 tag or release asset yet, so the installer builds from source until there is one.
+- Release is 4.5.0: `Version` const in server.go, `plugins/hyatlas/plugin.yaml`, the provider, the dashboard manifest and the install.sh default `HYATLAS_VERSION=v4.5.0` all say so. The 4.5.0 tag and its release assets exist only once the release PR is merged and tagged; until then the installer builds from source.
 - Plugin: `hyatlas` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hyatlas\` + Hermes Desktop pane
 - Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`)
 
-## Unreleased (branch claude/busy-faraday-3tvefr)
+## 4.5.0 (branch fix/windows-tests-and-consolidation)
+See CHANGELOG.md for the full list. In short: the plugin stores turns at turn size
+(no tool output) and recalls on the current message; search honours the owner, with
+aliases, a 0.60 floor, no repeated text, hybrid keyword + vector ranking and an L5 cap;
+restated facts supersede old ones; L5 graph relations are searchable (edges indexed
+as L5 documents, older graphs backfilled at startup, ownerless rows visible under any
+owner); consolidation batches 50 facts, drops need a reason, and the graph is on by
+default; maintenance endpoints (HYATLAS_ADMIN=on) compact old raw rows and merge
+duplicate facts. Verified end to end on fresh stores: lite fills L2, pro L1-L4 + L7,
+ultra all seven layers, each found by a layer-scoped search.
+
+## 4.4.0 (merged, branch claude/busy-faraday-3tvefr)
 - **Plugin start/stop are truthful:** `hermes hyatlas start` does not spawn over a server that already answers (reports `already_running` and the pid when known); the pidfile is written only once the child is seen alive; `stop` returns `ok:false` for a server it did not start.
 - **Installer:** a failed BGE model download no longer aborts the install; release binaries (embedded) skip the download entirely.
 - **Plugin:** `on_memory_write` is documented as a raw (L2) write, not an L1 mirror; the `llm_key` settings link is removed.

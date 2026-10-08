@@ -234,8 +234,8 @@ func TestConsolidateWritesUnderOwnerScopeAndSumsReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Merged != 3 || rep.Dropped != 6 {
-		t.Errorf("Merged=%d Dropped=%d, want 3 and 6 summed across three scopes", rep.Merged, rep.Dropped)
+	if rep.Merged != 3 || rep.Absorbed != 6 || rep.Dropped != 0 {
+		t.Errorf("Merged=%d Absorbed=%d Dropped=%d, want 3, 6 and 0 summed across three scopes", rep.Merged, rep.Absorbed, rep.Dropped)
 	}
 	if len(rep.Errors) != 0 {
 		t.Errorf("unexpected errors: %v", rep.Errors)
@@ -325,7 +325,7 @@ func mergeAndDrop(t *testing.T) consolidated {
 	mock := scopeMock(t, &log, func(string) (int, string) {
 		return http.StatusOK, chatBody(t, Consolidation{
 			Merges: []Merge{{Text: "the port is 4471", Supersedes: []string{c.a, c.b}}},
-			Drops:  []string{c.d},
+			Drops:  []Drop{{ID: c.d, Reason: "stale"}},
 		})
 	})
 	t.Cleanup(mock.Close)
@@ -335,8 +335,8 @@ func mergeAndDrop(t *testing.T) consolidated {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Merged != 1 || rep.Dropped != 3 {
-		t.Fatalf("Merged=%d Dropped=%d, want 1 and 3", rep.Merged, rep.Dropped)
+	if rep.Merged != 1 || rep.Absorbed != 2 || rep.Dropped != 1 {
+		t.Fatalf("Merged=%d Absorbed=%d Dropped=%d, want 1, 2 and 1", rep.Merged, rep.Absorbed, rep.Dropped)
 	}
 	all, _ := srv.store.ListAll(memory.L3Fact, "", "", 100, 0, false)
 	for _, d := range all {

@@ -65,6 +65,10 @@ type MemoryStore struct {
 	// row about to be rewritten) and "commit" (once, before the index update), which
 	// are the points where a concurrent Add or Delete can interleave. Nil in production.
 	supersedeHook func(stage, id string)
+	// l5Dedupe is the similarity (HYATLAS_DEDUPE_SCORE) at or above which a graph
+	// relation is not indexed as an L5 document because one for the same owner
+	// already says it. Zero turns the check off. Set once, before any indexing.
+	l5Dedupe float64
 	// persisted index path (same dir as the chromem DB)
 	indexPath string
 	// usage counters — atomic so reads from /api/v1/status never block writes.
@@ -194,15 +198,81 @@ func isSuperseded(d DocIndex) bool { return d.Meta["invalid_at"] != "" }
 // Search does vector search, scoped to user/agent when provided. Superseded
 // docs are never returned.
 func (s *MemoryStore) Search(query string, limit int, layer memory.Layer, userID, agentID string) ([]SearchHit, error) {
+	hits, err := s.search(query, limit, layer, userID, agentID)
+	if err != nil {
+		return nil, err
+	}
+	s.searches.Add(1)
+	s.persistUsageAsync()
+	return hits, nil
+}
+
+// SearchOwners is Search across several user IDs, for one person known by more than
+// one ID. Each ID is searched with the same agent filter, the hits are merged by
+// score, duplicates (same ID) are dropped, and the best limit are kept. With no user
+// ID it is exactly Search. It counts as one search.
+//
+// Memories with no owner at all (no user_id and no agent_id: rows written before
+// owners were recorded, which is most of an older store's graph) are included under
+// any owner, as the graph endpoints already do, so single-user data from older
+// releases stays reachable.
+func (s *MemoryStore) SearchOwners(query string, limit int, layer memory.Layer, userIDs []string, agentID string) ([]SearchHit, error) {
+	if len(userIDs) == 0 {
+		return s.Search(query, limit, layer, "", agentID)
+	}
 	if limit <= 0 {
 		limit = 5
 	}
-	layers := []memory.Layer{}
-	if layer != "" {
-		layers = []memory.Layer{layer}
-	} else {
-		layers = memory.All()
+	// Embed once for every ID and layer; chromem's Query would embed the query
+	// again for each of them.
+	qv, err := s.embed.Embed(s.ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't create embedding of query: %w", err)
 	}
+	var merged []SearchHit
+	for _, id := range userIDs {
+		hits, err := s.searchVec(qv, limit, layer, id, agentID)
+		if err != nil {
+			return nil, err
+		}
+		merged = append(merged, hits...)
+	}
+	ownerless, err := s.searchWhere(qv, limit, layer, map[string]string{"user_id": "", "agent_id": ""})
+	if err != nil {
+		return nil, err
+	}
+	merged = append(merged, ownerless...)
+	sort.SliceStable(merged, func(i, j int) bool { return merged[i].Score > merged[j].Score })
+	seen := make(map[string]bool, len(merged))
+	var out []SearchHit
+	for _, h := range merged {
+		if seen[h.ID] {
+			continue
+		}
+		seen[h.ID] = true
+		out = append(out, h)
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	s.searches.Add(1)
+	s.persistUsageAsync()
+	return out, nil
+}
+
+// search is the body of Search without the usage counter, so SearchOwners can
+// count a multi-ID search once.
+func (s *MemoryStore) search(query string, limit int, layer memory.Layer, userID, agentID string) ([]SearchHit, error) {
+	qv, err := s.embed.Embed(s.ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't create embedding of query: %w", err)
+	}
+	return s.searchVec(qv, limit, layer, userID, agentID)
+}
+
+// searchVec is search with the query already embedded, so one embedding serves
+// every layer (and, from SearchOwners, every user ID) instead of one per query.
+func (s *MemoryStore) searchVec(qv []float32, limit int, layer memory.Layer, userID, agentID string) ([]SearchHit, error) {
 	where := map[string]string{}
 	if userID != "" {
 		where["user_id"] = userID
@@ -212,6 +282,22 @@ func (s *MemoryStore) Search(query string, limit int, layer memory.Layer, userID
 	}
 	if len(where) == 0 {
 		where = nil
+	}
+	return s.searchWhere(qv, limit, layer, where)
+}
+
+// searchWhere is searchVec with the metadata filter given as is. An empty value
+// matches only rows whose field is empty or absent, which is how SearchOwners asks
+// for ownerless rows; searchVec instead leaves an empty owner out of the filter.
+func (s *MemoryStore) searchWhere(qv []float32, limit int, layer memory.Layer, where map[string]string) ([]SearchHit, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	layers := []memory.Layer{}
+	if layer != "" {
+		layers = []memory.Layer{layer}
+	} else {
+		layers = memory.All()
 	}
 
 	// Superseded rows still sit in chromem, so they can take nearest-neighbour
@@ -230,7 +316,7 @@ func (s *MemoryStore) Search(query string, limit int, layer memory.Layer, userID
 		if k <= 0 {
 			continue
 		}
-		res, err := col.Query(s.ctx, query, k, where, nil)
+		res, err := col.QueryEmbedding(s.ctx, qv, k, where, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -248,8 +334,6 @@ func (s *MemoryStore) Search(query string, limit int, layer memory.Layer, userID
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
-	s.searches.Add(1)
-	s.persistUsageAsync()
 	return hits, nil
 }
 
@@ -398,6 +482,12 @@ func (s *MemoryStore) TotalMemories() int {
 // a same-id Add in the meantime is left as the newer write made it: a stale
 // snapshot is never written back, and a vanished row is skipped without error.
 func (s *MemoryStore) Supersede(ids []string, by string) (int, error) {
+	return s.supersedeWith(ids, by, nil)
+}
+
+// supersedeWith is Supersede that also records extra metadata on each marked row,
+// such as why a fact was dropped.
+func (s *MemoryStore) supersedeWith(ids []string, by string, extra map[string]string) (int, error) {
 	s.supMu.Lock()
 	defer s.supMu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -449,6 +539,9 @@ func (s *MemoryStore) Supersede(ids []string, by string) (int, error) {
 		}
 		meta["invalid_at"] = now
 		meta["superseded_by"] = by
+		for k, v := range extra {
+			meta[k] = v
+		}
 		meta["layer"] = d.Layer
 		if getErr != nil {
 			if firstErr == nil {

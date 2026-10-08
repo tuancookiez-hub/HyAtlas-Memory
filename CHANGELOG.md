@@ -1,5 +1,132 @@
 # Changelog
 
+## [4.5.0] — 2026-10-09
+
+Fixes found by running 4.4.0 against a real store. The largest: the Hermes plugin
+stored each turn with all of its tool output (raw rows up to 1.6 MB), recall used the
+previous turn's message, and plugin searches ignored the owner. Upgrading an existing
+store: see *Upgrading a store written before 4.5.0* in `plugins/hyatlas/after-install.md`.
+
+### Changed
+
+- **Default consolidation batch is 50 facts, not 200.** A free reasoning model took 4
+  to 10+ minutes on 200 facts and often missed the 10-minute pass limit; 50 came back
+  in about two and a half. `HYATLAS_CONSOLIDATE_BATCH` still overrides it.
+
+- **L5 knowledge is searchable.** L5 lived only in the graph (`graph.json`), so search
+  could never return it: on a real store L5 took none of 70 search slots. Each graph
+  edge is now also stored as an L5 memory ("Foxtrot uses Postgres 16") with its owner
+  and sources, under an ID derived from the edge, so re-citing it adds nothing. Edges
+  from older versions are indexed at startup, in the background. Checked end to end
+  on fresh stores: `lite` fills L2 only, `pro` fills L1-L4 and L7, and `ultra` fills
+  all seven layers, each one found by a layer-scoped search.
+- **Ownerless memories are found under an owner filter.** Rows written before owners
+  were recorded (on a real store, 1,385 of 1,395 graph relations) were invisible to
+  every plugin search, which always names an owner. Search now includes rows with
+  no owner at all, as the graph endpoints already do.
+- **L5 takes at most 40% of an all-layer search** (2 of 5 slots). Indexed old graph
+  relations are short and near-identical; uncapped they filled 4 of 5 slots for
+  "how do I start the hyatlas server" and pushed out the answer. A search scoped to
+  `l5_knowledge` is not capped.
+- **`HYATLAS_CONSOLIDATE_GRAPH=off` stops L5 and the arc** (on by default). With it
+  off, the consolidation prompt does not ask for them and `/api/v1/status`
+  `mode_detail` says so.
+- **De-duplication never merges rows whose numbers differ.** Embeddings barely see
+  numbers: "open PR #101722" and "open PR #96783" scored 0.992 alike. The write-time
+  fact rule, L5 indexing and `dedupe_facts` now also require the same set of digit
+  runs, since keeping two near-identical rows costs little and merging two true ones
+  loses one. On a real graph this cut 165 L5 duplicates to 127.
+- **The consolidation report separates merges from drops.** `absorbed` counts facts
+  folded into a merged fact; `dropped` now counts only facts dropped as stale, each
+  with a reason. `dropped` used to include both, so a pass that only merged looked
+  like data loss (a real pass reported "dropped 15" when all 16 facts were merged).
+- **Near-identical graph relations are not indexed twice.** A relation whose L5
+  document would be at least `HYATLAS_DEDUPE_SCORE` similar to one already indexed for
+  the same owner is not indexed (the graph keeps it), and
+  `dedupe_facts` accepts `"layer": "l5_knowledge"` to merge the ones already stored.
+- **A consolidation drop needs a reason.** The model returns
+  `{"id": ..., "reason": ...}`; a drop without a reason (including the old bare-id
+  form) is not applied, and the reason is kept on the dropped row as `drop_reason`.
+  The prompt now says a durable fact is never stale only because it is old.
+  `/api/v1/list?include_superseded=true` shows `drop_reason` on dropped rows.
+- **Search embeds the query once.** A search across aliased owners ran one vector
+  query per owner and layer, and chromem embedded the query text for each: 21
+  embeddings for three aliased IDs. Now one embedding serves them all.
+
+### Fixed
+
+- **A turn is stored as the turn, not the transcript.** `sync_turn` receives the whole
+  thread, and the plugin sent every message since its last sync, including each
+  tool result and, after context compaction, the compaction summary. Raw rows reached
+  200,000 to 1,650,000 characters, and the extraction LLM read each in full. Only user
+  and assistant text is sent now, compaction summaries are skipped, and each message
+  (4,000 chars) and turn (12,000 chars) is capped. (`plugins/hyatlas/__init__.py`
+  `_build_turn_text`)
+- **Recall uses the current message.** `prefetch()` ignored its query and returned the
+  results `queue_prefetch` cached after the previous turn, in one slot shared by all
+  sessions. It now searches the message it is given (Hermes bounds the call with a
+  timeout) and keeps a per-session fallback for when the search fails.
+- **Search honours `user_id` and `agent_id`.** The plugin sends singular fields, and
+  `/api/v1/search` read only `user_ids` / `agent_ids`, so every plugin search was
+  unscoped. Both shapes work now. (`server.go` `handleSearch`)
+
+- **Search drops repeats and weak matches.** An L3 preference and its L1 Profile
+  mirror carry the same text and both came back; now one hit per text is kept (the
+  L1 Profile one). Hits below `HYATLAS_MIN_SCORE` (default 0.60) are dropped, so an
+  off-topic query returns nothing instead of five unrelated memories. A request can
+  override the floor with `min_score`. (`server.go` `refineHits`)
+- **A restated fact replaces the old one.** Before an extracted L3 fact is written,
+  the owner's nearest live fact is looked up; at `HYATLAS_DEDUPE_SCORE` (default 0.92)
+  or above, the new fact supersedes it and its L1 mirrors. Newest wins, so a changed
+  value replaces the stale one. About a quarter of facts had a near-twin before this.
+  (`server.go` `promoteExtractionDedupe`)
+- **Extraction input is capped at 16,000 bytes**, whatever the client sends.
+
+### Added
+
+- **Maintenance endpoints for stores written before this release.** Both are POST,
+  default to a dry run (`{"dry_run": false}` applies), and answer only when the
+  server runs with `HYATLAS_ADMIN=on`; otherwise they return 403, because
+  `compact_raw` cannot be undone and any local process can reach the port.
+  - `/api/v1/admin/compact_raw` rewrites each raw row to what the plugin stores now:
+    user and assistant text only, compaction summaries dropped, 4,000 bytes per
+    message and 12,000 per turn. IDs, metadata and the extracted flag are kept, and
+    the index is written once. On a real store: 522 rows, 241 MB of text to 5.7 MB;
+    the data dir went from 491 MB to 29 MB and startup RAM from 1.15 GB to 180 MB.
+  - `/api/v1/admin/dedupe_facts` applies the write-time de-dup rule to facts already
+    stored: per owner, newest first, an older fact at or above the threshold
+    (default `HYATLAS_DEDUPE_SCORE`) is superseded by the newer one. On a real
+    store: 280 of 2,687 facts.
+- **Hybrid search.** `/api/v1/search` now fuses the vector ranking with a BM25 keyword
+  ranking (reciprocal rank fusion, k 60). Embeddings blur exact identifiers: on a real
+  store, `HYATLAS_SYNC_EXTRACT`, `19528`, `RSI(2)` and `Reg-T` each found none of the
+  facts that contain them; with keyword search they find 2 to 5 of 5. A keyword hit
+  must contain all of a short query's terms (three quarters of a longer one), so
+  off-topic queries still return nothing. Raw rows are left out of keyword search.
+  The request's `reader` picks the ranking: `legacy` is vector only, `hybrid_tag`
+  keyword only, anything else (and none, which is what the plugin sends) hybrid, so
+  the dashboard's Semantic, Keyword and Hybrid tabs now differ. (`keyword.go`,
+  `fusion.go`)
+- **`HYATLAS_USER_ALIASES`** groups user IDs that belong to one person
+  (`"id1,id2;id3,id4"`). A search for any of them covers the whole group.
+  (`server.go` `parseUserAliases`, `store.go` `SearchOwners`)
+
+- **A late deadline cut no longer counts as a window failure.** When the pass
+  deadline cut an owner's call after earlier owners' calls had spent the time, the
+  cut counted toward `maxWindowFails`, so with a slow model a healthy window of a
+  large owner was skipped after three passes. That cut now leaves the window's walk
+  state alone and the next pass starts with that owner. An owner cut while it had
+  the whole budget still counts the cut as a failure. (`consolidate.go` `Once`)
+- **Each consolidation call is logged** with its owner, window, fact count, result
+  and duration, so a slow model shows up in the log rather than only as a deadline
+  error in the report.
+- **An empty LLM reply names its `finish_reason`,** so a reply the provider cut off
+  (`length`) can be told apart from one that came back blank. (`llm.go` `chat`)
+- **Two model-directory tests pass on Windows.** They set `HOME` but not
+  `USERPROFILE`, which `os.UserHomeDir` reads on Windows, and one picked up a real
+  installer model directory on a machine that had run the installer.
+  (`model_dir_test.go`, `server_embed_test.go`)
+
 ## [4.4.0] — 2026-10-08
 
 Everything on `claude/busy-faraday-3tvefr` since v4.3.3. Several items are

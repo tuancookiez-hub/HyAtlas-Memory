@@ -27,7 +27,7 @@ import (
 // It is exposed on /api/v1/status and /api/info so every client (Desktop pane,
 // web dashboard, CLI) reports the real running version instead of hardcoding
 // a "v4" badge that silently goes stale on each release. Bump in one place.
-const Version = "4.4.0"
+const Version = "4.5.0"
 
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {
@@ -43,6 +43,15 @@ type Server struct {
 	// allowedHosts are the extra hostnames (HYATLAS_ALLOWED_HOSTS) a request may
 	// name in Host or Origin, beyond localhost and IP literals (see guardLocal).
 	allowedHosts []string
+	// ownerAliases maps a user ID to every ID of the same person
+	// (HYATLAS_USER_ALIASES), so search covers all of them.
+	ownerAliases map[string][]string
+	// minScore and dedupeScore are HYATLAS_MIN_SCORE and HYATLAS_DEDUPE_SCORE. The
+	// zero value turns each off, which is what tests built without main get.
+	minScore    float64
+	dedupeScore float64
+	// admin is HYATLAS_ADMIN: whether the /api/v1/admin/* maintenance endpoints answer.
+	admin bool
 
 	// mu guards lastExtractErr: the extraction goroutines write it from
 	// background contexts while /api/v1/status reads it on request.
@@ -146,7 +155,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		GraphNodes:       s.store.Graph().NodeCount(),
 		GraphEdges:       s.store.Graph().EdgeCount(),
 		Mode:             s.mode.OrDefault(),
-		ModeDetail:       s.mode.Describe(),
+		ModeDetail:       s.modeDetail(),
 		UsesLLM:          s.mode.UsesLLM(),
 		ExtractSync:      s.sync.Describe(s.mode),
 		Consolidations:   consRuns,
@@ -168,14 +177,36 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // source_id so the slow path can trace a consolidated claim back to the
 // conversations that produced it, and so raw decay can protect the rows a live
 // claim still depends on.
+//
+// It never de-duplicates; the server path uses promoteExtractionDedupe.
 func promoteExtraction(store *MemoryStore, ex *Extraction, userID, agentID, sourceID string) {
+	promoteExtractionDedupe(store, ex, userID, agentID, sourceID, 0)
+}
+
+// promoteExtractionDedupe is promoteExtraction that also folds restatements. Before an
+// L3 fact is written, the owner's nearest live L3 fact is looked up; if it scores at
+// least dedupe, the new fact is written and the old one, with its L1 Profile mirrors,
+// is superseded by it. Newest wins, so an updated value replaces the stale one rather
+// than being dropped as a duplicate. dedupe <= 0 turns this off.
+func promoteExtractionDedupe(store *MemoryStore, ex *Extraction, userID, agentID, sourceID string, dedupe float64) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	// L3 Facts
 	for _, f := range ex.Facts {
 		if f.Data == "" {
 			continue
 		}
-		_ = store.Add(memory.L3Fact, newID(), f.Data, map[string]string{
+		// Found before the new rows are written, so the new L1 mirror is not
+		// taken for one of the old fact's mirrors.
+		var stale []string
+		if dedupe > 0 {
+			near, err := store.search(f.Data, 1, memory.L3Fact, userID, agentID)
+			if err == nil && len(near) > 0 && float64(near[0].Score) >= dedupe && sameNumbers(near[0].Content, f.Data) {
+				old := near[0]
+				stale = append([]string{old.ID}, store.MirrorsOf(memory.L1Profile, old.Meta["source_id"], old.Content)...)
+			}
+		}
+		factID := newID()
+		_ = store.Add(memory.L3Fact, factID, f.Data, map[string]string{
 			"user_id": userID, "agent_id": agentID,
 			"source_layer_label": f.Layer, "source_id": sourceID, "ts": now,
 		})
@@ -185,6 +216,11 @@ func promoteExtraction(store *MemoryStore, ex *Extraction, userID, agentID, sour
 				"user_id": userID, "agent_id": agentID,
 				"source_id": sourceID, "ts": now,
 			})
+		}
+		if len(stale) > 0 {
+			if _, err := store.Supersede(stale, factID); err != nil {
+				log.Printf("dedupe: supersede %s: %v", stale[0], err)
+			}
 		}
 	}
 	// L4 Summary (enabled layer — the narrative arc)
@@ -294,12 +330,12 @@ func (s *Server) extract(text, userID, agentID, id string) error {
 	if s.llm == nil {
 		return fmt.Errorf("no LLM client configured")
 	}
-	ex, err := s.llm.Complete(ctx, text)
+	ex, err := s.llm.Complete(ctx, utf8Trunc(text, maxExtractInput))
 	if err != nil {
 		s.setExtractErr(err.Error())
 		return err
 	}
-	promoteExtraction(s.store, ex, userID, agentID, id)
+	promoteExtractionDedupe(s.store, ex, userID, agentID, id, s.dedupeScore)
 	_ = s.store.SetExtracted(id, true)
 	s.setExtractErr("")
 	return nil
@@ -312,6 +348,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Layer    string   `json:"layer"`     // optional: filter to one memory layer
 		UserIDs  []string `json:"user_ids"`  // optional: restrict to these users
 		AgentIDs []string `json:"agent_ids"` // optional: restrict to these agents
+		UserID   string   `json:"user_id"`   // what the Hermes plugin sends
+		AgentID  string   `json:"agent_id"`  // what the Hermes plugin sends
+		MinScore *float64 `json:"min_score"` // optional: overrides HYATLAS_MIN_SCORE
+		Reader   string   `json:"reader"`    // optional: see parseReader; empty is hybrid
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonResponse(w, 400, map[string]any{"error": "bad body"})
@@ -321,17 +361,57 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, 400, map[string]any{"error": "query required"})
 		return
 	}
-	userID, agentID := "", ""
-	if len(body.UserIDs) > 0 {
-		userID = body.UserIDs[0]
+	var users []string
+	seenUser := map[string]bool{}
+	for _, id := range append([]string{body.UserID}, body.UserIDs...) {
+		if id == "" || seenUser[id] {
+			continue
+		}
+		seenUser[id] = true
+		users = append(users, id)
 	}
-	if len(body.AgentIDs) > 0 {
+	agentID := body.AgentID
+	if agentID == "" && len(body.AgentIDs) > 0 {
 		agentID = body.AgentIDs[0]
 	}
-	res, err := s.store.Search(body.Query, body.Limit, memory.Layer(body.Layer), userID, agentID)
+	users = s.expandOwners(users)
+	limit := body.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+	minScore := s.minScore
+	if body.MinScore != nil {
+		minScore = *body.MinScore
+	}
+	// Fetch three times the limit so the floor, the duplicate drop and the L5 cap
+	// still leave limit hits. The vector search runs in every mode, because it
+	// counts the request as a search.
+	res, err := s.store.SearchOwners(body.Query, limit*3, memory.Layer(body.Layer), users, agentID)
 	if err != nil {
 		jsonResponse(w, 500, map[string]any{"error": err.Error()})
 		return
+	}
+	// Keyword search catches exact identifiers (HYATLAS_SYNC_EXTRACT, a port, a
+	// ticker) that the embedding scores low; the two rankings are fused.
+	switch reader := parseReader(body.Reader); reader {
+	case readVector:
+		res = refineHits(res, minScore, 0)
+	default:
+		kw, err := s.store.KeywordSearch(body.Query, limit*3, memory.Layer(body.Layer), users, agentID)
+		if err != nil {
+			jsonResponse(w, 500, map[string]any{"error": err.Error()})
+			return
+		}
+		if reader == readKeyword {
+			res = nil
+		}
+		res = fuseHits(res, kw, minScore, 0)
+	}
+	if body.Layer == "" {
+		res = capLayer(res, memory.L5Knowledge, l5Share(limit))
+	}
+	if len(res) > limit {
+		res = res[:limit]
 	}
 	type hit struct {
 		MemoryID   string  `json:"memory_id"`
@@ -362,6 +442,64 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, 200, map[string]any{"memories": map[string]any{
 		"profile": profileHits, "proactive": proactiveHits, "normal": normalHits,
 	}})
+}
+
+// refineHits drops hits scoring below minScore, then drops hits whose text repeats an
+// earlier hit's, and keeps the best limit. Text is compared case-insensitively with
+// whitespace collapsed. An L3 preference and its L1 Profile mirror carry the same
+// text, so of two equal texts the L1 Profile one is kept: it is the one the profile
+// channel shows. hits must be sorted best first, and the result is too.
+func refineHits(hits []SearchHit, minScore float64, limit int) []SearchHit {
+	kept := []SearchHit{}
+	pos := map[string]int{}
+	for _, h := range hits {
+		if float64(h.Score) < minScore {
+			continue
+		}
+		key := strings.ToLower(strings.Join(strings.Fields(h.Content), " "))
+		if i, dup := pos[key]; dup {
+			if h.Layer == memory.L1Profile && kept[i].Layer != memory.L1Profile {
+				kept[i] = h
+			}
+			continue
+		}
+		pos[key] = len(kept)
+		kept = append(kept, h)
+	}
+	if limit > 0 && len(kept) > limit {
+		kept = kept[:limit]
+	}
+	return kept
+}
+
+// l5Share is how many of limit result slots L5 knowledge may take in a search over
+// all layers: 40%, at least one. A graph relation is a terse restatement of facts
+// ("X runs on Y"), so it scores high against short queries, and an older graph
+// holds many near-identical ones; uncapped, they push the facts, profile and rules
+// they summarise out of the results.
+func l5Share(limit int) int {
+	n := limit * 2 / 5
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// capLayer keeps at most max hits of layer, dropping the lower-ranked ones, so the
+// slots go to the next hits of other layers. Order is kept.
+func capLayer(hits []SearchHit, layer memory.Layer, max int) []SearchHit {
+	out := make([]SearchHit, 0, len(hits))
+	n := 0
+	for _, h := range hits {
+		if h.Layer == layer {
+			if n >= max {
+				continue
+			}
+			n++
+		}
+		out = append(out, h)
+	}
+	return out
 }
 
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
@@ -421,6 +559,10 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		if isSuperseded(it) {
 			m["invalid_at"] = it.Meta["invalid_at"]
 			m["superseded_by"] = it.Meta["superseded_by"]
+			// Why consolidation dropped it, when it was a drop rather than a merge.
+			if r := it.Meta["drop_reason"]; r != "" {
+				m["drop_reason"] = r
+			}
 		}
 		out = append(out, m)
 	}
@@ -994,12 +1136,27 @@ type runtimeCfg struct {
 	// AllowedHosts is HYATLAS_ALLOWED_HOSTS: extra hostnames a request may name
 	// in Host or Origin (see guardLocal). Empty means loopback and IP literals only.
 	AllowedHosts []string
-	Mode         Mode
-	Sync         Sync
+	// UserAliases is HYATLAS_USER_ALIASES: groups of user IDs that belong to one
+	// person, so a search for any of them covers all of them. Empty means none.
+	UserAliases [][]string
+	// MinScore is HYATLAS_MIN_SCORE: hits below it are dropped from /api/v1/search.
+	MinScore float64
+	// DedupeScore is HYATLAS_DEDUPE_SCORE: a new fact this similar to the owner's
+	// nearest existing fact supersedes it instead of sitting beside it.
+	DedupeScore float64
+	Mode        Mode
+	Sync        Sync
 	// Slow-path (ultra) tuning. Zero retention means raw history is never decayed.
 	Consolidate time.Duration
 	Retention   time.Duration
 	Batch       int
+	// Graph is HYATLAS_CONSOLIDATE_GRAPH: whether consolidation also writes L5
+	// knowledge edges and the cross-session arc. On unless set to off/false/0/no:
+	// ultra promises all seven layers, and the starmap and dashboard draw L5.
+	Graph bool
+	// Admin is HYATLAS_ADMIN: whether the maintenance endpoints are enabled. Off
+	// unless set to on/true/1/yes, because compact_raw cannot be undone.
+	Admin bool
 }
 
 // Defaults that decide what leaves the machine:
@@ -1043,6 +1200,8 @@ func resolveRuntime() runtimeCfg {
 		Consolidate:  resolveConsolidate(mode),
 		Retention:    parseDuration("HYATLAS_RAW_RETENTION", 0),
 		Batch:        envInt("HYATLAS_CONSOLIDATE_BATCH", defaultBatch),
+		Graph:        !envOff("HYATLAS_CONSOLIDATE_GRAPH"),
+		Admin:        envOn("HYATLAS_ADMIN"),
 		Host:         strings.Trim(envOr("HYATLAS_GO_HOST", defaultHost), "[]"),
 		Port:         envOr("HYATLAS_GO_PORT", defaultPort),
 		DataDir:      dataDir,
@@ -1054,6 +1213,9 @@ func resolveRuntime() runtimeCfg {
 		ModelDir:     modelDir,
 		ModelTried:   modelTried,
 		AllowedHosts: parseHostList(envOr("HYATLAS_ALLOWED_HOSTS", "")),
+		UserAliases:  parseUserAliases(envOr("HYATLAS_USER_ALIASES", "")),
+		MinScore:     envFloat("HYATLAS_MIN_SCORE", defaultMinScore),
+		DedupeScore:  envFloat("HYATLAS_DEDUPE_SCORE", defaultDedupeScore),
 	}
 }
 
@@ -1112,8 +1274,52 @@ func (s *Server) attachSlowPath(ctx context.Context, rt runtimeCfg) bool {
 		return false
 	}
 	s.cons = NewConsolidator(s.store, s.llm, rt.Consolidate, rt.Retention, rt.Batch)
+	s.cons.graph = rt.Graph
 	go s.cons.Run(ctx)
 	return true
+}
+
+// modeDetail is the mode's description, noting when the slow path runs without the
+// L5 graph and arc (HYATLAS_CONSOLIDATE_GRAPH off), which Describe cannot know.
+func (s *Server) modeDetail() string {
+	d := s.mode.Describe()
+	if s.cons != nil && !s.cons.graph {
+		d += "; L5 graph and arc writing off (HYATLAS_CONSOLIDATE_GRAPH)"
+	}
+	return d
+}
+
+// envOn reports whether key is set to on, true, 1 or yes (any case).
+func envOn(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "on", "true", "1", "yes":
+		return true
+	}
+	return false
+}
+
+// envOff reports whether key is set to off, false, 0 or no (any case). For a
+// setting that is on unless turned off.
+func envOff(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "off", "false", "0", "no":
+		return true
+	}
+	return false
+}
+
+// envFloat reads key as a float64. Unset, blank or unparsable means def.
+func envFloat(key string, def float64) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		log.Printf("%s=%q is not a number; using %v", key, v, def)
+		return def
+	}
+	return f
 }
 
 // envInt reads a positive integer or falls back.
@@ -1194,6 +1400,16 @@ func main() {
 	if err != nil {
 		log.Fatal("store: ", err)
 	}
+	store.l5Dedupe = rt.DedupeScore
+	// Graph edges written before 4.5.0 have no L5 search documents. Index any that
+	// are missing, in the background so the server answers at once.
+	go func() {
+		if n, err := store.BackfillL5(); err != nil {
+			log.Printf("l5 backfill: indexed %d edge(s), error: %v", n, err)
+		} else if n > 0 {
+			log.Printf("l5 backfill: indexed %d graph edge(s) as L5 search documents", n)
+		}
+	}()
 	llm := NewLLMClient(llmBase, llmKey, llmModel)
 	llm.KeyFile = llmKeyFile
 	srv := &Server{store: store, llm: llm, llmModel: llmModel, llmBase: llmBase,
@@ -1206,6 +1422,13 @@ func main() {
 	}
 	log.Print(listeningLine(rt))
 	srv.allowedHosts = rt.AllowedHosts
+	srv.ownerAliases = aliasMap(rt.UserAliases)
+	srv.minScore = rt.MinScore
+	srv.dedupeScore = rt.DedupeScore
+	srv.admin = rt.Admin
+	if rt.Admin {
+		log.Print("HYATLAS_ADMIN=on: /api/v1/admin/compact_raw and /api/v1/admin/dedupe_facts are enabled")
+	}
 	hs := &http.Server{Addr: net.JoinHostPort(rt.Host, port), Handler: srv.routes(), ReadHeaderTimeout: readHeaderTimeout}
 	log.Fatal(hs.ListenAndServe())
 }
@@ -1227,6 +1450,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)
 	mux.HandleFunc("/api/v1/digest", s.handleDigest)
 	mux.HandleFunc("/api/v1/reprocess", s.handleReprocess)
+	mux.HandleFunc("/api/v1/admin/compact_raw", s.handleCompactRaw)
+	mux.HandleFunc("/api/v1/admin/dedupe_facts", s.handleDedupeFacts)
 	// Dashboard UI (embedded single-file frontend)
 	// --- v3.5 dashboard adapter endpoints (real v4 data, v3.5 shapes) ---
 	mux.HandleFunc("/api/status", s.handleDashStatus)
@@ -1342,6 +1567,72 @@ func normHost(h string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
 }
 
+// parseUserAliases reads HYATLAS_USER_ALIASES: groups separated by ";", user IDs in a
+// group separated by ",". IDs are trimmed and empty ones dropped; a group needs at
+// least two distinct IDs to mean anything, so smaller ones are dropped.
+// "123,default;alice,al" is two groups.
+func parseUserAliases(raw string) [][]string {
+	var out [][]string
+	for _, group := range strings.Split(raw, ";") {
+		var ids []string
+		seen := map[string]bool{}
+		for _, part := range strings.Split(group, ",") {
+			id := strings.TrimSpace(part)
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			ids = append(ids, id)
+		}
+		if len(ids) >= 2 {
+			out = append(out, ids)
+		}
+	}
+	return out
+}
+
+// aliasMap indexes alias groups by member: each ID maps to its whole group,
+// itself included. An ID in two groups maps to the union of both.
+func aliasMap(groups [][]string) map[string][]string {
+	out := map[string][]string{}
+	for _, group := range groups {
+		for _, id := range group {
+			seen := map[string]bool{}
+			for _, existing := range out[id] {
+				seen[existing] = true
+			}
+			for _, other := range group {
+				if !seen[other] {
+					seen[other] = true
+					out[id] = append(out[id], other)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// expandOwners adds every alias of each user ID (HYATLAS_USER_ALIASES), keeping the
+// order IDs were first seen and dropping duplicates. Without aliases it returns ids.
+func (s *Server) expandOwners(ids []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(id string) {
+		if id == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	for _, id := range ids {
+		add(id)
+		for _, alias := range s.ownerAliases[id] {
+			add(alias)
+		}
+	}
+	return out
+}
+
 // parseHostList reads HYATLAS_ALLOWED_HOSTS: comma-separated hostnames. An entry
 // may carry a port ("myhost:8080" is "myhost"), as a Host header does. Entries are
 // lower-cased with any trailing dot dropped, and empty ones are dropped.
@@ -1365,6 +1656,21 @@ func isLoopbackHost(h string) bool {
 	ip := net.ParseIP(h)
 	return ip != nil && ip.IsLoopback()
 }
+
+// defaultMinScore is the similarity below which /api/v1/search drops a hit. Measured
+// on a real store with bge-small: on-topic queries never put a relevant hit below
+// 0.67, and off-topic queries never scored above 0.55. 0 disables the floor.
+const defaultMinScore = 0.60
+
+// defaultDedupeScore is the similarity at or above which a newly extracted fact is
+// treated as a restatement of the owner's nearest existing fact, which it then
+// supersedes. 0 disables write-time de-duplication.
+const defaultDedupeScore = 0.92
+
+// maxExtractInput caps the text one extraction call sends to the LLM, in bytes. The
+// Hermes plugin already sends one turn; this guards against any other client
+// posting a whole transcript.
+const maxExtractInput = 16000
 
 // maxRequestBody caps every request body. Raw memories can be large session
 // dumps (see utf8Trunc), so the cap is generous. Without it, decoding read

@@ -40,8 +40,8 @@ install by starting the server and probing `/healthz`.
   built instead only when that tag is missing and `HYATLAS_VERSION` is not set, and
   the installer warns about it. If you set `HYATLAS_VERSION` and the tag is missing,
   the install fails.
-- **Until the v4.4.0 release assets are published**, the installer finds no prebuilt
-  binary and builds from source. It clones the `v4.4.0` tag, or the default branch if
+- **Until the v4.5.0 release assets are published**, the installer finds no prebuilt
+  binary and builds from source. It clones the `v4.5.0` tag, or the default branch if
   that tag does not exist yet, with a warning. The default branch is not used when
   `HYATLAS_VERSION` is set.
 - **Go 1.26 or newer** is required for source builds. A plain `go build` with an
@@ -67,7 +67,7 @@ Useful env vars (installer only):
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.4.0` |
+| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.5.0` |
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the installer caches the model (source builds) | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
 | `HYATLAS_MODE` | Extraction mode written to the Hermes `.env`: `lite` \| `pro` \| `ultra`. Any other exported value stops the installer with an error and nothing is written | `ultra` (asked interactively) |
@@ -162,8 +162,8 @@ default configuration is not fully local:
 
 | What | Goes where | Default | How to keep it local |
 |---|---|---|---|
-| **Memory text** (each write's text, sent for extraction) | The extraction LLM. Each write is one request, and a failed call or unparseable reply is retried once | **Nowhere** — no endpoint is shipped, so an unconfigured server makes no LLM call and reports `unconfigured` | Already opt-in: set `HYATLAS_LLM_BASE`/`_MODEL`/`_KEY` to choose where it goes. Point them at a local OpenAI-compatible server to keep it on-machine, or use `HYATLAS_MODE=lite` |
-| **Stored facts and schema patterns** (ultra only) | The same LLM, by the consolidation pass. One request per owner (`user_id`/`agent_id` pair) that is due: its facts changed since its last pass, or not every window of its facts has been covered since that change. An owner with one fact, or with nothing due, makes no request. Each request carries up to `HYATLAS_CONSOLIDATE_BATCH` (200) facts of that owner, each cut to 400 characters with its fact and turn IDs, plus up to 20 existing schema patterns cut to 200 characters | Nowhere until an endpoint is configured | Use `pro` or `lite` |
+| **Memory text** (each write's text, sent for extraction) | The extraction LLM. Each write is one request, and a failed call or unparseable reply is retried once. From the Hermes plugin, a write is one turn: the user's message and the assistant's text only. Tool calls, tool output, system messages and Hermes compaction summaries are not sent. Each message is capped at 4,000 characters and the turn at 12,000. One extraction call sends at most 16,000 bytes of the write's text (the stored raw row keeps the full text) | **Nowhere** — no endpoint is shipped, so an unconfigured server makes no LLM call and reports `unconfigured` | Already opt-in: set `HYATLAS_LLM_BASE`/`_MODEL`/`_KEY` to choose where it goes. Point them at a local OpenAI-compatible server to keep it on-machine, or use `HYATLAS_MODE=lite` |
+| **Stored facts and schema patterns** (ultra only) | The same LLM, by the consolidation pass. One request per owner (`user_id`/`agent_id` pair) that is due: its facts changed since its last pass, or not every window of its facts has been covered since that change. An owner with one fact, or with nothing due, makes no request. Each request carries up to `HYATLAS_CONSOLIDATE_BATCH` (50) facts of that owner, each cut to 400 characters with its fact and turn IDs, plus up to 20 existing schema patterns cut to 200 characters. Facts that a pass merges or drops are superseded: kept and hidden from search, not deleted. Each drop is stored with its reason | Nowhere until an endpoint is configured | Use `pro` or `lite` |
 | **Embeddings** (each memory's text, and each search query) | In-process BGE-small (onnxruntime-go) | **Local** — `HYATLAS_EMBED_BASE=bge`, no network | Already local. If you set `HYATLAS_EMBED_BASE` to a URL, the text goes there instead, in every mode, including `lite` |
 | Stored memories, vector index, graph | `HYATLAS_GO_DATA` (default `./data`) | **Local** | Already local |
 | Telemetry / usage reporting | — | **None.** The only outbound HTTP the server makes is to the LLM and embedding endpoints you configure | — |
@@ -185,7 +185,7 @@ The three modes form a ladder of reasoning scope, not of latency:
 |---|---|---|---|---|
 | `lite` | none | — | **1 / 7** — L2 Raw only | no |
 | `pro` | one per write | within one turn | **5 / 7** — L1, L2, L3, L4, L7 | no |
-| `ultra` *(default)* | one per write **+** periodic batch | **across memories and time** | **7 / 7** at steady state | **yes** |
+| `ultra` *(default)* | one per write **+** periodic batch | **across memories and time** | **7 / 7** at steady state (6 / 7 with `HYATLAS_CONSOLIDATE_GRAPH=off`) | **yes** |
 
 The two systems own disjoint layers:
 
@@ -194,7 +194,8 @@ The two systems own disjoint layers:
 - **System2 (slow path)** — L5 Knowledge, L6 Schema. A relation worth keeping is
   corroborated by more than one turn, and a schema is a *recurring* pattern, so
   neither can come from a single turn. Ultra is the only mode that runs System2,
-  which is why it is the only one that fills L5 and L6.
+  which is why it is the only one that fills L5 and L6. `HYATLAS_CONSOLIDATE_GRAPH=off`
+  stops L5 (and the arc).
 
 Whether a write *blocks* on its extraction is a separate knob
 (`HYATLAS_SYNC_EXTRACT=on|off`), not part of the mode. Pro blocks by default and
@@ -212,7 +213,8 @@ Ultra-only tuning:
 | Variable | Default | Meaning |
 |---|---|---|
 | `HYATLAS_CONSOLIDATE_EVERY` | `6h` | how often the slow path runs |
-| `HYATLAS_CONSOLIDATE_BATCH` | `200` | max facts per owner per consolidation call |
+| `HYATLAS_CONSOLIDATE_BATCH` | `50` | max facts per owner per consolidation call |
+| `HYATLAS_CONSOLIDATE_GRAPH` | on | `off` (also `false`, `0`, `no`) stops consolidation writing L5 knowledge edges and the cross-session arc; the prompt then does not ask for them. Each edge is also stored as a searchable L5 memory ("Foxtrot uses Postgres 16") |
 | `HYATLAS_RAW_RETENTION` | *(unset = never delete)* | age after which uncited L2 Raw is deleted |
 
 Durations are Go durations (`30m`, `6h`, `2160h`) or a plain number of seconds.
@@ -235,8 +237,7 @@ Facts that the ultra pass merges or drops are superseded, not deleted: they keep
 
 The `7 / 7` above is steady state, not the first minute. A fresh ultra install
 sits at 5/7 until the slow path first runs, which is up to `6h` away by default. L5
-and L6 are filled only when a pass finds corroborated relations and recurring
-patterns. To run a pass now, instead of waiting for the tick:
+is filled only when a pass finds relations corroborated by at least two turns, and L6 only when a pass finds recurring patterns. To run a pass now, instead of waiting for the tick:
 
 ```bash
 curl -X POST http://127.0.0.1:19528/api/v1/digest
@@ -305,8 +306,13 @@ the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
 | `HYATLAS_MODE` | `ultra` | `lite` \| `pro` \| `ultra`. An unrecognised value is fatal at startup. See the mode table above. |
 | `HYATLAS_SYNC_EXTRACT` | *(follows the mode)* | `on` \| `off`. Whether a write waits for extraction. An unrecognised value is fatal at startup. |
 | `HYATLAS_CONSOLIDATE_EVERY` | `6h` | Ultra only: interval between slow-path passes. Must be positive in ultra (zero or negative is fatal at startup); use `pro` to run without the pass. |
-| `HYATLAS_CONSOLIDATE_BATCH` | `200` | Ultra only: max facts per owner per consolidation call. Larger owners are consolidated in successive windows. |
+| `HYATLAS_CONSOLIDATE_BATCH` | `50` | Ultra only: max facts per owner per consolidation call. Larger owners are consolidated in successive windows. |
+| `HYATLAS_CONSOLIDATE_GRAPH` | on | Ultra only: `off` (also `false`, `0`, `no`) stops consolidation writing L5 knowledge edges and the cross-session arc, and the prompt then does not ask for them. Each edge is stored in the graph (drawn by the dashboard and the Desktop starmap) and as a searchable L5 memory; edges from older versions are indexed for search at startup. |
 | `HYATLAS_RAW_RETENTION` | *(unset = never delete)* | Ultra only: age after which an L2 raw row cited by no live edge or fact is deleted |
+| `HYATLAS_USER_ALIASES` | *(unset = no aliases)* | Groups of user IDs that are one person, for search: groups separated by `;`, IDs in a group by `,`, e.g. `"221727702992945152,default,hermes-memory-archive"`. A search for any ID in a group covers the whole group |
+| `HYATLAS_MIN_SCORE` | `0.60` | Search drops vector hits below this cosine similarity. `0` disables the floor. A request may override it with `min_score` |
+| `HYATLAS_DEDUPE_SCORE` | `0.92` | Write-time de-duplication: a new L3 fact at or above this similarity to the owner's nearest live fact supersedes it. `0` disables it |
+| `HYATLAS_ADMIN` | off | `on` enables the two `/api/v1/admin/*` maintenance endpoints (see *Maintenance (admin)* in the API Reference). Otherwise they return 403 |
 | `HYATLAS_LLM_BASE` | *(unset)* | OpenAI-compatible LLM endpoint. **Memory text is sent here once you set it** — see *Privacy* above. Unset means no LLM call at all. |
 | `HYATLAS_LLM_MODEL` | *(unset)* | LLM model name. Base, model and key must all be set for extraction to run. |
 | `HYATLAS_LLM_KEY` | (empty) | LLM bearer token |
@@ -415,7 +421,7 @@ if you depend on that. Every route is behind the Host/Origin guard described abo
 | `GET` | `/api/v1/status` | `status`, `version`, `vdb`, `embed`, `llm` (`ok` \| `unconfigured` \| `unused`), `llm_model`, `llm_base`, `mode`, `mode_detail`, `uses_llm`, `extract_sync`, `write_pipeline` (`ok` or `degraded: …`), `writes`, `searches`, `layers` (per layer, live rows; L5 = graph node count), `graph_nodes`, `graph_edges`, `consolidations` (`-1` without a slow path; resets on restart), `last_consolidated` (last report; omitted until a pass has run). `graph_nodes` and `graph_edges` count all owners. |
 | `GET` | `/api/v1/metrics` | `layers`, `total`, `graph_nodes`, `graph_edges` (all owners). |
 | `POST` | `/api/v1/add` | Body: `text` (or `data`, required), `user_id`, `agent_id`, `session_id`, `metadata`. Returns `success`, `memory_id`, `extraction_status` (`done` \| `failed` \| `pending` \| `unconfigured` \| `skipped`). A missing text returns 400. |
-| `POST` | `/api/v1/search` | Body: `query` (required), `limit`, `layer`, `user_ids` and `agent_ids` (arrays; only the first entry of each is used). Returns `memories`: `profile`, `proactive` and `normal` lists, each item with `memory_id`, `content`, `score`, `layer`, `gmt_created`, `user_id`, `agent_id`. |
+| `POST` | `/api/v1/search` | Body: `query` (required), `limit`, `layer`, `user_id` and `agent_id` (strings, as the Hermes plugin sends them), `user_ids` and `agent_ids` (arrays; only the first entry of each is used), `min_score` (float, overrides `HYATLAS_MIN_SCORE`; `0` disables the floor), `reader` (ranking: `legacy`, `hybrid_tag` or hybrid by default; see *Search*). Returns `memories`: `profile`, `proactive` and `normal` lists, each item with `memory_id`, `content`, `score`, `layer`, `gmt_created`, `user_id`, `agent_id`. |
 | `GET` or `POST` | `/api/v1/list` | Query or body: `layer`, `user_id`, `agent_id`, `limit` (default 20), `offset`, `include_raw` (default on; `false` hides L2 rows when no layer is given), `include_superseded` (`true` also returns rows the ultra pass merged or dropped, with `invalid_at` and `superseded_by`). The string `all` is not special here. Returns `total`, `offset`, `limit`, `memories`, `layers`, `graph_nodes`, `graph_edges`. |
 | `GET` or `POST` | `/api/v1/graph` | `node` (the L5 node ID), `user_id`, `agent_id`. Read from the query string or the JSON body; the body wins when both are set. `all` or empty means no owner filter. Returns `node`, `neighbors`, `node_count`, `edge_count` (for that owner), `extract_err`. |
 | `GET` | `/api/v1/edges` | Query: `n` (default 500), `k_semantic` (default 3), `user_id`, `agent_id` (`all` = no filter). Returns `nodes`, `knowledge` (L5 relations, each with `sources`), `co_session`, `semantic`, `total_edges`. |
@@ -468,7 +474,39 @@ curl -X POST http://127.0.0.1:19528/api/v1/search \
 ```
 
 `user_ids` and `agent_ids` are arrays; the server scopes by the first entry of
-each. A `user_id` or `agent_id` string is ignored by search.
+each. `user_id` and `agent_id` are single strings, the form the Hermes plugin
+sends; search reads them as well as the arrays. With `HYATLAS_USER_ALIASES` set, a
+search for any ID in an alias group covers the whole group.
+
+Request fields beyond the example:
+
+- `min_score`: a float that overrides `HYATLAS_MIN_SCORE` for this request. `0`
+  disables the floor.
+- `reader`: picks the ranking.
+  - `legacy` (also `semantic`, `vector`): vector search only.
+  - `hybrid_tag` (also `keyword`): keyword search only.
+  - Anything else, or absent: hybrid. Hybrid fuses the vector ranking with a BM25
+    keyword ranking (reciprocal rank fusion, k 60) over live memories other than L2
+    raw. A keyword hit must contain all terms of a query of up to 3 terms, or three
+    quarters (rounded up) of a longer one. Terms are runs of letters and digits,
+    lower-cased; stopwords and 1-character terms are dropped.
+  - The score floor applies to vector hits only.
+
+Results are hybrid by default, floor-filtered, and free of repeated text. Vector
+hits scoring below the floor are dropped, so an off-topic query can return nothing.
+Hits whose text repeats another hit's (case and whitespace ignored) are dropped. Of
+an L3 fact and its L1 Profile copy, the L1 copy is kept.
+
+With an owner filter (`user_id`, aliases included), memories that have no owner at
+all are also returned: rows written before owners were recorded, which in an older
+store is most of the knowledge graph. The graph endpoints already show them under
+every owner.
+
+In a search over all layers, L5 knowledge takes at most 40% of the result slots (2
+of 5). Graph relations are short restatements of facts ("X runs on Y") and score
+high, and an older graph holds many near-identical ones, so without the cap they
+push out the facts and rules they summarise. A search with `"layer": "l5_knowledge"`
+is not capped.
 
 Response shape:
 ```json
@@ -479,6 +517,37 @@ Response shape:
     "normal": [...]
   }
 }
+```
+
+### Maintenance (admin)
+
+Two `POST` endpoints for stores written before 4.5.0. Both are refused with 403
+unless the server runs with `HYATLAS_ADMIN=on`. Both are dry runs unless the body
+says `{"dry_run": false}`.
+
+- `POST /api/v1/admin/compact_raw` rewrites every live L2 raw row to user and
+  assistant text only. Tool output and compaction summaries are removed, and each
+  message is capped at 4,000 bytes and the turn at 12,000 (UTF-8, cut on a character
+  boundary). IDs, metadata and the extracted flag
+  are kept. Response: `rows_checked`, `rows_changed`, `bytes_before`, `bytes_after`,
+  `sample`, and when applied, `rows_rewritten`.
+- `POST /api/v1/admin/dedupe_facts` works per owner, newest first. It supersedes
+  each older live L3 fact at or above `threshold` (a body field; default
+  `HYATLAS_DEDUPE_SCORE`) by the newer one. Superseded facts are kept and hidden,
+  so this is reversible. With `"layer": "l5_knowledge"` it does the same for the L5
+  search documents of graph relations (an older graph holds many near-identical
+  ones); the graph itself is not changed. Response: `layer`, `owners`, `facts`,
+  `duplicates`, `sample`, and when applied, `rows_superseded`.
+
+**Warning: `compact_raw` is irreversible. The removed text is gone.** Read the dry
+run's `sample` before you apply it.
+
+Dry run (default):
+```bash
+curl -X POST http://127.0.0.1:19528/api/v1/admin/compact_raw -H "Content-Type: application/json" -d '{}'
+```
+```bash
+curl -X POST http://127.0.0.1:19528/api/v1/admin/dedupe_facts -H "Content-Type: application/json" -d '{}'
 ```
 
 ---
@@ -501,9 +570,9 @@ Quality and System.
   owners, whatever the selector shows. Per-owner graph counts are in `/api/v1/graph`
   (`node_count`, `edge_count`).
 - **Explore.** Search posts the query, the owner scope and an optional layer to
-  `/api/v1/search`. The day filter is applied in the browser. The semantic, keyword
-  and hybrid tabs are sent as a `reader` field, which the server does not read, so
-  the three tabs return the same results.
+  `/api/v1/search`. The day filter is applied in the browser. The Semantic, Keyword
+  and Hybrid tabs send `reader` as `legacy`, `hybrid_tag` and `hybrid_v2`, which the
+  server reads, so the three tabs return different rankings.
 - **External hosts.** The page loads a stylesheet from `fonts.googleapis.com` and the
   Chart.js 4.4.0 script from `cdn.jsdelivr.net`, in the browser. No other external
   host is referenced in the page.
@@ -626,7 +695,7 @@ The full v3.5 → v4 side-by-side (architecture, performance, reliability, API c
 
 ## Known gaps (honest)
 
-- The slow path runs on a timer, not at startup: a fresh ultra server shows 5/7 layers until the first pass (up to `HYATLAS_CONSOLIDATE_EVERY` later). `POST /api/v1/digest` runs one on demand.
+- The slow path runs on a timer, not at startup: a fresh ultra server shows 5/7 layers until the first pass (7/7 after a pass that finds relations and patterns) (up to `HYATLAS_CONSOLIDATE_EVERY` later). `POST /api/v1/digest` runs one on demand.
 - `/api/quality-metrics` returns `{available: false}` (v3.5-only feature; the dashboard adapter's quality endpoint, not a `/api/v1/` route)
 - Upscaling and codemode are not implemented (those were v3.5 features)
 - The coding layer is not in v4; the `/api/coding-*` endpoints return empty results

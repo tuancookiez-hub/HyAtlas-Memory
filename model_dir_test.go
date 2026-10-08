@@ -175,7 +175,9 @@ func TestFindModelDirWithoutOptionalBases(t *testing.T) {
 // Unix, %LOCALAPPDATA%\hyatlas\models on Windows.
 func TestInstallModelDirMatchesInstaller(t *testing.T) {
 	home := t.TempDir()
+	// os.UserHomeDir reads USERPROFILE on Windows and HOME elsewhere.
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	if got, want := installModelDir("linux"), filepath.Join(home, ".hyatlas", "models"); got != want {
 		t.Errorf("linux: %q, want %q", got, want)
 	}

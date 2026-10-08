@@ -173,9 +173,11 @@ plugin never forwards it from settings to the server. Set it through `hermes mem
 setup` (which writes it to `.env`) or export `HYATLAS_LLM_KEY`. If a key does end
 up in one of those files by hand, the plugin reads it but does not use it.
 
-Server-side variables such as `HYATLAS_ALLOWED_HOSTS` are not plugin settings. A
+Server-side variables such as `HYATLAS_ALLOWED_HOSTS` and `HYATLAS_USER_ALIASES` are not plugin settings. A
 server you start yourself reads them from its own environment. A server the plugin
 starts receives every `HYATLAS_*` variable exported in the agent's environment.
+`HYATLAS_USER_ALIASES` groups user IDs that are one person, for search, for example
+`HYATLAS_USER_ALIASES="221727702992945152,default,hermes-memory-archive"` when the same person reaches Hermes under several user IDs.
 
 ### Reaching the server by a hostname
 
@@ -193,9 +195,10 @@ entry is ignored.
 - `lite`: no LLM call. Raw text and local embeddings only. This is the only mode
   where no conversation text goes to an LLM.
 - `pro`: one LLM call per write. Fills 5 of 7 layers.
-- `ultra` (default): `pro`, plus a consolidation pass every 6 hours. It fills L5 and
-  L6 only when a pass finds corroborated relations and recurring patterns, so
-  "7 of 7" is the steady state, not the first pass.
+- `ultra` (default): `pro`, plus a consolidation pass every 6 hours. It fills L6 only
+  when a pass finds recurring patterns, and L5 only when a pass finds relations
+  corroborated by at least two turns, so "7 of 7" is the steady state, not the first
+  pass. `HYATLAS_CONSOLIDATE_GRAPH=off` on the server stops L5.
 
 `sync` decides whether a write waits for extraction. For a server the plugin
 starts, the default is `off` in every mode, so a Hermes turn does not wait on the
@@ -211,6 +214,29 @@ hermes plugins update hyatlas    # then restart the gateway
 
 This updates the plugin only. The `hyatlas-go` binary is separate: update it with
 the server's installer or by replacing the binary with a newer release.
+
+### Upgrading a store written before 4.5.0
+
+A store written before 4.5.0 can hold raw rows with tool output, because older
+releases sent it. The two maintenance endpoints remove that output from raw rows and
+supersede duplicate facts.
+They are refused with 403 unless the server runs with `HYATLAS_ADMIN=on`. Back up the
+data directory (`HYATLAS_GO_DATA`, default `./data`) first, because `compact_raw` is
+irreversible: the removed text is gone. Then:
+
+```bash
+HYATLAS_ADMIN=on hyatlas-go                       # 1. start the server with admin endpoints on
+curl -X POST http://127.0.0.1:19528/api/v1/admin/compact_raw       # 2. dry run (no body): reports, changes nothing
+curl -X POST http://127.0.0.1:19528/api/v1/admin/dedupe_facts      # 2. dry run (no body)
+curl -X POST -H "Content-Type: application/json" -d '{"dry_run": false}' http://127.0.0.1:19528/api/v1/admin/compact_raw   # 3. apply
+curl -X POST -H "Content-Type: application/json" -d '{"dry_run": false}' http://127.0.0.1:19528/api/v1/admin/dedupe_facts   # 3. apply
+curl -X POST -H "Content-Type: application/json" -d '{"layer": "l5_knowledge"}' http://127.0.0.1:19528/api/v1/admin/dedupe_facts   # 4. dry run for graph relations
+curl -X POST -H "Content-Type: application/json" -d '{"layer": "l5_knowledge", "dry_run": false}' http://127.0.0.1:19528/api/v1/admin/dedupe_facts   # 4. apply
+```
+
+Check the dry-run responses before step 3. `dedupe_facts` supersedes facts, so it is
+reversible; `compact_raw` is not. When done, restart the server without
+`HYATLAS_ADMIN`.
 
 ## Logs
 
