@@ -433,7 +433,7 @@ class HyatlasMemoryProvider(MemoryProvider):
     def get_config_schema(self) -> List[Dict[str, Any]]:
         """Settings this provider exposes, derived from :mod:`settings`.
 
-        Not a literal here: the manifest declares the same nine settings for the
+        Not a literal here: the manifest declares the same fourteen settings for the
         Desktop settings form, and the two drifted until the provider offered
         only five — so four settings existed in ``plugin.yaml`` but were
         invisible to ``hermes memory setup``. A test pins the two together.

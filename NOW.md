@@ -1,9 +1,9 @@
 # HyAtlas v4 — NOW
 
-**v4.3.3** | 2026-10-08 | Release: tuancookiez-hub/HyAtlas-Memory
+**v4.4.0** | 2026-10-08 | Release: tuancookiez-hub/HyAtlas-Memory
 
 ## Running
-- Latest release is v4.3.3 (`Version` const in server.go and `plugins/hyatlas/plugin.yaml` both 4.3.3; latest tag v4.3.3)
+- Release is 4.4.0: `Version` const in server.go, `plugins/hyatlas/plugin.yaml`, and the install.sh default `HYATLAS_VERSION=v4.4.0` all say so. The latest tag in this checkout is v4.3.3; there is no v4.4.0 tag or release asset yet, so the installer builds from source until there is one.
 - Plugin: `hyatlas` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hyatlas\` + Hermes Desktop pane
 - Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`)
 
@@ -13,7 +13,12 @@
 - **Plugin:** `on_memory_write` is documented as a raw (L2) write, not an L1 mirror; the `llm_key` settings link is removed.
 - **Host guard:** a DNS-name `Host` gets 403 on every route, `/healthz` included, unless it is in `HYATLAS_ALLOWED_HOSTS` (hostnames only; a port in an entry is ignored). Plugin `server_host` set to a DNS name needs that entry on the server.
 - **Owner-less graph rows** (written before owners existed) stay visible under every user filter.
-- **Consolidation windows:** an owner with more facts than `HYATLAS_CONSOLIDATE_BATCH` is consolidated in successive windows across passes.
+- **Consolidation windows:** an owner with more facts than `HYATLAS_CONSOLIDATE_BATCH` is consolidated in successive windows across passes. After a change, passes alternate newest window and walk; a walk window failing 3 passes in a row is skipped and reported. Soft write failures (arc, schema, L5 edge, L1 mirror) are reported but not retried; LLM, merge and supersede failures are retried. The fingerprint format changed, so each owner runs once after upgrading.
+- **Reprocess** walks unextracted raw rows oldest first; extracted rows are filtered before `max`.
+- **Security:** dashboard values are escaped before `innerHTML` (XSS fix).
+- **Dashboard:** owner selector (pairs from the most recent 1000 memories), Explore search wired to `/api/v1/search` (the semantic/keyword/hybrid tabs are not applied server-side yet), L5 page fixed. Served at `/dashboard/`.
+- **Installer:** questions on `/dev/tty` under `curl | bash`; with no terminal, exported `HYATLAS_*` values go to `$HERMES_HOME/.env` (0600). Four verification outcomes with exit codes; source builds clone the `HYATLAS_VERSION` tag.
+- **Plugin:** `recent` includes raw rows in lite by default; start lock falls back to unlocked with a warning on filesystems without locking.
 - **Installer:** source builds fetch the onnxruntime package for the CPU (Linux x64/aarch64, macOS arm64, Windows x64/arm64; Intel macOS stops with a clear error).
 - **Plugin auto-start lock:** two Hermes sessions auto-starting at once start one server.
 - Status note: the `/api/v1/status` `graph_nodes` / `graph_edges`, and the `/api/graph-counts` `l5_knowledge` / `relation_count`, count all owners. Per-owner counts are in `/api/v1/graph` (`node_count` / `edge_count`).

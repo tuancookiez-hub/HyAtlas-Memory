@@ -1134,7 +1134,8 @@ func main() {
 	rt := resolveRuntime()
 	port := rt.Port
 	dir := rt.DataDir
-	// LLM: any OpenAI-compatible endpoint. Default is a Nous Portal :free model.
+	// LLM: any OpenAI-compatible endpoint. No default: extraction stays off until
+	// HYATLAS_LLM_BASE, HYATLAS_LLM_MODEL and HYATLAS_LLM_KEY are all set.
 	llmBase := rt.LLMBase
 	llmKey := os.Getenv("HYATLAS_LLM_KEY")
 	// Optional: read the key live from a file each call, for rotating

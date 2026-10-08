@@ -1,4 +1,4 @@
-![HyAtlas Memory v4.3.0 — three-gear extraction across a seven-layer memory](https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/assets/hyatlas-v4.3.0-banner.png)
+![HyAtlas Memory — three-gear extraction across a seven-layer memory](https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/assets/hyatlas-v4.3.0-banner.png)
 
 # HyAtlas Memory — Pure-Go Memory Core
 
@@ -23,8 +23,9 @@ curl -fsSL https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main
 The script looks for a prebuilt release asset for your platform
 (`hyatlas-go-<tag>-<os>-<arch>`). Release assets exist for Linux amd64, macOS
 arm64 and Windows amd64. On any other platform it builds from source, which needs
-Go 1.26+ and a C compiler. It installs the binary to a directory on your `PATH`,
-and verifies the install by starting the server and probing `/healthz`.
+Go 1.26+ and a C compiler. The installer refuses an older `go` instead of switching
+toolchains. It installs the binary to a directory on your `PATH`, and verifies the
+install by starting the server and probing `/healthz`.
 
 - **Release binaries** are embedded builds and already carry the BGE-small model
   and onnxruntime, so the script downloads nothing else for them.
@@ -35,15 +36,41 @@ and verifies the install by starting the server and probing `/healthz`.
   installed, the manual steps are printed, and the script exits with status 1.
   A missing Go or C compiler, or a failed source build, stops the script before
   anything is installed.
+- **Source builds clone the tag** named by `HYATLAS_VERSION`. The default branch is
+  built instead only when that tag is missing and `HYATLAS_VERSION` is not set, and
+  the installer warns about it. If you set `HYATLAS_VERSION` and the tag is missing,
+  the install fails.
+- **Until the v4.4.0 release assets are published**, the installer finds no prebuilt
+  binary and builds from source. It clones the `v4.4.0` tag, or the default branch if
+  that tag does not exist yet, with a warning. The default branch is not used when
+  `HYATLAS_VERSION` is set.
+- **Go 1.26 or newer** is required for source builds. A plain `go build` with an
+  older Go and the default `GOTOOLCHAIN=auto` fetches the toolchain that `go.mod`
+  names (1.26.5). The installer does not do that: it stops on an older `go`.
+- **Verification** starts the server on a free loopback port and waits about 15
+  seconds for `/healthz`. The last line says which of four outcomes happened:
+
+  | Final line | Exit | Meaning |
+  |---|---|---|
+  | `installed and verified` | 0 | The server answered `/healthz` with the BGE embedder (an embedded release binary, or a source build with its model). |
+  | `binary verified, model missing` | 1 | The server answered `/healthz` only with the stub embedder (`HYATLAS_EMBED_BASE=local`). That shows the binary runs, not that embeddings work. The exit code is the model step's. |
+  | `NOT verified` | 1 | The server did not answer `/healthz`. Start `hyatlas-go` by hand to see its error. |
+  | `skipped, not verified` | 0 | A source build with `HYATLAS_NO_MODEL=1`. Without the model the server cannot start, so nothing was probed. |
+
+- **Setup questions.** The installer asks for the mode, the LLM endpoint and the key
+  on the terminal. Under `curl | bash` it asks on `/dev/tty`. With no terminal at all
+  it asks nothing. Any `HYATLAS_MODE`, `HYATLAS_LLM_BASE`, `HYATLAS_LLM_MODEL` or
+  `HYATLAS_LLM_KEY` already exported are saved to `$HERMES_HOME/.env` (default
+  `~/.hermes/.env`), which is created with mode 0600.
 
 Useful env vars (installer only):
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `HYATLAS_VERSION` | Release tag to install | `v4.3.3` |
+| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.4.0` |
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the installer caches the model (source builds) | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
-| `HYATLAS_MODE` | Extraction mode written to the Hermes `.env`: `lite` \| `pro` \| `ultra` | `ultra` (asked interactively) |
+| `HYATLAS_MODE` | Extraction mode written to the Hermes `.env`: `lite` \| `pro` \| `ultra`. Any other exported value stops the installer with an error and nothing is written | `ultra` (asked interactively) |
 | `HYATLAS_LLM_BASE`, `HYATLAS_LLM_MODEL`, `HYATLAS_LLM_KEY` | LLM endpoint, model and key (asked interactively if unset) | *(none)* |
 | `HYATLAS_NO_MODEL=1` | Skip the model download on source builds | (downloads) |
 
@@ -136,7 +163,7 @@ default configuration is not fully local:
 | What | Goes where | Default | How to keep it local |
 |---|---|---|---|
 | **Memory text** (each write's text, sent for extraction) | The extraction LLM. Each write is one request, and a failed call or unparseable reply is retried once | **Nowhere** — no endpoint is shipped, so an unconfigured server makes no LLM call and reports `unconfigured` | Already opt-in: set `HYATLAS_LLM_BASE`/`_MODEL`/`_KEY` to choose where it goes. Point them at a local OpenAI-compatible server to keep it on-machine, or use `HYATLAS_MODE=lite` |
-| **Stored facts and schema patterns** (ultra only) | The same LLM, by the consolidation pass. One request per owner (`user_id`/`agent_id` pair) whose facts changed. Each request carries up to `HYATLAS_CONSOLIDATE_BATCH` (200) facts of that owner, each cut to 400 characters with its fact and turn IDs, plus up to 20 existing schema patterns cut to 200 characters | Nowhere until an endpoint is configured | Use `pro` or `lite` |
+| **Stored facts and schema patterns** (ultra only) | The same LLM, by the consolidation pass. One request per owner (`user_id`/`agent_id` pair) that is due: its facts changed since its last pass, or not every window of its facts has been covered since that change. An owner with one fact, or with nothing due, makes no request. Each request carries up to `HYATLAS_CONSOLIDATE_BATCH` (200) facts of that owner, each cut to 400 characters with its fact and turn IDs, plus up to 20 existing schema patterns cut to 200 characters | Nowhere until an endpoint is configured | Use `pro` or `lite` |
 | **Embeddings** (each memory's text, and each search query) | In-process BGE-small (onnxruntime-go) | **Local** — `HYATLAS_EMBED_BASE=bge`, no network | Already local. If you set `HYATLAS_EMBED_BASE` to a URL, the text goes there instead, in every mode, including `lite` |
 | Stored memories, vector index, graph | `HYATLAS_GO_DATA` (default `./data`) | **Local** | Already local |
 | Telemetry / usage reporting | — | **None.** The only outbound HTTP the server makes is to the LLM and embedding endpoints you configure | — |
@@ -230,6 +257,17 @@ still reports as run with zero changes, which is what distinguishes it from a pa
 that never happened. An owner whose facts have not changed since its last successful
 pass counts under `owners_unchanged` and is not sent to the LLM again.
 
+An owner is due when its facts changed since its last successful pass, and also
+when not every window of its facts has been covered since that change. An owner
+with more facts than `HYATLAS_CONSOLIDATE_BATCH` is walked one window per pass. After
+a change, a pass alternates between the newest window and the next window of the
+walk, until every window has been covered. A walk window that fails three passes in a
+row is skipped, and the skip is listed in `errors`. A retry of the newest window after
+a change is not counted toward that skip unless it is also the walk position. A failed LLM call, merge or supersede
+makes the owner retry on the next pass. A failed arc, schema, L5 edge or L1 mirror
+write is listed in `errors` but does not cause a retry, because the facts were
+already reconciled.
+
 Otherwise the endpoint is yours to choose per the tier you are on — set
 `HYATLAS_LLM_BASE`, `HYATLAS_LLM_MODEL` and `HYATLAS_LLM_KEY` to any
 OpenAI-compatible API, or point `HYATLAS_LLM_BASE` at a server you host
@@ -256,7 +294,7 @@ the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
 | Variable | Default | Purpose |
 |---|---|---|
 | `HYATLAS_GO_PORT` | `19528` | HTTP listen port |
-| `HYATLAS_GO_HOST` | `127.0.0.1` | Bind address (loopback only by default) |
+| `HYATLAS_GO_HOST` | `127.0.0.1` | Bind address (loopback only by default). IPv6 literals work with or without brackets |
 | `HYATLAS_ALLOWED_HOSTS` | *(empty)* | Comma-separated hostnames the server accepts in `Host` and `Origin`, in addition to localhost and IP literals. A DNS name not listed here gets 403 on every route, including `/healthz`. Entries are hostnames; a port in an entry is ignored. Add a name only if you reach the server through it, such as a reverse proxy or a LAN hostname. |
 | `HYATLAS_GO_DATA` | `./data` | Data directory (relative paths resolve against the working directory): chromem collections, `doc_index.json`, `consolidate_state.json`, and by default `graph.json` |
 | `HYATLAS_GRAPH_PATH` | `<data>/graph.json` | L5 graph store location |
@@ -379,12 +417,12 @@ if you depend on that. Every route is behind the Host/Origin guard described abo
 | `POST` | `/api/v1/add` | Body: `text` (or `data`, required), `user_id`, `agent_id`, `session_id`, `metadata`. Returns `success`, `memory_id`, `extraction_status` (`done` \| `failed` \| `pending` \| `unconfigured` \| `skipped`). A missing text returns 400. |
 | `POST` | `/api/v1/search` | Body: `query` (required), `limit`, `layer`, `user_ids` and `agent_ids` (arrays; only the first entry of each is used). Returns `memories`: `profile`, `proactive` and `normal` lists, each item with `memory_id`, `content`, `score`, `layer`, `gmt_created`, `user_id`, `agent_id`. |
 | `GET` or `POST` | `/api/v1/list` | Query or body: `layer`, `user_id`, `agent_id`, `limit` (default 20), `offset`, `include_raw` (default on; `false` hides L2 rows when no layer is given), `include_superseded` (`true` also returns rows the ultra pass merged or dropped, with `invalid_at` and `superseded_by`). The string `all` is not special here. Returns `total`, `offset`, `limit`, `memories`, `layers`, `graph_nodes`, `graph_edges`. |
-| `POST` | `/api/v1/graph` | Body: `node` (the L5 node ID). Query or body: `user_id`, `agent_id` (`all` or empty means no filter). Returns `node`, `neighbors`, `node_count`, `edge_count` (for that owner), `extract_err`. |
+| `GET` or `POST` | `/api/v1/graph` | `node` (the L5 node ID), `user_id`, `agent_id`. Read from the query string or the JSON body; the body wins when both are set. `all` or empty means no owner filter. Returns `node`, `neighbors`, `node_count`, `edge_count` (for that owner), `extract_err`. |
 | `GET` | `/api/v1/edges` | Query: `n` (default 500), `k_semantic` (default 3), `user_id`, `agent_id` (`all` = no filter). Returns `nodes`, `knowledge` (L5 relations, each with `sources`), `co_session`, `semantic`, `total_edges`. |
 | `GET` | `/api/v1/learning/graph` | Query: `n`, `k_semantic`, `user_id`, `agent_id`. Returns the starmap feed: `nodes`, `edges`, `memory`, `stats`. |
 | `GET` | `/api/v1/graph-as-of` | Query: `ts` (unix seconds, default now), `n` (default 500), `user_id`, `agent_id`. Returns `nodes`, `relations` and `as_of`, as they were at `ts` (world validity and recording axes). |
 | `POST` or `DELETE` | `/api/v1/delete_all` | Query or body: `id`, `layer` (`*` = all), `user_id`, `agent_id`, `all` (`true`), `confirm` (`wipe-all`, the older spelling of `all`). Other methods return 405. A call with no scope (no `id`, `layer`, `user_id`, `agent_id`, or `all`) returns 400. Returns `deleted_count`. |
-| `POST` | `/api/v1/reprocess` | Body: `ids` (explicit raw IDs; extracted rows are re-extracted too), or `max` (default 200). Without `ids`, takes the `max` most recent raw rows and skips those already extracted. Returns `reprocessed`, `failed`, `skipped`. In `lite` it extracts nothing and says so in `note`. |
+| `POST` | `/api/v1/reprocess` | Body: `ids` (explicit raw IDs; extracted rows are re-extracted too), or `max` (default 200). Without `ids`, takes up to `max` raw rows that extraction has not reached, oldest first (by `ts`, then `id`). Extracted rows are dropped before the cut, so they do not use up `max`. Returns `reprocessed`, `failed`, `skipped`. `skipped` is 0 on both paths. In `lite` it extracts nothing: `skipped` is the number of rows it would have processed, and `note` says so. |
 | `GET` | `/api/v1/digest` | Slow-path state. Returns `digest_ok: true`, `runs`, `last`, `last_at`, `graph_nodes`, `graph_edges`. In `lite` or `pro` it returns `digest_ok: false` with a `reason`. |
 | `POST` | `/api/v1/digest` | Runs one slow-path pass now (ultra only). Returns `digest_ok` and `report` (fields in *Ultra-only tuning* above). A pass already running returns `digest_ok: false` with a `reason`. The pass is bounded by a 10-minute timeout, and a client that disconnects does not cancel it. |
 
@@ -445,6 +483,31 @@ Response shape:
 
 ---
 
+## Dashboard
+
+The web dashboard is served by the server at `/dashboard/`, on the server's own
+address (for example `http://127.0.0.1:19528/dashboard/`). It is same-origin with the
+API, so it follows `HYATLAS_GO_HOST` and `HYATLAS_GO_PORT`. It reads the `/api/v1`
+and dashboard adapter endpoints listed above, and refreshes every 30 seconds. Its
+pages are Overview, Today, Layers, Explore, L5, Observatory (the starmap canvas),
+Quality and System.
+
+- **Owner selector.** The selector lists the `(user_id, agent_id)` pairs seen in the
+  most recent 1000 memories (`/api/memories?limit=1000`). An owner whose memories are
+  older than those 1000 rows does not appear. The default is "All owners". The choice
+  is kept in the browser's `localStorage`.
+- **Global numbers.** The layer counts, `/api/graph-counts` (`l5_knowledge`,
+  `relation_count`) and `graph_nodes` / `graph_edges` in `/api/v1/status` count all
+  owners, whatever the selector shows. Per-owner graph counts are in `/api/v1/graph`
+  (`node_count`, `edge_count`).
+- **Explore.** Search posts the query, the owner scope and an optional layer to
+  `/api/v1/search`. The day filter is applied in the browser. The semantic, keyword
+  and hybrid tabs are sent as a `reader` field, which the server does not read, so
+  the three tabs return the same results.
+- **External hosts.** The page loads a stylesheet from `fonts.googleapis.com` and the
+  Chart.js 4.4.0 script from `cdn.jsdelivr.net`, in the browser. No other external
+  host is referenced in the page.
+
 ## Hermes Integration
 
 HyAtlas v4 is the **backend HTTP server** (`127.0.0.1:19528`). The
@@ -496,6 +559,9 @@ hermes plugins install "tuancookiez-hub/HyAtlas-Memory#plugins/hyatlas"
 hermes plugins install "https://github.com/tuancookiez-hub/HyAtlas-Memory.git#plugins/hyatlas"
 ```
 
+The GitHub forms install the repository's default branch as it is at that moment.
+To install from a local clone, use the `file://` form above.
+
 Two forms do **not** work as intended:
 
 - `tuancookiez-hub/HyAtlas-Memory` on its own (no subdirectory) clones the
@@ -516,11 +582,13 @@ memory:
   provider: hyatlas
 ```
 
-`hermes memory setup` prompts for each of the plugin's 14 settings (server host and
-port, user and agent IDs, auto-start, binary path, launcher script, request timeout,
-data directory, LLM endpoint, model, key, extraction mode, block on extraction). The
-key goes to `.env` as `HYATLAS_LLM_KEY`. The other values go to
-`$HERMES_HOME/hyatlas.json`. Plugin settings also live under
+On a real terminal, `hermes memory setup` prompts for each of the plugin's 14
+settings (server host and port, user and agent IDs, auto-start, binary path, launcher
+script, request timeout, data directory, LLM endpoint, model, key, extraction mode,
+block on extraction). Without a terminal it only selects the provider. The key goes
+to `.env` as `HYATLAS_LLM_KEY`. The other values go to `$HERMES_HOME/hyatlas.json`,
+except `request_timeout`, which the wizard does not write there. Set that one in
+`config.yaml` or the environment. Plugin settings also live under
 `plugins.entries.hyatlas.settings` in `<HERMES_HOME>/config.yaml`, and are editable in
 **Desktop → Settings → Plugins → hyatlas**. An environment variable named in the
 plugin README's settings table overrides them. The defaults (`127.0.0.1:19528`,

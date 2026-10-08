@@ -12,15 +12,25 @@ hermes memory setup                # choose "hyatlas", then answer its prompts (
 plugin's subdirectory. The subdirectory is required, because the repository root
 is not the plugin. Equivalent forms: `tuancookiez-hub/HyAtlas-Memory#plugins/hyatlas`
 and `https://github.com/tuancookiez-hub/HyAtlas-Memory.git#plugins/hyatlas`. The
+GitHub forms install the repository's default branch as it is at that moment. The
 bare name `hyatlas` works only once the plugin is in the Hermes catalog. Add
 `--enable` to the install command to enable it in the same step.
+
+To install from a local clone, use a `file://` URL with the subdirectory fragment:
+
+```bash
+hermes plugins install file:///path/to/HyAtlas-Memory#plugins/hyatlas
+```
+
+A plain local path does not work. Hermes reads it as `owner/repo` and tries GitHub.
 
 ## What `hermes memory setup` does
 
 1. Shows the memory providers and "Built-in only". Pick `hyatlas`. The plugin
    declares no dependencies beyond Hermes core, so nothing is installed.
-2. Prompts for each of the plugin's 14 settings, in this order. Enter keeps the
-   default. The settings are: server host, server port, user ID, agent ID,
+2. On a real terminal, prompts for each of the plugin's 14 settings, in this order.
+   Enter keeps the default. Without a terminal it asks nothing (see *Without a
+   terminal* below). The settings are: server host, server port, user ID, agent ID,
    auto-start, binary path, launcher script, request timeout, data directory, LLM
    endpoint, LLM model, LLM API key, extraction mode, and block on extraction.
    Extraction mode and block on extraction are menus (`lite` / `pro` / `ultra`,
@@ -42,6 +52,36 @@ model and key. The plugin never invents an endpoint.
 
 The `hermes hyatlas` command appears only while `memory.provider` is `hyatlas`.
 
+## Without a terminal
+
+Where `hermes memory setup` has no terminal, it only selects the provider. Set the
+values in one of these places instead. A later source wins over an earlier one (see
+*Settings*). The keys are the setting names, such as `mode` and `llm_base`.
+
+`$HERMES_HOME/hyatlas.json`:
+
+```json
+{ "mode": "pro", "llm_base": "https://your-endpoint.example/v1", "llm_model": "your-model" }
+```
+
+`config.yaml`, under the plugin's settings:
+
+```yaml
+plugins:
+  entries:
+    hyatlas:
+      settings:
+        mode: pro
+        llm_base: "https://your-endpoint.example/v1"
+        llm_model: "your-model"
+```
+
+Or export the matching `HYATLAS_*` variable, such as `HYATLAS_MODE=pro`.
+
+The LLM key is set only through the environment: export `HYATLAS_LLM_KEY`, or keep
+the value that `hermes memory setup` wrote to `.env`. The plugin does not use a key
+found in `hyatlas.json` or `config.yaml`.
+
 Then check it:
 
 ```bash
@@ -59,6 +99,10 @@ hermes hyatlas search "answer style"
 `status` prints the server's JSON, including `version`, `mode` and `llm`
 (`ok`, `unconfigured` or `unused`). `search` prints the server's `memories` object,
 grouped into the `profile`, `proactive` and `normal` channels.
+
+`hermes hyatlas recent` lists the latest memories. In `lite` it includes raw rows by
+default, since raw is the only layer that mode stores. In other modes it leaves them
+out. `--include-raw` and `--no-include-raw` override the default.
 
 ## Start the server
 
@@ -109,8 +153,9 @@ plugins:
 With `auto_start` the plugin starts the binary during initialization, unless the
 run is a cron or flush context. It then waits up to 30 seconds for the server to
 answer. If two Hermes sessions start at once, a lock file means only one of them
-starts the server. The other finds it running. The server keeps running after
-Hermes exits; `hermes hyatlas stop` stops it. See the README's Disclosure section
+starts the server. The other finds it running. If the filesystem cannot lock, the
+start goes ahead without the lock and a warning is logged. The server keeps running
+after Hermes exits; `hermes hyatlas stop` stops it. See the README's Disclosure section
 for the full list of what runs.
 
 ## Settings

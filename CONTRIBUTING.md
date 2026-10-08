@@ -45,6 +45,14 @@ go build ./...
 
 CI (`.github/workflows/tests.yml`) runs these on Linux, plus a smoke test of a plain build with `HYATLAS_EMBED_BASE=local`, and a compile check of the embedded build on each OS. The release workflow smoke-tests the embedded binary against the real BGE model. Plugin tests (`plugins/hyatlas/tests`) run separately.
 
+### Testing the installer
+
+`scripts/install.sh` runs the installer when it is executed or piped to bash. Sourcing
+it also runs the installer, unless `HYATLAS_INSTALL_LIB=1` is set. With that variable,
+sourcing defines the functions without running `main`, so a test can call them one by
+one. The variable is a testing aid only. If it is set on a plain run, the script warns
+and runs the installer anyway.
+
 ## Commit style
 
 - Imperative subject: `feat: add L6 schema endpoint`, `fix: panic on empty search results`
