@@ -17,10 +17,13 @@ with a graph view, and a web dashboard panel. The server is a separate binary,
 - **Cross-session memory.** Each completed turn is saved to the server, which
   keeps the raw text (L2) and, in `pro` and `ultra`, extracts profile, fact,
   summary and intention layers (L1, L3, L4, L7), plus knowledge and schema layers
-  (L5, L6) in `ultra` (see the mode table below).
-- **Recall.** After each turn, Hermes calls the provider's `queue_prefetch` with the
-  user's message. The plugin runs a background search against the server and makes
-  the matches available to the next turn.
+  (L5, L6) in `ultra` (L5 only with `HYATLAS_CONSOLIDATE_GRAPH=on`; see the mode
+  table below).
+- **Recall.** Before each turn, Hermes calls the provider's `prefetch` with the
+  user's message. The plugin searches the server with that message and returns the
+  matches for the turn. If the search fails, it returns the last recall for the same
+  session. After each turn, `queue_prefetch` runs a background search and stores the
+  result as that session's fallback.
 - **Agent tools.** `hyatlas_status`, `hyatlas_search` (three channels: profile,
   proactive, normal), `hyatlas_recent`, `hyatlas_add`.
 - **Built-in `memory` tool.** An `add` through Hermes' `memory` tool is sent to
@@ -176,6 +179,21 @@ Two notes on the table:
   stays visible under every `user_id` filter, which is how single-user data from
   older releases keeps working.
 
+**Server-side search settings.** These are server variables, not plugin settings.
+Set them where the server runs, in its environment, not in `hyatlas.json` or
+`config.yaml`.
+
+- `HYATLAS_USER_ALIASES`: groups of user IDs that are one person, for search. Groups
+  are separated by `;`, and IDs within a group by `,`. Example:
+  `HYATLAS_USER_ALIASES="221727702992945152,default,hermes-memory-archive"`. Use it
+  when the same person reaches Hermes under several user IDs, such as a
+  messaging-gateway ID and the CLI's `default`. A search for any ID in a group covers
+  the whole group. Unset means no aliases.
+- `HYATLAS_MIN_SCORE` (default `0.60`): search drops vector hits below this cosine
+  similarity, so an off-topic query returns nothing. `0` disables the floor.
+- `HYATLAS_DEDUPE_SCORE` (default `0.92`): a new fact at or above this similarity to
+  the owner's nearest fact supersedes that fact. `0` disables it.
+
 The server accepts more `HYATLAS_*` variables than these (for example
 `HYATLAS_EMBED_BASE`, `HYATLAS_CONSOLIDATE_EVERY`, `HYATLAS_RAW_RETENTION`). The
 plugin passes any of them through to a server it starts. The server's own
@@ -187,12 +205,14 @@ documentation, in the repository README and `.env.example`, describes them.
 |---|---|---|---|---|
 | `lite` | none | none | **1 / 7**: L2 raw | no |
 | `pro` | one per write | within that one turn | **5 / 7**: L1, L2, L3, L4, L7 | no |
-| `ultra` *(default)* | one per write, plus a periodic batch | across memories and time | **7 / 7** at steady state | **yes**, every 6 hours |
+| `ultra` *(default)* | one per write, plus a periodic batch | across memories and time | **7 / 7** at steady state with `HYATLAS_CONSOLIDATE_GRAPH=on`, otherwise **6 / 7** | **yes**, every 6 hours |
 
 L5 (knowledge) and L6 (schema) come only from the consolidation pass, because a
 relation needs corroboration from more than one turn and a schema is a pattern
 across many turns. So only `ultra` fills them, and only when a pass finds such
-relations and patterns.
+relations and patterns. L5 is written only with `HYATLAS_CONSOLIDATE_GRAPH=on` (also
+`true`, `1`, `yes`). It is off by default, and then the consolidation prompt does not
+ask for relations.
 
 Whether a write waits for extraction is a separate setting, `HYATLAS_SYNC_EXTRACT`.
 A server the plugin spawns defaults to `off`, so a Hermes turn never waits on
@@ -205,7 +225,7 @@ Under `ultra`, each pass works on one owner (a `user_id` / `agent_id` pair) at a
 time. An owner is sent when its facts changed since its last pass, or when not every
 window of its facts has been covered since that change. An owner with a single fact,
 or with nothing due, is not sent. An owner with more facts than
-`HYATLAS_CONSOLIDATE_BATCH` (default 200) is walked one window per pass, not sent in
+`HYATLAS_CONSOLIDATE_BATCH` (default 50) is walked one window per pass, not sent in
 one call. After a change, a pass alternates between the newest window and the next
 window of the walk. A walk window that fails three passes in a row is skipped and reported.
 
@@ -244,13 +264,23 @@ checked against the plugin source and the server source at this commit.
 
 ### Network
 
+The server has two maintenance endpoints under `/api/v1/admin/`. They are off (403)
+unless the server runs with `HYATLAS_ADMIN=on`, and `compact_raw` irreversibly
+removes stored tool output. See the upgrade section of `after-install.md`.
+
 - **Plugin to server.** All plugin traffic goes to the server at
   `server_host:server_port` (default `127.0.0.1:19528`), over plain HTTP. The plugin
-  contacts no other host. Hermes calls the provider's `queue_prefetch` after a turn,
-  and the plugin searches the server with the user's message. Hermes calls `sync_turn`
-  after each turn, which posts that turn (plus any earlier messages the plugin has
-  not yet sent in that session) to the server to be stored. Each `hyatlas_*` tool
-  call is also a request to the server.
+  contacts no other host. Before each turn, Hermes calls the provider's `prefetch`
+  with the user's message, and the plugin searches the server with that message. If
+  that search fails, the plugin returns the last recall for the same session. After
+  each turn, `queue_prefetch` runs a background search and stores the result as that
+  session's fallback. Hermes calls `sync_turn` after each turn, which posts that turn
+  to the server to be stored. The turn is the user's message and the assistant's text
+  only. Tool calls, tool output, system messages and context-compaction summaries are
+  not sent. Each message is capped at 4,000 characters and the turn at 12,000. If the
+  plugin missed earlier messages of the same session, their user and assistant text
+  is also sent, under the same caps. Each `hyatlas_*` tool call is also a request to
+  the server.
 - **Server to an LLM endpoint.** The server calls an LLM only when `HYATLAS_LLM_BASE`,
   `HYATLAS_LLM_MODEL` and `HYATLAS_LLM_KEY` are all set, and only in `pro` or `ultra`.
   In `lite`, no LLM call is made.
@@ -259,12 +289,16 @@ checked against the plugin source and the server source at this commit.
     two requests.
   - In `ultra` only, every 6 hours by default, the consolidation pass sends one
     request per owner that is due (see *Mode*). An owner with one fact, or with
-    nothing due, sends none. Each request carries up to 200 of that
-    owner's live facts (`HYATLAS_CONSOLIDATE_BATCH`), each cut to 400 characters
-    with its fact ID and source turn ID. It also carries up to 20 of that owner's
-    existing schema patterns, each cut to 200 characters. These are facts already
-    in memory, not just the current turn. An owner's facts are never mixed with
-    another owner's in one request.
+    nothing due, sends none. Each request carries up to 50 of that
+    owner's live facts (`HYATLAS_CONSOLIDATE_BATCH`, default 50), each cut to 400
+    characters with its fact ID and source turn ID. It also carries up to 20 of that
+    owner's existing schema patterns, each cut to 200 characters. These are facts
+    already in memory, not just the current turn. An owner's facts are never mixed
+    with another owner's in one request.
+  - The pass's results are applied as follows. Merged and dropped facts are
+    superseded, not deleted: they are kept, hidden from search, and each drop stores
+    its reason. L5 knowledge edges and the cross-session arc are written only with
+    `HYATLAS_CONSOLIDATE_GRAPH=on` (also `true`, `1`, `yes`); the default is off.
   - There is no default endpoint. The plugin and the server both leave it empty.
     The plugin's tests check that an unset endpoint is not forwarded.
 - **Server to an embedding endpoint.** By default embeddings are computed locally

@@ -27,7 +27,7 @@ import (
 // It is exposed on /api/v1/status and /api/info so every client (Desktop pane,
 // web dashboard, CLI) reports the real running version instead of hardcoding
 // a "v4" badge that silently goes stale on each release. Bump in one place.
-const Version = "4.4.0"
+const Version = "4.5.0"
 
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {
@@ -50,6 +50,8 @@ type Server struct {
 	// zero value turns each off, which is what tests built without main get.
 	minScore    float64
 	dedupeScore float64
+	// admin is HYATLAS_ADMIN: whether the /api/v1/admin/* maintenance endpoints answer.
+	admin bool
 
 	// mu guards lastExtractErr: the extraction goroutines write it from
 	// background contexts while /api/v1/status reads it on request.
@@ -1114,6 +1116,9 @@ type runtimeCfg struct {
 	// Graph is HYATLAS_CONSOLIDATE_GRAPH: whether consolidation also writes L5
 	// knowledge edges and the cross-session arc. Off unless set to on/true/1/yes.
 	Graph bool
+	// Admin is HYATLAS_ADMIN: whether the maintenance endpoints are enabled. Off
+	// unless set to on/true/1/yes, because compact_raw cannot be undone.
+	Admin bool
 }
 
 // Defaults that decide what leaves the machine:
@@ -1158,6 +1163,7 @@ func resolveRuntime() runtimeCfg {
 		Retention:    parseDuration("HYATLAS_RAW_RETENTION", 0),
 		Batch:        envInt("HYATLAS_CONSOLIDATE_BATCH", defaultBatch),
 		Graph:        envOn("HYATLAS_CONSOLIDATE_GRAPH"),
+		Admin:        envOn("HYATLAS_ADMIN"),
 		Host:         strings.Trim(envOr("HYATLAS_GO_HOST", defaultHost), "[]"),
 		Port:         envOr("HYATLAS_GO_PORT", defaultPort),
 		DataDir:      dataDir,
@@ -1361,6 +1367,10 @@ func main() {
 	srv.ownerAliases = aliasMap(rt.UserAliases)
 	srv.minScore = rt.MinScore
 	srv.dedupeScore = rt.DedupeScore
+	srv.admin = rt.Admin
+	if rt.Admin {
+		log.Print("HYATLAS_ADMIN=on: /api/v1/admin/compact_raw and /api/v1/admin/dedupe_facts are enabled")
+	}
 	hs := &http.Server{Addr: net.JoinHostPort(rt.Host, port), Handler: srv.routes(), ReadHeaderTimeout: readHeaderTimeout}
 	log.Fatal(hs.ListenAndServe())
 }

@@ -123,7 +123,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         # Last recall per session, the fallback when a live search fails. Keyed by
         # session so concurrent sessions (gateway and CLI) never see each other's.
         self._prefetch_cache: "OrderedDict[str, str]" = OrderedDict()
-        self._version = "4.4.0"
+        self._version = "4.5.0"
         # Message count already synced per session, so _build_turn_text sends
         # only what the server has not seen. Bounded: a long-lived gateway
         # touches far more sessions than it can hold, and the cost of evicting

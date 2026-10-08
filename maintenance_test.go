@@ -48,6 +48,7 @@ func postJSON(t *testing.T, h func(w *httptest.ResponseRecorder)) map[string]any
 
 func TestCompactRawDryRunThenApply(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	srv.admin = true
 	bloated := "USER: the question\n\nTOOL: " + strings.Repeat("dump ", 5000) + "\n\nASSISTANT: the answer"
 	bigID, smallID := newID(), newID()
 	meta := func() map[string]string {
@@ -96,6 +97,7 @@ func TestCompactRawDryRunThenApply(t *testing.T) {
 
 func TestDedupeFactsKeepsNewestPerOwner(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	srv.admin = true
 	add := func(user, ts, text string) string {
 		id := newID()
 		if err := srv.store.Add(memory.L3Fact, id, text, map[string]string{
@@ -139,9 +141,30 @@ func TestDedupeFactsKeepsNewestPerOwner(t *testing.T) {
 
 func TestMaintenanceRequiresPost(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	srv.admin = true
 	w := httptest.NewRecorder()
 	srv.handleCompactRaw(w, httptest.NewRequest("GET", "/api/v1/admin/compact_raw", nil))
 	if w.Code != 405 {
 		t.Errorf("GET compact_raw = %d, want 405", w.Code)
+	}
+}
+
+// Without HYATLAS_ADMIN the maintenance endpoints refuse every request, so no
+// local process can trim stored text unless the operator turned them on.
+func TestMaintenanceOffByDefault(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	for path, h := range map[string]func(*httptest.ResponseRecorder, string){
+		"/api/v1/admin/compact_raw": func(w *httptest.ResponseRecorder, p string) {
+			srv.handleCompactRaw(w, httptest.NewRequest("POST", p, strings.NewReader(`{"dry_run": false}`)))
+		},
+		"/api/v1/admin/dedupe_facts": func(w *httptest.ResponseRecorder, p string) {
+			srv.handleDedupeFacts(w, httptest.NewRequest("POST", p, strings.NewReader(`{"dry_run": false}`)))
+		},
+	} {
+		w := httptest.NewRecorder()
+		h(w, path)
+		if w.Code != 403 {
+			t.Errorf("%s with HYATLAS_ADMIN off = %d, want 403", path, w.Code)
+		}
 	}
 }

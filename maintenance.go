@@ -172,9 +172,15 @@ type maintenanceRequest struct {
 	Threshold float64 `json:"threshold"`
 }
 
-// readMaintenance decodes the body and reports whether this is a dry run.
-func readMaintenance(w http.ResponseWriter, r *http.Request) (maintenanceRequest, bool, bool) {
+// readMaintenance refuses the request unless the server runs with HYATLAS_ADMIN=on,
+// then decodes the body and reports whether this is a dry run. The gate is there
+// because compact_raw cannot be undone and any local process can reach the port.
+func (s *Server) readMaintenance(w http.ResponseWriter, r *http.Request) (maintenanceRequest, bool, bool) {
 	var body maintenanceRequest
+	if !s.admin {
+		jsonResponse(w, 403, map[string]any{"error": "maintenance endpoints are off: restart the server with HYATLAS_ADMIN=on"})
+		return body, true, false
+	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		jsonResponse(w, 405, map[string]any{"error": "method not allowed: use POST"})
@@ -194,7 +200,7 @@ func readMaintenance(w http.ResponseWriter, r *http.Request) (maintenanceRequest
 // (L2) row with compactTurnText. {"dry_run": false} applies it; otherwise it only
 // reports what would change.
 func (s *Server) handleCompactRaw(w http.ResponseWriter, r *http.Request) {
-	_, dry, ok := readMaintenance(w, r)
+	_, dry, ok := s.readMaintenance(w, r)
 	if !ok {
 		return
 	}
@@ -238,7 +244,7 @@ func (s *Server) handleCompactRaw(w http.ResponseWriter, r *http.Request) {
 // mirrors. It is the write-time rule applied to facts stored before it existed.
 // {"dry_run": false} applies it.
 func (s *Server) handleDedupeFacts(w http.ResponseWriter, r *http.Request) {
-	body, dry, ok := readMaintenance(w, r)
+	body, dry, ok := s.readMaintenance(w, r)
 	if !ok {
 		return
 	}

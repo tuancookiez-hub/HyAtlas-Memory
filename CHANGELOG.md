@@ -1,8 +1,17 @@
 # Changelog
 
-## [Unreleased]
+## [4.5.0] — 2026-10-09
+
+Fixes found by running 4.4.0 against a real store. The largest: the Hermes plugin
+stored each turn with all of its tool output (raw rows up to 1.6 MB), recall used the
+previous turn's message, and plugin searches ignored the owner. Upgrading an existing
+store: see *Upgrading a store written before 4.5.0* in `plugins/hyatlas/after-install.md`.
 
 ### Changed
+
+- **Default consolidation batch is 50 facts, not 200.** A free reasoning model took 4
+  to 10+ minutes on 200 facts and often missed the 10-minute pass limit; 50 came back
+  in about two and a half. `HYATLAS_CONSOLIDATE_BATCH` still overrides it.
 
 - **Consolidation no longer writes the L5 graph or the arc by default.** Nothing a
   Hermes turn reads uses either, and on a real store L5 rows took none of the search
@@ -49,8 +58,10 @@
 
 ### Added
 
-- **Maintenance endpoints for stores written before this release.** Both are POST
-  and default to a dry run; `{"dry_run": false}` applies.
+- **Maintenance endpoints for stores written before this release.** Both are POST,
+  default to a dry run (`{"dry_run": false}` applies), and answer only when the
+  server runs with `HYATLAS_ADMIN=on`; otherwise they return 403, because
+  `compact_raw` cannot be undone and any local process can reach the port.
   - `/api/v1/admin/compact_raw` rewrites each raw row to what the plugin stores now:
     user and assistant text only, compaction summaries dropped, 4,000 bytes per
     message and 12,000 per turn. IDs, metadata and the extracted flag are kept, and

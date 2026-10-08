@@ -30,8 +30,10 @@ const (
 	consolidateTimeout = 10 * time.Minute
 
 	// defaultBatch caps facts per consolidation call so the prompt cannot grow
-	// without bound as memory accumulates.
-	defaultBatch = 200
+	// without bound as memory accumulates. 50, not 200: a free reasoning model took
+	// 4 to 10+ minutes on 200 facts and often missed consolidateTimeout, while 50
+	// came back in about two and a half. A larger owner is walked in more windows.
+	defaultBatch = 50
 
 	// maxPromptSchemas caps how many of an owner's existing schemas are shown to
 	// the model, so the refinement list cannot grow the prompt without bound.
@@ -217,7 +219,7 @@ var errBusy = errors.New("a consolidation pass is already running")
 // re-run owners whose facts have not changed.
 func NewConsolidator(store *MemoryStore, llm *LLMClient, every, retention time.Duration, batch int) *Consolidator {
 	if batch <= 0 {
-		batch = 200
+		batch = defaultBatch
 	}
 	c := &Consolidator{store: store, llm: llm, every: every, retention: retention, batch: batch,
 		graph: true, done: map[string]string{}, windows: map[string]windowCursor{}}
