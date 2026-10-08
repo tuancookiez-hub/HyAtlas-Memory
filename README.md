@@ -534,8 +534,10 @@ says `{"dry_run": false}`.
 - `POST /api/v1/admin/dedupe_facts` works per owner, newest first. It supersedes
   each older live L3 fact at or above `threshold` (a body field; default
   `HYATLAS_DEDUPE_SCORE`) by the newer one. Superseded facts are kept and hidden,
-  so this is reversible. Response: `owners`, `facts`, `duplicates`, `sample`, and
-  when applied, `rows_superseded`.
+  so this is reversible. With `"layer": "l5_knowledge"` it does the same for the L5
+  search documents of graph relations (an older graph holds many near-identical
+  ones); the graph itself is not changed. Response: `layer`, `owners`, `facts`,
+  `duplicates`, `sample`, and when applied, `rows_superseded`.
 
 **Warning: `compact_raw` is irreversible. The removed text is gone.** Read the dry
 run's `sample` before you apply it.

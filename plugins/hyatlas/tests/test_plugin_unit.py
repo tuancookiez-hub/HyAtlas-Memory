@@ -528,6 +528,9 @@ def test_launcher_is_never_discovered_beside_the_binary(monkeypatch, tmp_path):
 
 def test_launcher_path_is_configurable(monkeypatch, tmp_path):
     """`launcher_path` reaches the config from both the JSON and env layers."""
+    # Start from an empty Hermes home, not the developer's own hyatlas.json.
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.delenv("HYATLAS_LAUNCHER_PATH", raising=False)
     cfg = mod._load_config()
     assert cfg["launcher_path"] == ""
 

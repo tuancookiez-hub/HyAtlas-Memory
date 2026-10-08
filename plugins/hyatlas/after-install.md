@@ -230,6 +230,8 @@ curl -X POST http://127.0.0.1:19528/api/v1/admin/compact_raw       # 2. dry run 
 curl -X POST http://127.0.0.1:19528/api/v1/admin/dedupe_facts      # 2. dry run (no body)
 curl -X POST -H "Content-Type: application/json" -d '{"dry_run": false}' http://127.0.0.1:19528/api/v1/admin/compact_raw   # 3. apply
 curl -X POST -H "Content-Type: application/json" -d '{"dry_run": false}' http://127.0.0.1:19528/api/v1/admin/dedupe_facts   # 3. apply
+curl -X POST -H "Content-Type: application/json" -d '{"layer": "l5_knowledge"}' http://127.0.0.1:19528/api/v1/admin/dedupe_facts   # 4. dry run for graph relations
+curl -X POST -H "Content-Type: application/json" -d '{"layer": "l5_knowledge", "dry_run": false}' http://127.0.0.1:19528/api/v1/admin/dedupe_facts   # 4. apply
 ```
 
 Check the dry-run responses before step 3. `dedupe_facts` supersedes facts, so it is

@@ -65,6 +65,10 @@ type MemoryStore struct {
 	// row about to be rewritten) and "commit" (once, before the index update), which
 	// are the points where a concurrent Add or Delete can interleave. Nil in production.
 	supersedeHook func(stage, id string)
+	// l5Dedupe is the similarity (HYATLAS_DEDUPE_SCORE) at or above which a graph
+	// relation is not indexed as an L5 document because one for the same owner
+	// already says it. Zero turns the check off. Set once, before any indexing.
+	l5Dedupe float64
 	// persisted index path (same dir as the chromem DB)
 	indexPath string
 	// usage counters — atomic so reads from /api/v1/status never block writes.

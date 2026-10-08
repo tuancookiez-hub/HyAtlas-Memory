@@ -138,3 +138,22 @@ func TestKeywordSearchScopesAndSkipsRawAndSuperseded(t *testing.T) {
 		t.Errorf("no owner filter: want hits %s and %s, got %v", a, c, ids)
 	}
 }
+
+func TestSameNumbers(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"open PR #101722", "open PR #96783", false},
+		{"Tuna prefers Vue 3 Composition API", "Tuna prefers Vue 3 with Composition API", true},
+		{"runs on 127.0.0.1:19528", "server at 127.0.0.1:19528", true},
+		{"version 4.4.0", "version 4.5.0", false},
+		{"no numbers here", "none here either", true},
+		{"port 8080", "the port", false},
+	}
+	for _, c := range cases {
+		if got := sameNumbers(c.a, c.b); got != c.want {
+			t.Errorf("sameNumbers(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}

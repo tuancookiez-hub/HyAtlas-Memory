@@ -68,6 +68,16 @@ func (s *MemoryStore) indexL5(edges []l5Edge) (int, error) {
 			}
 			continue
 		}
+		// A relation that restates one already indexed for the same owner ("HyAtlas
+		// server at 127.0.0.1:19528" beside "HyAtlas runs on 127.0.0.1:19528") is
+		// not indexed again; the edge stays in the graph either way.
+		if s.l5Dedupe > 0 {
+			near, err := s.searchWhere(emb, 1, memory.L5Knowledge,
+				map[string]string{"user_id": e.user, "agent_id": e.agent})
+			if err == nil && len(near) > 0 && float64(near[0].Score) >= s.l5Dedupe && sameNumbers(near[0].Content, text) {
+				continue
+			}
+		}
 		ts := time.Now().UTC()
 		if e.recordedAt > 0 {
 			ts = time.Unix(e.recordedAt, 0).UTC()

@@ -130,7 +130,12 @@ type Report struct {
 	Merged        int      `json:"merged"`
 	// Edges counts distinct L5 edges this pass created. Re-citing an edge that
 	// already exists adds evidence to it and is not counted.
-	Edges      int      `json:"edges"`
+	Edges int `json:"edges"`
+	// Absorbed counts facts a merge folded into its new fact. They are superseded,
+	// not lost: their content lives on in the merged fact.
+	Absorbed int `json:"absorbed"`
+	// Dropped counts facts the model dropped as stale or obvious, each with a
+	// reason. It used to include Absorbed, which made merges look like data loss.
 	Dropped    int      `json:"dropped"`
 	Schemas    int      `json:"schemas"`
 	Arc        bool     `json:"arc"`
@@ -778,7 +783,7 @@ func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed [
 	for _, id := range marked {
 		delete(live, id)
 	}
-	rep.Dropped += len(marked)
+	rep.Absorbed += len(marked)
 	if len(marked) == 0 {
 		_, retractErr := c.store.Supersede([]string{mergedID}, "")
 		msg := fmt.Sprintf("merge supersede: 0 of %d absorbed facts marked; replacement retracted", len(ids))

@@ -170,6 +170,8 @@ func (s *MemoryStore) rewriteContent(layer memory.Layer, updates map[string]stri
 type maintenanceRequest struct {
 	DryRun    *bool   `json:"dry_run"`
 	Threshold float64 `json:"threshold"`
+	// Layer is what dedupe_facts walks: "l3_fact" (the default) or "l5_knowledge".
+	Layer string `json:"layer"`
 }
 
 // readMaintenance refuses the request unless the server runs with HYATLAS_ADMIN=on,
@@ -239,10 +241,12 @@ func (s *Server) handleCompactRaw(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDedupeFacts is POST /api/v1/admin/dedupe_facts: for each owner, it walks the
-// live L3 facts newest first and supersedes every older fact at least threshold
-// similar (default HYATLAS_DEDUPE_SCORE) by the newer one, with its L1 Profile
-// mirrors. It is the write-time rule applied to facts stored before it existed.
-// {"dry_run": false} applies it.
+// live rows of one layer newest first and supersedes every older row at least
+// threshold similar (default HYATLAS_DEDUPE_SCORE) by the newer one. For L3 facts
+// (the default) the superseded fact's L1 Profile mirrors go with it; with
+// "layer": "l5_knowledge" it merges near-identical graph relations in search (the
+// graph itself is not changed). It is the write-time rule applied to rows stored
+// before it existed. {"dry_run": false} applies it.
 func (s *Server) handleDedupeFacts(w http.ResponseWriter, r *http.Request) {
 	body, dry, ok := s.readMaintenance(w, r)
 	if !ok {
@@ -255,7 +259,16 @@ func (s *Server) handleDedupeFacts(w http.ResponseWriter, r *http.Request) {
 	if thr <= 0 {
 		thr = defaultDedupeScore
 	}
-	facts, _ := s.store.List(memory.L3Fact, "", "", 1<<30, 0, false)
+	layer := memory.L3Fact
+	switch body.Layer {
+	case "", string(memory.L3Fact):
+	case string(memory.L5Knowledge):
+		layer = memory.L5Knowledge
+	default:
+		jsonResponse(w, 400, map[string]any{"error": "layer must be l3_fact or l5_knowledge"})
+		return
+	}
+	facts, _ := s.store.List(layer, "", "", 1<<30, 0, false)
 	type owner struct{ user, agent string }
 	byOwner := map[owner][]DocIndex{}
 	for _, f := range facts {
@@ -285,12 +298,18 @@ func (s *Server) handleDedupeFacts(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			visited[f.ID] = true
-			hits, err := s.store.search(f.Content, 6, memory.L3Fact, k.user, k.agent)
+			// An exact owner filter: an empty owner must match only ownerless rows,
+			// not every row, or other owners' rows could fill the six slots.
+			qv, err := s.store.embed.Embed(s.store.ctx, f.Content)
+			if err != nil {
+				continue
+			}
+			hits, err := s.store.searchWhere(qv, 6, layer, map[string]string{"user_id": k.user, "agent_id": k.agent})
 			if err != nil {
 				continue
 			}
 			for _, h := range hits {
-				if h.ID == f.ID || gone[h.ID] || visited[h.ID] || float64(h.Score) < thr {
+				if h.ID == f.ID || gone[h.ID] || visited[h.ID] || float64(h.Score) < thr || !sameNumbers(h.Content, f.Content) {
 					continue
 				}
 				if h.Meta["user_id"] != k.user || h.Meta["agent_id"] != k.agent {
@@ -303,7 +322,7 @@ func (s *Server) handleDedupeFacts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.Slice(pairs, func(i, j int) bool { return pairs[i].Score > pairs[j].Score })
-	resp := map[string]any{"dry_run": dry, "threshold": thr, "owners": len(byOwner),
+	resp := map[string]any{"dry_run": dry, "threshold": thr, "layer": layer, "owners": len(byOwner),
 		"facts": len(facts), "duplicates": len(pairs)}
 	sample := pairs
 	if len(sample) > 10 {
@@ -319,7 +338,9 @@ func (s *Server) handleDedupeFacts(w http.ResponseWriter, r *http.Request) {
 			}
 			o := oldDoc[p.Old]
 			bySurvivor[p.New] = append(bySurvivor[p.New], p.Old)
-			bySurvivor[p.New] = append(bySurvivor[p.New], s.store.MirrorsOf(memory.L1Profile, o.Meta["source_id"], o.Content)...)
+			if layer == memory.L3Fact {
+				bySurvivor[p.New] = append(bySurvivor[p.New], s.store.MirrorsOf(memory.L1Profile, o.Meta["source_id"], o.Content)...)
+			}
 		}
 		marked := 0
 		var firstErr error

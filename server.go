@@ -200,7 +200,7 @@ func promoteExtractionDedupe(store *MemoryStore, ex *Extraction, userID, agentID
 		var stale []string
 		if dedupe > 0 {
 			near, err := store.search(f.Data, 1, memory.L3Fact, userID, agentID)
-			if err == nil && len(near) > 0 && float64(near[0].Score) >= dedupe {
+			if err == nil && len(near) > 0 && float64(near[0].Score) >= dedupe && sameNumbers(near[0].Content, f.Data) {
 				old := near[0]
 				stale = append([]string{old.ID}, store.MirrorsOf(memory.L1Profile, old.Meta["source_id"], old.Content)...)
 			}
@@ -1400,6 +1400,7 @@ func main() {
 	if err != nil {
 		log.Fatal("store: ", err)
 	}
+	store.l5Dedupe = rt.DedupeScore
 	// Graph edges written before 4.5.0 have no L5 search documents. Index any that
 	// are missing, in the background so the server answers at once.
 	go func() {

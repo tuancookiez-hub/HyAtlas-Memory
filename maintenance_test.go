@@ -168,3 +168,34 @@ func TestMaintenanceOffByDefault(t *testing.T) {
 		}
 	}
 }
+
+// dedupe_facts with "layer": "l5_knowledge" supersedes the older of two identical
+// relations; any other layer is refused.
+func TestDedupeFactsL5Layer(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	srv.admin = true
+	if _, err := srv.store.indexL5([]l5Edge{
+		{from: "HyAtlas", rel: "runs_on", to: "port 19528", recordedAt: 1700000000},
+		{from: "HyAtlas", rel: "runs on", to: "port 19528", recordedAt: 1800000000},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	call := func(body string) (int, map[string]any) {
+		w := httptest.NewRecorder()
+		srv.handleDedupeFacts(w, httptest.NewRequest("POST", "/api/v1/admin/dedupe_facts", strings.NewReader(body)))
+		var out map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		return w.Code, out
+	}
+	if code, _ := call(`{"layer": "l2_raw"}`); code != 400 {
+		t.Errorf("layer l2_raw = %d, want 400", code)
+	}
+	code, out := call(`{"layer": "l5_knowledge", "threshold": 0.999, "dry_run": false}`)
+	if code != 200 || out["duplicates"] != float64(1) {
+		t.Fatalf("dedupe l5 = %d %v, want 200 and 1 duplicate", code, out)
+	}
+	live, _ := srv.store.List(memory.L5Knowledge, "", "", 10, 0, false)
+	if len(live) != 1 || live[0].ID != l5DocID("", "", "HyAtlas", "runs on", "port 19528") {
+		t.Errorf("live L5 = %v, want only the newer relation", live)
+	}
+}

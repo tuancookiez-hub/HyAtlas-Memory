@@ -462,8 +462,8 @@ func TestMergedPreferenceReplacesItsL1Mirror(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Merged != 1 || rep.Dropped != 2 {
-		t.Fatalf("Merged=%d Dropped=%d, want 1/2", rep.Merged, rep.Dropped)
+	if rep.Merged != 1 || rep.Absorbed != 2 || rep.Dropped != 0 {
+		t.Fatalf("Merged=%d Absorbed=%d Dropped=%d, want 1/2/0", rep.Merged, rep.Absorbed, rep.Dropped)
 	}
 	live := liveRows(t, srv.store, memory.L1Profile, "alice", "a1")
 	if len(live) != 1 || live[0].Content != "prefers tabs everywhere" {

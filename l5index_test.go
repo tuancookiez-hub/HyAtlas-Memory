@@ -85,3 +85,23 @@ func TestOwnerlessL5IsVisibleUnderAnyOwner(t *testing.T) {
 		t.Errorf("keyword search for alice = %v; want the ownerless edge and not bob's", got)
 	}
 }
+
+// With the dedupe threshold set, a relation whose text matches one already indexed
+// for the same owner is not indexed again (the graph keeps both edges).
+func TestIndexL5SkipsNearDuplicate(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	srv.store.l5Dedupe = 0.999
+	g := srv.store.Graph()
+	// "runs_on" and "runs on" are two edges with two IDs but the same text.
+	for _, rel := range []string{"runs_on", "runs on"} {
+		if _, err := g.AddEdgeWithSources("", "", "HyAtlas", rel, "port 19528", []string{"r-" + rel}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := srv.store.BackfillL5(); err != nil || n != 1 {
+		t.Fatalf("backfill = %d, %v; want 1 (the second restates the first)", n, err)
+	}
+	if got := srv.store.Graph().EdgeCount(); got != 2 {
+		t.Errorf("graph edges = %d, want 2 (the graph is not changed)", got)
+	}
+}

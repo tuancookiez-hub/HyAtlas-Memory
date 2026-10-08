@@ -48,6 +48,42 @@ func keywordTokens(text string) []string {
 	return out
 }
 
+// sameNumbers reports whether a and b contain the same set of numbers (runs of
+// digits). Embeddings barely see numbers, so "open PR #101722" and "open PR #96783"
+// score 0.99 alike. De-duplication requires the numbers to match, because keeping
+// two near-identical rows costs little and wrongly merging two true ones loses one.
+func sameNumbers(a, b string) bool {
+	na, nb := digitRuns(a), digitRuns(b)
+	if len(na) != len(nb) {
+		return false
+	}
+	for n := range na {
+		if !nb[n] {
+			return false
+		}
+	}
+	return true
+}
+
+// digitRuns is the set of digit runs in s, with leading zeros kept.
+func digitRuns(s string) map[string]bool {
+	out := map[string]bool{}
+	start := -1
+	for i, r := range s + " " {
+		if r >= '0' && r <= '9' {
+			if start < 0 {
+				start = i
+			}
+			continue
+		}
+		if start >= 0 {
+			out[s[start:i]] = true
+			start = -1
+		}
+	}
+	return out
+}
+
 // keywordScore is one document's BM25 result: its score and how many distinct query
 // terms it contains.
 type keywordScore struct {

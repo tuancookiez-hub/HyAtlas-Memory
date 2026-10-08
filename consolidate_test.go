@@ -81,8 +81,8 @@ func TestConsolidateMergesAndPrunes(t *testing.T) {
 	if rep.Merged != 1 {
 		t.Errorf("Merged = %d, want 1", rep.Merged)
 	}
-	if rep.Dropped != 2 {
-		t.Errorf("Dropped = %d, want 2 (both superseded facts)", rep.Dropped)
+	if rep.Absorbed != 2 || rep.Dropped != 0 {
+		t.Errorf("Absorbed=%d Dropped=%d, want 2/0 (both merged facts are absorbed, none dropped)", rep.Absorbed, rep.Dropped)
 	}
 	if calls != 1 {
 		t.Errorf("LLM calls = %d, want exactly 1", calls)

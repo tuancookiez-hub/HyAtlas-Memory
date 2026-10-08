@@ -31,6 +31,19 @@ store: see *Upgrading a store written before 4.5.0* in `plugins/hyatlas/after-in
 - **`HYATLAS_CONSOLIDATE_GRAPH=off` stops L5 and the arc** (on by default). With it
   off, the consolidation prompt does not ask for them and `/api/v1/status`
   `mode_detail` says so.
+- **De-duplication never merges rows whose numbers differ.** Embeddings barely see
+  numbers: "open PR #101722" and "open PR #96783" scored 0.992 alike. The write-time
+  fact rule, L5 indexing and `dedupe_facts` now also require the same set of digit
+  runs, since keeping two near-identical rows costs little and merging two true ones
+  loses one. On a real graph this cut 165 L5 duplicates to 127.
+- **The consolidation report separates merges from drops.** `absorbed` counts facts
+  folded into a merged fact; `dropped` now counts only facts dropped as stale, each
+  with a reason. `dropped` used to include both, so a pass that only merged looked
+  like data loss (a real pass reported "dropped 15" when all 16 facts were merged).
+- **Near-identical graph relations are not indexed twice.** A relation whose L5
+  document would be at least `HYATLAS_DEDUPE_SCORE` similar to one already indexed for
+  the same owner is not indexed (the graph keeps it), and
+  `dedupe_facts` accepts `"layer": "l5_knowledge"` to merge the ones already stored.
 - **A consolidation drop needs a reason.** The model returns
   `{"id": ..., "reason": ...}`; a drop without a reason (including the old bare-id
   form) is not applied, and the reason is kept on the dropped row as `drop_reason`.
