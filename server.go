@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -36,6 +38,9 @@ type Server struct {
 	cons     *Consolidator
 	start    time.Time
 	dataDir  string
+	// bindHost is the address the server listens on. When it is loopback,
+	// requests must also name a loopback Host (see guardLocal).
+	bindHost string
 
 	// mu guards lastExtractErr: the extraction goroutines write it from
 	// background contexts while /api/v1/status reads it on request.
@@ -361,14 +366,17 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	limit := atoi(q.Get("limit"), 20)
 	offset := atoi(q.Get("offset"), 0)
 	includeRaw := q.Get("include_raw")
+	// Superseded rows are history. They stay hidden unless the caller asks.
+	includeSuperseded := q.Get("include_superseded") == "true"
 	if r.Method == http.MethodPost {
 		var body struct {
-			Limit      int    `json:"limit"`
-			Offset     int    `json:"offset"`
-			Layer      string `json:"layer"`
-			UserID     string `json:"user_id"`
-			AgentID    string `json:"agent_id"`
-			IncludeRaw *bool  `json:"include_raw"`
+			Limit             int    `json:"limit"`
+			Offset            int    `json:"offset"`
+			Layer             string `json:"layer"`
+			UserID            string `json:"user_id"`
+			AgentID           string `json:"agent_id"`
+			IncludeRaw        *bool  `json:"include_raw"`
+			IncludeSuperseded bool   `json:"include_superseded"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
 			if body.Limit > 0 {
@@ -383,9 +391,14 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 			if body.IncludeRaw != nil {
 				includeRaw = map[bool]string{true: "true", false: "false"}[*body.IncludeRaw]
 			}
+			includeSuperseded = includeSuperseded || body.IncludeSuperseded
 		}
 	}
-	items, total := s.store.List(memory.Layer(layer), userID, agentID, limit, offset, includeRaw == "false" && layer == "")
+	list := s.store.List
+	if includeSuperseded {
+		list = s.store.ListAll
+	}
+	items, total := list(memory.Layer(layer), userID, agentID, limit, offset, includeRaw == "false" && layer == "")
 
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {
@@ -396,6 +409,11 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		if it.Meta != nil {
 			m["session_id"] = it.Meta["session_id"]
+		}
+		// A superseded row says what replaced it, so history can be followed.
+		if isSuperseded(it) {
+			m["invalid_at"] = it.Meta["invalid_at"]
+			m["superseded_by"] = it.Meta["superseded_by"]
 		}
 		out = append(out, m)
 	}
@@ -1119,6 +1137,7 @@ func main() {
 	}
 	log.Print(listeningLine(rt))
 	host := envOr("HYATLAS_GO_HOST", "127.0.0.1")
+	srv.bindHost = host
 	hs := &http.Server{Addr: host + ":" + port, Handler: srv.routes(), ReadHeaderTimeout: readHeaderTimeout}
 	log.Fatal(hs.ListenAndServe())
 }
@@ -1156,7 +1175,50 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/coding-count", s.handleDashCodingCount)
 	mux.HandleFunc("/api/coding-memories", s.handleDashCodingMemories)
 	mux.Handle("/dashboard/", http.StripPrefix("/dashboard/", s.handleDashboard()))
-	return limitBody(mux)
+	return guardLocal(s.bindHost, limitBody(mux))
+}
+
+// guardLocal refuses requests a web page could make on the user's behalf. The
+// API has no authentication; binding to loopback keeps other machines out, but
+// not a page open in the user's own browser. Such a page can POST to
+// 127.0.0.1 without a CORS preflight (delete_all, add) and, through DNS
+// rebinding, read responses under its own hostname. So a request carrying a
+// non-local Origin is refused, and when the server is bound to loopback the
+// Host must be loopback too. Requests without an Origin (the plugin, curl)
+// and the server's own /dashboard/ pages are unaffected.
+func guardLocal(bindHost string, next http.Handler) http.Handler {
+	checkHost := isLoopbackHost(bindHost)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if o := r.Header.Get("Origin"); o != "" {
+			u, err := url.Parse(o)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || !isLoopbackHost(u.Hostname()) {
+				jsonResponse(w, http.StatusForbidden, map[string]any{"error": "cross-origin request refused"})
+				return
+			}
+		}
+		if checkHost {
+			h := r.Host
+			if hh, _, err := net.SplitHostPort(h); err == nil {
+				h = hh
+			}
+			if !isLoopbackHost(h) {
+				jsonResponse(w, http.StatusForbidden, map[string]any{"error": "non-local Host refused"})
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isLoopbackHost reports whether h names this machine: localhost or a
+// loopback IP literal (brackets allowed).
+func isLoopbackHost(h string) bool {
+	h = strings.Trim(h, "[]")
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
 
 // maxRequestBody caps every request body. Raw memories can be large session

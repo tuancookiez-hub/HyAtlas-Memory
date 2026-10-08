@@ -396,3 +396,65 @@ func TestConcurrentAddsKeepIndexValid(t *testing.T) {
 		t.Errorf("index has %d docs on disk, want 80", len(idx))
 	}
 }
+
+// A web page in the user's browser must not be able to drive the API: a
+// cross-origin request is refused, and a loopback-bound server refuses a
+// non-local Host (DNS rebinding). The plugin and curl send no Origin.
+func TestGuardLocalRefusesBrowserOriginsAndRebinding(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	if err := srv.store.Add(memory.L2Raw, "doc-1", "text", map[string]string{
+		"user_id": "u", "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	srv.bindHost = "127.0.0.1"
+	h := srv.routes()
+
+	do := func(host, origin string) int {
+		r := httptest.NewRequest("POST", "/api/v1/delete_all?all=true", nil)
+		r.Host = host
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code
+	}
+	for _, c := range []struct{ host, origin string }{
+		{"127.0.0.1:19528", "https://evil.example"},
+		{"127.0.0.1:19528", "null"},
+		{"evil.example:19528", ""},
+		{"evil.example", "http://evil.example"},
+	} {
+		if got := do(c.host, c.origin); got != http.StatusForbidden {
+			t.Errorf("host=%q origin=%q: want 403, got %d", c.host, c.origin, got)
+		}
+	}
+	if srv.store.TotalMemories() != 1 {
+		t.Fatalf("a refused request deleted data: %d left", srv.store.TotalMemories())
+	}
+
+	// The server's own dashboard, and clients that send no Origin, still work.
+	for _, c := range []struct{ host, origin string }{
+		{"localhost:19528", "http://localhost:19528"},
+		{"[::1]:19528", ""},
+	} {
+		r := httptest.NewRequest("GET", "/api/v1/status", nil)
+		r.Host = c.host
+		if c.origin != "" {
+			r.Header.Set("Origin", c.origin)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Errorf("host=%q origin=%q: want 200, got %d", c.host, c.origin, w.Code)
+		}
+	}
+
+	// Bound to all interfaces (Docker), Host is not checked but Origin still is.
+	srv.bindHost = "0.0.0.0"
+	h = srv.routes()
+	if got := do("192.168.1.5:19528", ""); got != http.StatusOK {
+		t.Errorf("0.0.0.0 bind, LAN host, no origin: want 200, got %d", got)
+	}
+}

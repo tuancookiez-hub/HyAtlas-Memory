@@ -90,6 +90,10 @@ export HYATLAS_LLM_KEY="your-nous-agent-key"
 ```
 
 The server listens on `127.0.0.1:19528` (loopback only — no external surface).
+It has no authentication, so keep it there. Requests from a web page (any
+non-local `Origin`) and, on a loopback bind, requests naming a non-local `Host`
+(DNS rebinding) are refused with 403, so a page open in your browser cannot read
+or wipe your memories.
 
 Each write returns an `extraction_status`: `pending` (extraction runs in the
 background), `done` or `failed` (the write waited for extraction), `unconfigured`
@@ -311,7 +315,7 @@ Base URL: `http://127.0.0.1:19528`
 | `GET` | `/api/v1/metrics` | Total memories, per-layer counts, graph node and edge counts |
 | `POST` | `/api/v1/add` | Add memory (text + user_id + agent_id + session_id). Returns `memory_id` and `extraction_status` |
 | `POST` | `/api/v1/search` | Vector search — returns `memories` split into profile / proactive / normal channels |
-| `GET` | `/api/v1/list` | List memories, filterable by `user_id`, `agent_id`, `layer`; paged with `limit` / `offset` |
+| `GET` | `/api/v1/list` | List live memories, filterable by `user_id`, `agent_id`, `layer`; paged with `limit` / `offset`. `include_superseded=true` also returns facts the ultra pass merged or dropped, with `invalid_at` and `superseded_by` |
 | `POST` | `/api/v1/list` | Same as GET but body for clients that send POST |
 | `POST` or `DELETE` | `/api/v1/delete_all` | Bulk delete. Requires at least one of `id`, `layer`, `user_id`, `agent_id`, or `all=true`; an unscoped call is refused |
 | `POST` | `/api/v1/reprocess` | Re-run extraction on unprocessed raw entries (or on `ids`). Reports nothing to do in `lite` |

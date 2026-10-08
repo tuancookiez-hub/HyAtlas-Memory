@@ -8,6 +8,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/philippgille/chromem-go"
 	"github.com/tuancookiez-hub/hyatlas-v4/graph"
@@ -150,7 +151,12 @@ func (s *MemoryStore) Add(layer memory.Layer, id, content string, meta map[strin
 	return s.persistIndex()
 }
 
-// Search does vector search, scoped to user/agent when provided.
+// isSuperseded reports whether the slow path replaced or dropped a doc. Such a
+// doc keeps its row for provenance but is invisible to every live read.
+func isSuperseded(d DocIndex) bool { return d.Meta["invalid_at"] != "" }
+
+// Search does vector search, scoped to user/agent when provided. Superseded
+// docs are never returned.
 func (s *MemoryStore) Search(query string, limit int, layer memory.Layer, userID, agentID string) ([]SearchHit, error) {
 	if limit <= 0 {
 		limit = 5
@@ -172,11 +178,25 @@ func (s *MemoryStore) Search(query string, limit int, layer memory.Layer, userID
 		where = nil
 	}
 
+	// Superseded rows still sit in chromem, so they can occupy nearest-neighbour
+	// slots. Snapshot them, and ask for as many extra neighbours as the layer has
+	// superseded rows, so the filtered result still fills the limit.
+	s.mu.RLock()
+	dead := map[string]bool{}
+	hidden := map[memory.Layer]int{}
+	for id, d := range s.index {
+		if isSuperseded(d) {
+			dead[id] = true
+			hidden[memory.Layer(d.Layer)]++
+		}
+	}
+	s.mu.RUnlock()
+
 	var hits []SearchHit
 	for _, l := range layers {
 		col := s.cols[l]
 		n := col.Count()
-		k := limit // note: chromem requires k <= n; guard below
+		k := limit + hidden[l] // note: chromem requires k <= n; guard below
 		if k > n {
 			k = n
 		}
@@ -188,6 +208,9 @@ func (s *MemoryStore) Search(query string, limit int, layer memory.Layer, userID
 			return nil, err
 		}
 		for _, r := range res {
+			if dead[r.ID] {
+				continue
+			}
 			hits = append(hits, SearchHit{ID: r.ID, Content: r.Content,
 				Score: r.Similarity, Layer: memory.Layer(l), Meta: r.Metadata})
 		}
@@ -210,10 +233,21 @@ type SearchHit struct {
 	Meta    map[string]string
 }
 
-// List returns exact-match docs, optionally filtered by layer/user/agent, with pagination.
+// List returns live exact-match docs, optionally filtered by layer/user/agent,
+// with pagination. Superseded docs are left out; use ListAll for history.
 // excludeRaw drops l2_raw rows BEFORE pagination (and from total), so a raw-heavy
 // head cannot empty a page — that is the include_raw=false contract.
 func (s *MemoryStore) List(layer memory.Layer, userID, agentID string, limit, offset int, excludeRaw bool) ([]DocIndex, int) {
+	return s.list(layer, userID, agentID, limit, offset, excludeRaw, false)
+}
+
+// ListAll is List including superseded docs, for the history view
+// (/api/v1/list with include_superseded).
+func (s *MemoryStore) ListAll(layer memory.Layer, userID, agentID string, limit, offset int, excludeRaw bool) ([]DocIndex, int) {
+	return s.list(layer, userID, agentID, limit, offset, excludeRaw, true)
+}
+
+func (s *MemoryStore) list(layer memory.Layer, userID, agentID string, limit, offset int, excludeRaw, includeSuperseded bool) ([]DocIndex, int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var all []DocIndex
@@ -222,6 +256,9 @@ func (s *MemoryStore) List(layer memory.Layer, userID, agentID string, limit, of
 			continue
 		}
 		if excludeRaw && d.Layer == string(memory.L2Raw) {
+			continue
+		}
+		if !includeSuperseded && isSuperseded(d) {
 			continue
 		}
 		if userID != "" && d.UserID != userID {
@@ -285,7 +322,7 @@ func (s *MemoryStore) Delete(ids []string, layer memory.Layer, userID, agentID s
 	return deleted, s.persistIndexLocked()
 }
 
-// LayerCounts returns the number of docs per layer (exact). L5 is the
+// LayerCounts returns the number of live docs per layer (exact). L5 is the
 // exception: knowledge lives in the graph store (entities are the durable
 // rows), never in chromem, so its count is the graph node count. Every
 // caller gets the same numbers — no per-handler overrides.
@@ -297,17 +334,73 @@ func (s *MemoryStore) LayerCounts() map[string]int {
 		out[string(l)] = 0
 	}
 	for _, d := range s.index {
+		if isSuperseded(d) {
+			continue
+		}
 		out[d.Layer]++
 	}
 	out[string(memory.L5Knowledge)] = s.g.NodeCount()
 	return out
 }
 
-// TotalMemories sums all layer docs.
+// TotalMemories counts live docs across all layers.
 func (s *MemoryStore) TotalMemories() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.index)
+	n := 0
+	for _, d := range s.index {
+		if !isSuperseded(d) {
+			n++
+		}
+	}
+	return n
+}
+
+// Supersede marks live docs as replaced by `by`, or as dropped when by is empty,
+// instead of deleting them. The row keeps its content, vector and provenance, so
+// history stays reachable through ListAll. Returns how many docs were marked.
+func (s *MemoryStore) Supersede(ids []string, by string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC().Format(time.RFC3339)
+	marked := 0
+	var firstErr error
+	for _, id := range ids {
+		d, ok := s.index[id]
+		if !ok || isSuperseded(d) {
+			continue
+		}
+		meta := make(map[string]string, len(d.Meta)+2)
+		for k, v := range d.Meta {
+			meta[k] = v
+		}
+		meta["invalid_at"] = now
+		meta["superseded_by"] = by
+		meta["layer"] = d.Layer
+		if col, ok := s.cols[memory.Layer(d.Layer)]; ok {
+			// chromem has no metadata update, but AddDocument on an existing ID
+			// overwrites the row. Passing the stored vector back means no embedding
+			// call is made.
+			if old, err := col.GetByID(s.ctx, id); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+			} else if err := col.AddDocument(s.ctx, chromem.Document{
+				ID: id, Content: old.Content, Embedding: old.Embedding, Metadata: meta,
+			}); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		// The exact index is what live reads filter on, so it is updated even when
+		// the chromem row could not be rewritten.
+		d.Meta = meta
+		s.index[id] = d
+		marked++
+	}
+	if err := s.persistIndexLocked(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return marked, firstErr
 }
 
 // SetExtracted marks a doc as extracted (used after successful promotion).
