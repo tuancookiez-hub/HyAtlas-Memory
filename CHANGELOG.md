@@ -1,5 +1,39 @@
 # Changelog
 
+## [4.3.2] — 2026-10-08
+
+Fixes two ways a consolidation pass could be lost or duplicated.
+
+### Fixed
+
+- **A client giving up no longer cancels the pass.** `POST /api/v1/digest`
+  derived its context from the request, so a caller that stopped waiting — a
+  cron with a shorter timeout, a dropped connection — cancelled the
+  consolidation mid-flight. An automated sweep with a two-minute client timeout
+  could never complete a pass whose legitimate bound is ten minutes; it reported
+  a timeout while the server aborted the work, leaving `consolidations` at 0.
+  The pass now runs on its own context, still bounded by `consolidateTimeout`,
+  because losing one halfway is worse than finishing after the caller left.
+- **A pass is single-flight.** The ticker and a manual `POST /api/v1/digest`
+  could both ask for one, and two passes over the same batch would duplicate the
+  LLM spend and race each other's merges and edge writes. The second caller is
+  now told instead of queued: the ticker skips that tick, and the endpoint
+  answers `digest_ok: false` with a reason rather than a 500, because a cron
+  overlapping a tick is normal operation and not a failure.
+
+Both behaviours are pinned by tests that fail against the previous code:
+cancelling the request mid-pass must still leave the pass complete and
+error-free, and a second pass attempted while one is in flight must report
+itself as busy.
+
+### Docs
+
+- The digest helper — a per-profile sweep over `/api/v1/digest` — outlasts the
+  server's own bound (660s against a 600s pass) and reports the real report
+  fields (`merged`, `edges`, `schemas`, `arc`, `pruned_raw`, `duration_ms`)
+  instead of a field that stopped existing, which had been printing
+  `digest_processed=0` on successful passes.
+
 ## [4.3.1] — 2026-10-08
 
 Fixes a defect that left every shipped binary unable to store a single memory,
