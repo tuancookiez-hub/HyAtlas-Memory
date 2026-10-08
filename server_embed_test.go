@@ -199,6 +199,12 @@ func TestResolveRuntimeDefaults(t *testing.T) {
 // helper: a relative "./models" is what broke on Windows.
 func TestResolveRuntimeModelDirIsAbsolute(t *testing.T) {
 	clearRuntimeEnv(t)
+	// The installer default holds a real model on a machine that ran the
+	// installer, and would win over this empty <cwd>/models. Point it elsewhere.
+	elsewhere := t.TempDir()
+	t.Setenv("LOCALAPPDATA", elsewhere)
+	t.Setenv("HOME", elsewhere)
+	t.Setenv("USERPROFILE", elsewhere)
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "models"), 0o755); err != nil {
 		t.Fatal(err)

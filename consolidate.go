@@ -295,22 +295,28 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 	}
 	next := first + 1 // a pass that reaches every owner starts one owner later next time
 	ran := map[scopeKey]cycleStep{}
+	called := false // whether an earlier owner in this pass has made an LLM call
+	// stopAt ends the pass at owner i: the next pass starts there, and every owner
+	// from i on that still has work is reported as skipped.
+	stopAt := func(i int, err error) {
+		next = first + i
+		var skipped []string
+		for j := i; j < n; j++ {
+			sk := work[(first+j)%n]
+			if c.due(sk, byOwner[sk]) {
+				skipped = append(skipped, sk.String())
+			}
+		}
+		if len(skipped) > 0 {
+			rep.SkippedOwners = skipped
+			rep.Errors = append(rep.Errors, fmt.Sprintf(
+				"pass stopped (%v) before %d owner(s) were consolidated; they run next pass", err, len(skipped)))
+		}
+	}
 	for i := 0; i < n; i++ {
 		k := work[(first+i)%n]
 		if err := ctx.Err(); err != nil {
-			next = first + i
-			var skipped []string
-			for j := i; j < n; j++ {
-				sk := work[(first+j)%n]
-				if c.due(sk, byOwner[sk]) {
-					skipped = append(skipped, sk.String())
-				}
-			}
-			if len(skipped) > 0 {
-				rep.SkippedOwners = skipped
-				rep.Errors = append(rep.Errors, fmt.Sprintf(
-					"pass stopped (%v) before %d owner(s) were consolidated; they run next pass", err, len(skipped)))
-			}
+			stopAt(i, err)
 			break
 		}
 		facts := byOwner[k]
@@ -338,7 +344,22 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 			idx = 0
 		}
 		rep.OwnersRun++
-		ok, created := c.consolidateScope(ctx, k, c.windowAt(facts, idx), rep)
+		window := c.windowAt(facts, idx)
+		late := called
+		called = true
+		callStart := time.Now()
+		ok, created := c.consolidateScope(ctx, k, window, rep)
+		log.Printf("consolidate: %s window %d/%d (%d facts) ok=%v in %s",
+			k, idx+1, count, len(window), ok, time.Since(callStart).Round(time.Second))
+		if !ok && late && ctx.Err() != nil {
+			// The pass deadline cut this owner off after earlier owners' calls had
+			// spent the time. The window is not at fault, so its walk state is left
+			// as it was (the cut does not count toward maxWindowFails) and the next
+			// pass starts here, with the full budget. An owner cut while it had the
+			// whole budget still counts the cut as a failure below.
+			stopAt(i, ctx.Err())
+			break
+		}
 		w.LastFresh = fresh
 		if ok {
 			w.Fails, w.FailWin = 0, 0

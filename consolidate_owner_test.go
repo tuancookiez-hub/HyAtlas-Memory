@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -264,6 +265,70 @@ func TestCursorResumesAndRotatesOwners(t *testing.T) {
 	}
 	if c.cursor != 2 {
 		t.Errorf("cursor after full pass = %d, want 2", c.cursor)
+	}
+}
+
+// An owner the deadline cuts off after earlier owners spent the pass is not
+// blamed for it: its window is not counted toward maxWindowFails, so repeated
+// late cuts cannot get a healthy window skipped, and the next pass starts with it.
+func TestLateDeadlineCutDoesNotCountAsWindowFailure(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	for _, who := range []string{"alice", "bob", "carol"} {
+		seedSourced(t, srv.store, who, "x1", who+"-1", who+" one")
+		seedSourced(t, srv.store, who, "x1", who+"-2", who+" two")
+	}
+	bob := scopeKey{"bob", "x1"}.String()
+
+	var cancel context.CancelFunc
+	var log promptLog
+	mock := scopeMock(t, &log, func(prompt string) (int, string) {
+		if cancel != nil && strings.Contains(prompt, "bob one") {
+			cancel() // the deadline lands during bob's call, the second of the pass
+		}
+		return http.StatusOK, chatBody(t, Consolidation{})
+	})
+	defer mock.Close()
+	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
+
+	// Cut bob late more times than maxWindowFails would tolerate.
+	for pass := 1; pass <= maxWindowFails+1; pass++ {
+		// alice leads and has changed, so her call spends time before bob's.
+		seedSourced(t, srv.store, "alice", "x1", fmt.Sprintf("alice-new-%d", pass), fmt.Sprintf("alice new %d", pass))
+		c.cursor = 0
+		var ctx context.Context
+		ctx, cancel = context.WithCancel(context.Background())
+		rep, err := c.Once(ctx)
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w := c.windows[bob]; w.Fails != 0 {
+			t.Fatalf("pass %d: bob's window Fails = %d, want 0 for a late cut", pass, w.Fails)
+		}
+		if c.cursor != 1 {
+			t.Errorf("pass %d: cursor = %d, want 1 (bob leads the next pass)", pass, c.cursor)
+		}
+		if len(rep.SkippedOwners) != 2 || rep.SkippedOwners[0] != bob {
+			t.Errorf("pass %d: SkippedOwners = %v, want bob then carol", pass, rep.SkippedOwners)
+		}
+		if strings.Contains(strings.Join(rep.Errors, " "), "skipped") &&
+			strings.Contains(strings.Join(rep.Errors, " "), "window") {
+			t.Errorf("pass %d: a late cut was reported as a skipped window: %v", pass, rep.Errors)
+		}
+	}
+
+	// With the full budget, the resumed pass consolidates bob first.
+	cancel = nil
+	before := len(log.all())
+	if _, err := c.Once(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	prompts := log.all()[before:]
+	if len(prompts) == 0 || !strings.Contains(prompts[0], "bob one") {
+		t.Fatalf("resumed pass did not start with bob (%d calls)", len(prompts))
+	}
+	if c.windows[bob].Covered == 0 {
+		t.Error("bob's window is still uncovered after a full-budget pass")
 	}
 }
 
