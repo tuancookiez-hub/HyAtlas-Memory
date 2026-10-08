@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -101,11 +102,20 @@ type Consolidator struct {
 	// cannot grow without bound as memory accumulates.
 	batch int
 
+	// gate makes a pass single-flight. The ticker and a manual POST /digest can
+	// both ask for one, and two passes over the same batch would duplicate the
+	// LLM spend and race each other's merges and edge writes.
+	gate sync.Mutex
+
 	mu     sync.Mutex
 	last   *Report
 	lastAt time.Time
 	ran    int
 }
+
+// errBusy reports that another pass holds the consolidator. Callers decide what
+// that means for them: the ticker skips the tick, the digest endpoint says so.
+var errBusy = errors.New("a consolidation pass is already running")
 
 // NewConsolidator wires the slow path. retention <= 0 disables raw decay.
 func NewConsolidator(store *MemoryStore, llm *LLMClient, every, retention time.Duration, batch int) *Consolidator {
@@ -139,6 +149,10 @@ func (c *Consolidator) Run(ctx context.Context) {
 			run, cancel := context.WithTimeout(ctx, consolidateTimeout)
 			rep, err := c.Once(run)
 			cancel()
+			if errors.Is(err, errBusy) {
+				// A manual pass is in flight; it covers this tick's work.
+				continue
+			}
 			if err != nil {
 				log.Printf("consolidate: %v", err)
 				continue
@@ -150,6 +164,13 @@ func (c *Consolidator) Run(ctx context.Context) {
 
 // Once runs a single consolidation pass and reports exactly what it changed.
 func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
+	// Single flight: the loser is told so rather than queued, because the work
+	// it would have done is covered by the pass already in flight.
+	if !c.gate.TryLock() {
+		return nil, errBusy
+	}
+	defer c.gate.Unlock()
+
 	start := time.Now()
 	rep := &Report{}
 	if c.llm == nil {

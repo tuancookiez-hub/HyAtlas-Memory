@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -831,5 +833,117 @@ func TestSlowPathOwnsL5AndL6(t *testing.T) {
 	}
 	if _, n := srv.store.List("l6_schema", "", "", 1, 0, false); n != 1 {
 		t.Errorf("slow path wrote %d L6 row(s), want 1", n)
+	}
+}
+
+// Only one pass may be in flight. The ticker and a manual POST /digest can both
+// ask for one, and two passes over the same batch would duplicate the LLM spend
+// and race each other's merges and edge writes.
+func TestOnceIsSingleFlight(t *testing.T) {
+	calls := 0
+	mock := mockConsolidationServer(t, &calls, Consolidation{})
+	defer mock.Close()
+	srv := newTestServer(t, "m", mock.URL)
+	seed(t, srv.store, 3, "single")
+	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
+
+	c.gate.Lock()
+	if _, err := c.Once(ctxForTest()); !errors.Is(err, errBusy) {
+		t.Errorf("while a pass is in flight: err = %v, want errBusy", err)
+	}
+	c.gate.Unlock()
+
+	rep, err := c.Once(ctxForTest())
+	if err != nil {
+		t.Fatalf("after the in-flight pass released, a new pass must run: %v", err)
+	}
+	if rep == nil {
+		t.Fatal("no report from the pass that ran")
+	}
+
+	// The endpoint reports the same condition instead of a 500, because a cron
+	// overlapping a tick is normal operation, not a failure.
+	srv.mode = ModeUltra
+	srv.cons = c
+	c.gate.Lock()
+	w := httptest.NewRecorder()
+	srv.handleDigest(w, httptest.NewRequest(http.MethodPost, "/api/v1/digest", nil))
+	c.gate.Unlock()
+	if w.Code != 200 {
+		t.Errorf("status = %d, want 200 (busy is not an error)", w.Code)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["digest_ok"] != false {
+		t.Errorf("digest_ok = %v, want false while busy", got["digest_ok"])
+	}
+	if s, _ := got["reason"].(string); !strings.Contains(s, "already running") {
+		t.Errorf("reason = %q, want it to say a pass is already running", s)
+	}
+}
+
+// The pass rewrites facts and graph edges, so a caller that stops waiting — a
+// cron with a shorter timeout, a dropped connection — must not cancel work
+// already in flight. The endpoint detaches the pass from the request for this
+// reason; this test cancels the request mid-pass and requires the pass to still
+// finish and record no error.
+func TestDigestPassSurvivesClientDisconnect(t *testing.T) {
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var hits int32
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		payload, _ := json.Marshal(Consolidation{})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"content":%s}}]}`, string(mustJSON(payload)))
+	}))
+	defer mock.Close()
+
+	srv := newTestServer(t, "m", mock.URL)
+	seed(t, srv.store, 3, "disconnect")
+	srv.mode = ModeUltra
+	srv.cons = NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/digest", nil).WithContext(ctx)
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		srv.handleDigest(w, req)
+		close(done)
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		cancel()
+		close(release)
+		<-done
+		t.Fatal("the pass never reached the LLM")
+	}
+
+	cancel()       // the caller gives up waiting
+	close(release) // the LLM answers anyway
+	<-done
+
+	if atomic.LoadInt32(&hits) == 0 {
+		t.Fatal("the pass never called the LLM")
+	}
+	runs, last, _ := srv.cons.Stats()
+	if runs != 1 {
+		t.Fatalf("runs = %d, want 1: the pass did not complete after the disconnect", runs)
+	}
+	if last != nil && len(last.Errors) > 0 {
+		t.Errorf("the disconnect leaked into the pass: errors = %v", last.Errors)
+	}
+	if w.Code != 200 {
+		t.Errorf("status = %d, want 200", w.Code)
 	}
 }

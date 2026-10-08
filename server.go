@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -22,7 +23,7 @@ import (
 // It is exposed on /api/v1/status and /api/info so every client (Desktop pane,
 // web dashboard, CLI) reports the real running version instead of hardcoding
 // a "v4" badge that silently goes stale on each release. Bump in one place.
-const Version = "4.3.1"
+const Version = "4.3.2"
 
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {
@@ -499,9 +500,21 @@ func (s *Server) handleDigest(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), consolidateTimeout)
+	// The pass is deliberately detached from the request. It rewrites facts and
+	// graph edges, so a client that stops waiting — a cron with a shorter
+	// timeout, a dropped connection — must not cancel work already in flight.
+	// The server's own bound still caps it, and a caller that wants the report
+	// back should wait longer than consolidateTimeout.
+	ctx, cancel := context.WithTimeout(context.Background(), consolidateTimeout)
 	defer cancel()
 	rep, err := s.cons.Once(ctx)
+	if errors.Is(err, errBusy) {
+		jsonResponse(w, 200, map[string]any{
+			"digest_ok": false,
+			"reason":    "a consolidation pass is already running",
+		})
+		return
+	}
 	if err != nil {
 		jsonResponse(w, 500, map[string]any{"digest_ok": false, "error": err.Error()})
 		return
