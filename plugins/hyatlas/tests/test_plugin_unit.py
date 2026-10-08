@@ -650,6 +650,18 @@ def test_data_dir_setting_reaches_the_server(monkeypatch):
     assert "HYATLAS_GO_DATA" not in env2, "an empty data_dir must not override the server default"
 
 
+def test_spawned_server_defaults_to_background_extraction(monkeypatch):
+    """A spawned server must not make Hermes turns wait on the LLM by default."""
+    proc_mod = _load_sibling("process")
+    _poison(monkeypatch, {"PATH": "/usr/bin", "HOME": "/home/u"})
+    assert proc_mod.HyatlasProcess({})._env()["HYATLAS_SYNC_EXTRACT"] == "off"
+    assert proc_mod.HyatlasProcess({"sync": "on"})._env()["HYATLAS_SYNC_EXTRACT"] == "on"
+
+    _poison(monkeypatch, {"PATH": "/usr/bin", "HOME": "/home/u",
+                          "HYATLAS_SYNC_EXTRACT": "on"})
+    assert proc_mod.HyatlasProcess({})._env()["HYATLAS_SYNC_EXTRACT"] == "on"
+
+
 def test_explicit_env_beats_config_for_the_forwarded_settings(monkeypatch):
     """setdefault keeps an exported variable authoritative, matching mode/sync."""
     proc_mod = _load_sibling("process")
@@ -1131,14 +1143,6 @@ def test_spawner_forwards_validated_sync_only():
     env = hp._env()
     assert env.get("HYATLAS_SYNC_EXTRACT") == "on"
     assert env.get("HYATLAS_MODE") == "ultra"
-
-
-def test_spawner_omits_sync_when_unset():
-    proc = _load_sibling("process")
-    hp = proc.HyatlasProcess({})
-    hp._mode = hp._sync = ""
-    os.environ.pop("HYATLAS_SYNC_EXTRACT", None)
-    assert "HYATLAS_SYNC_EXTRACT" not in hp._env(), "empty must not pin the child"
 
 
 def test_spawner_start_rejects_invalid_sync():

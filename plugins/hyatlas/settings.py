@@ -127,9 +127,9 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
         "description": "Passed to a spawned server as HYATLAS_SYNC_EXTRACT. on "
                        "makes the write wait for extraction and report done or "
                        "failed; off returns immediately and extracts behind it. "
-                       "Empty follows the mode: pro blocks, ultra does not. This "
-                       "is a latency choice and does not change what the mode can "
-                       "reason about.",
+                       "Empty means off for a server this plugin spawns, so a "
+                       "Hermes turn never waits on the LLM. This is a latency "
+                       "choice and does not change what the mode can reason about.",
     },
 )
 
@@ -366,7 +366,7 @@ def sync(cfg: Dict[str, Any] | None = None) -> str:
     if v not in _SYNC_ALIASES:
         raise ValueError(
             f"invalid hyatlas sync {v!r}; valid values are {', '.join(VALID_SYNC)} "
-            f"(or leave it empty to follow the mode)"
+            f"(or leave it empty for the default)"
         )
     return _SYNC_ALIASES[v]
 

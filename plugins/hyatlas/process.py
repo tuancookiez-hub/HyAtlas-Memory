@@ -142,9 +142,11 @@ class HyatlasProcess:
         mode = getattr(self, "_mode", "") or settings.mode(self._config)
         if mode:
             env.setdefault("HYATLAS_MODE", mode)
-        sync = getattr(self, "_sync", "") or settings.sync(self._config)
-        if sync:
-            env.setdefault("HYATLAS_SYNC_EXTRACT", sync)
+        # A server this plugin spawns serves Hermes turns, so by default it never
+        # makes a turn wait on the LLM: pro still extracts every write, just
+        # behind the response. An explicit setting or exported variable wins.
+        sync = getattr(self, "_sync", "") or settings.sync(self._config) or "off"
+        env.setdefault("HYATLAS_SYNC_EXTRACT", sync)
 
         # Endpoint and model are non-secret, so they arrive through the settings
         # form into hyatlas.json rather than the environment. Without forwarding

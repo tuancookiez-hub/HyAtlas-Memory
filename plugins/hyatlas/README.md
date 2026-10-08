@@ -95,7 +95,7 @@ still stored.
 | `llm_model` | `HYATLAS_LLM_MODEL` | *(none)* | Model id at that endpoint |
 | `llm_key` | `HYATLAS_LLM_KEY` | *(none)* | **Secret.** Stored in `.env` (0600), never in `hyatlas.json` |
 | `mode` | `HYATLAS_MODE` | *(server default: ultra)* | Extraction mode: `lite` \| `pro` \| `ultra` |
-| `sync` | `HYATLAS_SYNC_EXTRACT` | *(follows mode)* | Whether a write waits for extraction: `on` \| `off` |
+| `sync` | `HYATLAS_SYNC_EXTRACT` | `off` for a spawned server | Whether a write waits for extraction: `on` \| `off` |
 
 All fourteen are editable in **Desktop → Settings → Plugins → hyatlas**, in
 `plugins.entries.hyatlas.settings` in `config.yaml`, or through the environment
@@ -122,9 +122,11 @@ relation needs corroboration from more than one turn and a schema is a pattern
 across many turns. So only `ultra` fills them.
 
 Whether a write waits for extraction is a separate setting, `HYATLAS_SYNC_EXTRACT`.
-With `sync` unset, `pro` waits and `ultra` does not. With `sync: on`, a write
-waits; the plugin's request timeout (`request_timeout`, 15 s) still applies on
-the plugin side.
+A server the plugin spawns defaults to `off`, so a Hermes turn never waits on
+the LLM; `pro` still extracts every write, just behind the response. With
+`sync: on`, a write waits; the plugin's request timeout (`request_timeout`,
+15 s) still applies on the plugin side. A server you start yourself follows its
+own default (`pro` waits, `ultra` does not).
 
 ### Updating
 
