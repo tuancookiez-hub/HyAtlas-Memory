@@ -349,6 +349,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		UserID   string   `json:"user_id"`   // what the Hermes plugin sends
 		AgentID  string   `json:"agent_id"`  // what the Hermes plugin sends
 		MinScore *float64 `json:"min_score"` // optional: overrides HYATLAS_MIN_SCORE
+		Reader   string   `json:"reader"`    // optional: see parseReader; empty is hybrid
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonResponse(w, 400, map[string]any{"error": "bad body"})
@@ -380,13 +381,29 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if body.MinScore != nil {
 		minScore = *body.MinScore
 	}
-	// Fetch double so the floor and the duplicate drop still leave limit hits.
+	// Fetch double so the floor and the duplicate drop still leave limit hits. The
+	// vector search runs in every mode, because it counts the request as a search.
 	res, err := s.store.SearchOwners(body.Query, limit*2, memory.Layer(body.Layer), users, agentID)
 	if err != nil {
 		jsonResponse(w, 500, map[string]any{"error": err.Error()})
 		return
 	}
-	res = refineHits(res, minScore, limit)
+	// Keyword search catches exact identifiers (HYATLAS_SYNC_EXTRACT, a port, a
+	// ticker) that the embedding scores low; the two rankings are fused.
+	switch reader := parseReader(body.Reader); reader {
+	case readVector:
+		res = refineHits(res, minScore, limit)
+	default:
+		kw, err := s.store.KeywordSearch(body.Query, limit*2, memory.Layer(body.Layer), users, agentID)
+		if err != nil {
+			jsonResponse(w, 500, map[string]any{"error": err.Error()})
+			return
+		}
+		if reader == readKeyword {
+			res = nil
+		}
+		res = fuseHits(res, kw, minScore, limit)
+	}
 	type hit struct {
 		MemoryID   string  `json:"memory_id"`
 		Content    string  `json:"content"`

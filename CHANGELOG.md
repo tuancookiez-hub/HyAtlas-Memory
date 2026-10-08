@@ -33,6 +33,16 @@
 
 ### Added
 
+- **Hybrid search.** `/api/v1/search` now fuses the vector ranking with a BM25 keyword
+  ranking (reciprocal rank fusion, k 60). Embeddings blur exact identifiers: on a real
+  store, `HYATLAS_SYNC_EXTRACT`, `19528`, `RSI(2)` and `Reg-T` each found none of the
+  facts that contain them; with keyword search they find 2 to 5 of 5. A keyword hit
+  must contain all of a short query's terms (three quarters of a longer one), so
+  off-topic queries still return nothing. Raw rows are left out of keyword search.
+  The request's `reader` picks the ranking: `legacy` is vector only, `hybrid_tag`
+  keyword only, anything else (and none, which is what the plugin sends) hybrid, so
+  the dashboard's Semantic, Keyword and Hybrid tabs now differ. (`keyword.go`,
+  `fusion.go`)
 - **`HYATLAS_USER_ALIASES`** groups user IDs that belong to one person
   (`"id1,id2;id3,id4"`). A search for any of them covers the whole group.
   (`server.go` `parseUserAliases`, `store.go` `SearchOwners`)
