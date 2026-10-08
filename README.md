@@ -151,13 +151,35 @@ Ultra-only tuning:
 live L5 graph edge are always protected, so decay cannot leave the knowledge
 graph pointing at a memory that no longer exists.
 
+The `7 / 7` above is steady state, not the first minute. A fresh ultra install
+sits at 5/7 until the slow path first runs, which is up to `6h` away by default.
+To see L5 and L6 immediately rather than waiting for the tick, trigger a pass
+yourself:
+
+```bash
+curl -X POST http://127.0.0.1:19528/api/v1/digest
+```
+
+The response reports exactly what the pass changed (`facts_in`, `merged`,
+`edges`, `dropped`, `schemas`, `arc`), and `/api/v1/status` carries the same
+shape as `consolidations` plus `last_consolidated`, so "the slow path ran" is
+checkable rather than something you have to take on faith. A pass that finds
+nothing to reconcile still reports as run with zero changes, which is what
+distinguishes it from a pass that never happened.
+
 
 Otherwise the endpoint is yours to choose per the tier you are on — set
 `HYATLAS_LLM_BASE`, `HYATLAS_LLM_MODEL` and `HYATLAS_LLM_KEY` to any
 OpenAI-compatible API, or point `HYATLAS_LLM_BASE` at a server you host
 (ollama, vLLM, llama.cpp, LM Studio) and leave `HYATLAS_EMBED_BASE=bge`.
-Extraction fires on every write even with no key set, so in pro and ultra the
-text is transmitted by default until you configure these.
+
+**Nothing is transmitted until all three are set.** There is no default endpoint,
+so a fresh install makes no LLM call at all: writes store the raw trace plus
+local embeddings, status reports `llm: "unconfigured"`, and each write reports
+`extraction_status: "unconfigured"`. Once you configure an endpoint, extraction
+runs on every write in `pro` and `ultra` and your turn text goes there — so
+choosing the endpoint is choosing where memory text leaves the machine. Set
+`HYATLAS_MODE=lite` to opt out entirely regardless of configuration.
 
 When the Hermes plugin spawns this server it passes an explicitly allowlisted
 environment — OS essentials plus `HYATLAS_*` only — rather than a copy of the
