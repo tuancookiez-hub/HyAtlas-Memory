@@ -196,10 +196,9 @@ entry is ignored.
   where no conversation text goes to an LLM.
 - `pro`: one LLM call per write. Fills 5 of 7 layers.
 - `ultra` (default): `pro`, plus a consolidation pass every 6 hours. It fills L6 only
-  when a pass finds recurring patterns, and L5 only when a pass finds corroborated
-  relations and `HYATLAS_CONSOLIDATE_GRAPH=on` (also `true`, `1`, `yes`) is set. That
-  setting is off by default. "7 of 7" needs it, and is the steady state, not the
-  first pass.
+  when a pass finds recurring patterns, and L5 only when a pass finds relations
+  corroborated by at least two turns, so "7 of 7" is the steady state, not the first
+  pass. `HYATLAS_CONSOLIDATE_GRAPH=off` on the server stops L5.
 
 `sync` decides whether a write waits for extraction. For a server the plugin
 starts, the default is `off` in every mode, so a Hermes turn does not wait on the

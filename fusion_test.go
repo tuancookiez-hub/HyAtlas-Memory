@@ -124,3 +124,23 @@ func TestParseReader(t *testing.T) {
 		}
 	}
 }
+
+// L5 may take at most 40% of the slots of an all-layer search, so near-identical
+// graph relations cannot crowd out the facts they summarise.
+func TestCapLayerKeepsOrderAndLimitsL5(t *testing.T) {
+	hits := []SearchHit{
+		{ID: "k1", Layer: memory.L5Knowledge}, {ID: "k2", Layer: memory.L5Knowledge},
+		{ID: "k3", Layer: memory.L5Knowledge}, {ID: "f1", Layer: memory.L3Fact},
+		{ID: "k4", Layer: memory.L5Knowledge}, {ID: "p1", Layer: memory.L1Profile},
+	}
+	got := fusedIDs(capLayer(hits, memory.L5Knowledge, l5Share(5)))
+	want := []string{"k1", "k2", "f1", "p1"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("capLayer = %v, want %v", got, want)
+	}
+	for limit, want := range map[int]int{1: 1, 2: 1, 5: 2, 10: 4} {
+		if got := l5Share(limit); got != want {
+			t.Errorf("l5Share(%d) = %d, want %d", limit, got, want)
+		}
+	}
+}

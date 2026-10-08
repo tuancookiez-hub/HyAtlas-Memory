@@ -13,11 +13,24 @@ store: see *Upgrading a store written before 4.5.0* in `plugins/hyatlas/after-in
   to 10+ minutes on 200 facts and often missed the 10-minute pass limit; 50 came back
   in about two and a half. `HYATLAS_CONSOLIDATE_BATCH` still overrides it.
 
-- **Consolidation no longer writes the L5 graph or the arc by default.** Nothing a
-  Hermes turn reads uses either, and on a real store L5 rows took none of the search
-  slots in a 70-slot probe. The prompt no longer asks for them, which shortens a slow
-  model's reply. `HYATLAS_CONSOLIDATE_GRAPH=on` restores both. `/api/v1/status`
-  `mode_detail` says when they are off. Merges, drops and L6 schemas are unchanged.
+- **L5 knowledge is searchable.** L5 lived only in the graph (`graph.json`), so search
+  could never return it: on a real store L5 took none of 70 search slots. Each graph
+  edge is now also stored as an L5 memory ("Foxtrot uses Postgres 16") with its owner
+  and sources, under an ID derived from the edge, so re-citing it adds nothing. Edges
+  from older versions are indexed at startup, in the background. Checked end to end
+  on fresh stores: `lite` fills L2 only, `pro` fills L1-L4 and L7, and `ultra` fills
+  all seven layers, each one found by a layer-scoped search.
+- **Ownerless memories are found under an owner filter.** Rows written before owners
+  were recorded (on a real store, 1,385 of 1,395 graph relations) were invisible to
+  every plugin search, which always names an owner. Search now includes rows with
+  no owner at all, as the graph endpoints already do.
+- **L5 takes at most 40% of an all-layer search** (2 of 5 slots). Indexed old graph
+  relations are short and near-identical; uncapped they filled 4 of 5 slots for
+  "how do I start the hyatlas server" and pushed out the answer. A search scoped to
+  `l5_knowledge` is not capped.
+- **`HYATLAS_CONSOLIDATE_GRAPH=off` stops L5 and the arc** (on by default). With it
+  off, the consolidation prompt does not ask for them and `/api/v1/status`
+  `mode_detail` says so.
 - **A consolidation drop needs a reason.** The model returns
   `{"id": ..., "reason": ...}`; a drop without a reason (including the old bare-id
   form) is not applied, and the reason is kept on the dropped row as `drop_reason`.

@@ -75,7 +75,7 @@ func TestDropNeedsAReason(t *testing.T) {
 
 // graphPass runs one pass over two facts from two turns whose reply asks for an
 // L5 edge and an arc, and returns the report and the prompt the model was sent.
-func graphPass(t *testing.T, graph bool) (*Report, string) {
+func graphPass(t *testing.T, graph bool) (*Report, string, int) {
 	t.Helper()
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
 	ids := seed(t, srv.store, 2, fmt.Sprintf("graph-%v", graph))
@@ -99,23 +99,24 @@ func graphPass(t *testing.T, graph bool) (*Report, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return rep, prompt
+	l5, _ := srv.store.List("l5_knowledge", "", "", 10, 0, false)
+	return rep, prompt, len(l5)
 }
 
 // With the graph off, the prompt does not ask for edges or an arc, and any the
 // model sends are not written. With it on (the constructor's default), they are.
 func TestGraphSettingControlsEdgesAndArc(t *testing.T) {
-	rep, prompt := graphPass(t, false)
-	if rep.Edges != 0 || rep.Arc {
-		t.Errorf("graph off: edges=%d arc=%v, want none", rep.Edges, rep.Arc)
+	rep, prompt, l5 := graphPass(t, false)
+	if rep.Edges != 0 || rep.Arc || l5 != 0 {
+		t.Errorf("graph off: edges=%d arc=%v l5 docs=%d, want none", rep.Edges, rep.Arc, l5)
 	}
 	if strings.Contains(prompt, `\"knowledge\"`) || strings.Contains(prompt, `\"arc\"`) {
 		t.Error("graph off: the prompt still asks for knowledge or arc")
 	}
 
-	rep, prompt = graphPass(t, true)
-	if rep.Edges != 1 || !rep.Arc {
-		t.Errorf("graph on: edges=%d arc=%v, want 1 and true", rep.Edges, rep.Arc)
+	rep, prompt, l5 = graphPass(t, true)
+	if rep.Edges != 1 || !rep.Arc || l5 != 1 {
+		t.Errorf("graph on: edges=%d arc=%v l5 docs=%d, want 1, true, 1 (the edge must be searchable)", rep.Edges, rep.Arc, l5)
 	}
 	if !strings.Contains(prompt, `\"knowledge\"`) {
 		t.Error("graph on: the prompt does not ask for knowledge")

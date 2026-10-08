@@ -17,8 +17,7 @@ with a graph view, and a web dashboard panel. The server is a separate binary,
 - **Cross-session memory.** Each completed turn is saved to the server, which
   keeps the raw text (L2) and, in `pro` and `ultra`, extracts profile, fact,
   summary and intention layers (L1, L3, L4, L7), plus knowledge and schema layers
-  (L5, L6) in `ultra` (L5 only with `HYATLAS_CONSOLIDATE_GRAPH=on`; see the mode
-  table below).
+  (L5, L6) in `ultra` (see the mode table below).
 - **Recall.** Before each turn, Hermes calls the provider's `prefetch` with the
   user's message. The plugin searches the server with that message and returns the
   matches for the turn. If the search fails, it returns the last recall for the same
@@ -194,6 +193,11 @@ Set them where the server runs, in its environment, not in `hyatlas.json` or
 - `HYATLAS_DEDUPE_SCORE` (default `0.92`): a new fact at or above this similarity to
   the owner's nearest fact supersedes that fact. `0` disables it.
 
+Every search the plugin makes names its owner. Memories with no owner at all, written
+by releases before owners were recorded (in an older store, most knowledge-graph
+relations), are returned under any owner. On a server shared by several people, data
+from those older releases is therefore visible to all of them.
+
 The server accepts more `HYATLAS_*` variables than these (for example
 `HYATLAS_EMBED_BASE`, `HYATLAS_CONSOLIDATE_EVERY`, `HYATLAS_RAW_RETENTION`). The
 plugin passes any of them through to a server it starts. The server's own
@@ -205,14 +209,14 @@ documentation, in the repository README and `.env.example`, describes them.
 |---|---|---|---|---|
 | `lite` | none | none | **1 / 7**: L2 raw | no |
 | `pro` | one per write | within that one turn | **5 / 7**: L1, L2, L3, L4, L7 | no |
-| `ultra` *(default)* | one per write, plus a periodic batch | across memories and time | **7 / 7** at steady state with `HYATLAS_CONSOLIDATE_GRAPH=on`, otherwise **6 / 7** | **yes**, every 6 hours |
+| `ultra` *(default)* | one per write, plus a periodic batch | across memories and time | **7 / 7** at steady state (6 / 7 with `HYATLAS_CONSOLIDATE_GRAPH=off`) | **yes**, every 6 hours |
 
 L5 (knowledge) and L6 (schema) come only from the consolidation pass, because a
 relation needs corroboration from more than one turn and a schema is a pattern
 across many turns. So only `ultra` fills them, and only when a pass finds such
-relations and patterns. L5 is written only with `HYATLAS_CONSOLIDATE_GRAPH=on` (also
-`true`, `1`, `yes`). It is off by default, and then the consolidation prompt does not
-ask for relations.
+relations and patterns. Each L5 relation is kept in the graph (which the Desktop starmap and the dashboard
+draw) and as a searchable memory, so recall can return it. Setting
+`HYATLAS_CONSOLIDATE_GRAPH=off` on the server stops L5 and the arc.
 
 Whether a write waits for extraction is a separate setting, `HYATLAS_SYNC_EXTRACT`.
 A server the plugin spawns defaults to `off`, so a Hermes turn never waits on
@@ -297,8 +301,8 @@ removes stored tool output. See the upgrade section of `after-install.md`.
     with another owner's in one request.
   - The pass's results are applied as follows. Merged and dropped facts are
     superseded, not deleted: they are kept, hidden from search, and each drop stores
-    its reason. L5 knowledge edges and the cross-session arc are written only with
-    `HYATLAS_CONSOLIDATE_GRAPH=on` (also `true`, `1`, `yes`); the default is off.
+    its reason. L5 knowledge edges and the cross-session arc are written unless the server runs
+    with `HYATLAS_CONSOLIDATE_GRAPH=off`.
   - There is no default endpoint. The plugin and the server both leave it empty.
     The plugin's tests check that an unset endpoint is not forwarded.
 - **Server to an embedding endpoint.** By default embeddings are computed locally

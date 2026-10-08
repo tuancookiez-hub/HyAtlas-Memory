@@ -185,7 +185,7 @@ The three modes form a ladder of reasoning scope, not of latency:
 |---|---|---|---|---|
 | `lite` | none | — | **1 / 7** — L2 Raw only | no |
 | `pro` | one per write | within one turn | **5 / 7** — L1, L2, L3, L4, L7 | no |
-| `ultra` *(default)* | one per write **+** periodic batch | **across memories and time** | **7 / 7** at steady state with `HYATLAS_CONSOLIDATE_GRAPH=on`, otherwise **6 / 7** | **yes** |
+| `ultra` *(default)* | one per write **+** periodic batch | **across memories and time** | **7 / 7** at steady state (6 / 7 with `HYATLAS_CONSOLIDATE_GRAPH=off`) | **yes** |
 
 The two systems own disjoint layers:
 
@@ -194,8 +194,8 @@ The two systems own disjoint layers:
 - **System2 (slow path)** — L5 Knowledge, L6 Schema. A relation worth keeping is
   corroborated by more than one turn, and a schema is a *recurring* pattern, so
   neither can come from a single turn. Ultra is the only mode that runs System2,
-  which is why it is the only one that fills L5 and L6. L5 is written only with
-  `HYATLAS_CONSOLIDATE_GRAPH=on`.
+  which is why it is the only one that fills L5 and L6. `HYATLAS_CONSOLIDATE_GRAPH=off`
+  stops L5 (and the arc).
 
 Whether a write *blocks* on its extraction is a separate knob
 (`HYATLAS_SYNC_EXTRACT=on|off`), not part of the mode. Pro blocks by default and
@@ -214,7 +214,7 @@ Ultra-only tuning:
 |---|---|---|
 | `HYATLAS_CONSOLIDATE_EVERY` | `6h` | how often the slow path runs |
 | `HYATLAS_CONSOLIDATE_BATCH` | `50` | max facts per owner per consolidation call |
-| `HYATLAS_CONSOLIDATE_GRAPH` | off | `on` (also `true`, `1`, `yes`) makes consolidation also write L5 knowledge edges and the cross-session arc. Off, the consolidation prompt does not ask for them |
+| `HYATLAS_CONSOLIDATE_GRAPH` | on | `off` (also `false`, `0`, `no`) stops consolidation writing L5 knowledge edges and the cross-session arc; the prompt then does not ask for them. Each edge is also stored as a searchable L5 memory ("Foxtrot uses Postgres 16") |
 | `HYATLAS_RAW_RETENTION` | *(unset = never delete)* | age after which uncited L2 Raw is deleted |
 
 Durations are Go durations (`30m`, `6h`, `2160h`) or a plain number of seconds.
@@ -235,10 +235,9 @@ Facts that the ultra pass merges or drops are superseded, not deleted: they keep
 `invalid_at` and `superseded_by`, and `GET /api/v1/list` returns them only with
 `include_superseded=true`.
 
-The `7 / 7` above needs `HYATLAS_CONSOLIDATE_GRAPH=on` and is steady state, not the first minute. A fresh ultra install
+The `7 / 7` above is steady state, not the first minute. A fresh ultra install
 sits at 5/7 until the slow path first runs, which is up to `6h` away by default. L5
-is filled only when `HYATLAS_CONSOLIDATE_GRAPH=on` and a pass finds corroborated
-relations, and L6 only when a pass finds recurring patterns. To run a pass now, instead of waiting for the tick:
+is filled only when a pass finds relations corroborated by at least two turns, and L6 only when a pass finds recurring patterns. To run a pass now, instead of waiting for the tick:
 
 ```bash
 curl -X POST http://127.0.0.1:19528/api/v1/digest
@@ -308,7 +307,7 @@ the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
 | `HYATLAS_SYNC_EXTRACT` | *(follows the mode)* | `on` \| `off`. Whether a write waits for extraction. An unrecognised value is fatal at startup. |
 | `HYATLAS_CONSOLIDATE_EVERY` | `6h` | Ultra only: interval between slow-path passes. Must be positive in ultra (zero or negative is fatal at startup); use `pro` to run without the pass. |
 | `HYATLAS_CONSOLIDATE_BATCH` | `50` | Ultra only: max facts per owner per consolidation call. Larger owners are consolidated in successive windows. |
-| `HYATLAS_CONSOLIDATE_GRAPH` | off | Ultra only: `on` (also `true`, `1`, `yes`) makes consolidation also write L5 knowledge edges and the cross-session arc. Off, the consolidation prompt does not ask for them. |
+| `HYATLAS_CONSOLIDATE_GRAPH` | on | Ultra only: `off` (also `false`, `0`, `no`) stops consolidation writing L5 knowledge edges and the cross-session arc, and the prompt then does not ask for them. Each edge is stored in the graph (drawn by the dashboard and the Desktop starmap) and as a searchable L5 memory; edges from older versions are indexed for search at startup. |
 | `HYATLAS_RAW_RETENTION` | *(unset = never delete)* | Ultra only: age after which an L2 raw row cited by no live edge or fact is deleted |
 | `HYATLAS_USER_ALIASES` | *(unset = no aliases)* | Groups of user IDs that are one person, for search: groups separated by `;`, IDs in a group by `,`, e.g. `"221727702992945152,default,hermes-memory-archive"`. A search for any ID in a group covers the whole group |
 | `HYATLAS_MIN_SCORE` | `0.60` | Search drops vector hits below this cosine similarity. `0` disables the floor. A request may override it with `min_score` |
@@ -498,6 +497,17 @@ hits scoring below the floor are dropped, so an off-topic query can return nothi
 Hits whose text repeats another hit's (case and whitespace ignored) are dropped. Of
 an L3 fact and its L1 Profile copy, the L1 copy is kept.
 
+With an owner filter (`user_id`, aliases included), memories that have no owner at
+all are also returned: rows written before owners were recorded, which in an older
+store is most of the knowledge graph. The graph endpoints already show them under
+every owner.
+
+In a search over all layers, L5 knowledge takes at most 40% of the result slots (2
+of 5). Graph relations are short restatements of facts ("X runs on Y") and score
+high, and an older graph holds many near-identical ones, so without the cap they
+push out the facts and rules they summarise. A search with `"layer": "l5_knowledge"`
+is not capped.
+
 Response shape:
 ```json
 {
@@ -683,7 +693,7 @@ The full v3.5 → v4 side-by-side (architecture, performance, reliability, API c
 
 ## Known gaps (honest)
 
-- The slow path runs on a timer, not at startup: a fresh ultra server shows 5/7 layers until the first pass (6/7 or 7/7 after it, see the mode table) (up to `HYATLAS_CONSOLIDATE_EVERY` later). `POST /api/v1/digest` runs one on demand.
+- The slow path runs on a timer, not at startup: a fresh ultra server shows 5/7 layers until the first pass (7/7 after a pass that finds relations and patterns) (up to `HYATLAS_CONSOLIDATE_EVERY` later). `POST /api/v1/digest` runs one on demand.
 - `/api/quality-metrics` returns `{available: false}` (v3.5-only feature; the dashboard adapter's quality endpoint, not a `/api/v1/` route)
 - Upscaling and codemode are not implemented (those were v3.5 features)
 - The coding layer is not in v4; the `/api/coding-*` endpoints return empty results

@@ -383,9 +383,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if body.MinScore != nil {
 		minScore = *body.MinScore
 	}
-	// Fetch double so the floor and the duplicate drop still leave limit hits. The
-	// vector search runs in every mode, because it counts the request as a search.
-	res, err := s.store.SearchOwners(body.Query, limit*2, memory.Layer(body.Layer), users, agentID)
+	// Fetch three times the limit so the floor, the duplicate drop and the L5 cap
+	// still leave limit hits. The vector search runs in every mode, because it
+	// counts the request as a search.
+	res, err := s.store.SearchOwners(body.Query, limit*3, memory.Layer(body.Layer), users, agentID)
 	if err != nil {
 		jsonResponse(w, 500, map[string]any{"error": err.Error()})
 		return
@@ -394,9 +395,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// ticker) that the embedding scores low; the two rankings are fused.
 	switch reader := parseReader(body.Reader); reader {
 	case readVector:
-		res = refineHits(res, minScore, limit)
+		res = refineHits(res, minScore, 0)
 	default:
-		kw, err := s.store.KeywordSearch(body.Query, limit*2, memory.Layer(body.Layer), users, agentID)
+		kw, err := s.store.KeywordSearch(body.Query, limit*3, memory.Layer(body.Layer), users, agentID)
 		if err != nil {
 			jsonResponse(w, 500, map[string]any{"error": err.Error()})
 			return
@@ -404,7 +405,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		if reader == readKeyword {
 			res = nil
 		}
-		res = fuseHits(res, kw, minScore, limit)
+		res = fuseHits(res, kw, minScore, 0)
+	}
+	if body.Layer == "" {
+		res = capLayer(res, memory.L5Knowledge, l5Share(limit))
+	}
+	if len(res) > limit {
+		res = res[:limit]
 	}
 	type hit struct {
 		MemoryID   string  `json:"memory_id"`
@@ -463,6 +470,36 @@ func refineHits(hits []SearchHit, minScore float64, limit int) []SearchHit {
 		kept = kept[:limit]
 	}
 	return kept
+}
+
+// l5Share is how many of limit result slots L5 knowledge may take in a search over
+// all layers: 40%, at least one. A graph relation is a terse restatement of facts
+// ("X runs on Y"), so it scores high against short queries, and an older graph
+// holds many near-identical ones; uncapped, they push the facts, profile and rules
+// they summarise out of the results.
+func l5Share(limit int) int {
+	n := limit * 2 / 5
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// capLayer keeps at most max hits of layer, dropping the lower-ranked ones, so the
+// slots go to the next hits of other layers. Order is kept.
+func capLayer(hits []SearchHit, layer memory.Layer, max int) []SearchHit {
+	out := make([]SearchHit, 0, len(hits))
+	n := 0
+	for _, h := range hits {
+		if h.Layer == layer {
+			if n >= max {
+				continue
+			}
+			n++
+		}
+		out = append(out, h)
+	}
+	return out
 }
 
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
@@ -1114,7 +1151,8 @@ type runtimeCfg struct {
 	Retention   time.Duration
 	Batch       int
 	// Graph is HYATLAS_CONSOLIDATE_GRAPH: whether consolidation also writes L5
-	// knowledge edges and the cross-session arc. Off unless set to on/true/1/yes.
+	// knowledge edges and the cross-session arc. On unless set to off/false/0/no:
+	// ultra promises all seven layers, and the starmap and dashboard draw L5.
 	Graph bool
 	// Admin is HYATLAS_ADMIN: whether the maintenance endpoints are enabled. Off
 	// unless set to on/true/1/yes, because compact_raw cannot be undone.
@@ -1162,7 +1200,7 @@ func resolveRuntime() runtimeCfg {
 		Consolidate:  resolveConsolidate(mode),
 		Retention:    parseDuration("HYATLAS_RAW_RETENTION", 0),
 		Batch:        envInt("HYATLAS_CONSOLIDATE_BATCH", defaultBatch),
-		Graph:        envOn("HYATLAS_CONSOLIDATE_GRAPH"),
+		Graph:        !envOff("HYATLAS_CONSOLIDATE_GRAPH"),
 		Admin:        envOn("HYATLAS_ADMIN"),
 		Host:         strings.Trim(envOr("HYATLAS_GO_HOST", defaultHost), "[]"),
 		Port:         envOr("HYATLAS_GO_PORT", defaultPort),
@@ -1260,6 +1298,16 @@ func envOn(key string) bool {
 	return false
 }
 
+// envOff reports whether key is set to off, false, 0 or no (any case). For a
+// setting that is on unless turned off.
+func envOff(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "off", "false", "0", "no":
+		return true
+	}
+	return false
+}
+
 // envFloat reads key as a float64. Unset, blank or unparsable means def.
 func envFloat(key string, def float64) float64 {
 	v := strings.TrimSpace(os.Getenv(key))
@@ -1352,6 +1400,15 @@ func main() {
 	if err != nil {
 		log.Fatal("store: ", err)
 	}
+	// Graph edges written before 4.5.0 have no L5 search documents. Index any that
+	// are missing, in the background so the server answers at once.
+	go func() {
+		if n, err := store.BackfillL5(); err != nil {
+			log.Printf("l5 backfill: indexed %d edge(s), error: %v", n, err)
+		} else if n > 0 {
+			log.Printf("l5 backfill: indexed %d graph edge(s) as L5 search documents", n)
+		}
+	}()
 	llm := NewLLMClient(llmBase, llmKey, llmModel)
 	llm.KeyFile = llmKeyFile
 	srv := &Server{store: store, llm: llm, llmModel: llmModel, llmBase: llmBase,

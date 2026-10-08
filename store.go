@@ -205,14 +205,16 @@ func (s *MemoryStore) Search(query string, limit int, layer memory.Layer, userID
 
 // SearchOwners is Search across several user IDs, for one person known by more than
 // one ID. Each ID is searched with the same agent filter, the hits are merged by
-// score, duplicates (same ID) are dropped, and the best limit are kept. With zero or
-// one user ID it is exactly Search. It counts as one search.
+// score, duplicates (same ID) are dropped, and the best limit are kept. With no user
+// ID it is exactly Search. It counts as one search.
+//
+// Memories with no owner at all (no user_id and no agent_id: rows written before
+// owners were recorded, which is most of an older store's graph) are included under
+// any owner, as the graph endpoints already do, so single-user data from older
+// releases stays reachable.
 func (s *MemoryStore) SearchOwners(query string, limit int, layer memory.Layer, userIDs []string, agentID string) ([]SearchHit, error) {
 	if len(userIDs) == 0 {
 		return s.Search(query, limit, layer, "", agentID)
-	}
-	if len(userIDs) == 1 {
-		return s.Search(query, limit, layer, userIDs[0], agentID)
 	}
 	if limit <= 0 {
 		limit = 5
@@ -231,6 +233,11 @@ func (s *MemoryStore) SearchOwners(query string, limit int, layer memory.Layer, 
 		}
 		merged = append(merged, hits...)
 	}
+	ownerless, err := s.searchWhere(qv, limit, layer, map[string]string{"user_id": "", "agent_id": ""})
+	if err != nil {
+		return nil, err
+	}
+	merged = append(merged, ownerless...)
 	sort.SliceStable(merged, func(i, j int) bool { return merged[i].Score > merged[j].Score })
 	seen := make(map[string]bool, len(merged))
 	var out []SearchHit
@@ -262,15 +269,6 @@ func (s *MemoryStore) search(query string, limit int, layer memory.Layer, userID
 // searchVec is search with the query already embedded, so one embedding serves
 // every layer (and, from SearchOwners, every user ID) instead of one per query.
 func (s *MemoryStore) searchVec(qv []float32, limit int, layer memory.Layer, userID, agentID string) ([]SearchHit, error) {
-	if limit <= 0 {
-		limit = 5
-	}
-	layers := []memory.Layer{}
-	if layer != "" {
-		layers = []memory.Layer{layer}
-	} else {
-		layers = memory.All()
-	}
 	where := map[string]string{}
 	if userID != "" {
 		where["user_id"] = userID
@@ -280,6 +278,22 @@ func (s *MemoryStore) searchVec(qv []float32, limit int, layer memory.Layer, use
 	}
 	if len(where) == 0 {
 		where = nil
+	}
+	return s.searchWhere(qv, limit, layer, where)
+}
+
+// searchWhere is searchVec with the metadata filter given as is. An empty value
+// matches only rows whose field is empty or absent, which is how SearchOwners asks
+// for ownerless rows; searchVec instead leaves an empty owner out of the filter.
+func (s *MemoryStore) searchWhere(qv []float32, limit int, layer memory.Layer, where map[string]string) ([]SearchHit, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	layers := []memory.Layer{}
+	if layer != "" {
+		layers = []memory.Layer{layer}
+	} else {
+		layers = memory.All()
 	}
 
 	// Superseded rows still sit in chromem, so they can take nearest-neighbour

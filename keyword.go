@@ -161,8 +161,8 @@ func cosineSim(a, b []float32) float64 {
 
 // KeywordSearch finds live memories by their words rather than their meaning, which
 // catches exact names and identifiers an embedding blurs. Raw (L2) rows are left out
-// unless layer asks for them. userIDs, when given, restricts to those owners, and
-// agentID, when set, to that agent. Each hit's Score is its cosine similarity to the
+// unless layer asks for them. userIDs, when given, restricts to those owners plus
+// rows with no owner at all, and agentID, when set, to that agent. Each hit's Score is its cosine similarity to the
 // query, so it reads like a vector hit; it is 0 when that cannot be computed. It does
 // not count toward the search counter, because the caller's search already does.
 func (s *MemoryStore) KeywordSearch(query string, limit int, layer memory.Layer, userIDs []string, agentID string) ([]SearchHit, error) {
@@ -194,10 +194,13 @@ func (s *MemoryStore) KeywordSearch(query string, limit int, layer memory.Layer,
 		} else if d.Layer == string(memory.L2Raw) {
 			continue
 		}
-		if len(owners) > 0 && !owners[d.UserID] {
+		// A row with no owner at all predates owner tracking; under an owner filter
+		// it is visible, as in SearchOwners and the graph endpoints.
+		ownerless := d.UserID == "" && d.AgentID == ""
+		if len(owners) > 0 && !owners[d.UserID] && !ownerless {
 			continue
 		}
-		if agentID != "" && d.AgentID != agentID {
+		if agentID != "" && d.AgentID != agentID && !(len(owners) > 0 && ownerless) {
 			continue
 		}
 		docs = append(docs, d)

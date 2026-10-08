@@ -184,9 +184,8 @@ type Consolidator struct {
 	batch int
 
 	// graph is whether a pass asks for and writes L5 knowledge edges and the
-	// cross-session arc. NewConsolidator turns it on; the server sets it from
-	// HYATLAS_CONSOLIDATE_GRAPH, which defaults to off: nothing a Hermes turn reads
-	// uses either, and leaving them out shortens a slow model's reply.
+	// cross-session arc. It is on by default; the server turns it off only when
+	// HYATLAS_CONSOLIDATE_GRAPH is off, which leaves ultra with six layers.
 	graph bool
 
 	// gate makes a pass single-flight. The ticker and a manual POST /digest can
@@ -663,6 +662,12 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		}
 		if err != nil {
 			soft("edge: " + err.Error())
+		}
+		// The graph is what the starmap draws; the L5 document is what search finds.
+		// A re-cited edge is already indexed and is skipped.
+		if _, err := c.store.indexL5([]l5Edge{{user: owner.user, agent: owner.agent,
+			from: rel.From, rel: rel.Relation, to: rel.To, sources: cites}}); err != nil {
+			soft("edge index: " + err.Error())
 		}
 	}
 
