@@ -915,7 +915,8 @@ func (s *Server) handleGraphEdges(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
-	// The owner filter may come in the JSON body or the query string; the body wins.
+	// The node and owner filter may come in the JSON body or the query string; the
+	// body wins.
 	var body struct {
 		Node    string `json:"node"`
 		UserID  string `json:"user_id"`
@@ -923,15 +924,16 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	q := r.URL.Query()
+	node := firstNonEmpty(body.Node, q.Get("node"))
 	uid, aid := graphOwner(firstNonEmpty(body.UserID, q.Get("user_id")), firstNonEmpty(body.AgentID, q.Get("agent_id")))
 	scope := graphScope(uid, aid)
-	neighbors := s.store.Graph().NeighborsScoped(scope, body.Node)
+	neighbors := s.store.Graph().NeighborsScoped(scope, node)
 	if neighbors == nil {
 		neighbors = []graph.Neighbor{}
 	}
 	nodeCount, edgeCount := s.store.Graph().CountsScoped(scope)
 	jsonResponse(w, 200, map[string]any{
-		"node":        body.Node,
+		"node":        node,
 		"neighbors":   neighbors,
 		"node_count":  nodeCount,
 		"edge_count":  edgeCount,

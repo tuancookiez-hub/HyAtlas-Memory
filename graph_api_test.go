@@ -87,6 +87,16 @@ func TestGraphNeighboursFilterByOwnerInBodyOrQuery(t *testing.T) {
 	if n, _ := out["neighbors"].([]any); len(n) != 1 {
 		t.Errorf("bob query neighbours = %v, want one", out["neighbors"])
 	}
+	// GET with everything in the query string.
+	w := httptest.NewRecorder()
+	srv.handleGraph(w, httptest.NewRequest("GET", "/api/v1/graph?node=skyhook&user_id=alice", nil))
+	out = decodeBody(t, w)
+	if out["node"] != "skyhook" {
+		t.Errorf("GET node = %v, want skyhook", out["node"])
+	}
+	if n, _ := out["neighbors"].([]any); len(n) != 1 {
+		t.Errorf("GET query neighbours = %v, want one", out["neighbors"])
+	}
 	// No filter: both owners' neighbours.
 	out = do("/api/v1/graph", `{"node":"skyhook"}`)
 	if n, _ := out["neighbors"].([]any); len(n) != 2 {
