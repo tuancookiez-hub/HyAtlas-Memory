@@ -5,8 +5,32 @@ Install and enable the plugin, then restart the gateway so it loads:
 ```bash
 hermes plugins install hyatlas     # or: hermes plugins install tuancookiez-hub/HyAtlas-Memory/plugins/hyatlas
 hermes plugins enable hyatlas
-hermes memory setup                # choose "hyatlas", then mode, LLM endpoint and key
+hermes memory setup                # choose "hyatlas", then answer its prompts (see below)
 ```
+
+## What `hermes memory setup` does
+
+1. Shows the memory providers; pick `hyatlas`. Hermes installs the plugin's
+   dependencies (there are none beyond Hermes core).
+2. Prompts for each of the plugin's settings in turn. Press Enter to keep the
+   default. The ones that matter are the extraction `mode` (`lite`, `pro` or
+   `ultra`), `llm_base` and `llm_model` (any OpenAI-compatible endpoint), and
+   `llm_key`. The key is entered masked and written to Hermes' `.env` as
+   `HYATLAS_LLM_KEY`. The server host and port, user and agent ids, and the
+   auto-start options are also asked; their defaults work.
+3. Writes `memory.provider: hyatlas` to `config.yaml`, the non-secret settings to
+   `$HERMES_HOME/hyatlas.json`, and the key to `.env`.
+
+It does not start the server and does not call the LLM. Start a new session to
+activate.
+
+**Without an LLM endpoint** the server still runs, with extraction off. Writes
+store the raw trace and local embeddings, `hermes hyatlas status` reports `llm`
+as `unconfigured`, and each write returns `extraction_status: "unconfigured"`.
+Either choose `lite` at the mode prompt (no LLM call at all), or enter an endpoint,
+model and key. The plugin never invents an endpoint.
+
+The `hermes hyatlas` command appears only while `memory.provider` is `hyatlas`.
 
 Then check it:
 
@@ -34,12 +58,24 @@ The plugin does not install the server. Either run the binary yourself:
 hyatlas-go          # listens on 127.0.0.1:19528 by default
 ```
 
+A release binary is an embedded build and already contains the BGE model. A
+source-built binary needs the model folder: it looks in `HYATLAS_MODEL_DIR` if
+set, otherwise in `<cwd>/models`, then `<exe dir>/models`, then the installer's
+default `~/.hyatlas/models` (Windows `%LOCALAPPDATA%\hyatlas\models`).
+
 or let the plugin start it:
 
 ```bash
 hermes hyatlas start    # spawns the binary (see binary_path), logs to ~/.hermes/logs/hyatlas.log
 hermes hyatlas stop     # stops a server the plugin started
 ```
+
+`start` spawns nothing if a server already answers at the configured host and
+port. It reports `already_running` with the existing pid when the pidfile names
+a live `hyatlas-go`, and `pid_known: false` when the server was started by hand.
+`stop` reports `ok: false` when the server answers but the plugin did not start
+it, because it cannot safely stop a pid it does not know. Stop that one from the
+process that started it.
 
 To have the plugin start the server automatically when it is unreachable, set
 `auto_start: true`:

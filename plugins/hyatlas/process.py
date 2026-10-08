@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import settings
+from .client import HyatlasClient
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,71 @@ if sys.platform == "win32":
     _ENV_ALLOW = {k.upper() for k in _ENV_ALLOW} | {"NO_PROXY", "no_proxy"}
 
 
+class ServerAlreadyRunning(RuntimeError):
+    """A hyatlas-go server already owns the configured origin, so nothing is spawned.
+
+    ``serving`` is True when the origin answers health; ``pid`` is the pid from the
+    pidfile when that pid is a live hyatlas-go (None when unknown, e.g. a server
+    started by hand).
+    """
+
+    def __init__(self, origin: str, pid: Optional[int], serving: bool) -> None:
+        self.origin = origin
+        self.pid = pid
+        self.serving = serving
+        super().__init__(f"a hyatlas-go server is already running at {origin}")
+
+
+def _origin(config: Optional[Dict[str, Any]]) -> str:
+    cfg = config or {}
+    host = str(cfg.get("server_host") or "127.0.0.1")
+    port = cfg.get("server_port") or 19528
+    return f"{host}:{port}"
+
+
+def _serving(config: Optional[Dict[str, Any]]) -> bool:
+    """True iff the configured origin answers /healthz. Short timeout: this is a probe."""
+    try:
+        return HyatlasClient(base_url=f"http://{_origin(config)}", timeout=2.0).is_reachable()
+    except Exception:
+        return False
+
+
+def _read_pid() -> Optional[int]:
+    try:
+        return int(PID_FILE.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _write_pidfile(pid: int) -> None:
+    try:
+        PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PID_FILE.write_text(str(pid), encoding="utf-8")
+    except OSError as e:
+        logger.debug("could not write pidfile %s: %s", PID_FILE, e)
+
+
+def _remove_pidfile(only_pid: Optional[int] = None) -> None:
+    """Remove the pidfile. With *only_pid*, only when it still names that pid."""
+    if only_pid is not None and _read_pid() != only_pid:
+        return
+    try:
+        PID_FILE.unlink()
+    except OSError:
+        pass
+
+
+def _wait_for(predicate: Any, timeout: float, interval: float = 0.25) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        if predicate():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval)
+
+
 class HyatlasProcess:
     """Lifecycle manager for the v4 Go binary subprocess."""
 
@@ -67,6 +133,18 @@ class HyatlasProcess:
         self._log_handle: Optional[Any] = None
         self._mode = ""
         self._sync = ""
+        self._pid: Optional[int] = None
+        self._exit_code: Optional[int] = None
+
+    @property
+    def pid(self) -> Optional[int]:
+        """Pid of the child this instance spawned (set by start())."""
+        return self._pid
+
+    @property
+    def exit_code(self) -> Optional[int]:
+        """Return code of the child, once it has exited during startup."""
+        return self._exit_code
 
     @staticmethod
     def _discover_binary() -> Optional[str]:
@@ -173,6 +251,13 @@ class HyatlasProcess:
         produce a process that dies immediately and reports it only in
         ``hyatlas.log`` — and a user who meant ``lite`` would not learn that
         nothing came up at all.
+
+        Raises ServerAlreadyRunning, spawning nothing, when the configured origin
+        already answers or a live hyatlas-go owns the pidfile. A second spawn would
+        die on the port and, worse, overwrite the live server's pidfile.
+
+        The pidfile is written by :meth:`wait_started`, once the child has been seen
+        alive, not here.
         """
         if self._proc is not None:
             return
@@ -183,6 +268,13 @@ class HyatlasProcess:
         # setting, so an un-normalised value can never reach the child.
         self._mode = settings.mode(self._config)
         self._sync = settings.sync(self._config)
+
+        existing = _read_pid()
+        owner_alive = existing is not None and HyatlasProcess._is_server(existing)
+        serving = _serving(self._config)
+        if serving or owner_alive:
+            raise ServerAlreadyRunning(
+                _origin(self._config), existing if owner_alive else None, serving)
 
         binary = self._config.get("binary_path") or self._discover_binary()
         if not binary:
@@ -219,15 +311,36 @@ class HyatlasProcess:
             self._log_handle.close()
             self._log_handle = None
             raise
+        self._pid = self._proc.pid
 
-        # stop_running() looks for this file to reap a server it did not spawn
-        # (one started in a previous process, or left behind by a crash). Without
-        # the write that lookup can never match, and `hermes hyatlas stop` after a
-        # gateway restart leaves the old server holding the port.
-        try:
-            PID_FILE.write_text(str(self._proc.pid), encoding="utf-8")
-        except OSError as e:
-            logger.debug("could not write pidfile %s: %s", PID_FILE, e)
+    def wait_started(self, timeout: float = 30.0) -> str:
+        """Wait for the spawned child to serve, or to die.
+
+        Returns ``"serving"`` (health answers), ``"starting"`` (still alive at the
+        deadline, not yet answering) or ``"exited"`` (the child died; nothing is
+        recorded and the log handle is closed).
+
+        The pidfile is written only once the child is seen alive, so a child that
+        dies on a busy port never leaves a pid behind, and ``stop_running()`` can
+        find a server that is alive but slow to answer.
+        """
+        proc = self._proc
+        if proc is None:
+            return "exited"
+        deadline = time.monotonic() + timeout
+        while True:
+            if proc.poll() is not None:
+                self._exit_code = proc.returncode
+                self._cleanup()
+                return "exited"
+            if _serving(self._config):
+                _write_pidfile(proc.pid)
+                return "serving"
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.25)
+        _write_pidfile(proc.pid)
+        return "starting"
 
     def stop(self) -> None:
         """Terminate the subprocess gracefully."""
@@ -267,12 +380,9 @@ class HyatlasProcess:
             except Exception:
                 pass
             self._log_handle = None
-        # Only stale after a hard crash now, which is what makes the pid check in
-        # stop_running() worth its cost.
-        try:
-            PID_FILE.unlink()
-        except OSError:
-            pass
+        # Only this child's pidfile: never delete a pid that now belongs to another
+        # live server.
+        _remove_pidfile(only_pid=self._pid)
         self._proc = None
 
     @staticmethod
@@ -306,26 +416,83 @@ class HyatlasProcess:
             return False
 
     @staticmethod
-    def stop_running() -> None:
-        """Stop any existing hyatlas-go process by PID file or taskkill."""
-        pidfile = PID_FILE
-        if pidfile.exists():
-            try:
-                pid = int(pidfile.read_text().strip())
-                if not HyatlasProcess._is_server(pid):
-                    logger.info("stop_running: pid %s is not hyatlas-go; leaving it alone", pid)
-                    pidfile.unlink(missing_ok=True)
-                    return
-                if sys.platform == "win32":
-                    subprocess.run(
-                        ["taskkill", "/F", "/PID", str(pid)],
-                        capture_output=True, timeout=5,
-                    )
-                else:
+    def stop_running(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Stop the hyatlas-go server this plugin can identify, and say honestly what happened.
+
+        * pidfile names a live hyatlas-go: signal it, then wait for the origin to stop
+          answering. ``ok`` is True only if it stopped answering.
+        * nothing identifiable, but the origin still answers: ``ok`` False. That server
+          was started by something else (or the pidfile is stale), and killing an
+          unknown pid is refused.
+        * nothing running: ``ok`` True with ``running`` False.
+        """
+        cfg = config if config is not None else settings.load()
+        origin = _origin(cfg)
+        pid = _read_pid()
+
+        if pid is not None and HyatlasProcess._is_server(pid):
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                               capture_output=True, timeout=5)
+            else:
+                try:
                     os.kill(pid, signal.SIGTERM)
-            except (OSError, ValueError) as e:
-                logger.debug("stop_running: %s", e)
-            try:
-                pidfile.unlink()
-            except OSError:
-                pass
+                except OSError as e:
+                    logger.debug("stop_running: %s", e)
+            gone = _wait_for(lambda: not _serving(cfg), timeout=10.0)
+            _remove_pidfile(only_pid=pid)
+            if gone:
+                return {"ok": True, "stopped": True, "pid": pid, "origin": origin}
+            return {"ok": False, "stopped": False, "pid": pid, "origin": origin,
+                    "error": f"sent a stop to pid {pid}, but the server at {origin} "
+                             "still answers; check hyatlas.log"}
+
+        if pid is not None:
+            # Dead, or recycled into an unrelated process: not ours to signal.
+            _remove_pidfile(only_pid=pid)
+        if _serving(cfg):
+            return {"ok": False, "stopped": False, "running": True, "pid": None,
+                    "origin": origin,
+                    "error": f"the server at {origin} is running but was not started by "
+                             "this plugin (pid unknown); stop it from the process that "
+                             "started it"}
+        return {"ok": True, "stopped": False, "running": False, "origin": origin,
+                "message": f"no hyatlas-go server was running at {origin}"}
+
+
+def start_server(config: Optional[Dict[str, Any]], timeout: float = 30.0) -> Dict[str, Any]:
+    """Start the binary unless a server already owns the origin. Shared by the CLI,
+    the ``/hyatlas start`` slash command and ``auto_start``.
+
+    Returns a JSON-ready dict with ``ok``, ``started``, ``reachable`` and, where
+    relevant, ``already_running``, ``pid``, ``hint`` or ``error``.
+    """
+    origin = _origin(config)
+    proc = HyatlasProcess(config or {})
+    try:
+        proc.start()
+    except ServerAlreadyRunning as e:
+        return {
+            "ok": True, "started": False, "already_running": True,
+            "reachable": e.serving, "origin": origin,
+            "pid": e.pid, "pid_known": e.pid is not None,
+            "message": ("a server already answers at " + origin) if e.serving else
+                       f"a hyatlas-go (pid {e.pid}) is alive but not answering at {origin}",
+        }
+    except (FileNotFoundError, ValueError) as e:
+        return {"ok": False, "started": False, "reachable": False, "origin": origin,
+                "error": str(e)}
+
+    state = proc.wait_started(timeout=timeout)
+    if state == "serving":
+        return {"ok": True, "started": True, "reachable": True,
+                "pid": proc.pid, "origin": origin}
+    if state == "starting":
+        return {"ok": True, "started": True, "reachable": False,
+                "pid": proc.pid, "origin": origin,
+                "hint": f"hyatlas-go is running but not answering at {origin} yet; "
+                        f"check {LOG_FILE}"}
+    return {"ok": False, "started": False, "reachable": False, "origin": origin,
+            "error": f"hyatlas-go exited during startup (exit code {proc.exit_code}). "
+                     f"The port may be in use by another process, or the config is wrong. "
+                     f"See {LOG_FILE}"}

@@ -23,10 +23,16 @@ with a graph view, and a web dashboard panel. The server is a separate binary,
   asks the server for matching memories and makes them available to the next turn.
 - **Agent tools.** `hyatlas_status`, `hyatlas_search` (three channels: profile,
   proactive, normal), `hyatlas_recent`, `hyatlas_add`.
+- **Built-in `memory` tool.** An `add` through Hermes' `memory` tool is sent to
+  the server as a plain add and stored as a raw memory (L2), tagged with its
+  target in the metadata. It is not written to L1 Profile directly. L1 fills
+  later, when extraction labels the memory as a user preference (`pro` and
+  `ultra`). `replace` and `remove` are not mirrored.
 - **Desktop pane.** Overview (health and layer counts), Graph, Memories, Search,
   Add. Its keyboard shortcut is `mod+shift+h`.
 - **CLI and slash command.** `hermes hyatlas status|search|add|recent|start|stop`
-  and `/hyatlas status|search <q>|add <text>|recent|start|stop`.
+  and `/hyatlas status|search <q>|add <text>|recent|start|stop`. The `hermes
+  hyatlas` command appears only while `memory.provider` is `hyatlas`.
 
 ## Install
 
@@ -34,8 +40,10 @@ The plugin needs the **HyAtlas v4 server** (`hyatlas-go`) running on this machin
 Install the server from the project repository first. Its `scripts/install.sh`
 (one-line installer, see the repository README) fetches a prebuilt binary and the
 embedding model; see [Disclosure](#disclosure-what-this-plugin-does-on-your-machine)
-for what that installer downloads. You can also build the server from source
-with Go 1.26 or newer.
+for what that installer downloads. A release binary is an embedded build (about
+160 MB) and already contains the model. A source build needs the model folder
+(its search order is in the server README's Model assets section). You can also
+build the server from source with Go 1.26 or newer.
 
 Then install and enable the plugin:
 
@@ -59,8 +67,10 @@ memory:
 
 ### Setup
 
-`hermes memory setup` prompts for the fields in this plugin's config schema. The
-ones that matter:
+`hermes memory setup` picks the provider, then prompts for each field in this
+plugin's config schema (Enter keeps the default). It writes `memory.provider` to
+`config.yaml`, the non-secret settings to `hyatlas.json`, and the key to `.env`.
+It does not start the server. The fields that matter:
 
 1. **Extraction mode**: `lite`, `pro` or `ultra`. The default is `ultra`.
 2. **LLM endpoint**: any OpenAI-compatible base URL. Needed for `pro` and `ultra`.
@@ -73,6 +83,8 @@ to send memory text. The server's own install script suggests the Nous Portal
 endpoint (`https://inference-api.nousresearch.com/v1`) as a starting value, and
 you can overwrite it.
 
+If you leave the endpoint empty, the server still runs with extraction off. Choose
+`lite` in that case, or configure the endpoint later with `hermes memory setup`.
 If `pro` or `ultra` has no endpoint, model or key, the server reports
 `llm: "unconfigured"` in `/api/v1/status`, and writes return
 `extraction_status: "unconfigured"` instead of failing silently. The raw trace is
@@ -204,13 +216,24 @@ source at the pinned commit.
   `bin/` folder next to the plugin; `/usr/local/bin/hyatlas-go`;
   `/opt/hyatlas/hyatlas-go`; `~/hyatlas/hyatlas-go`; and on Windows
   `C:/hyatlas/hyatlas-go.exe` and `C:/Program Files/hyatlas/hyatlas-go.exe`.
+- `start` spawns nothing when a server already answers at `server_host:server_port`.
+  The result is `already_running: true`, with the existing pid when `hyatlas.pid`
+  names a live `hyatlas-go`. Nothing is written over a live pid.
 - The server's working directory is the binary's folder. Its stdin is closed. Its
   stdout and stderr are appended to `$HERMES_HOME/logs/hyatlas.log`
   (`HERMES_HOME` defaults to `~/.hermes`). Its PID is written to
-  `$HERMES_HOME/logs/hyatlas.pid`.
+  `$HERMES_HOME/logs/hyatlas.pid` only once the child is seen alive. A child that
+  dies during startup (for example because the port is taken) is reported as
+  `ok: false` and leaves no pidfile.
 - The plugin does not stop the server when Hermes exits. Stop it with
   `hermes hyatlas stop`, which sends SIGTERM to the PID in `hyatlas.pid` (on Windows
-  it uses `taskkill`), but only if that PID is still a `hyatlas-go` process.
+  it uses `taskkill`), but only if that PID is still a `hyatlas-go` process. It
+  then checks that the server stopped answering. The result is `ok: true` with
+  `stopped: true` only when that is so.
+- If the server answers but there is no usable pidfile, `stop` returns `ok: false`
+  with `running: true`: the server was not started by this plugin, its pid is
+  unknown, and the plugin will not guess one. Stop it from the process that started
+  it. With nothing running, `stop` returns `ok: true` with `running: false`.
 - The auto-start wait is bounded. The plugin waits up to 30 seconds (plus at most one
   request timeout for the last probe), then logs a warning and carries on with the
   server unreachable. Auto-start is skipped in cron and flush contexts.

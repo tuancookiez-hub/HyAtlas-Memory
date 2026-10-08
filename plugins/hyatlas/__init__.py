@@ -100,7 +100,6 @@ class HyatlasMemoryProvider(MemoryProvider):
         self._agent_id: str = ""
         self._prefetch_lock = threading.Lock()
         self._prefetch_result: str = ""
-        self._process: Optional[Any] = None  # lazy import to keep _load_config cheap
         self._version = "4.3.3"
         # Message count already synced per session, so _build_turn_text sends
         # only what the server has not seen. Bounded: a long-lived gateway
@@ -163,7 +162,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         """True iff the v4 server is reachable on the configured port.
 
         Does NOT auto-start the server — that's a separate decision
-        via ``hyatlas start`` / ``hermes hyatlas start`` (or the
+        via ``hermes hyatlas start`` (or the
         plugin's auto_start config flag, honored at initialize() time).
         """
         try:
@@ -177,7 +176,8 @@ class HyatlasMemoryProvider(MemoryProvider):
         """Why is_available() returned False — surfaced in the dashboard."""
         return (
             f"HyAtlas v4 not reachable at {self._origin()}. "
-            f"Start it with `hyatlas start` (or `hermes hyatlas start`)."
+            "Start it with `hermes hyatlas start`. The `hermes hyatlas` command "
+            "exists only while memory.provider is hyatlas (`hermes memory setup`)."
         )
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
@@ -194,9 +194,7 @@ class HyatlasMemoryProvider(MemoryProvider):
 
         # Auto-start the server if configured
         if settings.truthy(self._config.get("auto_start")) and not self._client.is_reachable():
-            self._ensure_server_running()
-            # Wait briefly for the server to come up
-            if not self._client.wait_until_reachable(timeout=30.0):
+            if not self._ensure_server_running():
                 logger.warning(
                     "auto_start enabled but server did not become reachable within 30s"
                 )
@@ -297,8 +295,9 @@ class HyatlasMemoryProvider(MemoryProvider):
             "Use the `hyatlas_search` tool to recall relevant past context, "
             "`hyatlas_recent` to see the latest memories, and `hyatlas_add` "
             "to record durable facts. Adds through the standard Hermes "
-            "`memory` tool are mirrored automatically to v4's L1 Profile "
-            "layer."
+            "`memory` tool are also stored in v4 as raw memories; v4 fills the "
+            "L1 Profile layer when extraction labels them as user preferences "
+            "(pro and ultra modes)."
         )
 
     # --- Optional: prefetch (sync, returns cached result) ---
@@ -393,19 +392,16 @@ class HyatlasMemoryProvider(MemoryProvider):
         content: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Mirror Hermes' built-in memory tool writes to v4.
+        """Mirror Hermes' built-in memory tool ``add`` writes to v4.
 
-        Hermes' built-in memory tool is the agent's primary way to save
-        atomic facts (it's trained in the system prompt). v4 mirrors
-        those writes to L1 Profile (user preferences) or a dedicated
-        "atomic" layer. Only ``add`` actions are mirrored — replace/remove
-        are handled by the built-in file store.
+        The write is a plain ``/api/v1/add``: it is stored as a raw (L2) memory,
+        tagged with ``write_origin`` and ``target`` in its metadata. It does not
+        write to L1 Profile directly. L1 fills later, when extraction labels the
+        memory as a user preference (pro and ultra modes). replace and remove
+        are handled by Hermes' built-in file store and are not mirrored.
         """
         if action != "add" or not self._client or not content:
             return
-        layer = "l1_profile" if target == "user" else "l1_profile"
-        # v4 maps everything user-written to L1 Profile; the layer
-        # distinction (user vs project) is preserved in metadata.
         meta = dict(metadata or {})
         meta.setdefault("write_origin", "memory_tool")
         meta.setdefault("target", target)
@@ -619,21 +615,25 @@ class HyatlasMemoryProvider(MemoryProvider):
             + "\n</relevant-memories>"
         )
 
-    def _ensure_server_running(self) -> None:
-        """Lazy import + invoke the process manager to spawn the Go binary."""
-        if self._process is not None:
-            return
+    def _ensure_server_running(self) -> bool:
+        """Start the Go binary through the shared launcher; True iff it answers.
+
+        Same path as ``hermes hyatlas start``: an already-running server is
+        detected rather than spawned over, and the pidfile is written only for a
+        child that stayed alive.
+        """
         try:
             from . import process as process_mod
         except ImportError as e:
             logger.debug("process module unavailable: %s", e)
-            return
-        self._process = process_mod.HyatlasProcess(self._config)
-        try:
-            self._process.start()
-        except Exception as e:
-            logger.warning("failed to auto-start hyatlas-go: %s", e)
-            self._process = None
+            return False
+        result = process_mod.start_server(self._config, timeout=30.0)
+        if not result.get("ok"):
+            logger.warning("failed to auto-start hyatlas-go: %s", result.get("error"))
+            return False
+        if result.get("already_running"):
+            logger.info("hyatlas auto_start: %s", result.get("message"))
+        return bool(result.get("reachable"))
 
 
 # =============================================================================
@@ -676,6 +676,13 @@ def _slash_hyatlas(raw_args: str) -> str:
 
     try:
         provider = HyatlasMemoryProvider()
+        # start and stop manage the server, so they must run whether or not it answers.
+        if cmd == "start":
+            from . import process as process_mod
+            return json.dumps(process_mod.start_server(provider._config))
+        if cmd == "stop":
+            from . import process as process_mod
+            return json.dumps(process_mod.HyatlasProcess.stop_running(provider._config))
         if not provider.is_available():
             return json.dumps({
                 "ok": False,
@@ -697,15 +704,6 @@ def _slash_hyatlas(raw_args: str) -> str:
             resp = client.add(text=rest, user_id=provider._user_id,
                               agent_id=provider._agent_id)
             return json.dumps(resp)
-        if cmd == "start":
-            from . import process as process_mod
-            process = process_mod.HyatlasProcess(provider._config)
-            process.start()
-            return json.dumps({"ok": True, "started": True})
-        if cmd == "stop":
-            from . import process as process_mod
-            process_mod.HyatlasProcess.stop_running()
-            return json.dumps({"ok": True, "stopped": True})
         return json.dumps({"ok": False, "error": f"unknown subcommand: {cmd}"})
     except Exception as e:
         return json.dumps({"ok": False, "error": str(e)})

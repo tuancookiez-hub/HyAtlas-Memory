@@ -882,15 +882,17 @@ def test_pidfile_written_on_start_and_removed_on_cleanup(monkeypatch, tmp_path):
     monkeypatch.setattr(proc_mod, "PID_FILE", tmp_path / "hyatlas.pid")
     monkeypatch.setattr(proc_mod, "LOG_FILE", tmp_path / "hyatlas.log")
 
-    proc = proc_mod.HyatlasProcess({"binary_path": str(fake), "server_port": 19528})
+    proc = proc_mod.HyatlasProcess({"binary_path": str(fake), "server_port": _free_port()})
     try:
         proc.start()
         pidfile = tmp_path / "hyatlas.pid"
-        assert pidfile.exists(), "start() did not write the pidfile"
+        assert not pidfile.exists(), "pidfile written before the child was seen alive"
+        # Nothing answers on this port, so the child is alive but not serving.
+        assert proc.wait_started(timeout=1.0) == "starting"
+        assert pidfile.exists(), "wait_started did not record the live child's pid"
         assert pidfile.read_text().strip() == str(proc._proc.pid)
-        # The pidfile alone proves nothing: start() writes it whether or not the
-        # child survived. A fixture whose shebang or line endings are broken exits
-        # instantly and the test still passes, so assert the child is really alive.
+        # The pidfile alone proves nothing. A fixture whose shebang or line endings
+        # are broken exits instantly, so assert the child is really alive.
         assert proc._proc.poll() is None, (
             f"fake server exited immediately (rc={proc._proc.returncode}); the "
             f"fixture is not a runnable script on this platform")
@@ -913,10 +915,134 @@ def test_stop_running_refuses_to_kill_a_recycled_pid(monkeypatch, tmp_path):
                         lambda *a, **k: killed.append(a) or __import__("types").SimpleNamespace(stdout=""))
     monkeypatch.setattr(proc_mod.HyatlasProcess, "_is_server", staticmethod(lambda pid: False))
 
-    proc_mod.HyatlasProcess.stop_running()
+    result = proc_mod.HyatlasProcess.stop_running({"server_port": _free_port()})
 
     assert not killed, "stop_running force-killed a pid that is not hyatlas-go"
     assert not (tmp_path / "hyatlas.pid").exists(), "stale pidfile was left behind"
+    assert result["ok"] is True and result["stopped"] is False
+
+
+# ---------------------------------------------------------------------------
+# Start/stop truthfulness: a second start must not spawn over a live server,
+# and stop must say what it actually stopped.
+# ---------------------------------------------------------------------------
+
+_FAKE_HEALTH_SERVER = """#!{python}
+import http.server, os
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b'{{"status": "ok"}}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a):
+        pass
+http.server.ThreadingHTTPServer(("127.0.0.1", int(os.environ["HYATLAS_GO_PORT"])), H).serve_forever()
+"""
+
+
+def _redirect_process_files(monkeypatch, proc_mod, tmp_path):
+    monkeypatch.setattr(proc_mod, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(proc_mod, "PID_FILE", tmp_path / "hyatlas.pid")
+    monkeypatch.setattr(proc_mod, "LOG_FILE", tmp_path / "hyatlas.log")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="shebang fixtures are POSIX")
+def test_start_refuses_to_spawn_over_a_serving_server(monkeypatch, tmp_path):
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    srv = FakeV4Server()
+    try:
+        port = int(srv.base.rsplit(":", 1)[1])
+        (tmp_path / "hyatlas.pid").write_text("424242")  # someone else's pidfile
+        cfg = {"server_port": port, "binary_path": str(tmp_path / "missing-binary")}
+
+        with pytest.raises(proc_mod.ServerAlreadyRunning) as info:
+            proc_mod.HyatlasProcess(cfg).start()
+        assert info.value.serving is True
+
+        result = proc_mod.start_server(cfg)
+        assert result["ok"] is True and result["already_running"] is True
+        assert result["reachable"] is True and result["started"] is False
+        assert (tmp_path / "hyatlas.pid").read_text() == "424242", \
+            "a second start overwrote the existing pidfile"
+    finally:
+        srv.stop()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="shebang fixtures are POSIX")
+def test_start_reports_a_child_that_dies_during_startup(monkeypatch, tmp_path):
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    fake = tmp_path / "hyatlas-go"
+    fake.write_text("#!/bin/sh\nexit 3\n")
+    os.chmod(fake, 0o755)
+
+    result = proc_mod.start_server({"binary_path": str(fake), "server_port": _free_port()},
+                                   timeout=10.0)
+
+    assert result["ok"] is False and result["started"] is False
+    assert "exited during startup" in result["error"]
+    assert not (tmp_path / "hyatlas.pid").exists(), "a dead child left a pidfile behind"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="shebang fixtures are POSIX")
+def test_start_then_stop_a_real_child_reports_truthfully(monkeypatch, tmp_path):
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    fake = tmp_path / "hyatlas-go"
+    fake.write_text(_FAKE_HEALTH_SERVER.format(python=sys.executable))
+    os.chmod(fake, 0o755)
+    cfg = {"binary_path": str(fake), "server_port": _free_port()}
+
+    started = proc_mod.start_server(cfg, timeout=20.0)
+    assert started["ok"] is True and started["reachable"] is True, started
+    pid = int(started["pid"])
+    assert (tmp_path / "hyatlas.pid").read_text().strip() == str(pid)
+
+    again = proc_mod.start_server(cfg, timeout=5.0)
+    assert again["already_running"] is True and again["started"] is False
+
+    stopped = proc_mod.HyatlasProcess.stop_running(cfg)
+    assert stopped["ok"] is True and stopped["stopped"] is True, stopped
+    assert not (tmp_path / "hyatlas.pid").exists()
+
+
+def test_stop_reports_a_server_it_did_not_start(monkeypatch, tmp_path):
+    """Health answers but no pidfile: stop must refuse and say so, not claim success."""
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    srv = FakeV4Server()
+    try:
+        port = int(srv.base.rsplit(":", 1)[1])
+        result = proc_mod.HyatlasProcess.stop_running({"server_port": port})
+    finally:
+        srv.stop()
+    assert result["ok"] is False and result["stopped"] is False
+    assert result["running"] is True
+    assert "not started by this plugin" in result["error"]
+    assert f"127.0.0.1:{port}" in result["error"]
+
+
+def test_stop_with_dead_pid_and_no_server_is_not_a_stop(monkeypatch, tmp_path):
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    (tmp_path / "hyatlas.pid").write_text("999999")
+    result = proc_mod.HyatlasProcess.stop_running({"server_port": _free_port()})
+    assert result["ok"] is True and result["stopped"] is False and result["running"] is False
+    assert not (tmp_path / "hyatlas.pid").exists()
+
+
+def test_cleanup_never_removes_another_servers_pidfile(monkeypatch, tmp_path):
+    proc_mod = _load_sibling("process")
+    _redirect_process_files(monkeypatch, proc_mod, tmp_path)
+    (tmp_path / "hyatlas.pid").write_text("777777")
+    hp = proc_mod.HyatlasProcess({})
+    hp._pid = 111111
+    hp._cleanup()
+    assert (tmp_path / "hyatlas.pid").read_text() == "777777"
 
 
 @requires_fastapi
@@ -1177,7 +1303,6 @@ def test_llm_key_is_declared_secret_with_env_var():
     key = fields["llm_key"]
     assert key.get("secret") is True
     assert key.get("env_var") == "HYATLAS_LLM_KEY"
-    assert key.get("url"), "a secret field should say where to get one"
     # The non-secret pair must NOT be masked.
     for name in ("llm_base", "llm_model"):
         assert not fields[name].get("secret"), f"{name} should not be secret"
@@ -1576,3 +1701,12 @@ def test_config_schema_drops_manifest_only_fields():
     key = {f["key"]: f for f in settings.config_schema()}["llm_key"]
     assert key["secret"] is True
     assert key["env_var"] == "HYATLAS_LLM_KEY"
+
+
+def test_unreachable_hint_names_the_real_command():
+    """`hyatlas start` is not a command; the hint must say `hermes hyatlas start`."""
+    p = HyatlasMemoryProvider()
+    p._config = dict(p._config, server_port=_free_port())
+    reason = p.unavailable_reason()
+    assert "`hermes hyatlas start`" in reason
+    assert "Start it with `hyatlas start`" not in reason

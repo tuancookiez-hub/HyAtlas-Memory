@@ -103,7 +103,6 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
         "key": "llm_key", "type": "str", "default": "", "secret": True,
         "env_var": "HYATLAS_LLM_KEY",
         "label": "LLM API key",
-        "url": "https://platform.openai.com/api-keys",
         "description": "API key for the endpoint above. The setup wizard stores it "
                        "in Hermes' .env (0600) as HYATLAS_LLM_KEY, never in "
                        "hyatlas.json. The plugin never reads or logs it. Not "

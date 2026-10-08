@@ -154,7 +154,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
         client = _client_from_args(args)
         if not client.is_reachable():
             _print({"error": "server unreachable",
-                    "hint": "Start it with `hyatlas start` or `hermes hyatlas start`"})
+                    "hint": "Start it with `hermes hyatlas start`. The `hermes hyatlas` command "
+                            "exists only while memory.provider is hyatlas (`hermes memory setup`)."})
             return 1
         _print(client.status())
         return 0
@@ -226,21 +227,13 @@ def _cmd_start(args: argparse.Namespace) -> int:
     # No canonical launcher (non-Windows / custom layout): spawn the binary
     # directly. Set HYATLAS_GO_DATA when the binary does not sit next to its
     # data/ dir — the server otherwise creates a fresh store beside itself.
+    # start_server refuses to spawn over a server that already answers, reports a
+    # child that died during startup as ok:false, and rejects an invalid mode or
+    # sync setting before spawning.
     from . import process as process_mod
-    proc = process_mod.HyatlasProcess(provider._config)
-    try:
-        proc.start()
-    except (FileNotFoundError, ValueError) as e:
-        # ValueError: an invalid mode or sync setting, rejected before spawning.
-        _print({"ok": False, "error": str(e)})
-        return 1
-    client = provider._ensure_client()
-    if client.wait_until_reachable(timeout=30.0):
-        _print({"ok": True, "started": True, "reachable": True})
-        return 0
-    _print({"ok": True, "started": True, "reachable": False,
-            "hint": "binary started but not reachable on the configured port"})
-    return 0
+    result = process_mod.start_server(provider._config, timeout=30.0)
+    _print(result)
+    return 0 if result.get("ok") else 1
 
 
 def _cmd_stop(args: argparse.Namespace) -> int:
@@ -249,9 +242,9 @@ def _cmd_stop(args: argparse.Namespace) -> int:
     if ps1 is not None:
         return _run_launcher(ps1, "stop", timeout=60)
     from . import process as process_mod
-    process_mod.HyatlasProcess.stop_running()
-    _print({"ok": True, "stopped": True})
-    return 0
+    result = process_mod.HyatlasProcess.stop_running(provider._config)
+    _print(result)
+    return 0 if result.get("ok") else 1
 
 
 def _main_standalone(argv: Any = None) -> int:

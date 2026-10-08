@@ -9,8 +9,12 @@
 #   2. Downloads a prebuilt release binary for your platform, if one exists
 #   3. If no prebuilt binary exists, falls back to building from source
 #      (requires Go 1.26+ and a C compiler — it checks and tells you)
-#   4. Fetches the BGE-small embedding model (~133 MB) — required for the
-#      server to run. Cached in ~/.hyatlas/models or $HYATLAS_MODEL_DIR.
+#   4. Source builds only: fetches the BGE-small embedding model (~133 MB) and
+#      onnxruntime. Release binaries are embedded builds and already carry the
+#      model, so nothing is downloaded for them. Cached in ~/.hyatlas/models
+#      (Windows: %LOCALAPPDATA%\hyatlas\models) or $HYATLAS_MODEL_DIR. If the
+#      download fails, the binary is still installed, the manual steps are printed,
+#      and the script exits non-zero at the end.
 #   5. Installs the binary to a directory on your PATH
 #   6. Verifies the install by starting the server and hitting /healthz
 #
@@ -44,6 +48,11 @@ VERSION="${HYATLAS_VERSION:-v4.3.3}"
 INSTALL_DIR="${HYATLAS_INSTALL_DIR:-}"
 MODEL_DIR="${HYATLAS_MODEL_DIR:-}"
 NO_MODEL="${HYATLAS_NO_MODEL:-0}"
+# 1 when the binary came from a release asset. Release binaries are built with
+# -tags embedded (.github/workflows/release.yml), so they carry the BGE model
+# and onnxruntime needs no separate download.
+BINARY_EMBEDDED=0
+MODEL_STATUS=0
 
 # Model files needed by the server (BGE-small-en-v1.5, Xenova ONNX export)
 MODEL_BASE="https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main"
@@ -59,6 +68,8 @@ info()  { printf '\033[0;34m==>\033[0m %s\n' "$*"; }
 ok()    { printf '\033[0;32m  ✓\033[0m %s\n' "$*"; }
 warn()  { printf '\033[0;33m  !\033[0m %s\n' "$*" >&2; }
 err()   { printf '\033[0;31m  ✗\033[0m %s\n' "$*" >&2; exit 1; }
+# soft_err: a failure the installer can survive. Prints like err but returns 1.
+soft_err() { printf '\033[0;31m  ✗\033[0m %s\n' "$*" >&2; }
 
 # ---------------------------------------------------------------------------
 # Platform detection
@@ -134,6 +145,7 @@ try_download_binary() {
     info "Looking for prebuilt binary: $ASSET_NAME"
     if curl -fsSL --retry 3 -o "$TMP_DIR/$BINARY_NAME" "$url" 2>/dev/null; then
         ok "Downloaded prebuilt binary ($(du -h "$TMP_DIR/$BINARY_NAME" | cut -f1))"
+        BINARY_EMBEDDED=1
         return 0
     fi
     info "No prebuilt binary for this platform yet — will build from source."
@@ -193,8 +205,27 @@ set_model_dir() {
     esac
 }
 
+# print_manual_model_steps — where the files go, for a model fetched by hand.
+print_manual_model_steps() {
+    warn "The BGE model could not be installed. The server will not start without it."
+    warn "Download these into $MODEL_DIR/ (create it first), then re-run this installer:"
+    warn "  1. $MODEL_BASE/onnx/model.onnx  ->  $MODEL_DIR/bge-small-en-v1.5.onnx"
+    warn "  2. $MODEL_BASE/vocab.txt        ->  $MODEL_DIR/vocab.txt"
+    warn "  3. onnxruntime ${ORT_VERSION} shared library (onnxruntime.dll / libonnxruntime.so /"
+    warn "     libonnxruntime.dylib) from https://github.com/microsoft/onnxruntime/releases"
+    warn "     -> $MODEL_DIR/"
+    warn "Or set HYATLAS_MODEL_DIR to the folder that already holds them. The server also"
+    warn "looks in a models/ folder next to the binary."
+}
+
+# download_model — returns 1 (never exits) on failure, so main() can still install
+# the binary. Release binaries skip this entirely: they already carry the model.
 download_model() {
-    [ "$NO_MODEL" = "1" ] && { warn "Skipping model download (HYATLAS_NO_MODEL=1)."; return; }
+    if [ "$BINARY_EMBEDDED" = "1" ]; then
+        ok "Release binary is embedded: the BGE model and onnxruntime are included, no download needed."
+        return 0
+    fi
+    [ "$NO_MODEL" = "1" ] && { warn "Skipping model download (HYATLAS_NO_MODEL=1)."; return 0; }
 
     # Skip if the model AND the onnxruntime library are both already there
     local need_download=0
@@ -220,19 +251,19 @@ download_model() {
         info "  fetching $local_name"
         if ! curl -fsSL --retry 3 -o "$MODEL_DIR/$local_name.part" "$url"; then
             rm -f "$MODEL_DIR/$local_name.part"
-            err "Model download failed: $url
-    The server will not start without the BGE model.
-    You can:
-      (a) re-run this installer when you have a better connection, or
-      (b) download $local_name manually from $url
-          and place it in $MODEL_DIR/"
+            soft_err "Model download failed: $url"
+            print_manual_model_steps
+            return 1
         fi
         mv "$MODEL_DIR/$local_name.part" "$MODEL_DIR/$local_name"
     done
 
     # The onnxruntime shared library is also required — the embedder needs it.
     # Name and download URL differ per OS.
-    download_onnxruntime
+    if ! download_onnxruntime; then
+        print_manual_model_steps
+        return 1
+    fi
     ok "Model + onnxruntime library ready in $MODEL_DIR"
 }
 
@@ -260,7 +291,7 @@ download_onnxruntime() {
         windows)
             url="${base}.zip"
             curl -fsSL --retry 3 -o "$payload/ort.zip" "$url" \
-                || err "onnxruntime download failed: $url"
+                || { soft_err "onnxruntime download failed: $url"; return 1; }
             # Extraction fallback chain: bsdtar (ships with Windows 10+ and
             # reads zip natively) -> unzip -> PowerShell Expand-Archive.
             if tar -xzf "$payload/ort.zip" -C "$payload" 2>/dev/null; then
@@ -271,16 +302,16 @@ download_onnxruntime() {
                 powershell -NoProfile -Command \
                     "Expand-Archive -Force '$(cygpath -w "$payload/ort.zip" 2>/dev/null || echo "$payload/ort.zip")' '$(cygpath -w "$payload" 2>/dev/null || echo "$payload")'"
             else
-                err "No unzip tool found (tried tar, unzip, powershell).
-    Download onnxruntime.dll manually from $url
-    and place it in $MODEL_DIR/"
+                soft_err "No unzip tool found (tried tar, unzip, powershell)."
+                soft_err "Download onnxruntime.dll manually from $url and place it in $MODEL_DIR/"
+                return 1
             fi
             cp "$payload/onnxruntime-${pkg}-${ORT_VERSION}/lib/onnxruntime.dll" "$MODEL_DIR/"
             ;;
         *)
             url="${base}.tgz"
             curl -fsSL --retry 3 -o "$payload/ort.tgz" "$url" \
-                || err "onnxruntime download failed: $url"
+                || { soft_err "onnxruntime download failed: $url"; return 1; }
             tar -xzf "$payload/ort.tgz" -C "$payload"
             local src="$payload/onnxruntime-${pkg}-${ORT_VERSION}/lib"
             if [ "$PLATFORM_OS" = "macos" ]; then
@@ -607,12 +638,19 @@ main() {
         build_from_source
     fi
 
-    download_model
+    # A failed model fetch must not stop the binary from being installed.
+    # Record it, finish the install, and exit non-zero at the very end.
+    download_model || MODEL_STATUS=$?
     install_binary
     ensure_on_path
     verify_install || true
     onboarding
     print_next_steps
+
+    if [ "$MODEL_STATUS" -ne 0 ]; then
+        warn "Installed the binary, but the model is missing (exit $MODEL_STATUS). Follow the steps above, then re-run this installer."
+        exit "$MODEL_STATUS"
+    fi
 }
 
 main "$@"
