@@ -3,11 +3,27 @@
 **v4.5.1** | 2026-10-11 | Release: tuancookiez-hub/HyAtlas-Memory
 
 ## Running
-- Release is 4.5.0: `Version` const in server.go, `plugins/hyatlas/plugin.yaml`, the provider, the dashboard manifest and the install.sh default `HYATLAS_VERSION=v4.5.0` all say so. The 4.5.0 tag and its release assets exist only once the release PR is merged and tagged; until then the installer builds from source.
-- Plugin: `hyatlas` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hyatlas\` + Hermes Desktop pane
+- Release: **v4.5.1** (2026-10-11), tag on merge commit 568576e, 3 release binaries. `Version` in server.go, `plugins/hyatlas/plugin.yaml`, the provider, the dashboard manifest and the install.sh default `HYATLAS_VERSION=v4.5.1` all agree.
+- Install folder `F:\HyAtlas-Memory-Go` is a checkout of `main`, started with `hyatlas-go.ps1 start`. Personal settings (model, batch, owner aliases) live in the git-ignored `hyatlas-go.local.ps1`.
+- Plugin: `hyatlas` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hyatlas\` + Hermes Desktop pane. The catalog entry `plugin-catalog/hyatlas.yaml` (NousResearch/hermes-agent) pins 4.5.0; 4.5.1 changed no plugin code, so there was no catalog bump.
 - Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`)
 
-## 4.5.0 (branch fix/windows-tests-and-consolidation)
+## 4.6.0 (merged, not yet tagged or released)
+Recall knows what is current: extraction is shown the owner's nearest facts and open
+intentions and can supersede a fact whose value changed or an intention that is done;
+search fades older memories (floor 92%, per-layer half-lives) and hides intentions
+older than 7 days. Consolidation sees dates and keeps events out of L5; dedupe_facts
+covers L6. The server zips its data dir daily into `<data>-snapshots` (keeps 7). The
+plugin can start the server when Hermes loads it, opt-in via `auto_start` (off by
+default). `--version` / `--help`. Verified on a copy of the live store, including a
+snapshot restored to identical layer counts.
+
+## 4.5.1
+Identifier queries (`RSI(2)`, `19528`, `HYATLAS_SYNC_EXTRACT`) return only memories that
+contain the identifier and fill their result slots; the launcher finds its own folder and
+runs `hyatlas-go.local.ps1` on start. See CHANGELOG.md.
+
+## 4.5.0
 See CHANGELOG.md for the full list. In short: the plugin stores turns at turn size
 (no tool output) and recalls on the current message; search honours the owner, with
 aliases, a 0.60 floor, no repeated text, hybrid keyword + vector ranking and an L5 cap;
@@ -18,7 +34,7 @@ default; maintenance endpoints (HYATLAS_ADMIN=on) compact old raw rows and merge
 duplicate facts. Verified end to end on fresh stores: lite fills L2, pro L1-L4 + L7,
 ultra all seven layers, each found by a layer-scoped search.
 
-## 4.4.0 (merged, branch claude/busy-faraday-3tvefr)
+## 4.4.0 (shipped in the 4.5.0 release; never released on its own)
 - **Plugin start/stop are truthful:** `hermes hyatlas start` does not spawn over a server that already answers (reports `already_running` and the pid when known); the pidfile is written only once the child is seen alive; `stop` returns `ok:false` for a server it did not start.
 - **Installer:** a failed BGE model download no longer aborts the install; release binaries (embedded) skip the download entirely.
 - **Plugin:** `on_memory_write` is documented as a raw (L2) write, not an L1 mirror; the `llm_key` settings link is removed.
@@ -33,7 +49,6 @@ ultra all seven layers, each found by a layer-scoped search.
 - **Installer:** source builds fetch the onnxruntime package for the CPU (Linux x64/aarch64, macOS arm64, Windows x64/arm64; Intel macOS stops with a clear error).
 - **Plugin auto-start lock:** two Hermes sessions auto-starting at once start one server.
 - Status note: the `/api/v1/status` `graph_nodes` / `graph_edges`, and the `/api/graph-counts` `l5_knowledge` / `relation_count`, count all owners. Per-owner counts are in `/api/v1/graph` (`node_count` / `edge_count`).
-- See CHANGELOG.md `[Unreleased]` for the full list.
 
 ## Done (v4.3.x — slow path)
 - **Consolidation pass detached from the request (v4.3.2):** `POST /api/v1/digest` runs on its own context, still bounded by `consolidateTimeout` (10 min), so a client that stops waiting no longer cancels a pass. Passes are single-flight.
@@ -85,6 +100,6 @@ ultra all seven layers, each found by a layer-scoped search.
 ## Next
 - [x] **Extraction LLM key 401 — FIXED.** Root cause was NOT rate-limiting (JWT shows rpm 800, paid_access, no cap) — it's JWT expiry: the Nous key is a 1-hour token Hermes rotates in auth.json, but the server froze it at startup. Fix: `HYATLAS_LLM_KEY_FILE` → `resolveKey()` reads live per call; ps1 points at auth.json; 4 Go tests + E2E verified (extraction fired +2 L3 in 10s).
 - [x] Release v4.2.1 (L5 unification + live-key-file + plugin tests + CI job) — shipped; v4.2.5 through v4.3.3 tags exist since
-- [ ] Catalog submission PR to NousResearch/hermes-agent (`plugin-catalog/hyatlas.yaml`) — HELD per Tuna until banner + screenshots are ready; re-pin sha to the released commit
+- [x] Catalog listing in NousResearch/hermes-agent (`plugin-catalog/hyatlas.yaml`) — merged 2026-10-09, pinned to the 4.5.0 commit
 - [x] Live migration on this machine: plugins/hyatlas + config.yaml (provider/enabled) + desktop-plugins — DONE (provider resolves, validate green, CLI works)
 - [ ] Backups: `backup_paths` absolute + a daily data snapshot (parked by Tuna 2026-10-06)
