@@ -75,6 +75,18 @@ def _is_compaction(text: str) -> bool:
     return "CONTEXT COMPACTION" in head or "Conversation Summary" in head
 
 
+def _iso_date(unix_seconds: Any) -> str:
+    """YYYY-MM-DD (UTC) for a search hit's gmt_created, or "" when it has none."""
+    try:
+        ts = int(unix_seconds)
+    except (TypeError, ValueError):
+        return ""
+    if ts <= 0:
+        return ""
+    import datetime
+    return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime("%Y-%m-%d")
+
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -653,8 +665,12 @@ class HyatlasMemoryProvider(MemoryProvider):
                 score = m.get("score", 0.0)
                 if content:
                     snippet = content[:300]
+                    # The date lets the agent tell "true on Oct 6" from "true now":
+                    # without it an old status line reads like the current one.
+                    date = _iso_date(m.get("gmt_created"))
+                    when = f", {date}" if date else ""
                     channel_lines.append(
-                        f"- ({layer}, score {score:.2f}) {snippet}"
+                        f"- ({layer}{when}, score {score:.2f}) {snippet}"
                     )
             if len(channel_lines) > 1:
                 channels.append("\n".join(channel_lines))

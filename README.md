@@ -344,7 +344,7 @@ and start it again.
 
 - **Vector store:** [Chromem-go](https://github.com/philippgille/chromem-go) v0.7.0 — embedded, disk-persisted, no server process
 - **Embeddings:** `bge/bge.go` — BGE-small-en-v1.5 (384-dim) via onnxruntime-go (cgo). WordPiece tokenizer, mean-pool, L2-normalize. No Python.
-- **LLM extraction:** Via any OpenAI-compatible endpoint. One structured call per write (pro, ultra) fills L3 Fact, L4 Summary, L7 Intention and, for user preferences, L1 Profile from the L2 Raw entry. The call is shown the owner's few nearest existing facts and open intentions, so it can mark a fact whose value changed as replaced, and an intention as continued or done; those rows are superseded, not deleted. Blocking or background follows `HYATLAS_SYNC_EXTRACT`. L5 and L6 come from the separate ultra consolidation pass.
+- **LLM extraction:** Via any OpenAI-compatible endpoint. One structured call per write (pro, ultra) fills L3 Fact, L4 Summary, L7 Intention and, for user preferences, L1 Profile from the L2 Raw entry. The call is shown the owner's few nearest existing facts and open intentions, so it can mark a fact whose value changed as replaced, and an intention as moved on or done; those rows are superseded, not deleted. An intention is written only for a goal beyond the one exchange, and not again for a turn that just continues an open one. The plugin shows each recalled memory with its date. Blocking or background follows `HYATLAS_SYNC_EXTRACT`. L5 and L6 come from the separate ultra consolidation pass.
 - **Graph:** `graph/graph.go` — exact-match traversal over JSON-persisted nodes and relations, scoped per owner
 - **HTTP:** Standard Go `net/http`. No framework.
 
