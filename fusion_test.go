@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -173,5 +174,48 @@ func TestRequireTermsDropsLookAlikes(t *testing.T) {
 	got := fusedIDs(requireTerms(hits, identifierTerms("HYATLAS_SYNC_EXTRACT")))
 	if len(got) != 1 || got[0] != "hit" {
 		t.Errorf("requireTerms = %v, want [hit]", got)
+	}
+}
+
+// Through the handler: when an identifier's best keyword matches are all L5
+// relations, the L5 cap must not leave the result short; facts fill the rest.
+func TestIdentifierSearchFillsPastL5Cap(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	g := srv.store.Graph()
+	for i := 0; i < 15; i++ {
+		if _, err := g.AddEdgeWithSources("alice", "a1", fmt.Sprintf("svc%d", i), "listens_on", "port 19528", []string{"r"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := srv.store.BackfillL5(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		text := fmt.Sprintf("fact %d: the HyAtlas server listens on port 19528 by default on this machine", i)
+		if err := srv.store.Add(memory.L3Fact, newID(), text, map[string]string{"user_id": "alice", "agent_id": "a1"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := httptest.NewRecorder()
+	srv.handleSearch(w, httptest.NewRequest("POST", "/api/v1/search",
+		strings.NewReader(`{"query":"19528","user_id":"alice","agent_id":"a1","limit":5}`)))
+	var resp struct {
+		Memories map[string][]map[string]any `json:"memories"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	l5, facts := 0, 0
+	for _, ch := range resp.Memories {
+		for _, m := range ch {
+			if m["layer"] == "l5_knowledge" {
+				l5++
+			} else {
+				facts++
+			}
+		}
+	}
+	if l5+facts != 5 || l5 > 2 {
+		t.Errorf("got %d L5 + %d other hits, want 5 in total with at most 2 L5", l5, facts)
 	}
 }

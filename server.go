@@ -397,7 +397,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	case readVector:
 		res = refineHits(res, minScore, 0)
 	default:
-		kw, err := s.store.KeywordSearch(body.Query, limit*3, memory.Layer(body.Layer), users, agentID)
+		// Keyword candidates are fetched deep: BM25 favours short documents, so an
+		// identifier's top ranks can all be terse L5 relations, which the L5 cap below
+		// then thins out. A shallow fetch left nothing else to fill the slots (2 hits
+		// for "19528" though 20 facts mention it). Ranking already scores every row.
+		kw, err := s.store.KeywordSearch(body.Query, limit*10, memory.Layer(body.Layer), users, agentID)
 		if err != nil {
 			jsonResponse(w, 500, map[string]any{"error": err.Error()})
 			return

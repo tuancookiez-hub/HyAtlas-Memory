@@ -11,6 +11,11 @@
   and keyword search such a query now keeps only hits containing the identifier's
   terms. Vector-only search (`reader: legacy`) is unchanged. (`fusion.go`
   `identifierTerms`, `requireTerms`)
+- **An identifier query fills its result slots.** Keyword candidates were fetched three
+  deep per slot; BM25 favours short documents, so an identifier's top ranks could all
+  be terse L5 relations, which the L5 cap then thinned to two, leaving nothing to fill
+  the rest (`19528` returned 2 hits though 20 facts mention it). They are now fetched
+  ten deep.
 
 ### Changed
 
