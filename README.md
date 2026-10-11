@@ -6,9 +6,7 @@
 
 HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It replaces the Python floor (venv, zvec, Kuzu, FastAPI, HTTP embed subprocess) with a single binary: an embedded Chromem vector store, in-process BGE-small embeddings via onnxruntime-go, and LLM fact extraction, where `HYATLAS_MODE` sets how much the server reasons and `HYATLAS_SYNC_EXTRACT` sets whether a write waits for extraction. The 7-layer memory model (Profile · Raw · Fact · Summary · Knowledge · Schema · Intention) is implemented, including L4 Summary extraction, which was dormant in v3.5.
 
-**Previous floor:** [HyAtlas v3.5.0](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.5.0) — Python/Zvec/Kuzu. See [V3_V4_COMPARISON.md](V3_V4_COMPARISON.md) for the full side-by-side and [CHANGELOG.md](CHANGELOG.md) for the migration history.
-
-![v3.5 → v4.0.1](assets/hyatlas-v3.5-to-v4.0.1.png)
+**Current release:** [v4.5.1](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v4.5.1). The last Python release was [v3.5.0](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.5.0) (Zvec/Kuzu); it is no longer maintained. [CHANGELOG.md](CHANGELOG.md) has the full history.
 
 ---
 
@@ -40,10 +38,6 @@ install by starting the server and probing `/healthz`.
   built instead only when that tag is missing and `HYATLAS_VERSION` is not set, and
   the installer warns about it. If you set `HYATLAS_VERSION` and the tag is missing,
   the install fails.
-- **Until the v4.5.1 release assets are published**, the installer finds no prebuilt
-  binary and builds from source. It clones the `v4.5.1` tag, or the default branch if
-  that tag does not exist yet, with a warning. The default branch is not used when
-  `HYATLAS_VERSION` is set.
 - **Go 1.26 or newer** is required for source builds. A plain `go build` with an
   older Go and the default `GOTOOLCHAIN=auto` fetches the toolchain that `go.mod`
   names (1.26.5). The installer does not do that: it stops on an older `go`.
@@ -351,14 +345,13 @@ scripts\hyatlas-v4-start.bat
 ### Differences from v3.5 (historical)
 
 This table lists differences that the code in this repository shows. It does not
-include benchmark numbers. The v3.5 comparison and its measurements are in
-[V3_V4_COMPARISON.md](V3_V4_COMPARISON.md).
+include benchmark numbers.
 
 | | v3.5 (Python) | v4 (Go) |
 |---|---|---|
 | Runtime | venv, zvec, Kuzu, FastAPI, HTTP embed subprocess | One binary, no Python |
 | Release binary | — | About 160 MB, embedded (model included). A plain build is small and needs a model folder |
-| Listening port | see V3_V4_COMPARISON.md | `19528` by default |
+| Listening port | `19527` | `19528` by default |
 | L4 Summary | Dormant | Active |
 | Restart | — | Reloads the doc index and graph from the data directory |
 
@@ -687,9 +680,7 @@ from `register(ctx)`.
 
 HyAtlas v4 is a **binary replacement** for the Python v3.5 floor. The memory data formats are incompatible (zvec → Chromem, Kuzu → JSON graph). The HTTP routes are not identical: v4 adds endpoints (`/api/v1/digest`, `/api/v1/graph-as-of`, `/api/v1/learning/graph`) and changes some defaults, such as owner scoping on graph reads. The API table above is the reference.
 
-**If you need to keep v3.5 running while testing v4**, use different ports. v4 listens on `localhost:19528` by default (`HYATLAS_GO_PORT` changes it). See [V3_V4_COMPARISON.md](V3_V4_COMPARISON.md) for the v3.5 side.
-
-The full v3.5 → v4 side-by-side (architecture, performance, reliability, API compatibility) is in [V3_V4_COMPARISON.md](V3_V4_COMPARISON.md).
+**If you need to keep v3.5 running while testing v4**, use different ports. v3.5 listened on `19527`; v4 listens on `localhost:19528` by default (`HYATLAS_GO_PORT` changes it). v3.5 is no longer maintained, and there is no tool that converts its data, so memories stored by v3.5 must be written again through v4's `/api/v1/add` if you want them.
 
 ---
 
