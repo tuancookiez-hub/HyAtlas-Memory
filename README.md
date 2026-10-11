@@ -679,7 +679,7 @@ except `request_timeout`, which the wizard does not write there. Set that one in
 plugin README's settings table overrides them. The defaults (`127.0.0.1:19528`,
 `auto_start: false`) work with no config at all.
 
-With `auto_start: true`, the plugin starts the server as soon as Hermes loads it (in
+`auto_start` is opt-in and off by default. With `auto_start: true`, the plugin starts the server as soon as Hermes loads it (in
 the background, so loading never waits), as well as when a session begins. A Hermes
 gateway that starts at logon therefore brings the server up after a reboot without
 anything else to set up.
