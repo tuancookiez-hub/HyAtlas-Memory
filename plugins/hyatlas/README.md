@@ -364,7 +364,9 @@ The plugin runs no shell. It starts child processes in these cases only:
   never discovered automatically. Only set `launcher_path` to a script you trust.
   The repository's `hyatlas-go.ps1` reads Hermes' `auth.json` to obtain a Nous
   Portal token (see Credentials). Do not point `launcher_path` at it unless you
-  want that.
+  want that. On `start` it also runs `hyatlas-go.local.ps1` from its own folder, if
+  that file exists: a git-ignored file for your own `HYATLAS_*` settings (model,
+  batch size, owner aliases); see `hyatlas-go.local.ps1.example`.
 - **Windows, stop and liveness checks.** The plugin runs `taskkill` to stop the
   pidfile's process, and `tasklist` to confirm the pid is a `hyatlas-go`.
 - **macOS, liveness check.** The plugin runs `ps` to confirm the pid is a `hyatlas-go`.

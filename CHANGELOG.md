@@ -1,5 +1,30 @@
 # Changelog
 
+## [4.5.1] — 2026-10-11
+
+### Fixed
+
+- **Identifier queries return only memories that mention the identifier.** A short
+  query (up to three words) holding a word such as `RSI(2)`, `Reg-T`, `19528` or
+  `HYATLAS_SYNC_EXTRACT` came back with the keyword matches plus one or two embedding
+  look-alikes ("hy_memory renamed to hyatlas" for `HYATLAS_SYNC_EXTRACT`). In hybrid
+  and keyword search such a query now keeps only hits containing the identifier's
+  terms. Vector-only search (`reader: legacy`) is unchanged. (`fusion.go`
+  `identifierTerms`, `requireTerms`)
+- **An identifier query fills its result slots.** Keyword candidates were fetched three
+  deep per slot; BM25 favours short documents, so an identifier's top ranks could all
+  be terse L5 relations, which the L5 cap then thinned to two, leaving nothing to fill
+  the rest (`19528` returned 2 hits though 20 facts mention it). They are now fetched
+  ten deep.
+
+### Changed
+
+- **The sample launcher keeps personal settings out of the repository.** `hyatlas-go.ps1`
+  now finds its folder itself (it had one machine's path hard-coded) and, on `start`,
+  runs `hyatlas-go.local.ps1` beside it if present, before its defaults. That file is
+  git-ignored; `hyatlas-go.local.ps1.example` lists the usual settings (model, batch
+  size, owner aliases).
+
 ## [4.5.0] — 2026-10-09
 
 Fixes found by running 4.4.0 against a real store. The largest: the Hermes plugin

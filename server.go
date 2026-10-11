@@ -27,7 +27,7 @@ import (
 // It is exposed on /api/v1/status and /api/info so every client (Desktop pane,
 // web dashboard, CLI) reports the real running version instead of hardcoding
 // a "v4" badge that silently goes stale on each release. Bump in one place.
-const Version = "4.5.0"
+const Version = "4.5.1"
 
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {
@@ -397,7 +397,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	case readVector:
 		res = refineHits(res, minScore, 0)
 	default:
-		kw, err := s.store.KeywordSearch(body.Query, limit*3, memory.Layer(body.Layer), users, agentID)
+		// Keyword candidates are fetched deep: BM25 favours short documents, so an
+		// identifier's top ranks can all be terse L5 relations, which the L5 cap below
+		// then thins out. A shallow fetch left nothing else to fill the slots (2 hits
+		// for "19528" though 20 facts mention it). Ranking already scores every row.
+		kw, err := s.store.KeywordSearch(body.Query, limit*10, memory.Layer(body.Layer), users, agentID)
 		if err != nil {
 			jsonResponse(w, 500, map[string]any{"error": err.Error()})
 			return
@@ -406,6 +410,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			res = nil
 		}
 		res = fuseHits(res, kw, minScore, 0)
+		// A query that is an identifier (RSI(2), HYATLAS_SYNC_EXTRACT, a port) is
+		// answered only by memories that mention it; embedding look-alikes are noise.
+		if terms := identifierTerms(body.Query); len(terms) > 0 {
+			res = requireTerms(res, terms)
+		}
 	}
 	if body.Layer == "" {
 		res = capLayer(res, memory.L5Knowledge, l5Share(limit))

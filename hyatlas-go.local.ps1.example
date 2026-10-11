@@ -1,0 +1,17 @@
+# Copy to hyatlas-go.local.ps1 (git-ignored) beside hyatlas-go.ps1 and edit.
+# hyatlas-go.ps1 runs it on `start`, before its own defaults, so what you set here
+# wins. Any HYATLAS_* server variable can go here; see the README's settings table.
+
+# Extraction model on the Nous Portal endpoint the launcher pairs with your key.
+# $env:HYATLAS_LLM_MODEL = "stepfun/step-5-preview:free"
+
+# Facts per consolidation call (default 50). Lower it if a slow model misses the
+# 10-minute pass limit.
+# $env:HYATLAS_CONSOLIDATE_BATCH = "50"
+
+# One person reaching Hermes under several user IDs (a messaging-gateway ID and the
+# CLI's "default"): search treats each group as one owner. Groups separated by ";".
+# $env:HYATLAS_USER_ALIASES = "<gateway-user-id>,default"
+
+# Mode: lite (no LLM call), pro, or ultra (default).
+# $env:HYATLAS_MODE = "ultra"
