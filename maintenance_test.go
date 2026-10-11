@@ -199,3 +199,39 @@ func TestDedupeFactsL5Layer(t *testing.T) {
 		t.Errorf("live L5 = %v, want only the newer relation", live)
 	}
 }
+
+// dedupe_facts with "layer": "l6_schema" supersedes the older of two schemas that
+// say the same thing, keeping the newer, and leaves a different schema alone.
+func TestDedupeFactsL6Layer(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	srv.admin = true
+	owner := map[string]string{"user_id": "u", "agent_id": "a"}
+	add := func(id, text, ts string) {
+		meta := map[string]string{"ts": ts}
+		for k, v := range owner {
+			meta[k] = v
+		}
+		if err := srv.store.Add(memory.L6Schema, id, text, meta); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("old", "Pilot trades stay within the capital cap.", "2026-09-03T00:00:00Z")
+	add("new", "Pilot trades stay within the capital cap.", "2026-10-11T00:00:00Z")
+	add("other", "Health probes can report OK while the service serves no data.", "2026-10-11T00:00:00Z")
+	w := httptest.NewRecorder()
+	srv.handleDedupeFacts(w, httptest.NewRequest("POST", "/api/v1/admin/dedupe_facts",
+		strings.NewReader(`{"layer": "l6_schema", "threshold": 0.999, "dry_run": false}`)))
+	var out map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+	if w.Code != 200 || out["duplicates"] != float64(1) {
+		t.Fatalf("dedupe l6 = %d %v, want 200 and 1 duplicate", w.Code, out)
+	}
+	live, _ := srv.store.List(memory.L6Schema, "", "", 10, 0, false)
+	ids := map[string]bool{}
+	for _, d := range live {
+		ids[d.ID] = true
+	}
+	if len(live) != 2 || !ids["new"] || !ids["other"] {
+		t.Errorf("live L6 = %v, want new and other", live)
+	}
+}

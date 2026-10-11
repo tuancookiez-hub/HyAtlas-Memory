@@ -264,8 +264,12 @@ func (s *Server) handleDedupeFacts(w http.ResponseWriter, r *http.Request) {
 	case "", string(memory.L3Fact):
 	case string(memory.L5Knowledge):
 		layer = memory.L5Knowledge
+	case string(memory.L6Schema):
+		// Consolidation passes over overlapping windows restate the same pattern in
+		// slightly different words, and nothing else merges L6.
+		layer = memory.L6Schema
 	default:
-		jsonResponse(w, 400, map[string]any{"error": "layer must be l3_fact or l5_knowledge"})
+		jsonResponse(w, 400, map[string]any{"error": "layer must be l3_fact, l5_knowledge or l6_schema"})
 		return
 	}
 	facts, _ := s.store.List(layer, "", "", 1<<30, 0, false)

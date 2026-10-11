@@ -91,6 +91,7 @@ function Status-V4 {
     try {
         $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/v1/status" -TimeoutSec 4 -UseBasicParsing
         $d  = $r.Content | ConvertFrom-Json
+        Write-Host "  version   : $($d.version)"
         Write-Host "  LLM       : $($d.llm_model)" -ForegroundColor Yellow
         Write-Host "  writes    : $($d.writes)"
         Write-Host "  searches  : $($d.searches)"

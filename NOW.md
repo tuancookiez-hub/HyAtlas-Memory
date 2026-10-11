@@ -8,6 +8,16 @@
 - Plugin: `hyatlas` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hyatlas\` + Hermes Desktop pane. The catalog entry `plugin-catalog/hyatlas.yaml` (NousResearch/hermes-agent) pins 4.5.0; 4.5.1 changed no plugin code, so there was no catalog bump.
 - Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`)
 
+## 4.6.0 (merged, not yet tagged or released)
+Recall knows what is current: extraction is shown the owner's nearest facts and open
+intentions and can supersede a fact whose value changed or an intention that is done;
+search fades older memories (floor 92%, per-layer half-lives) and hides intentions
+older than 7 days. Consolidation sees dates and keeps events out of L5; dedupe_facts
+covers L6. The server zips its data dir daily into `<data>-snapshots` (keeps 7). The
+plugin can start the server when Hermes loads it, opt-in via `auto_start` (off by
+default). `--version` / `--help`. Verified on a copy of the live store, including a
+snapshot restored to identical layer counts.
+
 ## 4.5.1
 Identifier queries (`RSI(2)`, `19528`, `HYATLAS_SYNC_EXTRACT`) return only memories that
 contain the identifier and fill their result slots; the launcher finds its own folder and

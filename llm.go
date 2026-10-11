@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"unicode"
 )
 
 // LLMClient wraps an OpenAI-compatible chat completions endpoint.
@@ -110,12 +111,52 @@ type Extraction struct {
 	Knowledge []Relation `json:"knowledge,omitempty"`
 	Schemas   []Schema   `json:"schemas,omitempty"`
 	Intention *Intention `json:"intention,omitempty"`
+	// IntentionsDone lists open intentions (shown to the model as context) that
+	// this input shows finished or abandoned. Empty when the model omits it.
+	IntentionsDone idList `json:"intentions_done,omitempty"`
 }
 
 // Fact is a single durable fact (L3).
 type Fact struct {
 	Data  string `json:"data"`
 	Layer string `json:"layer"` // user_preferences / project_state / technical_lesson / decision / negative_knowledge
+	// Replaces names related facts (shown to the model as context) that this fact
+	// updates or contradicts: same subject, new value or state.
+	Replaces idList `json:"replaces,omitempty"`
+}
+
+// idList is a list of memory ids the model sent back. Small models get the
+// shape wrong — one id as a bare string, a comma-separated string, numbers or
+// objects mixed into the list — and a decode error here would throw away the
+// whole extraction over a field that only refines it. So it accepts a string or
+// a list of strings, drops anything else, and never returns an error.
+type idList []string
+
+// UnmarshalJSON implements the tolerant decode described on idList.
+func (l *idList) UnmarshalJSON(b []byte) error {
+	*l = nil
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		*l = splitIDs(one)
+		return nil
+	}
+	var many []any
+	if err := json.Unmarshal(b, &many); err != nil {
+		return nil
+	}
+	for _, v := range many {
+		if s, ok := v.(string); ok {
+			*l = append(*l, splitIDs(s)...)
+		}
+	}
+	return nil
+}
+
+// splitIDs splits one string on commas and whitespace, since ids contain neither.
+func splitIDs(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool {
+		return unicode.IsSpace(r) || strings.ContainsRune(",;\"'", r)
+	})
 }
 
 // Summary is the session narrative arc (L4). The LLM may return it as either
@@ -157,6 +198,9 @@ type Schema struct {
 // Intention is the user's current goal / intent (L7). Accepts string or object.
 type Intention struct {
 	Goal string
+	// Replaces names open intentions (shown to the model as context) that this
+	// goal continues or supersedes.
+	Replaces idList
 }
 
 // UnmarshalJSON accepts both `"intention": "text"` and `"intention":{"goal":"..."}`.
@@ -167,12 +211,14 @@ func (i *Intention) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var obj struct {
-		Goal string `json:"goal"`
+		Goal     string `json:"goal"`
+		Replaces idList `json:"replaces"`
 	}
 	if err := json.Unmarshal(b, &obj); err != nil {
 		return err
 	}
 	i.Goal = obj.Goal
+	i.Replaces = obj.Replaces
 	return nil
 }
 
@@ -181,38 +227,33 @@ func (i *Intention) UnmarshalJSON(b []byte) error {
 // instead of extracting (their prose then fails JSON parsing), and a single
 // firm reminder recovers most of those.
 func (l *LLMClient) Complete(ctx context.Context, text string) (*Extraction, error) {
-	ex, err := l.completeOnce(ctx, text, false)
+	return l.CompleteWith(ctx, text, ExtractContext{})
+}
+
+// CompleteWith is Complete that also shows the model what the store already
+// holds about this input, so it can say which stored facts and open intentions
+// the input updates, finishes or abandons. An empty ec yields the plain prompt.
+func (l *LLMClient) CompleteWith(ctx context.Context, text string, ec ExtractContext) (*Extraction, error) {
+	ex, err := l.completeOnce(ctx, text, false, ec)
 	if err == nil {
 		return ex, nil
 	}
-	ex2, err2 := l.completeOnce(ctx, text, true)
+	ex2, err2 := l.completeOnce(ctx, text, true, ec)
 	if err2 == nil {
 		return ex2, nil
 	}
 	return nil, fmt.Errorf("after retry: %w", err2)
 }
 
-func (l *LLMClient) completeOnce(ctx context.Context, text string, reinforce bool) (*Extraction, error) {
+func (l *LLMClient) completeOnce(ctx context.Context, text string, reinforce bool, ec ExtractContext) (*Extraction, error) {
 	// System1: this pass sees ONE turn, so it may only produce what a single
 	// turn can actually evidence — facts, a narrative summary of itself, and the
 	// current intention. L5 knowledge and L6 schemas are deliberately NOT
 	// requested here: a recurring pattern is by definition not observable in one
 	// turn, and asking for one produced guesses that then competed with the real
 	// thing at retrieval time. The slow path owns those layers.
-	system := `You are a memory extraction engine. Given one user input, output a JSON object with EXACTLY these keys:
-{
-  "facts": [{"data": "<durable atomic fact>", "layer": "user_preferences|project_state|technical_lesson|decision|negative_knowledge"}],
-  "summary": {"text": "<1-2 sentence narrative of what this input is about and why it matters>"},
-  "intention": {"goal": "<what the user is trying to achieve right now>"}
-}
-Rules:
-- facts: ONLY durable, non-obvious facts worth remembering. Do not fabricate.
-- summary: synthesize the ARC of this input, not just restate it.
-- intention: the immediate goal, or null if none.
-- Do NOT invent patterns or entity relations; those come from a later pass.
-Return ONLY valid JSON, no prose, no markdown fences.`
-
-	user := "Input: " + text
+	system := extractSystemPrompt(!ec.Empty())
+	user := ec.promptSection() + "Input: " + text
 	messages := []map[string]string{
 		{"role": "system", "content": system},
 		{"role": "user", "content": user},

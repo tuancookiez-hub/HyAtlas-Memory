@@ -999,7 +999,9 @@ func (c *Consolidator) ask(ctx context.Context, facts, schemas []DocIndex) (*Con
 		if turn == "" {
 			turn = f.ID
 		}
-		fmt.Fprintf(&b, "- id=%s | turn=%s | %s\n", f.ID, turn, truncate(f.Content, 400))
+		// date lets the model tell which of two contradicting facts is newer; the
+		// rule below says to keep the newer one, and without a date it had to guess.
+		fmt.Fprintf(&b, "- id=%s | turn=%s | date=%s | %s\n", f.ID, turn, factDate(f.Ts), truncate(f.Content, 400))
 	}
 	var existing strings.Builder
 	if len(schemas) > 0 {
@@ -1019,7 +1021,7 @@ func (c *Consolidator) ask(ctx context.Context, facts, schemas []DocIndex) (*Con
   "knowledge": [{"from": "<entity>", "relation": "<relation>", "to": "<entity>", "evidence": ["<id>", "<id>"]}],
   "arc": "<1-3 sentences: what these facts say about the user's work over time>"`
 		graphRules = `
-- knowledge: 0-5 entity-relation-entity edges, each corroborated in "evidence" by fact ids from AT LEAST 2 different turns. A triple resting on one turn is just that turn restated — do not emit it. Use only ids from the input.
+- knowledge: 0-5 entity-relation-entity edges, each corroborated in "evidence" by fact ids from AT LEAST 2 different turns. A triple resting on one turn is just that turn restated — do not emit it. Use only ids from the input. Only durable relations: what something is, uses, depends on, belongs to, or where it lives. Never an event, an amount, a status or a one-off outcome ("trade filled at $244", "server returned 403") — those are facts, not knowledge.
 - arc: null if the facts are too few or too unrelated to synthesise.`
 	}
 	system := `You are a memory consolidation engine. Below are durable facts already stored, each with its id and the turn it came from. Reason ACROSS them — not about any single one — and output a JSON object with EXACTLY these keys:
@@ -1029,9 +1031,9 @@ func (c *Consolidator) ask(ctx context.Context, facts, schemas []DocIndex) (*Con
   "schemas": [{"pattern": "<a recurring pattern only visible across many facts>", "context": "<when it applies>", "supersedes": ["<schema_id>"]}]` + graphKeys + `
 }
 Rules:
-- merges: ONLY combine facts that genuinely say the same thing or contradict each other. For a contradiction, keep the newer statement and supersede the older. supersedes MUST list at least 2 ids. Use only ids from the input.
+- merges: ONLY combine facts that genuinely say the same thing or contradict each other. For a contradiction, keep the newer statement (later date) and supersede the older. supersedes MUST list at least 2 ids. Use only ids from the input.
 - drops: facts that are stale (a temporary state that has since passed) or trivially obvious, each with a short reason. A durable fact — a preference, a decision, where something lives, how something works — is never stale just because it is old. A drop without a reason is ignored. Be conservative.
-- schemas: 0-3 patterns that generalise beyond the individual facts. Do not repeat a schema already stored (listed below, if any). To refine a stored schema, return the refined pattern and list the schema_id it replaces in "supersedes"; otherwise leave "supersedes" empty.` + graphRules + `
+- schemas: 0-3 patterns that generalise beyond the individual facts, each a full sentence that says what the pattern is and when it applies (not a 3-word label such as "pilot trade within cap"). Do not repeat a schema already stored (listed below, if any). To refine a stored schema, return the refined pattern and list the schema_id it replaces in "supersedes"; otherwise leave "supersedes" empty.` + graphRules + `
 - Never invent an id. Never reference a fact not listed.
 Return ONLY valid JSON, no prose, no markdown fences.
 
@@ -1047,6 +1049,15 @@ Facts:
 		return nil, err
 	}
 	return parseConsolidation(content)
+}
+
+// factDate returns the YYYY-MM-DD part of a stored timestamp for the consolidation
+// prompt, or "unknown" when the row has none.
+func factDate(ts string) string {
+	if len(ts) >= 10 {
+		return ts[:10]
+	}
+	return "unknown"
 }
 
 // parseConsolidation tolerantly extracts the JSON object, mirroring the

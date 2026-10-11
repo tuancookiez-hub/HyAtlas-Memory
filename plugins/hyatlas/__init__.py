@@ -123,7 +123,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         # Last recall per session, the fallback when a live search fails. Keyed by
         # session so concurrent sessions (gateway and CLI) never see each other's.
         self._prefetch_cache: "OrderedDict[str, str]" = OrderedDict()
-        self._version = "4.5.1"
+        self._version = "4.6.0"
         # Message count already synced per session, so _build_turn_text sends
         # only what the server has not seen. Bounded: a long-lived gateway
         # touches far more sessions than it can hold, and the cost of evicting
@@ -686,6 +686,27 @@ class HyatlasMemoryProvider(MemoryProvider):
             logger.info("hyatlas auto_start: %s", result.get("message"))
         return bool(result.get("reachable"))
 
+    def _autostart_at_load(self) -> None:
+        """Start the server when Hermes loads the plugin, not only when a session begins.
+
+        After a reboot the Hermes gateway loads plugins at logon, but without this
+        the server stayed down until the first conversation, so cron jobs that call
+        the server directly failed in the meantime. Runs in a daemon thread so
+        plugin loading never waits on it. _ensure_server_running uses the shared
+        start lock and detects a running server, so two Hermes processes cannot
+        start two servers.
+        """
+        try:
+            if self._ensure_client().is_reachable():
+                return
+            ok = self._ensure_server_running()
+            logger.info(
+                "hyatlas auto_start at load: server %s",
+                "reachable" if ok else "not reachable",
+            )
+        except Exception as e:
+            logger.debug("hyatlas auto_start at load failed: %s", e)
+
 
 # =============================================================================
 # Plugin registration
@@ -704,6 +725,17 @@ def register(ctx: Any) -> None:
         "hyatlas v%s plugin registered (server=%s)",
         provider._version, provider._origin(),
     )
+    # With auto_start, starting Hermes is enough: the server comes up at load, not
+    # at the first conversation. Registration must never fail because of this.
+    try:
+        if settings.truthy(provider._config.get("auto_start")):
+            threading.Thread(
+                target=provider._autostart_at_load,
+                name="hyatlas-autostart",
+                daemon=True,
+            ).start()
+    except Exception as e:
+        logger.debug("hyatlas auto_start at load not scheduled: %s", e)
     # Also register a slash command for diagnostics
     try:
         ctx.register_command(

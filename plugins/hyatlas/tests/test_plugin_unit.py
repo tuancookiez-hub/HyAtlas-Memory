@@ -2120,3 +2120,81 @@ def test_second_start_reuses_held_lock_instead_of_leaking(lock_mod, monkeypatch)
         p.start(lock_wait=0.1)
     assert calls == [], "start() must reuse the lock it already holds"
     assert p._lock_fd is None, "the held lock is released on the refusal path"
+
+
+# ---------------------------------------------------------------------------
+# auto_start at plugin load (P7): starting Hermes is enough, no session needed
+# ---------------------------------------------------------------------------
+
+class _FakeRegisterCtx:
+    def __init__(self):
+        self.providers = []
+
+    def register_memory_provider(self, provider):
+        self.providers.append(provider)
+
+
+def _config_with_auto_start(monkeypatch, value):
+    cfg = {"auto_start": value}
+    monkeypatch.setattr(mod, "_load_config", lambda: dict(cfg))
+
+
+def test_register_with_auto_start_starts_autostart_thread(monkeypatch):
+    _config_with_auto_start(monkeypatch, True)
+    fired = threading.Event()
+    monkeypatch.setattr(HyatlasMemoryProvider, "_autostart_at_load",
+                        lambda self: fired.set())
+    ctx = _FakeRegisterCtx()
+    mod.register(ctx)
+    assert len(ctx.providers) == 1
+    assert fired.wait(2.0), "auto_start must run _autostart_at_load at register time"
+
+
+def test_register_without_auto_start_does_not_start_server(monkeypatch):
+    _config_with_auto_start(monkeypatch, False)
+    fired = threading.Event()
+    monkeypatch.setattr(HyatlasMemoryProvider, "_autostart_at_load",
+                        lambda self: fired.set())
+    ctx = _FakeRegisterCtx()
+    mod.register(ctx)
+    assert len(ctx.providers) == 1
+    assert not fired.wait(0.3), "without auto_start, load must not start the server"
+    assert not any(t.name == "hyatlas-autostart" for t in threading.enumerate())
+
+
+class _ReachabilityStub:
+    def __init__(self, reachable):
+        self._reachable = reachable
+
+    def is_reachable(self):
+        return self._reachable
+
+
+def test_autostart_at_load_skips_start_when_server_reachable(monkeypatch):
+    p = HyatlasMemoryProvider()
+    monkeypatch.setattr(p, "_ensure_client", lambda: _ReachabilityStub(True))
+    calls = []
+    monkeypatch.setattr(p, "_ensure_server_running",
+                        lambda: calls.append(1) or True)
+    p._autostart_at_load()
+    assert calls == [], "a reachable server must not be started again"
+
+
+def test_autostart_at_load_starts_server_when_unreachable(monkeypatch):
+    p = HyatlasMemoryProvider()
+    monkeypatch.setattr(p, "_ensure_client", lambda: _ReachabilityStub(False))
+    calls = []
+    monkeypatch.setattr(p, "_ensure_server_running",
+                        lambda: calls.append(1) or True)
+    p._autostart_at_load()
+    assert calls == [1]
+
+
+def test_autostart_at_load_never_raises(monkeypatch):
+    p = HyatlasMemoryProvider()
+
+    def boom():
+        raise RuntimeError("launcher exploded")
+
+    monkeypatch.setattr(p, "_ensure_client", boom)
+    p._autostart_at_load()  # must swallow and log at debug

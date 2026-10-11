@@ -27,7 +27,7 @@ import (
 // It is exposed on /api/v1/status and /api/info so every client (Desktop pane,
 // web dashboard, CLI) reports the real running version instead of hardcoding
 // a "v4" badge that silently goes stale on each release. Bump in one place.
-const Version = "4.5.1"
+const Version = "4.6.0"
 
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {
@@ -52,6 +52,11 @@ type Server struct {
 	dedupeScore float64
 	// admin is HYATLAS_ADMIN: whether the /api/v1/admin/* maintenance endpoints answer.
 	admin bool
+	// recency (HYATLAS_RECENCY, on unless "off") lets newer memories win close calls
+	// in search; intentionTTL (HYATLAS_INTENTION_TTL) leaves older L7 intentions out
+	// of results. The zero values turn both off, as for minScore.
+	recency      bool
+	intentionTTL time.Duration
 
 	// mu guards lastExtractErr: the extraction goroutines write it from
 	// background contexts while /api/v1/status reads it on request.
@@ -189,6 +194,16 @@ func promoteExtraction(store *MemoryStore, ex *Extraction, userID, agentID, sour
 // is superseded by it. Newest wins, so an updated value replaces the stale one rather
 // than being dropped as a duplicate. dedupe <= 0 turns this off.
 func promoteExtractionDedupe(store *MemoryStore, ex *Extraction, userID, agentID, sourceID string, dedupe float64) {
+	promoteExtractionCtx(store, ex, ExtractContext{}, userID, agentID, sourceID, dedupe)
+}
+
+// promoteExtractionCtx is promoteExtractionDedupe that also applies what the model
+// said about the context it was shown (ec): facts that replace related facts, an
+// intention that replaces an open one, and open intentions that are done. Only ids
+// that are in ec are honoured, because the reply is model output and an id it
+// invents or garbles must never supersede a real row. With an empty ec it is
+// promoteExtractionDedupe exactly.
+func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext, userID, agentID, sourceID string, dedupe float64) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	// L3 Facts
 	for _, f := range ex.Facts {
@@ -205,6 +220,12 @@ func promoteExtractionDedupe(store *MemoryStore, ex *Extraction, userID, agentID
 				stale = append([]string{old.ID}, store.MirrorsOf(memory.L1Profile, old.Meta["source_id"], old.Content)...)
 			}
 		}
+		// The model named related facts this one updates or contradicts. Same
+		// lookup point as above, for the same reason: before the new rows exist.
+		replaced := shown(f.Replaces, ec.hasRelated)
+		if len(replaced) > 0 {
+			stale = append(stale, store.withMirrors(replaced)...)
+		}
 		factID := newID()
 		_ = store.Add(memory.L3Fact, factID, f.Data, map[string]string{
 			"user_id": userID, "agent_id": agentID,
@@ -218,8 +239,10 @@ func promoteExtractionDedupe(store *MemoryStore, ex *Extraction, userID, agentID
 			})
 		}
 		if len(stale) > 0 {
-			if _, err := store.Supersede(stale, factID); err != nil {
+			if n, err := store.Supersede(stale, factID); err != nil {
 				log.Printf("dedupe: supersede %s: %v", stale[0], err)
+			} else if len(replaced) > 0 {
+				log.Printf("extract: fact %s replaces %d of %d stale row(s) %v", factID, n, len(stale), replaced)
 			}
 		}
 	}
@@ -231,9 +254,13 @@ func promoteExtractionDedupe(store *MemoryStore, ex *Extraction, userID, agentID
 	}
 	// L7 Intention
 	if ex.Intention != nil && strings.TrimSpace(ex.Intention.Goal) != "" {
-		_ = store.Add(memory.L7Intention, newID(), ex.Intention.Goal, map[string]string{
+		introID := newID()
+		_ = store.Add(memory.L7Intention, introID, ex.Intention.Goal, map[string]string{
 			"user_id": userID, "agent_id": agentID, "ts": now,
 		})
+		store.applyIntentions(ex, ec, introID, sourceID)
+	} else {
+		store.applyIntentions(ex, ec, "", sourceID)
 	}
 }
 
@@ -330,12 +357,17 @@ func (s *Server) extract(text, userID, agentID, id string) error {
 	if s.llm == nil {
 		return fmt.Errorf("no LLM client configured")
 	}
-	ex, err := s.llm.Complete(ctx, utf8Trunc(text, maxExtractInput))
+	input := utf8Trunc(text, maxExtractInput)
+	// What the store already holds about this input, so the model can say which
+	// stored facts it updates and which open intentions it finishes. A lookup
+	// failure is logged inside and leaves the context empty; it never fails the write.
+	ec := s.store.extractContext(input, userID, agentID, time.Now().UTC())
+	ex, err := s.llm.CompleteWith(ctx, input, ec)
 	if err != nil {
 		s.setExtractErr(err.Error())
 		return err
 	}
-	promoteExtractionDedupe(s.store, ex, userID, agentID, id, s.dedupeScore)
+	promoteExtractionCtx(s.store, ex, ec, userID, agentID, id, s.dedupeScore)
 	_ = s.store.SetExtracted(id, true)
 	s.setExtractErr("")
 	return nil
@@ -415,6 +447,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		if terms := identifierTerms(body.Query); len(terms) > 0 {
 			res = requireTerms(res, terms)
 		}
+	}
+	// Time before the L5 cap, so the cap keeps the relations that rank best once
+	// age is counted.
+	now := time.Now()
+	res = dropStaleIntentions(res, s.intentionTTL, now)
+	if s.recency {
+		res = rerankRecency(res, now)
 	}
 	if body.Layer == "" {
 		res = capLayer(res, memory.L5Knowledge, l5Share(limit))
@@ -1346,6 +1385,9 @@ func envInt(key string, def int) int {
 }
 
 func main() {
+	if exit, code := handleArgs(os.Args[1:], os.Stdout); exit {
+		os.Exit(code)
+	}
 	rt := resolveRuntime()
 	port := rt.Port
 	dir := rt.DataDir
@@ -1435,6 +1477,11 @@ func main() {
 	srv.minScore = rt.MinScore
 	srv.dedupeScore = rt.DedupeScore
 	srv.admin = rt.Admin
+	srv.recency = !envOff("HYATLAS_RECENCY")
+	srv.intentionTTL = parseDuration("HYATLAS_INTENTION_TTL", defaultIntentionTTL)
+	snap := resolveSnapshot(dir)
+	log.Print(snapshotLine(snap))
+	go runSnapshots(ctx, store, dir, snap)
 	if rt.Admin {
 		log.Print("HYATLAS_ADMIN=on: /api/v1/admin/compact_raw and /api/v1/admin/dedupe_facts are enabled")
 	}
