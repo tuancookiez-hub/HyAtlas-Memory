@@ -1,5 +1,52 @@
 # Changelog
 
+## [4.6.0] — 2026-10-12
+
+Recall that knows what is current, and a server that looks after itself.
+
+### Fixed
+
+- **Finished intentions stop coming back as current.** L7 intentions were never
+  closed: a live store held 435, and "what am I working on right now" returned goals
+  finished days earlier. Extraction is now shown the owner's open intentions (up to
+  5, from the last 7 days) and can mark one continued or done; those are
+  superseded. Search leaves out intentions older than `HYATLAS_INTENTION_TTL`
+  (default 7 days); the rows are kept.
+- **A changed value replaces the old fact.** Write-time dedupe caught only
+  restatements (similarity 0.92 and the same numbers), so "the extraction model is
+  poolside and returns 403" stayed live beside "extraction now uses stepfun".
+  Extraction is now shown the owner's nearest existing facts (up to 5, similarity
+  0.70 and above) and can name the ones a new fact replaces; only ids it was shown
+  are accepted. Still one LLM call per write.
+- **Search knows time.** Ranking ignored age. Newer memories now win close calls:
+  a hit keeps at least 92% of its weight (age can move it about five places), fading on a half-life per kind of memory
+  (3 days for intentions, 30 for project state and summaries, 180 for preferences
+  and decisions, none for profile and schemas). `HYATLAS_RECENCY=off` turns it off.
+- **Consolidation sees dates.** The prompt told the model to keep the newer of two
+  contradicting facts but sent no dates; each fact now carries its date.
+- **Less noise in L1, L5 and L6.** Extraction labels only statements about the user
+  as `user_preferences` (which are mirrored to L1 Profile), not project settings.
+  Consolidation no longer turns events, amounts or statuses into L5 knowledge, and
+  writes schemas as full sentences. `POST /api/v1/admin/dedupe_facts` accepts
+  `"layer": "l6_schema"` to merge schemas that restate each other.
+
+### Added
+
+- **The server backs itself up.** Every `HYATLAS_SNAPSHOT_EVERY` (default 24h, first
+  one a minute after start) it zips the data directory into `HYATLAS_SNAPSHOT_DIR`
+  (default: `<data>-snapshots` next to it), pausing writes while it copies, and keeps
+  the newest `HYATLAS_SNAPSHOT_KEEP` (7).
+- **The plugin starts the server when Hermes loads it** (with `auto_start: true`), not
+  only when a session begins, so a gateway that starts at logon brings the server up
+  after a reboot.
+- `hyatlas-go --version` and `--help`. Any other argument is refused; it used to be
+  ignored and start a second server. The launcher's `status` prints the version.
+
+### Removed
+
+- `scripts/hyatlas-v4-start.bat`, a developer script with one machine's paths,
+  replaced by `hyatlas-go.ps1`.
+
 ## [4.5.1] — 2026-10-11
 
 ### Fixed

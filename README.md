@@ -40,8 +40,8 @@ install by starting the server and probing `/healthz`.
   built instead only when that tag is missing and `HYATLAS_VERSION` is not set, and
   the installer warns about it. If you set `HYATLAS_VERSION` and the tag is missing,
   the install fails.
-- **Until the v4.5.1 release assets are published**, the installer finds no prebuilt
-  binary and builds from source. It clones the `v4.5.1` tag, or the default branch if
+- **Until the v4.6.0 release assets are published**, the installer finds no prebuilt
+  binary and builds from source. It clones the `v4.6.0` tag, or the default branch if
   that tag does not exist yet, with a warning. The default branch is not used when
   `HYATLAS_VERSION` is set.
 - **Go 1.26 or newer** is required for source builds. A plain `go build` with an
@@ -67,7 +67,7 @@ Useful env vars (installer only):
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.5.1` |
+| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.6.0` |
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the installer caches the model (source builds) | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
 | `HYATLAS_MODE` | Extraction mode written to the Hermes `.env`: `lite` \| `pro` \| `ultra`. Any other exported value stops the installer with an error and nothing is written | `ultra` (asked interactively) |
@@ -290,7 +290,7 @@ settings, and only when you have set them in the plugin config. It never forward
 the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
 `HYATLAS_LLM_KEY_FILE`) yourself.
 
-**All configuration is via environment variables** — the binary takes no CLI flags:
+**All configuration is via environment variables** — the binary reads no settings from its command line:
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -317,14 +317,20 @@ the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
 | `HYATLAS_LLM_MODEL` | *(unset)* | LLM model name. Base, model and key must all be set for extraction to run. |
 | `HYATLAS_LLM_KEY` | (empty) | LLM bearer token |
 | `HYATLAS_LLM_KEY_FILE` | (empty) | Read the key live from this file on every call (rotating creds, e.g. Hermes auth.json). Accepts `providers.nous.agent_key` / `access_token` JSON, or a plain-text token. Wins over `HYATLAS_LLM_KEY`, which becomes the fallback if the file cannot be read. |
+| `HYATLAS_RECENCY` | on | `off` stops newer memories winning close calls in search (see *Search*) |
+| `HYATLAS_INTENTION_TTL` | `168h` (7 days) | How long an L7 intention stays in search results. Older intentions are kept but not returned. `0` returns them all |
+| `HYATLAS_SNAPSHOT_EVERY` | `24h` | How often the server zips its data directory (first one a minute after start). `0` or `off` turns snapshots off |
+| `HYATLAS_SNAPSHOT_KEEP` | `7` | How many snapshots to keep; older ones are deleted |
+| `HYATLAS_SNAPSHOT_DIR` | `<data>-snapshots` | Where snapshots go: a folder next to the data directory by default; do not point it inside the data directory |
 
-**Windows batch runner** (`scripts/hyatlas-v4-start.bat`) is a developer script
-with hard-coded paths (`F:\HyAtlas-Memory-Go`, and a Hermes `auth.json` under one
-user's profile). Edit those paths before using it. It sets the variables above for a
-local run and reads the Nous Portal agent key from Hermes `auth.json`:
-```bat
-scripts\hyatlas-v4-start.bat
-```
+The binary reads no settings from the command line. It answers only `--version`
+and `--help`; any other argument is refused instead of starting a second server.
+
+**Snapshots.** The server backs itself up: every `HYATLAS_SNAPSHOT_EVERY` it writes
+`hyatlas-<UTC time>.zip` of the whole data directory to `HYATLAS_SNAPSHOT_DIR`,
+pausing writes while it copies, and keeps the newest `HYATLAS_SNAPSHOT_KEEP`. To
+restore, stop the server, replace the data directory with a snapshot's contents,
+and start it again.
 
 ---
 
@@ -344,7 +350,7 @@ scripts\hyatlas-v4-start.bat
 
 - **Vector store:** [Chromem-go](https://github.com/philippgille/chromem-go) v0.7.0 — embedded, disk-persisted, no server process
 - **Embeddings:** `bge/bge.go` — BGE-small-en-v1.5 (384-dim) via onnxruntime-go (cgo). WordPiece tokenizer, mean-pool, L2-normalize. No Python.
-- **LLM extraction:** Via any OpenAI-compatible endpoint. One structured call per write (pro, ultra) fills L3 Fact, L4 Summary, L7 Intention and, for user preferences, L1 Profile from the L2 Raw entry. Blocking or background follows `HYATLAS_SYNC_EXTRACT`. L5 and L6 come from the separate ultra consolidation pass.
+- **LLM extraction:** Via any OpenAI-compatible endpoint. One structured call per write (pro, ultra) fills L3 Fact, L4 Summary, L7 Intention and, for user preferences, L1 Profile from the L2 Raw entry. The call is shown the owner's few nearest existing facts and open intentions, so it can mark a fact whose value changed as replaced, and an intention as continued or done; those rows are superseded, not deleted. Blocking or background follows `HYATLAS_SYNC_EXTRACT`. L5 and L6 come from the separate ultra consolidation pass.
 - **Graph:** `graph/graph.go` — exact-match traversal over JSON-persisted nodes and relations, scoped per owner
 - **HTTP:** Standard Go `net/http`. No framework.
 
@@ -497,6 +503,15 @@ hits scoring below the floor are dropped, so an off-topic query can return nothi
 Hits whose text repeats another hit's (case and whitespace ignored) are dropped. Of
 an L3 fact and its L1 Profile copy, the L1 copy is kept.
 
+**Time counts.** Newer memories win close calls: each hit's ranking weight fades with
+age to no less than 92% of its value (enough to move it about five places), on a half-life that follows how fast that kind of
+memory goes stale — 3 days for intentions, 30 days for project state, summaries, raw
+turns and graph relations, 180 days for preferences, decisions and lessons, and never
+for L1 Profile and L6 Schema. Relevance still decides anything that is not close.
+`HYATLAS_RECENCY=off` turns this off. L7 intentions older than
+`HYATLAS_INTENTION_TTL` (7 days) are left out of results altogether: an intention
+is what the user is doing now, and weeks later it is history.
+
 With an owner filter (`user_id`, aliases included), memories that have no owner at
 all are also returned: rows written before owners were recorded, which in an older
 store is most of the knowledge graph. The graph endpoints already show them under
@@ -536,7 +551,8 @@ says `{"dry_run": false}`.
   `HYATLAS_DEDUPE_SCORE`) by the newer one. Superseded facts are kept and hidden,
   so this is reversible. With `"layer": "l5_knowledge"` it does the same for the L5
   search documents of graph relations (an older graph holds many near-identical
-  ones); the graph itself is not changed. Response: `layer`, `owners`, `facts`,
+  ones); the graph itself is not changed. With `"layer": "l6_schema"` it merges
+  schemas that restate each other. Response: `layer`, `owners`, `facts`,
   `duplicates`, `sample`, and when applied, `rows_superseded`.
 
 **Warning: `compact_raw` is irreversible. The removed text is gone.** Read the dry
@@ -662,6 +678,11 @@ except `request_timeout`, which the wizard does not write there. Set that one in
 **Desktop → Settings → Plugins → hyatlas**. An environment variable named in the
 plugin README's settings table overrides them. The defaults (`127.0.0.1:19528`,
 `auto_start: false`) work with no config at all.
+
+With `auto_start: true`, the plugin starts the server as soon as Hermes loads it (in
+the background, so loading never waits), as well as when a session begins. A Hermes
+gateway that starts at logon therefore brings the server up after a reboot without
+anything else to set up.
 
 If `server_host` is a DNS name, the server refuses it with 403 unless the server's
 `HYATLAS_ALLOWED_HOSTS` lists that name. See *Who may talk to it* above.

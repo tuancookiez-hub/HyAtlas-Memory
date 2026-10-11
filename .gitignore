@@ -56,3 +56,6 @@ TUNA_AGENT_OS_TASK_BRIEF.md
 __pycache__/
 # Personal launcher settings (see hyatlas-go.local.ps1.example)
 hyatlas-go.local.ps1
+
+# Rolling data snapshots written by the server (HYATLAS_SNAPSHOT_DIR default)
+data-snapshots/
