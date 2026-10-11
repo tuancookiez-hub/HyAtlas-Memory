@@ -2198,3 +2198,14 @@ def test_autostart_at_load_never_raises(monkeypatch):
 
     monkeypatch.setattr(p, "_ensure_client", boom)
     p._autostart_at_load()  # must swallow and log at debug
+
+
+def test_format_prefetch_shows_dates():
+    """Each recalled memory carries its date, so an old status reads as old."""
+    p = mod.HyatlasMemoryProvider()
+    out = p._format_prefetch({"memories": {"normal": [
+        {"content": "extraction uses stepfun", "layer": "l3_fact", "score": 0.8, "gmt_created": 1791504000},
+        {"content": "no date here", "layer": "l3_fact", "score": 0.7},
+    ]}}, "model")
+    assert "- (l3_fact, 2026-10-09, score 0.80) extraction uses stepfun" in out
+    assert "- (l3_fact, score 0.70) no date here" in out
