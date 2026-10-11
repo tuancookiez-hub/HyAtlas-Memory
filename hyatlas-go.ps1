@@ -2,7 +2,8 @@ param([string]$Action = "status")
 $ErrorActionPreference = "Stop"
 
 $port   = 19528
-$goDir  = "F:\HyAtlas-Memory-Go"
+# The folder this script sits in, which holds hyatlas-go.exe, models\ and data\.
+$goDir  = $PSScriptRoot
 $goExe  = Join-Path $goDir "hyatlas-go.exe"
 $data   = Join-Path $goDir "data"
 $log    = Join-Path $data "hyatlas-v4.log"
@@ -35,6 +36,14 @@ function Start-V4 {
     # pro (per-write extraction, reasons within one turn), ultra (adds the slow
     # path: periodic consolidation across memories). Unset means ultra.
     # HYATLAS_SYNC_EXTRACT=on|off separately controls whether a write blocks.
+
+    # Personal settings (model, batch size, owner aliases, any HYATLAS_* variable)
+    # go in hyatlas-go.local.ps1 beside this script; see hyatlas-go.local.ps1.example.
+    # It is git-ignored, so personal values never reach the repository, and it runs
+    # before the defaults below, so whatever it sets wins.
+    $localSettings = Join-Path $goDir "hyatlas-go.local.ps1"
+    if (Test-Path $localSettings) { . $localSettings }
+
     if ($env:HYATLAS_MODE) { Write-Host "  mode: $env:HYATLAS_MODE" }
 
     # This launcher pairs the key below (a Nous Portal JWT from auth.json) with

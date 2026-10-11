@@ -40,8 +40,8 @@ install by starting the server and probing `/healthz`.
   built instead only when that tag is missing and `HYATLAS_VERSION` is not set, and
   the installer warns about it. If you set `HYATLAS_VERSION` and the tag is missing,
   the install fails.
-- **Until the v4.5.0 release assets are published**, the installer finds no prebuilt
-  binary and builds from source. It clones the `v4.5.0` tag, or the default branch if
+- **Until the v4.5.1 release assets are published**, the installer finds no prebuilt
+  binary and builds from source. It clones the `v4.5.1` tag, or the default branch if
   that tag does not exist yet, with a warning. The default branch is not used when
   `HYATLAS_VERSION` is set.
 - **Go 1.26 or newer** is required for source builds. A plain `go build` with an
@@ -67,7 +67,7 @@ Useful env vars (installer only):
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.5.0` |
+| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.5.1` |
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the installer caches the model (source builds) | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
 | `HYATLAS_MODE` | Extraction mode written to the Hermes `.env`: `lite` \| `pro` \| `ultra`. Any other exported value stops the installer with an error and nothing is written | `ultra` (asked interactively) |

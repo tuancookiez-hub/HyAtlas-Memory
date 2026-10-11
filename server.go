@@ -27,7 +27,7 @@ import (
 // It is exposed on /api/v1/status and /api/info so every client (Desktop pane,
 // web dashboard, CLI) reports the real running version instead of hardcoding
 // a "v4" badge that silently goes stale on each release. Bump in one place.
-const Version = "4.5.0"
+const Version = "4.5.1"
 
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {
@@ -406,6 +406,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			res = nil
 		}
 		res = fuseHits(res, kw, minScore, 0)
+		// A query that is an identifier (RSI(2), HYATLAS_SYNC_EXTRACT, a port) is
+		// answered only by memories that mention it; embedding look-alikes are noise.
+		if terms := identifierTerms(body.Query); len(terms) > 0 {
+			res = requireTerms(res, terms)
+		}
 	}
 	if body.Layer == "" {
 		res = capLayer(res, memory.L5Knowledge, l5Share(limit))

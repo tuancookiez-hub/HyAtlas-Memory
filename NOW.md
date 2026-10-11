@@ -1,6 +1,6 @@
 # HyAtlas v4 — NOW
 
-**v4.5.0** | 2026-10-09 | Release: tuancookiez-hub/HyAtlas-Memory
+**v4.5.1** | 2026-10-11 | Release: tuancookiez-hub/HyAtlas-Memory
 
 ## Running
 - Release is 4.5.0: `Version` const in server.go, `plugins/hyatlas/plugin.yaml`, the provider, the dashboard manifest and the install.sh default `HYATLAS_VERSION=v4.5.0` all say so. The 4.5.0 tag and its release assets exist only once the release PR is merged and tagged; until then the installer builds from source.

@@ -144,3 +144,34 @@ func TestCapLayerKeepsOrderAndLimitsL5(t *testing.T) {
 		}
 	}
 }
+
+func TestIdentifierTerms(t *testing.T) {
+	cases := map[string][]string{
+		"HYATLAS_SYNC_EXTRACT":              {"hyatlas", "sync", "extract"},
+		"RSI(2)":                            {"rsi"},
+		"19528":                             {"19528"},
+		"Reg-T margin":                      {"reg"},
+		"discord-tps plugin":                {"discord", "tps"},
+		"how do I start the hyatlas server": nil, // a sentence, not an identifier
+		"don't forget":                      nil, // an apostrophe is not identifier punctuation
+		"trading strategy":                  nil, // plain words
+		"which strategy makes money on NVDA 2026": nil, // too long to be an identifier query
+	}
+	for q, want := range cases {
+		if got := identifierTerms(q); strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("identifierTerms(%q) = %v, want %v", q, got, want)
+		}
+	}
+}
+
+// For an identifier query, only hits that mention the identifier survive.
+func TestRequireTermsDropsLookAlikes(t *testing.T) {
+	hits := []SearchHit{
+		{ID: "noise", Content: "hy_memory renamed to hyatlas"},
+		{ID: "hit", Content: "HYATLAS_SYNC_EXTRACT=on makes the write block"},
+	}
+	got := fusedIDs(requireTerms(hits, identifierTerms("HYATLAS_SYNC_EXTRACT")))
+	if len(got) != 1 || got[0] != "hit" {
+		t.Errorf("requireTerms = %v, want [hit]", got)
+	}
+}
