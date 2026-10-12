@@ -54,9 +54,10 @@ func TestFactArrivingMidPassKeepsOwnerDue(t *testing.T) {
 	}
 }
 
-// An owner with more facts than the batch cap is walked window by window. Every
-// fact is sent at least once, and the owner is unchanged only after all windows.
-func TestWindowsCoverEveryFactBeforeOwnerIsUnchanged(t *testing.T) {
+// An owner with more facts than the batch cap is cut into clusters. Every fact is
+// sent at least once in the first pass, and the owner is unchanged after it. A new
+// fact then dirties exactly one cluster.
+func TestClustersCoverEveryFactBeforeOwnerIsUnchanged(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
 	for _, s := range []string{"r1", "r2", "r3", "r4", "r5"} {
 		seedSourced(t, srv.store, "alice", "a1", s, "alice "+s)
@@ -69,48 +70,44 @@ func TestWindowsCoverEveryFactBeforeOwnerIsUnchanged(t *testing.T) {
 	defer mock.Close()
 	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 2)
 
+	rep, err := c.Once(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	seen := map[string]bool{}
-	for pass := 1; pass <= 3; pass++ {
-		before := len(log.all())
-		if _, err := c.Once(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		prompts := log.all()[before:]
-		if len(prompts) != 1 {
-			t.Fatalf("pass %d made %d calls, want 1", pass, len(prompts))
-		}
-		ids := factIDs(prompts[0])
+	for _, p := range log.all() {
+		ids := factIDs(p)
 		if len(ids) != 2 {
-			t.Errorf("pass %d sent %d facts, want the batch of 2", pass, len(ids))
+			t.Errorf("a call sent %d facts, want the batch of 2", len(ids))
 		}
 		for _, id := range ids {
 			seen[id] = true
 		}
 	}
-	if len(seen) != 5 {
-		t.Errorf("windows covered %d distinct facts, want all 5", len(seen))
+	if len(seen) != 5 || rep.ClustersRun != 3 {
+		t.Errorf("first pass covered %d distinct facts in %d clusters, want all 5 in 3", len(seen), rep.ClustersRun)
 	}
 
 	before := len(log.all())
-	rep, err := c.Once(context.Background())
+	rep, err = c.Once(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n := len(log.all()) - before; n != 0 {
-		t.Errorf("fourth pass made %d calls, want 0 (every window covered)", n)
+		t.Errorf("second pass made %d calls, want 0 (every cluster done)", n)
 	}
 	if rep.OwnersUnchanged != 1 {
 		t.Errorf("OwnersUnchanged = %d, want 1", rep.OwnersUnchanged)
 	}
 
-	// A new fact starts a new cycle from the newest window.
+	// A new fact dirties one cluster.
 	seedSourced(t, srv.store, "alice", "a1", "r6", "alice r6")
 	before = len(log.all())
 	if rep, err = c.Once(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(log.all()) - before; n != 1 || rep.OwnersRun != 1 {
-		t.Errorf("after a change: calls=%d run=%d, want 1/1", n, rep.OwnersRun)
+	if n := len(log.all()) - before; n != 1 || rep.OwnersRun != 1 || rep.ClustersRun != 1 {
+		t.Errorf("after a change: calls=%d owners_run=%d clusters_run=%d, want 1/1/1", n, rep.OwnersRun, rep.ClustersRun)
 	}
 }
 

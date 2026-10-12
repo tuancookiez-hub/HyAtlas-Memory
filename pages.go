@@ -424,12 +424,27 @@ func (p *PageStore) persistLocked() error {
 	return os.Rename(tmp, p.path)
 }
 
+// docLive reports whether id names a document that is in the store index and not
+// superseded. A doc removed by delete_all, or one that was superseded, is not live.
+//
+// Why: the page's text hash alone cannot tell that its document was deleted, so a
+// page whose doc vanished would never become searchable again until its text changed.
+func (p *PageStore) docLive(id string) bool {
+	if id == "" {
+		return false
+	}
+	rows := p.store.GetMany([]string{id})
+	return len(rows) == 1 && !isSuperseded(rows[0])
+}
+
 // reindex makes the page's current text the one live l8_entity document. The new
 // version is added under a new id first and the previous one superseded after,
 // so a failure between the two leaves the page findable rather than missing.
+// The skip only applies when the text is unchanged and its document is still live,
+// so a document lost from the store is written again.
 func (p *PageStore) reindex(pg Page) error {
 	docID := pageDocID(pg)
-	if docID == pg.DocID {
+	if docID == pg.DocID && p.docLive(docID) {
 		return nil
 	}
 	err := p.store.Add(memory.L8Entity, docID, pageText(pg), map[string]string{
@@ -439,7 +454,9 @@ func (p *PageStore) reindex(pg Page) error {
 	if err != nil {
 		return fmt.Errorf("index page %s: %w", pg.ID, err)
 	}
-	if pg.DocID != "" {
+	// Supersede only a previous, different version. When the text is unchanged the
+	// id is the same, and superseding it would retire the document just written.
+	if pg.DocID != "" && pg.DocID != docID {
 		if _, err := p.store.Supersede([]string{pg.DocID}, docID); err != nil {
 			log.Printf("pages: supersede old version of %s: %v", pg.ID, err)
 		}
@@ -451,6 +468,43 @@ func (p *PageStore) reindex(pg Page) error {
 		return p.persistLocked()
 	}
 	return nil
+}
+
+// Repair re-indexes every page whose live document is missing, and returns how many
+// it wrote. The orchestrator calls it at startup, so pages whose documents were
+// removed (for example by delete_all) become searchable again without waiting for
+// their text to change. It holds applyMu, so it never interleaves with Apply. A
+// second call returns 0 once every page is live.
+func (p *PageStore) Repair() (int, error) {
+	if p == nil {
+		return 0, nil
+	}
+	p.applyMu.Lock()
+	defer p.applyMu.Unlock()
+
+	p.mu.RLock()
+	var snaps []Page
+	for _, pg := range p.pages {
+		snaps = append(snaps, clonePage(*pg))
+	}
+	p.mu.RUnlock()
+
+	repaired := 0
+	var firstErr error
+	for _, snap := range snaps {
+		if p.docLive(snap.DocID) && snap.DocID == pageDocID(snap) {
+			continue
+		}
+		if err := p.reindex(snap); err != nil {
+			log.Printf("pages: repair %s: %v", snap.ID, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		repaired++
+	}
+	return repaired, firstErr
 }
 
 func clonePage(pg Page) Page {

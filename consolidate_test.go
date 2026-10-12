@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -552,11 +553,16 @@ func TestConsolidateRespectsBatchCap(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
 	seed(t, srv.store, 12, "many")
 
-	var seen int
+	var mu sync.Mutex
+	var seen int // the most facts any one call held
 	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b := make([]byte, r.ContentLength)
 		_, _ = r.Body.Read(b)
-		seen = strings.Count(string(b), "id=m")
+		mu.Lock()
+		if n := strings.Count(string(b), "id=m"); n > seen {
+			seen = n
+		}
+		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"merges\":[],\"drops\":[],\"schemas\":[],\"arc\":null}"}}]}`))
 	}))
@@ -1023,6 +1029,12 @@ func TestConsolidationPassRespectsCallerDeadline(t *testing.T) {
 	srv := newTestServer(t, "m", mock.URL)
 	seed(t, srv.store, 3, "deadline")
 	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
+
+	// The 150ms deadline is far under the budget a call needs to start; lift that
+	// rule so the call is made and the deadline cuts it.
+	oldBudget := minCallBudget
+	minCallBudget = 0
+	t.Cleanup(func() { minCallBudget = oldBudget })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()

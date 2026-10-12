@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,10 +28,11 @@ func seedAt(t *testing.T, store *MemoryStore, ts, text string) string {
 	return id
 }
 
-// A new fact before every pass used to reset the owner to its newest window, so the
-// oldest window was never sent. With 3 windows (batch 10, 21 facts) the oldest
-// window holds the oldest fact, and it must be reached within 6 changed passes.
-func TestChangingOwnerReachesOldestWindow(t *testing.T) {
+// A new fact before every pass dirties one cluster, and only that cluster is sent.
+// The first pass covers the whole owner, oldest fact included; after it each pass
+// makes exactly one call however many passes follow, because stable clusters keep
+// a new fact from reshuffling the rest.
+func TestChangingOwnerRunsOnlyItsDirtyCluster(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
 	oldest := seedAt(t, srv.store, "2026-01-01T00:00:00Z", "alice old 0")
 	for i := 1; i < 21; i++ {
@@ -43,34 +46,40 @@ func TestChangingOwnerReachesOldestWindow(t *testing.T) {
 	defer mock.Close()
 	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 10)
 
+	if _, err := c.Once(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	reached := false
-	for pass := 1; pass <= 6 && !reached; pass++ {
-		seedAt(t, srv.store, fmt.Sprintf("2026-02-01T00:%02d:00Z", pass), fmt.Sprintf("alice new %d", pass))
-		before := len(log.all())
-		if _, err := c.Once(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		prompts := log.all()[before:]
-		if len(prompts) != 1 {
-			t.Fatalf("pass %d made %d calls, want 1", pass, len(prompts))
-		}
-		for _, id := range factIDs(prompts[0]) {
+	for _, p := range log.all() {
+		for _, id := range factIDs(p) {
 			if id == oldest {
 				reached = true
 			}
 		}
 	}
 	if !reached {
-		t.Fatal("owner that changed before every pass never reached its oldest window in 6 passes")
+		t.Fatal("the first pass never sent the oldest fact")
+	}
+
+	for pass := 1; pass <= 4; pass++ {
+		seedAt(t, srv.store, fmt.Sprintf("2026-02-01T00:%02d:00Z", pass), fmt.Sprintf("alice new %d", pass))
+		before := len(log.all())
+		rep, err := c.Once(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := len(log.all()) - before; n != 1 || rep.ClustersRun != 1 {
+			t.Fatalf("pass %d after one new fact: calls=%d clusters_run=%d, want 1/1", pass, n, rep.ClustersRun)
+		}
 	}
 }
 
-// A window that fails every pass is given up on after maxWindowFails passes, so
-// the walk moves on and the rest of the owner's facts still get consolidated.
-func TestPoisonedWindowIsSkippedAfterRepeatedFailures(t *testing.T) {
+// A cluster that fails every pass is left alone after maxWindowFails passes, so it
+// stops spending calls, and the owner's other clusters are still consolidated.
+func TestPoisonedClusterIsLeftAfterRepeatedFailures(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
-	// Newest first with batch 2 and 5 facts: window 0 = [0,1], window 1 = [2,3],
-	// window 2 = [3,4]. The poison fact (index 2) is only in window 1.
+	// Newest first with batch 2 and 5 facts the clusters are [0,1], [2,3] and [3,4].
+	// The poison fact (index 2) is only in the second.
 	for i := 0; i < 5; i++ {
 		text := fmt.Sprintf("alice fact %d", i)
 		if i == 2 {
@@ -90,12 +99,15 @@ func TestPoisonedWindowIsSkippedAfterRepeatedFailures(t *testing.T) {
 	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 2)
 
 	var reports []*Report
+	var callsPerPass []int
 	for pass := 1; pass <= 6; pass++ {
+		before := len(log.all())
 		rep, err := c.Once(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
 		reports = append(reports, rep)
+		callsPerPass = append(callsPerPass, len(log.all())-before)
 	}
 
 	poisoned := 0
@@ -105,10 +117,13 @@ func TestPoisonedWindowIsSkippedAfterRepeatedFailures(t *testing.T) {
 		}
 	}
 	if poisoned != maxWindowFails {
-		t.Errorf("poisoned window was sent %d times, want exactly %d", poisoned, maxWindowFails)
+		t.Errorf("poisoned cluster was sent %d times, want exactly %d", poisoned, maxWindowFails)
 	}
-	// The first pass is clean and the poisoned window is then sent on each later
-	// pass, so the skip is reported on the pass that makes the last failure.
+	// Pass 1 sends all three clusters, passes 2 and 3 only the failing one, and
+	// nothing is sent after that.
+	if fmt.Sprint(callsPerPass) != "[3 1 1 0 0 0]" {
+		t.Errorf("calls per pass = %v, want [3 1 1 0 0 0]", callsPerPass)
+	}
 	reported := false
 	for _, rep := range reports {
 		if strings.Contains(strings.Join(rep.Errors, " "), "skipped") {
@@ -116,16 +131,24 @@ func TestPoisonedWindowIsSkippedAfterRepeatedFailures(t *testing.T) {
 		}
 	}
 	if !reported {
-		t.Error("the skipped window was not reported")
+		t.Error("giving up on the cluster was not reported")
 	}
-	// After the skip the walk reaches window 2, which does not contain the poison.
-	final := log.all()
-	last := final[len(final)-1]
-	if strings.Contains(last, "alice poison fact") {
-		t.Fatal("last pass still sent the poisoned window")
+}
+
+// A failure count belongs to one membership: a cluster that gave up becomes due
+// again as soon as its facts change.
+func TestFailedClusterIsDueAgainWhenMembershipChanges(t *testing.T) {
+	cs := &clusterState{ID: "c1", FactIDs: []string{"a", "b"}}
+	cs.Fails, cs.FailFP = maxWindowFails, cs.fp()
+	if cs.due() {
+		t.Fatal("a cluster that failed maxWindowFails times on its current members is due")
 	}
-	if got := len(factIDs(last)); got != 2 {
-		t.Errorf("window after the skip sent %d facts, want 2", got)
+	cs.FactIDs = append(cs.FactIDs, "c")
+	if !cs.due() {
+		t.Fatal("a cluster whose members changed is not due")
+	}
+	if one := (&clusterState{FactIDs: []string{"a"}}); one.due() {
+		t.Fatal("a cluster of one fact is due: it has nothing to be reconciled against")
 	}
 }
 
@@ -224,13 +247,11 @@ func TestFatalWriteFailureRetriesOwnerDespiteSoftFailures(t *testing.T) {
 	}
 }
 
-// After an owner's walk has covered every window, one new fact must send the new
-// facts against every older window again, not just the newest: a contradiction
-// between a new fact and an old one is only visible if both are in one prompt.
-func TestChangeAfterFullWalkRewalksOlderWindows(t *testing.T) {
+// Once makes a call for each due cluster and for none else: after a full pass an
+// unchanged owner reports no clusters run and makes no call.
+func TestOnceRunsDueClustersOnly(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
-	oldest := seedAt(t, srv.store, "2026-01-01T00:00:00Z", "alice old 0")
-	for i := 1; i < 21; i++ {
+	for i := 0; i < 21; i++ {
 		seedAt(t, srv.store, fmt.Sprintf("2026-01-01T00:%02d:00Z", i), fmt.Sprintf("alice old %d", i))
 	}
 
@@ -241,41 +262,221 @@ func TestChangeAfterFullWalkRewalksOlderWindows(t *testing.T) {
 	defer mock.Close()
 	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 10)
 
-	// Quiet owner: walk until it stops being due.
-	for pass := 0; pass < 10; pass++ {
-		before := len(log.all())
-		if _, err := c.Once(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		if len(log.all()) == before {
-			break
-		}
-	}
-	before := len(log.all())
-	if _, err := c.Once(context.Background()); err != nil {
+	first, err := c.Once(context.Background())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(log.all()) != before {
-		t.Fatal("a fully walked, unchanged owner was sent again")
+	if first.ClustersRun < 2 || first.ClustersPending != 0 || len(log.all()) != first.ClustersRun {
+		t.Fatalf("first pass: clusters_run=%d pending=%d calls=%d, want every cluster run once",
+			first.ClustersRun, first.ClustersPending, len(log.all()))
 	}
+	before := len(log.all())
+	second, err := c.Once(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ClustersRun != 0 || len(log.all()) != before || second.OwnersUnchanged != 1 {
+		t.Errorf("unchanged pass: clusters_run=%d calls=%d unchanged=%d, want 0/0/1",
+			second.ClustersRun, len(log.all())-before, second.OwnersUnchanged)
+	}
+}
 
-	// One new fact, then no more changes: the walk must reach the oldest window again.
-	seedAt(t, srv.store, "2026-03-01T00:00:00Z", "alice new")
-	start := len(log.all())
-	for pass := 0; pass < 6; pass++ {
-		if _, err := c.Once(context.Background()); err != nil {
-			t.Fatal(err)
-		}
+// A pass whose context leaves less than minCallBudget starts no call, and says how
+// many clusters it left for the next pass.
+func TestPassWithoutBudgetStartsNoCall(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	for i := 0; i < 5; i++ {
+		seedAt(t, srv.store, fmt.Sprintf("2026-01-01T00:%02d:00Z", i), fmt.Sprintf("alice fact %d", i))
 	}
-	reached := false
-	for _, p := range log.all()[start:] {
-		for _, id := range factIDs(p) {
-			if id == oldest {
-				reached = true
+	var log promptLog
+	mock := scopeMock(t, &log, func(string) (int, string) {
+		return http.StatusOK, chatBody(t, Consolidation{})
+	})
+	defer mock.Close()
+	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 2)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	rep, err := c.Once(ctx) // a second is far under the default minCallBudget
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(log.all()); n != 0 {
+		t.Fatalf("calls with no budget = %d, want 0", n)
+	}
+	if rep.ClustersPending != 3 || rep.ClustersRun != 0 || len(rep.SkippedOwners) != 1 {
+		t.Errorf("pending=%d run=%d skipped=%v, want 3/0/one owner", rep.ClustersPending, rep.ClustersRun, rep.SkippedOwners)
+	}
+	// The next pass, with budget, does all of it.
+	rep, err = c.Once(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.ClustersRun != 3 || rep.ClustersPending != 0 {
+		t.Errorf("next pass run=%d pending=%d, want 3/0", rep.ClustersRun, rep.ClustersPending)
+	}
+}
+
+// With parallel 2, two calls are in flight at once, never more, and never two
+// clusters that share a fact. Five facts in batches of 2 give the clusters [0,1],
+// [2,3] and [3,4], the last two overlapping on fact 3.
+func TestClustersRunInParallelWithoutSharingFacts(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	for i := 0; i < 5; i++ {
+		seedAt(t, srv.store, fmt.Sprintf("2026-01-01T00:%02d:00Z", 5-i), fmt.Sprintf("alice fact %d", i))
+	}
+	var (
+		mu       sync.Mutex
+		inflight = map[string]int{}
+		cur, max int
+		overlap  bool
+	)
+	var log promptLog
+	mock := scopeMock(t, &log, func(prompt string) (int, string) {
+		ids := factIDs(prompt)
+		mu.Lock()
+		for _, id := range ids {
+			if inflight[id] > 0 {
+				overlap = true
+			}
+			inflight[id]++
+		}
+		cur++
+		if cur > max {
+			max = cur
+		}
+		mu.Unlock()
+		// Hold until a second call arrives, so a serial scheduler is caught.
+		for end := time.Now().Add(time.Second); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+			mu.Lock()
+			both := cur >= 2
+			mu.Unlock()
+			if both {
+				break
 			}
 		}
+		time.Sleep(40 * time.Millisecond)
+		mu.Lock()
+		for _, id := range ids {
+			inflight[id]--
+		}
+		cur--
+		mu.Unlock()
+		return http.StatusOK, chatBody(t, Consolidation{})
+	})
+	defer mock.Close()
+	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 2)
+	c.parallel = 2
+
+	rep, err := c.Once(context.Background())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !reached {
-		t.Fatal("after a change, the owner was never re-walked back to its oldest window")
+	if rep.ClustersRun != 3 {
+		t.Fatalf("ClustersRun = %d, want 3", rep.ClustersRun)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if max != 2 {
+		t.Errorf("most calls in flight at once = %d, want 2", max)
+	}
+	if overlap {
+		t.Error("two clusters that share a fact ran at the same time")
+	}
+}
+
+// Run starts the next pass after the catch-up delay, not the full interval, while a
+// pass has left clusters pending. Each pass here has time for one call; at every=1.5s
+// three passes on the full interval take over 4s, and with catch-up under 3s.
+func TestRunCatchesUpWhilePending(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	for i := 0; i < 5; i++ {
+		seedAt(t, srv.store, fmt.Sprintf("2026-01-01T00:%02d:00Z", i), fmt.Sprintf("alice fact %d", i))
+	}
+	old := minCallBudget
+	minCallBudget = 400 * time.Millisecond
+	t.Cleanup(func() { minCallBudget = old })
+
+	var log promptLog
+	mock := scopeMock(t, &log, func(string) (int, string) {
+		time.Sleep(300 * time.Millisecond)
+		return http.StatusOK, chatBody(t, Consolidation{})
+	})
+	defer mock.Close()
+	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), 1500*time.Millisecond, 0, 2)
+	c.parallel = 1
+	c.catchup = 10 * time.Millisecond
+	c.timeout = 600 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { c.Run(ctx); close(done) }()
+	deadline := time.Now().Add(4 * time.Second)
+	for len(log.all()) < 3 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if n := len(log.all()); n != 3 {
+		t.Fatalf("calls = %d within 4s, want 3: the catch-up pass did not follow early", n)
+	}
+	if runs, _, _ := c.Stats(); runs < 3 {
+		t.Errorf("passes = %d, want at least 3 (one call fits each pass)", runs)
+	}
+}
+
+// A state file from before stable clusters (owners and windows, no clusters) loads,
+// and its owner has its clusters built and run.
+func TestOldWindowStateFileBuildsClusters(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	seedSourced(t, srv.store, "alice", "a1", "ra-1", "alice one")
+	seedSourced(t, srv.store, "alice", "a1", "ra-2", "alice two")
+	key := scopeKey{"alice", "a1"}.String()
+	old := fmt.Sprintf(`{"cursor":1,"owners":{%q:"abc"},"windows":{%q:{"next":2,"covered":3,"count":4}}}`, key, key)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(srv.store.indexPath), consolidateStateFile), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var log promptLog
+	mock := scopeMock(t, &log, func(string) (int, string) {
+		return http.StatusOK, chatBody(t, Consolidation{})
+	})
+	defer mock.Close()
+	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
+	if len(c.clusters) != 0 {
+		t.Fatalf("an old state file produced %d owners of clusters, want none", len(c.clusters))
+	}
+	rep, err := c.Once(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(log.all()); n != 1 || rep.ClustersRun != 1 {
+		t.Errorf("calls=%d clusters_run=%d, want 1/1", n, rep.ClustersRun)
+	}
+	if oc := c.clusters[key]; oc == nil || len(oc.Clusters) != 1 {
+		t.Errorf("clusters were not built and stored: %+v", oc)
+	}
+}
+
+// The three scheduling variables are read when the consolidator is made, with the
+// bounds the spec gives: parallel 1 to 4, catch-up positive.
+func TestConsolidatorReadsSchedulingEnv(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	c := NewConsolidator(srv.store, nil, time.Hour, 0, 0)
+	if c.parallel != 2 || c.catchup != 20*time.Minute || c.recluster != 0 {
+		t.Errorf("defaults parallel=%d catchup=%s recluster=%s, want 2/20m/0", c.parallel, c.catchup, c.recluster)
+	}
+	t.Setenv("HYATLAS_CONSOLIDATE_PARALLEL", "9")
+	t.Setenv("HYATLAS_CONSOLIDATE_CATCHUP", "0s")
+	t.Setenv("HYATLAS_CONSOLIDATE_RECLUSTER", "48h")
+	c = NewConsolidator(srv.store, nil, time.Hour, 0, 0)
+	if c.parallel != 4 || c.catchup != 20*time.Minute || c.recluster != 48*time.Hour {
+		t.Errorf("parallel=%d catchup=%s recluster=%s, want 4/20m/48h", c.parallel, c.catchup, c.recluster)
+	}
+	t.Setenv("HYATLAS_CONSOLIDATE_CATCHUP", "5m")
+	t.Setenv("HYATLAS_CONSOLIDATE_PARALLEL", "1")
+	c = NewConsolidator(srv.store, nil, time.Hour, 0, 0)
+	if c.parallel != 1 || c.catchup != 5*time.Minute {
+		t.Errorf("parallel=%d catchup=%s, want 1/5m", c.parallel, c.catchup)
 	}
 }
