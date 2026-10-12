@@ -265,6 +265,15 @@ func (b *BacklogJob) readPlan() (*backlogPlan, error) {
 	return &plan, nil
 }
 
+// ownerOf is the owner ID a fact belongs to in a plan: its canonical alias (plans
+// group one person's IDs as one owner), or the ID itself without a consolidator.
+func (b *BacklogJob) ownerOf(user string) string {
+	if b.cons == nil {
+		return user
+	}
+	return b.cons.canonical(user)
+}
+
 // ownerWork is one owner's clusters, cut before any LLM call so progress has a total.
 type ownerWork struct {
 	key      scopeKey
@@ -274,17 +283,13 @@ type ownerWork struct {
 // runDry asks the model about every cluster and saves the plan. A cluster that
 // fails is recorded and skipped; the job continues.
 func (b *BacklogJob) runDry(ctx context.Context) error {
-	facts := b.cons.listAllLive(memory.L3Fact)
-	byOwner, owners := groupByOwner(facts)
+	// The consolidator's own stored clusters, so the backlog groups facts exactly as
+	// consolidation does (one person's alias IDs as one owner), and a failed group
+	// is one consolidation will also run, instead of cutting a second grouping.
+	owners, clusters := b.cons.StableClusters()
 	var work []ownerWork
 	for _, k := range owners {
-		fs := byOwner[k]
-		// A single fact has nothing to be contradicted by or reconciled against.
-		if len(fs) < 2 {
-			continue
-		}
-		sortNewestFirst(fs)
-		work = append(work, ownerWork{key: k, clusters: b.cons.clusterWindows(fs)})
+		work = append(work, ownerWork{key: k, clusters: clusters[k]})
 	}
 	return b.planWork(ctx, work)
 }
@@ -320,7 +325,7 @@ func (b *BacklogJob) runRetry(ctx context.Context, failed []BacklogFailed) error
 		k := scopeKey{user: f.User, agent: f.Agent}
 		var fs []DocIndex
 		for _, d := range b.store.GetMany(f.FactIDs) {
-			if d.Layer == string(memory.L3Fact) && !isSuperseded(d) && d.UserID == f.User && d.AgentID == f.Agent {
+			if d.Layer == string(memory.L3Fact) && !isSuperseded(d) && b.ownerOf(d.UserID) == f.User && d.AgentID == f.Agent {
 				fs = append(fs, d)
 			}
 		}
@@ -564,7 +569,7 @@ func (b *BacklogJob) runApply(plan *backlogPlan) error {
 		liveOwned := func(id string) bool {
 			d, ok := docs[id]
 			return ok && d.Layer == string(memory.L3Fact) && !isSuperseded(d) &&
-				d.UserID == po.User && d.AgentID == po.Agent
+				b.ownerOf(d.UserID) == po.User && d.AgentID == po.Agent
 		}
 		replacedBy := map[string]string{}
 		for _, o := range po.Outdated {

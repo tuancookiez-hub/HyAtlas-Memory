@@ -142,7 +142,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         # The query each recall was made with, keyed like _recalled: feedback leaves
         # its words out, because a reply naturally repeats the question.
         self._recalled_query: Dict[str, str] = {}
-        self._version = "4.7.1"
+        self._version = "4.7.2"
         # Message count already synced per session, so _build_turn_text sends
         # only what the server has not seen. Bounded: a long-lived gateway
         # touches far more sessions than it can hold, and the cost of evicting
