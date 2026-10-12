@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"sort"
 	"strconv"
 	"time"
@@ -73,7 +74,7 @@ func (c *Consolidator) clusterPlan(facts []DocIndex) ([][]DocIndex, []bool) {
 		}
 		assigned[i] = true
 		members := []int{i}
-		hits, err := c.store.search(seed.Content, c.batch*2, memory.L3Fact, seed.UserID, seed.AgentID)
+		hits, err := c.neighbours(seed, c.batch*2)
 		if err == nil {
 			for _, h := range hits {
 				if len(members) >= c.batch {
@@ -139,6 +140,50 @@ func chunkTimeOrdered(facts []DocIndex, batch int) [][]DocIndex {
 		out = append(out, facts[lo:hi])
 	}
 	return out
+}
+
+// neighbours returns the facts nearest to f among its owner's, where the owner is
+// every user ID of the same person (HYATLAS_USER_ALIASES): consolidation groups
+// those IDs as one owner, so a cluster may span them.
+func (c *Consolidator) neighbours(f DocIndex, k int) ([]SearchHit, error) {
+	if group := c.groupOf(f.UserID); len(group) > 1 {
+		return c.store.SearchOwners(f.Content, k, memory.L3Fact, group, f.AgentID)
+	}
+	return c.store.search(f.Content, k, memory.L3Fact, f.UserID, f.AgentID)
+}
+
+// StableClusters returns each owner's stored clusters as their live facts (newest
+// first, clusters of fewer than two facts left out), synced with the store the way
+// a pass syncs them, so other passes group facts exactly as consolidation does. It
+// waits for a running pass, and saves the synced layout.
+func (c *Consolidator) StableClusters() ([]scopeKey, map[scopeKey][][]DocIndex) {
+	c.gate.Lock()
+	defer c.gate.Unlock()
+	byOwner, owners := c.groupOwners(c.listAllLive(memory.L3Fact))
+	out := map[scopeKey][][]DocIndex{}
+	var keys []scopeKey
+	for _, k := range owners {
+		fs := byOwner[k]
+		if len(fs) < 2 {
+			continue
+		}
+		sortNewestFirst(fs)
+		oc := c.syncClusters(k, fs)
+		for _, cs := range oc.Clusters {
+			if members := c.liveMembers(cs.FactIDs); len(members) >= 2 {
+				out[k] = append(out[k], members)
+			}
+		}
+		if len(out[k]) > 0 {
+			keys = append(keys, k)
+		}
+	}
+	c.stateMu.Lock()
+	if err := c.saveState(); err != nil {
+		log.Printf("consolidate: save state: %v", err)
+	}
+	c.stateMu.Unlock()
+	return keys, out
 }
 
 // clusterSearchK is how many neighbours a new fact looks at when it is assigned to
@@ -264,7 +309,7 @@ func (c *Consolidator) assignFact(oc *ownerClusters, f DocIndex, where map[strin
 	if len(oc.Clusters) == 1 && room(oc.Clusters[0]) {
 		// The only cluster: nothing to choose between, so no search.
 		target = oc.Clusters[0]
-	} else if hits, err := c.store.search(f.Content, clusterSearchK, memory.L3Fact, f.UserID, f.AgentID); err == nil {
+	} else if hits, err := c.neighbours(f, clusterSearchK); err == nil {
 		for _, h := range hits {
 			cs := where[h.ID]
 			if h.ID == f.ID || cs == nil {

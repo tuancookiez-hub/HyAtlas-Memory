@@ -221,3 +221,39 @@ func TestResolveExtractTimeout(t *testing.T) {
 		t.Errorf("zero: got %v, want default 300s", got)
 	}
 }
+
+// The primary's key goes to the fallback only on the primary's own host. A fallback
+// on another host with no key of its own gets no Authorization header, so a live
+// primary token is never handed to a different provider.
+func TestChatFallbackOnOtherHostGetsNoPrimaryKey(t *testing.T) {
+	primary := newFakeChatEndpoint(t, http.StatusInternalServerError, "")
+	fallback := newFakeChatEndpoint(t, http.StatusOK, "from fallback")
+	// Same server, but named by a different host than the primary's 127.0.0.1.
+	other := strings.Replace(fallback.srv.URL, "127.0.0.1", "localhost", 1)
+
+	l := NewLLMClient(primary.srv.URL, "primary-key", "primary-model")
+	l.SetFallback(other, "fallback-model", "")
+	if _, err := l.chat(context.Background(), []map[string]string{{"role": "user", "content": "hi"}}, 0); err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if len(fallback.auths) != 1 || fallback.auths[0] != "" {
+		t.Errorf("fallback on another host got Authorization %v, want none", fallback.auths)
+	}
+}
+
+func TestSameHost(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"https://inference-api.nousresearch.com/v1", "https://inference-api.nousresearch.com/v2", true},
+		{"http://127.0.0.1:1/v1", "http://127.0.0.1:2/v1", true},
+		{"http://localhost:1", "http://127.0.0.1:1", false},
+		{"https://a.example/v1", "https://b.example/v1", false},
+		{"", "https://a.example", false},
+	} {
+		if got := sameHost(c.a, c.b); got != c.want {
+			t.Errorf("sameHost(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}

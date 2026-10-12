@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -32,6 +33,28 @@ type LLMClient struct {
 	// FallbackKey is the bearer key for the fallback. Empty means the primary's
 	// key resolution (Key / KeyFile) is used.
 	FallbackKey string
+}
+
+// fallbackKey is the bearer token for a fallback call to base: FallbackKey when set,
+// otherwise the primary's key, but only when base is the primary's host. The
+// primary key (on this setup a live Nous Portal token) must never be sent to some
+// other provider just because its own key was left unset; that call goes out
+// without one and fails visibly instead.
+func (l *LLMClient) fallbackKey(base string) string {
+	if l.FallbackKey != "" {
+		return l.FallbackKey
+	}
+	if sameHost(base, l.BaseURL) {
+		return l.resolveKey()
+	}
+	return ""
+}
+
+// sameHost reports whether two endpoint URLs name the same host (ports aside).
+func sameHost(a, b string) bool {
+	ua, errA := url.Parse(a)
+	ub, errB := url.Parse(b)
+	return errA == nil && errB == nil && ua.Hostname() != "" && strings.EqualFold(ua.Hostname(), ub.Hostname())
 }
 
 // SetFallback configures the fallback model used when the primary call fails.
@@ -304,14 +327,14 @@ func (l *LLMClient) completeOnce(ctx context.Context, text string, reinforce boo
 // all mean the same thing to the caller: this model did not answer this time.
 func (l *LLMClient) chat(ctx context.Context, messages []map[string]string, temp float64) (string, error) {
 	if l.FallbackModel == "" {
-		return l.chatOnce(ctx, l.BaseURL, l.Model, "", messages, temp)
+		return l.chatOnce(ctx, l.BaseURL, l.Model, l.resolveKey(), messages, temp)
 	}
 	budget := 120 * time.Second
 	if dl, ok := ctx.Deadline(); ok {
 		budget = time.Until(dl)
 	}
 	pctx, cancel := context.WithTimeout(ctx, budget*2/3)
-	content, errPrimary := l.chatOnce(pctx, l.BaseURL, l.Model, "", messages, temp)
+	content, errPrimary := l.chatOnce(pctx, l.BaseURL, l.Model, l.resolveKey(), messages, temp)
 	cancel()
 	if errPrimary == nil {
 		return content, nil
@@ -326,7 +349,7 @@ func (l *LLMClient) chat(ctx context.Context, messages []map[string]string, temp
 		base = l.BaseURL
 	}
 	log.Printf("llm: primary %s failed (%v); trying fallback %s", l.Model, errPrimary, l.FallbackModel)
-	content, errFallback := l.chatOnce(ctx, base, l.FallbackModel, l.FallbackKey, messages, temp)
+	content, errFallback := l.chatOnce(ctx, base, l.FallbackModel, l.fallbackKey(base), messages, temp)
 	if errFallback != nil {
 		return "", fmt.Errorf("primary: %v; fallback: %w", errPrimary, errFallback)
 	}
@@ -358,9 +381,6 @@ func (l *LLMClient) chatOnce(ctx context.Context, base, model, key string, messa
 	// Resolve the key per request so a rotating credential (KeyFile) never
 	// goes stale the way a startup-frozen env value does.
 	k := key
-	if k == "" {
-		k = l.resolveKey()
-	}
 	if k != "" {
 		req.Header.Set("Authorization", "Bearer "+k)
 	}

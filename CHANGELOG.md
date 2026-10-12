@@ -1,5 +1,42 @@
 # Changelog
 
+## [4.7.2] — 2026-10-13
+
+Fixes from a code review of 4.7.1.
+
+### Fixed
+
+- **An outage no longer abandons the backlog.** With catch-up passes every 20
+  minutes, an hour of provider errors could use up every pending cluster's three
+  strikes, and a skipped cluster was only retried when its facts changed — for a
+  quiet cluster, never. Now a pass where two or more calls fail and none succeeds is
+  taken as the provider being down and charges no cluster, and a skipped cluster is
+  tried again after 24 hours.
+- **Consolidation follows `HYATLAS_USER_ALIASES`.** One person's facts written under
+  different IDs (a messaging gateway ID and the CLI's `default`) were consolidated
+  as separate owners, so contradictions between them never met. They are now one
+  owner: clustered, consolidated and backlog-planned together.
+- **The primary key is never sent to another host.** With a fallback endpoint on a
+  different host and no `HYATLAS_LLM_FALLBACK_KEY`, the fallback call carried the
+  primary's key (here a live Nous Portal token). It now gets no key.
+- **Catch-up survives restarts and manual passes.** A server started with work
+  pending begins with a catch-up pass instead of waiting `HYATLAS_CONSOLIDATE_EVERY`
+  (6h), and a scheduled pass that finds a manual one running checks back after the
+  catch-up interval instead of 6h.
+
+### Changed
+
+- **A call starts only when there is time for it.** The minimum time left in a pass
+  for a new call follows the model: 1.25 times the median of recent successful
+  calls, at least 3 minutes and at most 80% of a pass. A fixed 3 minutes started
+  calls on a slow free model that the deadline then cut, spending quota for nothing.
+- The backlog pass uses the consolidator's stored topic clusters instead of cutting
+  its own, so both group facts the same way.
+- After a call, the cluster's members are checked by ID instead of listing every
+  live fact of the owner.
+- Coverage estimates in the docs now state what was measured (about half a day for
+  ~150 clusters on a free model) instead of a fixed nine hours.
+
 ## [4.7.1] — 2026-10-12
 
 Consolidation that finishes in hours, not weeks, and calls that survive a slow model.

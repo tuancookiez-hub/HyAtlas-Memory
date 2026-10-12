@@ -61,7 +61,7 @@ Useful env vars (installer only):
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.7.1` |
+| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.7.2` |
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the installer caches the model (source builds) | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
 | `HYATLAS_MODE` | Extraction mode written to the Hermes `.env`: `lite` \| `pro` \| `ultra`. Any other exported value stops the installer with an error and nothing is written | `ultra` (asked interactively) |
@@ -255,18 +255,24 @@ that never happened. An owner whose facts have not changed since its last succes
 pass counts under `owners_unchanged` and is not sent to the LLM again.
 
 Facts are consolidated in **topic clusters** of up to `HYATLAS_CONSOLIDATE_BATCH`
-facts, built once per owner and kept in `consolidate_state.json`. A new fact joins the
+facts, built once per owner and kept in `consolidate_state.json`. An owner here is a
+person: user IDs grouped by `HYATLAS_USER_ALIASES` are consolidated together, so a
+contradiction between facts written under two of their IDs meets in one call. A new fact joins the
 cluster of its nearest neighbour (similarity 0.55 and up) when that cluster has room,
 otherwise the newest time-ordered cluster. A cluster is due only when its members
 changed since its last successful call, so after the first full coverage a pass
 handles just the clusters that received new facts. A pass runs due clusters across
 owners, up to `HYATLAS_CONSOLIDATE_PARALLEL` (2) calls at once, and starts no call
-with less than 3 minutes of its 10-minute budget left. While clusters are still due
+when less time is left in its 10-minute budget than a call takes: 1.25 times the
+median of recent successful calls, at least 3 minutes. While clusters are still due
 (`clusters_pending` > 0) the next pass runs after `HYATLAS_CONSOLIDATE_CATCHUP` (20m)
-instead of `HYATLAS_CONSOLIDATE_EVERY`; for a store of about 100 clusters, the first
-coverage takes hours rather than weeks. Progress is saved after every cluster. A
-cluster that fails three passes in a row is left until its members change, and the
-skip is listed in `errors`. A failed LLM call, merge or supersede makes the cluster
+instead of `HYATLAS_CONSOLIDATE_EVERY`, and a server started with work pending begins
+with a catch-up pass. How long the first coverage takes depends on the model: on a
+free model with 25-fact clusters a pass ran 7 clusters in 9 minutes, about half a
+day for ~150 clusters. Progress is saved after every cluster. A cluster that fails
+three passes in a row is skipped until its members change or 24 hours pass, and the
+skip is listed in `errors`; when two or more calls of a pass fail and none succeeds,
+the provider is taken to be down and no cluster is charged. A failed LLM call, merge or supersede makes the cluster
 retry on the next pass. A failed arc, schema, L5 edge or L1 mirror
 write is listed in `errors` but does not cause a retry, because the facts were
 already reconciled.
@@ -331,7 +337,7 @@ the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
 | `HYATLAS_USAGE_LEARNING` | on | `off` stops search learning from which recalled memories replies actually used |
 | `HYATLAS_LLM_FALLBACK_MODEL` | *(unset)* | A second model, tried only when a call to the primary fails (error, empty reply or timeout). The primary then gets two thirds of the call's time. Unset means no fallback |
 | `HYATLAS_LLM_FALLBACK_BASE` | *(the primary's)* | OpenAI-compatible endpoint for the fallback model |
-| `HYATLAS_LLM_FALLBACK_KEY` | *(the primary's)* | Key for the fallback endpoint; unset reuses the primary key or key file |
+| `HYATLAS_LLM_FALLBACK_KEY` | *(see purpose)* | Key for the fallback endpoint. Unset reuses the primary key or key file only when the fallback is on the primary's host; a fallback on another host gets no key rather than the primary's |
 | `HYATLAS_EXTRACT_TIMEOUT` | `300s` | How long one extraction call may take |
 
 The binary reads no settings from the command line. It answers only `--version`

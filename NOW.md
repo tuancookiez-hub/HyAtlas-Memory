@@ -8,9 +8,16 @@
 - Plugin: `hyatlas` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hyatlas\` + Hermes Desktop pane. The catalog entry `plugin-catalog/hyatlas.yaml` (NousResearch/hermes-agent) pins 4.5.0; 4.5.1 changed no plugin code, so there was no catalog bump.
 - Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`)
 
-## 4.7.1 (branch feat/4.7.1-throughput)
-Stable topic clusters with dirty-only, parallel, catch-up consolidation (~9 h to
-cover ~100 clusters instead of ~22 days); fallback model; 300 s extraction timeout;
+## 4.7.2 (branch fix/4.7.2-review)
+Code-review fixes: provider-wide failures are not charged to clusters and skipped
+clusters retry after 24 h; consolidation groups alias IDs as one owner; the
+fallback never gets the primary key on another host; catch-up after restart and
+after a busy tick; call budget from measured call times; backlog reuses stored
+clusters.
+
+## 4.7.1 (released 2026-10-12)
+Stable topic clusters with dirty-only, parallel, catch-up consolidation (about half
+a day to cover ~150 clusters on the free model, instead of ~22 days); fallback model; 300 s extraction timeout;
 backlog retry of failed groups; page re-index repair; usage.json cap.
 
 ## 4.7.0 (released 2026-10-12)
