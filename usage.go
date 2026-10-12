@@ -36,6 +36,11 @@ type UsageStats struct {
 // recalls say nothing about whether it helps.
 const usageMinShown = 3
 
+// usageMaxEntries caps how many memories usage.json tracks. Every recalled id gains
+// an entry and nothing else removes one, so without a cap the file grows forever.
+// Pruning to 90% of the cap leaves headroom, so it does not run on every write.
+const usageMaxEntries = 20000
+
 // NewUsageStats loads <dataDir>/usage.json if it exists. A missing or unreadable
 // file starts empty, because usage counts are advisory and must never block startup.
 // An empty dataDir keeps the counts in memory only.
@@ -84,10 +89,66 @@ func (u *UsageStats) Record(recalled []string, contents map[string]string, reply
 		}
 		u.m[id] = e
 	}
+	if len(u.m) > usageMaxEntries {
+		u.pruneLocked()
+	}
 	if len(seen) > 0 {
 		_ = u.persistLocked()
 	}
 	return used
+}
+
+// pruneLocked drops entries until the map holds usageMaxEntries*9/10. It goes first
+// for memories never used, fewest shows first, then for the oldest last use. The
+// caller must hold u.mu.
+//
+// Why: a memory that was never used and was rarely shown carries the least signal,
+// so it is the cheapest to forget. Used memories are kept, and among them the ones
+// not used for longest go first.
+func (u *UsageStats) pruneLocked() {
+	target := usageMaxEntries * 9 / 10
+	drop := len(u.m) - target
+	if drop <= 0 {
+		return
+	}
+	type cand struct {
+		id string
+		e  usageEntry
+	}
+	var unused, rest []cand
+	for id, e := range u.m {
+		if e.Used == 0 {
+			unused = append(unused, cand{id, e})
+		} else {
+			rest = append(rest, cand{id, e})
+		}
+	}
+	sort.Slice(unused, func(i, j int) bool {
+		if unused[i].e.Shown != unused[j].e.Shown {
+			return unused[i].e.Shown < unused[j].e.Shown
+		}
+		return unused[i].id < unused[j].id
+	})
+	for _, c := range unused {
+		if drop <= 0 {
+			return
+		}
+		delete(u.m, c.id)
+		drop--
+	}
+	sort.Slice(rest, func(i, j int) bool {
+		if rest[i].e.Last != rest[j].e.Last {
+			return rest[i].e.Last < rest[j].e.Last
+		}
+		return rest[i].id < rest[j].id
+	})
+	for _, c := range rest {
+		if drop <= 0 {
+			return
+		}
+		delete(u.m, c.id)
+		drop--
+	}
 }
 
 // Factor is the ranking multiplier for a memory: 1.0 until it has been shown at

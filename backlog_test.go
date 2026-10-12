@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -49,10 +50,58 @@ func newBacklogEnv(t *testing.T, reply func(body string) string) *backlogEnv {
 
 func (e *backlogEnv) post(t *testing.T, dry bool) *httptest.ResponseRecorder {
 	t.Helper()
-	body, _ := json.Marshal(map[string]any{"dry_run": dry})
+	return e.postBody(t, map[string]any{"dry_run": dry})
+}
+
+// postBody sends an arbitrary POST body, for the only_failed flag.
+func (e *backlogEnv) postBody(t *testing.T, body map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, _ := json.Marshal(body)
 	rec := httptest.NewRecorder()
-	e.job.HandleBacklog(rec, httptest.NewRequest(http.MethodPost, "/api/v1/admin/backlog", bytes.NewReader(body)))
+	e.job.HandleBacklog(rec, httptest.NewRequest(http.MethodPost, "/api/v1/admin/backlog", bytes.NewReader(raw)))
 	return rec
+}
+
+// readBacklogFile loads a saved plan (the pending plan or the applied one) from dir.
+func readBacklogFile(t *testing.T, dir, name string) backlogPlan {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p backlogPlan
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// failVOnce makes the LLM fail owner v's cluster (the one holding id=v1) while
+// failV is set, and records every request body it receives.
+type failVOnce struct {
+	mu     sync.Mutex
+	failV  bool
+	bodies []string
+}
+
+func (f *failVOnce) reply(body string) string {
+	f.mu.Lock()
+	f.bodies = append(f.bodies, body)
+	fail := f.failV
+	f.mu.Unlock()
+	if fail && strings.Contains(body, "id=v1") {
+		return "not json at all"
+	}
+	return backlogReply(body)
+}
+
+// take returns the bodies recorded since the last take and clears them.
+func (f *failVOnce) take() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := f.bodies
+	f.bodies = nil
+	return out
 }
 
 func (e *backlogEnv) get() BacklogStatus {
@@ -267,5 +316,131 @@ func TestParseBacklogReplyDedupAndTolerance(t *testing.T) {
 	}
 	if got := dedupFacts(append(cluster, cluster[0])); len(got) != 2 {
 		t.Errorf("dedupFacts = %d", len(got))
+	}
+}
+
+func TestBacklogDryRunRecordsFailedCluster(t *testing.T) {
+	f := &failVOnce{failV: true}
+	e := newBacklogEnv(t, f.reply)
+	e.seed(t)
+	e.post(t, true)
+	e.waitDone(t)
+	st := e.get()
+	if st.Summary["clusters_failed"] != float64(1) {
+		t.Errorf("summary = %+v", st.Summary)
+	}
+	plan := readBacklogFile(t, e.dir, backlogPlanFile)
+	if len(plan.Failed) != 1 {
+		t.Fatalf("failed = %+v", plan.Failed)
+	}
+	got := plan.Failed[0]
+	if got.User != "v" || got.Agent != "a" || !slices.Contains(got.FactIDs, "v1") ||
+		!slices.Contains(got.FactIDs, "v2") || got.Error == "" {
+		t.Errorf("failed[0] = %+v", got)
+	}
+}
+
+func TestBacklogOnlyFailedRetriesOnlyFailedCluster(t *testing.T) {
+	f := &failVOnce{failV: true}
+	e := newBacklogEnv(t, f.reply)
+	e.seed(t)
+	e.post(t, true)
+	e.waitDone(t)
+	e.post(t, false)
+	e.waitDone(t)
+	f.take()
+
+	f.mu.Lock()
+	f.failV = false
+	f.mu.Unlock()
+	if rec := e.postBody(t, map[string]any{"dry_run": true, "only_failed": true}); rec.Code != 202 {
+		t.Fatalf("only_failed POST = %d %s", rec.Code, rec.Body)
+	}
+	e.waitDone(t)
+	bodies := f.take()
+	if len(bodies) != 1 || !strings.Contains(bodies[0], "id=v1") || !strings.Contains(bodies[0], "id=v2") ||
+		strings.Contains(bodies[0], "id=old1") || strings.Contains(bodies[0], "id=new1") {
+		t.Fatalf("retry made %d requests, want one about owner v only", len(bodies))
+	}
+	st := e.get()
+	if st.State != "done" || st.ClustersTotal != 1 || st.ClustersDone != 1 || st.Summary["clusters_failed"] != float64(0) {
+		t.Errorf("status = %+v", st)
+	}
+	plan := readBacklogFile(t, e.dir, backlogPlanFile)
+	if len(plan.Failed) != 0 || len(plan.Owners) != 1 || plan.Owners[0].User != "v" {
+		t.Errorf("retry plan = %+v", plan)
+	}
+
+	// The retry's plan is applied the normal way.
+	if rec := e.post(t, false); rec.Code != 202 {
+		t.Fatalf("apply retry POST = %d %s", rec.Code, rec.Body)
+	}
+	e.waitDone(t)
+	if got := e.get(); got.State != "done" {
+		t.Errorf("apply status = %+v", got)
+	}
+	if _, err := os.Stat(filepath.Join(e.dir, backlogAppliedFile)); err != nil {
+		t.Errorf("applied plan missing: %v", err)
+	}
+}
+
+func TestBacklogOnlyFailedRefusedWhilePlanWaits(t *testing.T) {
+	e := newBacklogEnv(t, backlogReply)
+	e.seed(t)
+	e.post(t, true)
+	e.waitDone(t)
+	if rec := e.postBody(t, map[string]any{"dry_run": true, "only_failed": true}); rec.Code != 409 {
+		t.Errorf("only_failed with a pending plan = %d, want 409", rec.Code)
+	}
+	if _, err := os.Stat(filepath.Join(e.dir, backlogPlanFile)); err != nil {
+		t.Errorf("pending plan was touched: %v", err)
+	}
+}
+
+func TestBacklogOnlyFailedNeedsAppliedPlan(t *testing.T) {
+	e := newBacklogEnv(t, backlogReply)
+	e.seed(t)
+	if rec := e.postBody(t, map[string]any{"dry_run": true, "only_failed": true}); rec.Code != 400 {
+		t.Errorf("only_failed with no applied plan = %d, want 400", rec.Code)
+	}
+	e.post(t, true)
+	e.waitDone(t)
+	e.post(t, false)
+	e.waitDone(t)
+	// The applied plan has no failed clusters (backlogReply answers both), so there is nothing to retry.
+	if rec := e.postBody(t, map[string]any{"dry_run": true, "only_failed": true}); rec.Code != 400 {
+		t.Errorf("only_failed with no failed clusters = %d, want 400", rec.Code)
+	}
+	if rec := e.postBody(t, map[string]any{"dry_run": false, "only_failed": true}); rec.Code != 400 {
+		t.Errorf("only_failed on apply = %d, want 400", rec.Code)
+	}
+}
+
+func TestBacklogOnlyFailedDropsSupersededFacts(t *testing.T) {
+	f := &failVOnce{failV: true}
+	e := newBacklogEnv(t, f.reply)
+	e.seed(t)
+	ctxAdd(t, e.store, memory.L3Fact, "v3", "Other owner fact three", "v", time.Now().Add(time.Hour))
+	e.post(t, true)
+	e.waitDone(t)
+	e.post(t, false)
+	e.waitDone(t)
+	f.take()
+
+	// v1 is replaced after the failure; the retry must not send it again.
+	if _, err := e.store.Supersede([]string{"v1"}, "v2"); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.failV = false
+	f.mu.Unlock()
+	if rec := e.postBody(t, map[string]any{"dry_run": true, "only_failed": true}); rec.Code != 202 {
+		t.Fatalf("only_failed POST = %d %s", rec.Code, rec.Body)
+	}
+	e.waitDone(t)
+	bodies := f.take()
+	if len(bodies) != 1 || strings.Contains(bodies[0], "id=v1") ||
+		!strings.Contains(bodies[0], "id=v2") || !strings.Contains(bodies[0], "id=v3") {
+		t.Errorf("retry requests = %d, want one about v2 and v3 only", len(bodies))
 	}
 }

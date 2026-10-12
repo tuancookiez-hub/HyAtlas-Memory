@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -246,20 +247,148 @@ func TestOnceSendsContradictingFactsTogether(t *testing.T) {
 	if _, err := c.Once(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// One topic cluster plus the 65 unrelated facts in time clusters of 20: five
+	// calls, all in this one pass.
 	prompts := log.all()
-	if len(prompts) != 1 {
-		t.Fatalf("pass made %d calls, want 1", len(prompts))
+	if len(prompts) != 5 {
+		t.Fatalf("pass made %d calls, want 5", len(prompts))
 	}
-	if !strings.Contains(prompts[0], "stepfun") || !strings.Contains(prompts[0], "poolside") {
-		t.Fatalf("the contradicting pair was not sent in one call:\n%s", prompts[0])
+	var topic string
+	for _, p := range prompts {
+		if strings.Contains(p, "stepfun") {
+			topic = p
+		}
 	}
-	if got := len(factIDs(prompts[0])); got != 5 {
-		t.Errorf("topic window holds %d facts, want the 5 about the topic", got)
+	if topic == "" || !strings.Contains(topic, "poolside") {
+		t.Fatalf("the contradicting pair was not sent in one call")
 	}
-	// The count is stored, so due can decide without clustering again: one topic
-	// window plus the 65 unrelated facts in time windows of 20.
+	if got := len(factIDs(topic)); got != 5 {
+		t.Errorf("topic cluster holds %d facts, want the 5 about the topic", got)
+	}
+	// The clusters are stored, so later passes decide what is due without cutting them again.
 	key := scopeKey{user: "alice", agent: "a1"}.String()
-	if got := c.windows[key].Count; got != 1+4 {
-		t.Errorf("stored window count = %d, want 5", got)
+	if got := len(c.clusters[key].Clusters); got != 1+4 {
+		t.Errorf("stored cluster count = %d, want 5", got)
+	}
+}
+
+// clustersOf returns an owner's stored clusters as sorted-member strings, so two
+// clusterings can be compared regardless of cluster order.
+func clustersOf(c *Consolidator, k scopeKey) []string {
+	var out []string
+	for _, cs := range c.clusters[k.String()].Clusters {
+		ids := append([]string(nil), cs.FactIDs...)
+		sort.Strings(ids)
+		out = append(out, strings.Join(ids, ","))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// dueIDs returns the IDs of an owner's due clusters.
+func dueIDs(c *Consolidator, k scopeKey) []string {
+	var out []string
+	for _, cs := range c.clusters[k.String()].Clusters {
+		if cs.due() {
+			out = append(out, cs.ID)
+		}
+	}
+	return out
+}
+
+// seedTopics writes n facts for each of two topics (interleaved) and returns the
+// consolidator and the owner's facts.
+func seedTopics(t *testing.T, n int) (*Consolidator, []DocIndex, scopeKey) {
+	t.Helper()
+	store, _ := newTopicStore(t)
+	var texts []string
+	for i := 0; i < 2*n; i++ {
+		topic := "topic:a"
+		if i%2 == 1 {
+			topic = "topic:b"
+		}
+		texts = append(texts, fmt.Sprintf("%s fact %d", topic, i))
+	}
+	facts := seedTexts(t, store, texts)
+	return &Consolidator{store: store, batch: 20, clusters: map[string]*ownerClusters{}}, facts, scopeKey{"alice", "a1"}
+}
+
+// Cutting the same facts twice gives the same clusters, and a second sync with
+// nothing changed leaves them and their membership alone.
+func TestSyncClustersIsStable(t *testing.T) {
+	c, facts, k := seedTopics(t, 15)
+	c.syncClusters(k, facts)
+	first := clustersOf(c, k)
+	if len(first) != 2 {
+		t.Fatalf("got %d clusters, want 2 topics: %v", len(first), first)
+	}
+	c.syncClusters(k, facts)
+	if got := clustersOf(c, k); fmt.Sprint(got) != fmt.Sprint(first) {
+		t.Errorf("resync changed the clusters:\n%v\n%v", first, got)
+	}
+	other := &Consolidator{store: c.store, batch: 20, clusters: map[string]*ownerClusters{}}
+	other.syncClusters(k, facts)
+	if got := clustersOf(other, k); fmt.Sprint(got) != fmt.Sprint(first) {
+		t.Errorf("building twice differs:\n%v\n%v", first, got)
+	}
+}
+
+// One new fact about topic A dirties only A's cluster; one superseded fact dirties
+// only its own.
+func TestNewAndRemovedFactDirtyOnlyTheirCluster(t *testing.T) {
+	c, facts, k := seedTopics(t, 15)
+	oc := c.syncClusters(k, facts)
+	for _, cs := range oc.Clusters {
+		cs.DoneFP = cs.fp() // as if both had just run
+	}
+	if due := dueIDs(c, k); len(due) != 0 {
+		t.Fatalf("clusters due right after running: %v", due)
+	}
+
+	seedAt(t, c.store, "2026-06-01T00:00:00Z", "topic:a a brand new fact")
+	_, total := c.store.List(memory.L3Fact, "", "", 1, 0, false)
+	docs, _ := c.store.List(memory.L3Fact, "", "", total, 0, false)
+	sortNewestFirst(docs)
+	oc = c.syncClusters(k, docs)
+	due := dueIDs(c, k)
+	if len(due) != 1 {
+		t.Fatalf("due after one new fact = %v, want exactly one cluster", due)
+	}
+	var hit *clusterState
+	for _, cs := range oc.Clusters {
+		if cs.ID == due[0] {
+			hit = cs
+		}
+	}
+	for _, d := range c.store.GetMany(hit.FactIDs) {
+		if !strings.HasPrefix(d.Content, "topic:a") {
+			t.Errorf("the dirty cluster holds %q, want only topic a", d.Content)
+		}
+	}
+	for _, cs := range oc.Clusters {
+		cs.DoneFP = cs.fp()
+	}
+
+	// Supersede one topic b fact.
+	var gone string
+	for _, d := range docs {
+		if strings.HasPrefix(d.Content, "topic:b") {
+			gone = d.ID
+			break
+		}
+	}
+	if _, err := c.store.Supersede([]string{gone}, ""); err != nil {
+		t.Fatal(err)
+	}
+	live := docs[:0:0]
+	for _, d := range docs {
+		if d.ID != gone {
+			live = append(live, d)
+		}
+	}
+	c.syncClusters(k, live)
+	due = dueIDs(c, k)
+	if len(due) != 1 {
+		t.Fatalf("due after a removal = %v, want exactly one cluster", due)
 	}
 }

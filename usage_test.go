@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -189,5 +190,28 @@ func TestHandleFeedbackAliases(t *testing.T) {
 	alias := func(ids []string) []string { return append(ids, "discord-123") }
 	if n := post(alias); n != 1 {
 		t.Fatalf("with aliases shown = %d, want 1", n)
+	}
+}
+
+// Past usageMaxEntries the map is pruned to 90% of the cap: never-used memories go
+// first, so a heavily used one survives and an unused one does not.
+func TestUsagePrunes(t *testing.T) {
+	dir := t.TempDir()
+	u := NewUsageStats(dir)
+	for i := 0; i < usageMaxEntries+1; i++ {
+		u.m[fmt.Sprintf("id-%d", i)] = usageEntry{Shown: 1}
+	}
+	u.m["heavy"] = usageEntry{Shown: 50, Used: 40, Last: "2026-01-01T00:00:00Z"}
+
+	u.Record([]string{"probe"}, map[string]string{"probe": "unrelated"}, "reply", "")
+
+	if got, want := len(u.m), usageMaxEntries*9/10; got != want {
+		t.Fatalf("size after prune = %d, want %d", got, want)
+	}
+	if _, ok := u.m["heavy"]; !ok {
+		t.Fatal("heavily used entry was pruned")
+	}
+	if _, ok := u.m["id-0"]; ok {
+		t.Fatal("never-used entry id-0 survived the prune")
 	}
 }

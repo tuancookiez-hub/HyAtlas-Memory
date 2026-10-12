@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -21,6 +22,25 @@ type LLMClient struct {
 	KeyFile string // when set, the key is read live from this file each call
 	Model   string
 	Client  *http.Client
+
+	// FallbackBaseURL is the endpoint the fallback model is called on. Empty
+	// means the same endpoint as BaseURL.
+	FallbackBaseURL string
+	// FallbackModel is the model tried when the primary fails. Empty means no
+	// fallback, and chat behaves exactly as it did before fallbacks existed.
+	FallbackModel string
+	// FallbackKey is the bearer key for the fallback. Empty means the primary's
+	// key resolution (Key / KeyFile) is used.
+	FallbackKey string
+}
+
+// SetFallback configures the fallback model used when the primary call fails.
+// Values are trimmed of surrounding spaces, so an env var with a stray newline
+// or space still yields a usable model name.
+func (l *LLMClient) SetFallback(base, model, key string) {
+	l.FallbackBaseURL = strings.TrimSpace(base)
+	l.FallbackModel = strings.TrimSpace(model)
+	l.FallbackKey = strings.TrimSpace(key)
 }
 
 // NewLLMClient builds the shared HTTP client.
@@ -274,19 +294,59 @@ func (l *LLMClient) completeOnce(ctx context.Context, text string, reinforce boo
 	return parseExtraction(content)
 }
 
-// chat sends one chat-completions request and returns the assistant's text.
+// chat sends one chat-completions request and returns the assistant's text,
+// retrying once on the fallback model when the primary fails.
 //
-// Shared by extraction and consolidation so the two cannot drift on the parts
+// The primary gets two thirds of the caller's remaining time, so a hung
+// free-tier endpoint cannot consume the whole budget and leave nothing for the
+// fallback. With no caller deadline the primary is bounded at 120s. A fallback
+// is tried on any primary error, because a 5xx, a timeout and an empty reply
+// all mean the same thing to the caller: this model did not answer this time.
+func (l *LLMClient) chat(ctx context.Context, messages []map[string]string, temp float64) (string, error) {
+	if l.FallbackModel == "" {
+		return l.chatOnce(ctx, l.BaseURL, l.Model, "", messages, temp)
+	}
+	budget := 120 * time.Second
+	if dl, ok := ctx.Deadline(); ok {
+		budget = time.Until(dl)
+	}
+	pctx, cancel := context.WithTimeout(ctx, budget*2/3)
+	content, errPrimary := l.chatOnce(pctx, l.BaseURL, l.Model, "", messages, temp)
+	cancel()
+	if errPrimary == nil {
+		return content, nil
+	}
+	// A caller that has already given up gets the primary's error, not a
+	// fallback call nobody is waiting on.
+	if ctx.Err() != nil {
+		return "", errPrimary
+	}
+	base := l.FallbackBaseURL
+	if base == "" {
+		base = l.BaseURL
+	}
+	log.Printf("llm: primary %s failed (%v); trying fallback %s", l.Model, errPrimary, l.FallbackModel)
+	content, errFallback := l.chatOnce(ctx, base, l.FallbackModel, l.FallbackKey, messages, temp)
+	if errFallback != nil {
+		return "", fmt.Errorf("primary: %v; fallback: %w", errPrimary, errFallback)
+	}
+	return content, nil
+}
+
+// chatOnce sends one request to one model and returns the assistant's text.
+//
+// Shared by the primary and fallback paths so the two cannot drift on the parts
 // that are easy to get wrong once and hard to notice: the Cloudflare WAF
 // rejects Go's default User-Agent with a 403, and the key must be resolved per
-// request because a rotating JWT goes stale if frozen at startup.
-func (l *LLMClient) chat(ctx context.Context, messages []map[string]string, temp float64) (string, error) {
+// request because a rotating JWT goes stale if frozen at startup. A non-empty
+// key overrides that resolution; an empty one falls back to resolveKey.
+func (l *LLMClient) chatOnce(ctx context.Context, base, model, key string, messages []map[string]string, temp float64) (string, error) {
 	body, _ := json.Marshal(map[string]any{
-		"model":       l.Model,
+		"model":       model,
 		"messages":    messages,
 		"temperature": temp,
 	})
-	req, err := http.NewRequestWithContext(ctx, "POST", l.BaseURL+"/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", base+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -297,7 +357,11 @@ func (l *LLMClient) chat(ctx context.Context, messages []map[string]string, temp
 	req.Header.Set("User-Agent", "HyAtlas/4.3 (+https://github.com/tuancookiez-hub/HyAtlas-Memory)")
 	// Resolve the key per request so a rotating credential (KeyFile) never
 	// goes stale the way a startup-frozen env value does.
-	if k := l.resolveKey(); k != "" {
+	k := key
+	if k == "" {
+		k = l.resolveKey()
+	}
+	if k != "" {
 		req.Header.Set("Authorization", "Bearer "+k)
 	}
 	resp, err := l.Client.Do(req)

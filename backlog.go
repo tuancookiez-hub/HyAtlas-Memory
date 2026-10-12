@@ -66,10 +66,22 @@ type backlogOwner struct {
 	Outdated []BacklogOutdated `json:"outdated"`
 }
 
-// backlogPlan is what the dry run saves and apply reads.
+// BacklogFailed is one cluster whose LLM call or reply check failed. It keeps the
+// fact ids that were sent, so a retry can rebuild the same cluster from the live
+// store without asking the model about anything else.
+type BacklogFailed struct {
+	User    string   `json:"user"`
+	Agent   string   `json:"agent"`
+	FactIDs []string `json:"fact_ids"`
+	Error   string   `json:"error"`
+}
+
+// backlogPlan is what the dry run saves and apply reads. Failed lists the clusters
+// that could not be answered, so a later only_failed dry run can retry them.
 type backlogPlan struct {
-	Created string         `json:"created"`
-	Owners  []backlogOwner `json:"owners"`
+	Created string          `json:"created"`
+	Owners  []backlogOwner  `json:"owners"`
+	Failed  []BacklogFailed `json:"failed"`
 }
 
 // BacklogStatus is the GET view of the job.
@@ -143,7 +155,8 @@ func (b *BacklogJob) HandleBacklog(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, 200, b.snapshot())
 	case http.MethodPost:
 		var body struct {
-			DryRun *bool `json:"dry_run"`
+			DryRun     *bool `json:"dry_run"`
+			OnlyFailed bool  `json:"only_failed"`
 		}
 		if r.Body != nil {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err.Error() != "EOF" {
@@ -152,7 +165,13 @@ func (b *BacklogJob) HandleBacklog(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		dry := body.DryRun == nil || *body.DryRun
-		code, err := b.start(dry)
+		// Retrying failed clusters only makes sense as a dry run: apply carries out a
+		// saved plan and never asks the model, so there is nothing to retry there.
+		if body.OnlyFailed && !dry {
+			jsonResponse(w, 400, map[string]any{"error": "only_failed needs a dry run: send {\"dry_run\": true, \"only_failed\": true}"})
+			return
+		}
+		code, err := b.start(dry, body.OnlyFailed)
 		if err != nil {
 			jsonResponse(w, code, map[string]any{"error": err.Error(), "status": b.snapshot()})
 			return
@@ -165,20 +184,35 @@ func (b *BacklogJob) HandleBacklog(w http.ResponseWriter, r *http.Request) {
 }
 
 // start validates the request and launches the job; the HTTP code is returned
-// with any refusal.
-func (b *BacklogJob) start(dry bool) (int, error) {
+// with any refusal. onlyFailed retries the clusters that failed in the applied plan.
+func (b *BacklogJob) start(dry, onlyFailed bool) (int, error) {
 	b.mu.Lock()
 	if b.status.State == "running" {
 		b.mu.Unlock()
 		return 409, fmt.Errorf("a backlog job is already running")
 	}
 	var plan *backlogPlan
+	var failed []BacklogFailed
 	if dry {
 		if b.cons == nil || b.llm == nil || !b.llm.Configured() {
 			b.mu.Unlock()
 			return 400, fmt.Errorf("the backlog dry run needs an LLM; none configured")
 		}
-	} else {
+	}
+	if dry && onlyFailed {
+		// A saved plan that was never applied must not be overwritten by the retry's
+		// new plan, so it is refused until it is applied or removed.
+		if _, err := os.Stat(b.planPath()); err == nil {
+			b.mu.Unlock()
+			return 409, fmt.Errorf("a backlog plan is waiting to be applied: apply or remove %s before retrying failed clusters", backlogPlanFile)
+		}
+		f, err := b.readFailed()
+		if err != nil {
+			b.mu.Unlock()
+			return 400, err
+		}
+		failed = f
+	} else if !dry {
 		p, err := b.readPlan()
 		if err != nil {
 			b.mu.Unlock()
@@ -194,9 +228,12 @@ func (b *BacklogJob) start(dry bool) (int, error) {
 	go func() {
 		defer b.wg.Done()
 		var err error
-		if dry {
+		switch {
+		case dry && onlyFailed:
+			err = b.runRetry(context.Background(), failed)
+		case dry:
 			err = b.runDry(context.Background())
-		} else {
+		default:
 			err = b.runApply(plan)
 		}
 		b.update(func(s *BacklogStatus) {
@@ -240,7 +277,6 @@ func (b *BacklogJob) runDry(ctx context.Context) error {
 	facts := b.cons.listAllLive(memory.L3Fact)
 	byOwner, owners := groupByOwner(facts)
 	var work []ownerWork
-	total := 0
 	for _, k := range owners {
 		fs := byOwner[k]
 		// A single fact has nothing to be contradicted by or reconciled against.
@@ -248,13 +284,73 @@ func (b *BacklogJob) runDry(ctx context.Context) error {
 			continue
 		}
 		sortNewestFirst(fs)
-		cl := b.cons.clusterWindows(fs)
-		work = append(work, ownerWork{key: k, clusters: cl})
-		total += len(cl)
+		work = append(work, ownerWork{key: k, clusters: b.cons.clusterWindows(fs)})
+	}
+	return b.planWork(ctx, work)
+}
+
+// readFailed loads the clusters that failed in the applied plan. Only the applied
+// plan is read: a retry never starts from a plan that has not been applied yet.
+func (b *BacklogJob) readFailed() ([]BacklogFailed, error) {
+	raw, err := os.ReadFile(filepath.Join(b.dataDir, backlogAppliedFile))
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("no applied backlog plan to retry from: run a dry run and apply it first")
+	}
+	if err != nil {
+		return nil, err
+	}
+	var plan backlogPlan
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		return nil, fmt.Errorf("applied backlog plan is unreadable: %w", err)
+	}
+	if len(plan.Failed) == 0 {
+		return nil, fmt.Errorf("the applied backlog plan has no failed clusters: nothing to retry")
+	}
+	return plan.Failed, nil
+}
+
+// runRetry asks the model again about the clusters that failed in the applied plan.
+// Each cluster is rebuilt from its saved fact ids, keeping only facts that are still
+// live and owned by the same owner, so a fact superseded since the failure is never
+// sent again. The result is a fresh plan, exactly like a normal dry run.
+func (b *BacklogJob) runRetry(ctx context.Context, failed []BacklogFailed) error {
+	var work []ownerWork
+	at := map[scopeKey]int{}
+	for _, f := range failed {
+		k := scopeKey{user: f.User, agent: f.Agent}
+		var fs []DocIndex
+		for _, d := range b.store.GetMany(f.FactIDs) {
+			if d.Layer == string(memory.L3Fact) && !isSuperseded(d) && d.UserID == f.User && d.AgentID == f.Agent {
+				fs = append(fs, d)
+			}
+		}
+		// Fewer than two live facts left nothing to reconcile, as in the normal pass.
+		if len(fs) < 2 {
+			continue
+		}
+		sortNewestFirst(fs)
+		i, ok := at[k]
+		if !ok {
+			i = len(work)
+			at[k] = i
+			work = append(work, ownerWork{key: k})
+		}
+		work[i].clusters = append(work[i].clusters, fs)
+	}
+	return b.planWork(ctx, work)
+}
+
+// planWork asks the model about each cluster of each owner, then saves the plan
+// with the answers and the clusters that failed. Both the normal dry run and the
+// retry use it, so a retried plan is checked the same way as a first one.
+func (b *BacklogJob) planWork(ctx context.Context, work []ownerWork) error {
+	total := 0
+	for _, ow := range work {
+		total += len(ow.clusters)
 	}
 	b.update(func(s *BacklogStatus) { s.ClustersTotal = total })
 
-	plan := backlogPlan{Created: time.Now().UTC().Format(time.RFC3339), Owners: []backlogOwner{}}
+	plan := backlogPlan{Created: time.Now().UTC().Format(time.RFC3339), Owners: []backlogOwner{}, Failed: []BacklogFailed{}}
 	for _, ow := range work {
 		po := backlogOwner{User: ow.key.user, Agent: ow.key.agent, Pages: []PageUpdate{}, Outdated: []BacklogOutdated{}}
 		seenPair := map[string]bool{}
@@ -265,6 +361,8 @@ func (b *BacklogJob) runDry(ctx context.Context) error {
 			if err != nil {
 				msg := fmt.Sprintf("%s: %v", ow.key, err)
 				log.Printf("backlog: %s", msg)
+				plan.Failed = append(plan.Failed, BacklogFailed{User: ow.key.user, Agent: ow.key.agent,
+					FactIDs: backlogFactIDs(cluster), Error: err.Error()})
 				b.update(func(s *BacklogStatus) { s.Errors = append(s.Errors, msg); s.ClustersDone++ })
 				continue
 			}
@@ -310,9 +408,18 @@ func (b *BacklogJob) runDry(ctx context.Context) error {
 	}
 	b.update(func(s *BacklogStatus) {
 		s.Summary = map[string]any{"owners": len(plan.Owners), "clusters": total, "pages_proposed": pages,
-			"facts_to_supersede": outdated, "sample_outdated": sample}
+			"facts_to_supersede": outdated, "clusters_failed": len(plan.Failed), "sample_outdated": sample}
 	})
 	return nil
+}
+
+// backlogFactIDs lists the ids of a cluster, in order, for the failed-cluster record.
+func backlogFactIDs(fs []DocIndex) []string {
+	ids := make([]string, 0, len(fs))
+	for _, f := range fs {
+		ids = append(ids, f.ID)
+	}
+	return ids
 }
 
 // dedupFacts drops repeated ids from a cluster. Trailing time-ordered windows can

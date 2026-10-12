@@ -295,3 +295,50 @@ func TestPageUpdatesTolerantParse(t *testing.T) {
 		t.Errorf("scalar values: %+v", got)
 	}
 }
+
+// A page whose live doc was deleted from the store is written again by the next
+// event-only update, which before the fix was skipped because the text was unchanged.
+func TestPagesReindexRestoresDeletedDoc(t *testing.T) {
+	store, _ := newPagesStore(t)
+	_, _, _ = store.pages.Apply("u", "a", "s1", []PageUpdate{{Name: "HyAtlas", Set: []PageSet{set("model", "stepfun")}}}, nil)
+	pg := store.pages.List("u", "a")[0]
+	shown := map[string]bool{pg.ID: true}
+	if !store.pages.docLive(pg.DocID) {
+		t.Fatal("doc not live after first apply")
+	}
+
+	if n, err := store.Delete([]string{pg.DocID}, memory.L8Entity, "", ""); err != nil || n != 1 {
+		t.Fatalf("delete doc: n=%d err=%v", n, err)
+	}
+	if store.pages.docLive(pg.DocID) {
+		t.Fatal("doc still live after delete")
+	}
+
+	_, _, _ = store.pages.Apply("u", "a", "s2", []PageUpdate{{Page: pg.ID, Event: "tested"}}, shown)
+	if !store.pages.docLive(pg.DocID) {
+		t.Fatal("event-only update did not re-add the deleted doc")
+	}
+}
+
+// Repair re-indexes exactly the pages whose doc is missing, and a second run finds
+// nothing left to do.
+func TestPagesRepair(t *testing.T) {
+	store, _ := newPagesStore(t)
+	_, _, _ = store.pages.Apply("u", "a", "s1", []PageUpdate{{Name: "HyAtlas", Set: []PageSet{set("model", "stepfun")}}}, nil)
+	pg := store.pages.List("u", "a")[0]
+
+	if n, err := store.Delete([]string{pg.DocID}, memory.L8Entity, "", ""); err != nil || n != 1 {
+		t.Fatalf("delete doc: n=%d err=%v", n, err)
+	}
+	n, err := store.pages.Repair()
+	if err != nil || n != 1 {
+		t.Fatalf("Repair = %d, %v; want 1, nil", n, err)
+	}
+	if !store.pages.docLive(pg.DocID) {
+		t.Fatal("Repair did not re-add the doc")
+	}
+	n, err = store.pages.Repair()
+	if err != nil || n != 0 {
+		t.Fatalf("second Repair = %d, %v; want 0, nil", n, err)
+	}
+}

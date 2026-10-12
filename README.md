@@ -61,7 +61,7 @@ Useful env vars (installer only):
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.7.0` |
+| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.7.1` |
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the installer caches the model (source builds) | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
 | `HYATLAS_MODE` | Extraction mode written to the Hermes `.env`: `lite` \| `pro` \| `ultra`. Any other exported value stops the installer with an error and nothing is written | `ultra` (asked interactively) |
@@ -157,7 +157,7 @@ default configuration is not fully local:
 | What | Goes where | Default | How to keep it local |
 |---|---|---|---|
 | **Memory text** (each write's text, sent for extraction) | The extraction LLM. Each write is one request, and a failed call or unparseable reply is retried once. From the Hermes plugin, a write is one turn: the user's message and the assistant's text only. Tool calls, tool output, system messages and Hermes compaction summaries are not sent. Each message is capped at 4,000 characters and the turn at 12,000. One extraction call sends at most 16,000 bytes of the write's text (the stored raw row keeps the full text) | **Nowhere** — no endpoint is shipped, so an unconfigured server makes no LLM call and reports `unconfigured` | Already opt-in: set `HYATLAS_LLM_BASE`/`_MODEL`/`_KEY` to choose where it goes. Point them at a local OpenAI-compatible server to keep it on-machine, or use `HYATLAS_MODE=lite` |
-| **Stored facts and schema patterns** (ultra only) | The same LLM, by the consolidation pass. One request per owner (`user_id`/`agent_id` pair) that is due: its facts changed since its last pass, or not every window of its facts has been covered since that change. An owner with one fact, or with nothing due, makes no request. Each request carries up to `HYATLAS_CONSOLIDATE_BATCH` (50) facts of that owner, each cut to 400 characters with its fact and turn IDs, plus up to 20 existing schema patterns cut to 200 characters. Facts that a pass merges or drops are superseded: kept and hidden from search, not deleted. Each drop is stored with its reason | Nowhere until an endpoint is configured | Use `pro` or `lite` |
+| **Stored facts and schema patterns** (ultra only) | The same LLM, by the consolidation pass. One request per owner (`user_id`/`agent_id` pair) that is due: one of its topic clusters has changed members since the cluster's last successful call. An owner with one fact, or with nothing due, makes no request. Each request covers one cluster and carries up to `HYATLAS_CONSOLIDATE_BATCH` (50) facts of that owner, each cut to 400 characters with its fact and turn IDs, plus up to 20 existing schema patterns cut to 200 characters. Facts that a pass merges or drops are superseded: kept and hidden from search, not deleted. Each drop is stored with its reason | Nowhere until an endpoint is configured | Use `pro` or `lite` |
 | **Embeddings** (each memory's text, and each search query) | In-process BGE-small (onnxruntime-go) | **Local** — `HYATLAS_EMBED_BASE=bge`, no network | Already local. If you set `HYATLAS_EMBED_BASE` to a URL, the text goes there instead, in every mode, including `lite` |
 | Stored memories, vector index, graph | `HYATLAS_GO_DATA` (default `./data`) | **Local** | Already local |
 | Telemetry / usage reporting | — | **None.** The only outbound HTTP the server makes is to the LLM and embedding endpoints you configure | — |
@@ -209,6 +209,9 @@ Ultra-only tuning:
 | `HYATLAS_CONSOLIDATE_EVERY` | `6h` | how often the slow path runs |
 | `HYATLAS_CONSOLIDATE_BATCH` | `50` | max facts per owner per consolidation call |
 | `HYATLAS_CONSOLIDATE_GRAPH` | on | `off` (also `false`, `0`, `no`) stops consolidation writing L5 knowledge edges and the cross-session arc; the prompt then does not ask for them. Each edge is also stored as a searchable L5 memory ("Foxtrot uses Postgres 16") |
+| `HYATLAS_CONSOLIDATE_PARALLEL` | `2` | calls run at once (1 to 4) |
+| `HYATLAS_CONSOLIDATE_CATCHUP` | `20m` | interval between passes while clusters are still due |
+| `HYATLAS_CONSOLIDATE_RECLUSTER` | *(unset = never)* | rebuild an owner's clusters after this long |
 | `HYATLAS_RAW_RETENTION` | *(unset = never delete)* | age after which uncited L2 Raw is deleted |
 
 Durations are Go durations (`30m`, `6h`, `2160h`) or a plain number of seconds.
@@ -216,8 +219,7 @@ Go has no `d` unit, so write 90 days as `2160h`. A value that does not parse is
 logged and treated as unset, so raw decay stays off.
 
 `HYATLAS_CONSOLIDATE_BATCH` caps the facts one owner sends per call. An owner with
-more facts than the cap is consolidated in successive windows across passes, not in
-one call.
+more facts than the cap is split into several clusters, each its own call.
 
 `HYATLAS_RAW_RETENTION` is opt-in because it deletes. An L2 raw row is kept if a
 live graph edge cites it (as its primary source or any of its sources), or if a
@@ -238,9 +240,9 @@ curl -X POST http://127.0.0.1:19528/api/v1/digest
 ```
 
 The response wraps the pass in `report`: `digest_ok: true`, then `report` with
-`facts_in`, `owners_run`, `owners_unchanged`, `skipped_owners`, `merged`, `edges`,
-`dropped`, `schemas`, `arc`, `pruned_raw`, `protected_raw`, `duration_ms` and
-`errors`. `edges` counts distinct L5 edges created. Re-citing an existing edge adds
+`facts_in`, `owners_run`, `owners_unchanged`, `skipped_owners`, `clusters_run`,
+`clusters_pending`, `merged`, `edges`, `dropped`, `schemas`, `arc`, `pruned_raw`,
+`protected_raw`, `duration_ms` and `errors`. `edges` counts distinct L5 edges created. Re-citing an existing edge adds
 evidence and is not counted.
 
 `/api/v1/status` carries `consolidations` (the number of completed passes) and
@@ -252,14 +254,20 @@ still reports as run with zero changes, which is what distinguishes it from a pa
 that never happened. An owner whose facts have not changed since its last successful
 pass counts under `owners_unchanged` and is not sent to the LLM again.
 
-An owner is due when its facts changed since its last successful pass, and also
-when not every window of its facts has been covered since that change. An owner
-with more facts than `HYATLAS_CONSOLIDATE_BATCH` is walked one window per pass. After
-a change, a pass alternates between the newest window and the next window of the
-walk, until every window has been covered. A walk window that fails three passes in a
-row is skipped, and the skip is listed in `errors`. A retry of the newest window after
-a change is not counted toward that skip unless it is also the walk position. A failed LLM call, merge or supersede
-makes the owner retry on the next pass. A failed arc, schema, L5 edge or L1 mirror
+Facts are consolidated in **topic clusters** of up to `HYATLAS_CONSOLIDATE_BATCH`
+facts, built once per owner and kept in `consolidate_state.json`. A new fact joins the
+cluster of its nearest neighbour (similarity 0.55 and up) when that cluster has room,
+otherwise the newest time-ordered cluster. A cluster is due only when its members
+changed since its last successful call, so after the first full coverage a pass
+handles just the clusters that received new facts. A pass runs due clusters across
+owners, up to `HYATLAS_CONSOLIDATE_PARALLEL` (2) calls at once, and starts no call
+with less than 3 minutes of its 10-minute budget left. While clusters are still due
+(`clusters_pending` > 0) the next pass runs after `HYATLAS_CONSOLIDATE_CATCHUP` (20m)
+instead of `HYATLAS_CONSOLIDATE_EVERY`; for a store of about 100 clusters, the first
+coverage takes hours rather than weeks. Progress is saved after every cluster. A
+cluster that fails three passes in a row is left until its members change, and the
+skip is listed in `errors`. A failed LLM call, merge or supersede makes the cluster
+retry on the next pass. A failed arc, schema, L5 edge or L1 mirror
 write is listed in `errors` but does not cause a retry, because the facts were
 already reconciled.
 
@@ -300,8 +308,11 @@ the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
 | `HYATLAS_MODE` | `ultra` | `lite` \| `pro` \| `ultra`. An unrecognised value is fatal at startup. See the mode table above. |
 | `HYATLAS_SYNC_EXTRACT` | *(follows the mode)* | `on` \| `off`. Whether a write waits for extraction. An unrecognised value is fatal at startup. |
 | `HYATLAS_CONSOLIDATE_EVERY` | `6h` | Ultra only: interval between slow-path passes. Must be positive in ultra (zero or negative is fatal at startup); use `pro` to run without the pass. |
-| `HYATLAS_CONSOLIDATE_BATCH` | `50` | Ultra only: max facts per owner per consolidation call. Larger owners are consolidated in successive windows. |
+| `HYATLAS_CONSOLIDATE_BATCH` | `50` | Ultra only: max facts per owner per consolidation call. Larger owners are split into several clusters, one call each. |
 | `HYATLAS_CONSOLIDATE_GRAPH` | on | Ultra only: `off` (also `false`, `0`, `no`) stops consolidation writing L5 knowledge edges and the cross-session arc, and the prompt then does not ask for them. Each edge is stored in the graph (drawn by the dashboard and the Desktop starmap) and as a searchable L5 memory; edges from older versions are indexed for search at startup. |
+| `HYATLAS_CONSOLIDATE_PARALLEL` | `2` | Ultra only: how many consolidation calls run at once (1 to 4) |
+| `HYATLAS_CONSOLIDATE_CATCHUP` | `20m` | Ultra only: the interval between passes while clusters are still due |
+| `HYATLAS_CONSOLIDATE_RECLUSTER` | *(unset = never)* | Ultra only: rebuild an owner's topic clusters after this long; clusters whose members are unchanged keep their progress |
 | `HYATLAS_RAW_RETENTION` | *(unset = never delete)* | Ultra only: age after which an L2 raw row cited by no live edge or fact is deleted |
 | `HYATLAS_USER_ALIASES` | *(unset = no aliases)* | Groups of user IDs that are one person, for search: groups separated by `;`, IDs in a group by `,`, e.g. `"221727702992945152,default,hermes-memory-archive"`. A search for any ID in a group covers the whole group |
 | `HYATLAS_MIN_SCORE` | `0.60` | Search drops vector hits below this cosine similarity. `0` disables the floor. A request may override it with `min_score` |
@@ -318,6 +329,10 @@ the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
 | `HYATLAS_SNAPSHOT_DIR` | `<data>-snapshots` | Where snapshots go: a folder next to the data directory by default; do not point it inside the data directory |
 | `HYATLAS_NOW_EVERY` | `15m` | How often an owner's Now page may be rebuilt after writes (pro and ultra only). `0` or `off` rebuilds after every write |
 | `HYATLAS_USAGE_LEARNING` | on | `off` stops search learning from which recalled memories replies actually used |
+| `HYATLAS_LLM_FALLBACK_MODEL` | *(unset)* | A second model, tried only when a call to the primary fails (error, empty reply or timeout). The primary then gets two thirds of the call's time. Unset means no fallback |
+| `HYATLAS_LLM_FALLBACK_BASE` | *(the primary's)* | OpenAI-compatible endpoint for the fallback model |
+| `HYATLAS_LLM_FALLBACK_KEY` | *(the primary's)* | Key for the fallback endpoint; unset reuses the primary key or key file |
+| `HYATLAS_EXTRACT_TIMEOUT` | `300s` | How long one extraction call may take |
 
 The binary reads no settings from the command line. It answers only `--version`
 and `--help`; any other argument is refused instead of starting a second server.
@@ -563,10 +578,10 @@ Three parts of 4.7.0 change what recall is made of, not only how it is ranked.
   never uses sink and the ones it relies on rise. `HYATLAS_USAGE_LEARNING=off`
   turns it off.
 
-The slow path also groups facts by topic: each consolidation window is built from a
+The slow path also groups facts by topic (see *Ultra-only tuning*): each cluster is a
 fact and its nearest neighbours (similarity 0.55 and up), so two statements about the
-same thing meet in one call however far apart in time they were written. Facts
-without close neighbours fall back to time-ordered windows. Graph edges that restate
+same thing meet in one call however far apart in time they were written, and only
+clusters that changed are sent again. Graph edges that restate
 an edge between the same entities (one endpoint equal, the other the same name with
 extra words, similarity 0.80 and up, same numbers) are not indexed again.
 
@@ -579,7 +594,9 @@ It writes `<data>/backlog_plan.json` and changes nothing. `GET /api/v1/admin/bac
 reports progress and, when done, a summary with sample pairs. `{"dry_run": false}`
 applies the saved plan without any LLM call: each planned fact is checked to still be
 live, then superseded by its newer fact (reversible), and the pages are written. The
-plan is then renamed so it cannot be applied twice.
+plan is then renamed so it cannot be applied twice. Groups whose LLM call failed are
+listed in the plan; after an apply, `{"dry_run": true, "only_failed": true}` retries
+just those groups (refused while an unapplied plan exists).
 
 Two `POST` endpoints for stores written before 4.5.0. Both are refused with 403
 unless the server runs with `HYATLAS_ADMIN=on`. Both are dry runs unless the body

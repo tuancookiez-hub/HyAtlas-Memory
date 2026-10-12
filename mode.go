@@ -43,13 +43,32 @@ const (
 	// defaultMode is what a server with no HYATLAS_MODE set runs.
 	defaultMode = ModeUltra
 
-	// extractTimeout bounds one extraction LLM call. Shared by the blocking and
-	// background paths so the two cannot drift apart.
-	extractTimeout = 180 * time.Second
-
 	// syncKey is the separate knob for whether a write waits on extraction.
 	syncKey = "HYATLAS_SYNC_EXTRACT"
+
+	// defaultExtractTimeout is the cap on one extraction LLM call when
+	// HYATLAS_EXTRACT_TIMEOUT is unset. Free models occasionally take minutes
+	// rather than seconds, and a 180s cap failed calls that succeeded on retry.
+	// A background write does not wait on this bound anyway, so a generous cap
+	// costs nothing on the request path.
+	defaultExtractTimeout = 300 * time.Second
 )
+
+// extractTimeout bounds one extraction LLM call. Shared by the blocking and
+// background paths so the two cannot drift apart. It is a variable so the
+// configured value can replace the default at startup; see resolveExtractTimeout.
+var extractTimeout = defaultExtractTimeout
+
+// resolveExtractTimeout reads HYATLAS_EXTRACT_TIMEOUT. Unset, unparseable and
+// non-positive values all yield defaultExtractTimeout, so a typo cannot leave
+// extraction with no bound at all.
+func resolveExtractTimeout() time.Duration {
+	d := parseDuration("HYATLAS_EXTRACT_TIMEOUT", defaultExtractTimeout)
+	if d <= 0 {
+		return defaultExtractTimeout
+	}
+	return d
+}
 
 // validModes is the accepted set, in ladder order — each entry is strictly more
 // capable than the one before it.

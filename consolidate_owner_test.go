@@ -233,12 +233,17 @@ func TestCursorResumesAndRotatesOwners(t *testing.T) {
 		if cut {
 			cut = false
 			cancel()
+			// Fail the cut call outright. Answering 200 raced the cancel: a fast
+			// client could read the reply first and count alice as done, which made
+			// this test flaky on CI.
+			return http.StatusInternalServerError, `{"error":"cut"}`
 		}
 		return http.StatusOK, chatBody(t, Consolidation{})
 	})
 	defer mock.Close()
 
 	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
+	c.parallel = 1 // the test cuts the pass inside the first call, so calls run one at a time
 	rep, err := c.Once(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +274,7 @@ func TestCursorResumesAndRotatesOwners(t *testing.T) {
 }
 
 // An owner the deadline cuts off after earlier owners spent the pass is not
-// blamed for it: its window is not counted toward maxWindowFails, so repeated
+// blamed for it: its cluster is not counted toward maxWindowFails, so repeated
 // late cuts cannot get a healthy window skipped, and the next pass starts with it.
 func TestLateDeadlineCutDoesNotCountAsWindowFailure(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
@@ -284,11 +289,15 @@ func TestLateDeadlineCutDoesNotCountAsWindowFailure(t *testing.T) {
 	mock := scopeMock(t, &log, func(prompt string) (int, string) {
 		if cancel != nil && strings.Contains(prompt, "bob one") {
 			cancel() // the deadline lands during bob's call, the second of the pass
+			// Fail the cut call outright: answering 200 raced the cancel, and a fast
+			// client could count bob as done (flaky on CI).
+			return http.StatusInternalServerError, `{"error":"cut"}`
 		}
 		return http.StatusOK, chatBody(t, Consolidation{})
 	})
 	defer mock.Close()
 	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
+	c.parallel = 1 // the test pins which call is cut, so calls run one at a time
 
 	// Cut bob late more times than maxWindowFails would tolerate.
 	for pass := 1; pass <= maxWindowFails+1; pass++ {
@@ -302,8 +311,8 @@ func TestLateDeadlineCutDoesNotCountAsWindowFailure(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if w := c.windows[bob]; w.Fails != 0 {
-			t.Fatalf("pass %d: bob's window Fails = %d, want 0 for a late cut", pass, w.Fails)
+		if cs := c.clusters[bob].Clusters[0]; cs.Fails != 0 {
+			t.Fatalf("pass %d: bob's cluster Fails = %d, want 0 for a late cut", pass, cs.Fails)
 		}
 		if c.cursor != 1 {
 			t.Errorf("pass %d: cursor = %d, want 1 (bob leads the next pass)", pass, c.cursor)
@@ -327,8 +336,8 @@ func TestLateDeadlineCutDoesNotCountAsWindowFailure(t *testing.T) {
 	if len(prompts) == 0 || !strings.Contains(prompts[0], "bob one") {
 		t.Fatalf("resumed pass did not start with bob (%d calls)", len(prompts))
 	}
-	if c.windows[bob].Covered == 0 {
-		t.Error("bob's window is still uncovered after a full-budget pass")
+	if cs := c.clusters[bob].Clusters[0]; cs.DoneFP == "" || cs.Fails != 0 {
+		t.Error("bob's cluster has not completed after a full-budget pass")
 	}
 }
 
