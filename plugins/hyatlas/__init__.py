@@ -135,7 +135,14 @@ class HyatlasMemoryProvider(MemoryProvider):
         # Last recall per session, the fallback when a live search fails. Keyed by
         # session so concurrent sessions (gateway and CLI) never see each other's.
         self._prefetch_cache: "OrderedDict[str, str]" = OrderedDict()
-        self._version = "4.6.0"
+        # Memory ids the last recall put in front of the agent, per session. The
+        # reply is posted against them so the server learns which recalled memories
+        # were used. Bounded like _prefetch_cache and guarded by _prefetch_lock.
+        self._recalled: "OrderedDict[str, List[str]]" = OrderedDict()
+        # The query each recall was made with, keyed like _recalled: feedback leaves
+        # its words out, because a reply naturally repeats the question.
+        self._recalled_query: Dict[str, str] = {}
+        self._version = "4.7.0"
         # Message count already synced per session, so _build_turn_text sends
         # only what the server has not seen. Bounded: a long-lived gateway
         # touches far more sessions than it can hold, and the cost of evicting
@@ -355,6 +362,7 @@ class HyatlasMemoryProvider(MemoryProvider):
                 )
                 formatted = self._format_prefetch(results, query)
                 self._store_prefetch(session_id, formatted)
+                self._store_recalled(session_id, results, query)
                 return formatted
             except Exception as e:
                 logger.debug("prefetch search failed, using cached recall: %s", e)
@@ -376,6 +384,7 @@ class HyatlasMemoryProvider(MemoryProvider):
                 )
                 formatted = self._format_prefetch(results, query)
                 self._store_prefetch(session_id, formatted)
+                self._store_recalled(session_id, results, query)
             except Exception as e:
                 logger.debug("prefetch failed: %s", e)
 
@@ -418,6 +427,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         except Exception as e:
             # sync_turn must be best-effort — never raise
             logger.debug("sync_turn failed: %s", e)
+        self._send_feedback(session_id, assistant_content)
 
     # --- Optional: on_pre_compress (fail-closed checkpoint) ---
 
@@ -651,20 +661,31 @@ class HyatlasMemoryProvider(MemoryProvider):
                 self._prefetch_cache.popitem(last=False)
 
     def _format_prefetch(self, results: Dict[str, Any], query: str) -> str:
-        """Format v4's 3-channel search result into a prompt block."""
-        memories = results.get("memories", {})
+        """Format v4's search result into a prompt block: the Now page, then the channels.
+
+        The Now page is the agent's working memory, a short rewrite of what is true
+        at the moment, and it is read before every reply, so it leads the block and
+        is not cut down to the channel snippet length. Entity pages come before the
+        other channels because each one is the consolidated view of a topic, so they
+        get more room than a single raw fact. Each item keeps its date so an old
+        status still reads as old.
+        """
+        now = results.get("now") if isinstance(results.get("now"), dict) else {}
+        now_text = str(now.get("text") or "").strip()
+        memories = results.get("memories") or {}
         channels = []
-        for channel_name in ("profile", "proactive", "normal"):
+        for channel_name in ("pages", "profile", "proactive", "normal"):
             items = memories.get(channel_name, [])
             if not items:
                 continue
+            limit = 600 if channel_name == "pages" else 300
             channel_lines = [f"[{channel_name.upper()}]"]
             for m in items[:5]:
                 content = m.get("content", "")
                 layer = m.get("layer", "")
                 score = m.get("score", 0.0)
                 if content:
-                    snippet = content[:300]
+                    snippet = content[:limit]
                     # The date lets the agent tell "true on Oct 6" from "true now":
                     # without it an old status line reads like the current one.
                     date = _iso_date(m.get("gmt_created"))
@@ -674,13 +695,84 @@ class HyatlasMemoryProvider(MemoryProvider):
                     )
             if len(channel_lines) > 1:
                 channels.append("\n".join(channel_lines))
-        if not channels:
+        if not now_text and not channels:
             return ""
+        blocks = []
+        if now_text:
+            # The Now page carries its own date for the same reason channel items do:
+            # the agent must be able to judge how fresh the working memory is.
+            updated = str(now.get("updated") or "")[:10]
+            header = f"[NOW] (updated {updated})" if updated else "[NOW]"
+            blocks.append(f"{header}\n{now_text[:1500]}")
         return (
             f"<relevant-memories query=\"{query[:50]}\">\n"
-            + "\n\n".join(channels)
+            + "\n\n".join(blocks + channels)
             + "\n</relevant-memories>"
         )
+
+    def _store_recalled(self, session_id: str, results: Dict[str, Any], query: str = "") -> None:
+        """Remember the memory ids this recall returned, for session_id.
+
+        Every channel counts, not only the lines the prompt shows, because feedback
+        is about what the agent was given to read. The Now page has no memory id
+        and is not a recalled memory, so it is left out. An empty recall clears the
+        session's entry: ids from an earlier turn would describe a recall the agent
+        never saw.
+        """
+        ids: List[str] = []
+        seen = set()
+        memories = results.get("memories") or {}
+        if not isinstance(memories, dict):
+            memories = {}
+        for items in memories.values():
+            if not isinstance(items, list):
+                continue
+            for m in items:
+                mid = str(m.get("memory_id") or "") if isinstance(m, dict) else ""
+                if mid and mid not in seen:
+                    seen.add(mid)
+                    ids.append(mid)
+        with self._prefetch_lock:
+            if ids:
+                self._recalled[session_id] = ids
+                self._recalled.move_to_end(session_id)
+                self._recalled_query[session_id] = query
+                while len(self._recalled) > self._SYNCED_MAX:
+                    old, _ = self._recalled.popitem(last=False)
+                    self._recalled_query.pop(old, None)
+            else:
+                self._recalled.pop(session_id, None)
+                self._recalled_query.pop(session_id, None)
+
+    def _send_feedback(self, session_id: str, assistant_content: str) -> None:
+        """Post the reply against the memories recalled for session_id, off the turn's path.
+
+        The server uses the reply to learn which recalled memories the agent used.
+        The post runs in a daemon thread because sync_turn runs after every reply
+        and feedback is advisory: it must never delay or fail the turn. Every
+        failure is logged at debug and dropped.
+        """
+        try:
+            if not assistant_content or not self._client:
+                return
+            with self._prefetch_lock:
+                ids = self._recalled.pop(session_id, None)
+                query = self._recalled_query.pop(session_id, "")
+            if not ids:
+                return
+            client = self._client
+            reply = assistant_content[:20000]
+            user_id, agent_id = self._user_id, self._agent_id
+
+            def _do() -> None:
+                try:
+                    client.feedback(ids, reply, user_id, agent_id, query=query)
+                except Exception as e:
+                    logger.debug("hyatlas feedback failed: %s", e)
+
+            threading.Thread(target=_do, daemon=True, name="hyatlas-feedback").start()
+        except Exception as e:
+            logger.debug("hyatlas feedback not sent: %s", e)
 
     def _ensure_server_running(self) -> bool:
         """Start the Go binary through the shared launcher; True iff it answers.

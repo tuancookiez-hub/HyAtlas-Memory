@@ -93,8 +93,8 @@ func TestModeZeroValueIsUltra(t *testing.T) {
 	if m.Describe() != ModeUltra.Describe() {
 		t.Errorf("zero value Describe()=%q, want the ultra spelling %q", m.Describe(), ModeUltra.Describe())
 	}
-	if m.LayersActive() != 7 {
-		t.Errorf("LayersActive() = %d, want 7", m.LayersActive())
+	if m.LayersActive() != 8 {
+		t.Errorf("LayersActive() = %d, want 8", m.LayersActive())
 	}
 }
 
@@ -109,8 +109,8 @@ func TestModeSemantics(t *testing.T) {
 		describHas  string
 	}{
 		{ModeLite, false, false, 1, 0, false, "no LLM call"},
-		{ModePro, true, false, 5, 1, true, "no slow path"},
-		{ModeUltra, true, true, 7, 2, false, "slow path"},
+		{ModePro, true, false, 6, 1, true, "no slow path"},
+		{ModeUltra, true, true, 8, 2, false, "slow path"},
 	}
 	for _, c := range cases {
 		if got := c.mode.UsesLLM(); got != c.usesLLM {

@@ -114,6 +114,9 @@ type Extraction struct {
 	// IntentionsDone lists open intentions (shown to the model as context) that
 	// this input shows finished or abandoned. Empty when the model omits it.
 	IntentionsDone idList `json:"intentions_done,omitempty"`
+	// Pages are entity-page updates: the durable things this input is about, with
+	// their current state and what happened. Empty when the model omits them.
+	Pages pageUpdates `json:"pages,omitempty"`
 }
 
 // Fact is a single durable fact (L3).

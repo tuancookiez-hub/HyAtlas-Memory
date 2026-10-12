@@ -8,7 +8,14 @@
 - Plugin: `hyatlas` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hyatlas\` + Hermes Desktop pane. The catalog entry `plugin-catalog/hyatlas.yaml` (NousResearch/hermes-agent) pins 4.5.0; 4.5.1 changed no plugin code, so there was no catalog bump.
 - Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`)
 
-## 4.6.0 (merged, not yet tagged or released)
+## 4.7.0 (branch feat/4.7.0-living-memory)
+Living memory: a Now page per owner (working memory, shown first in recall), L8
+entity pages (current state + dated history, updated by each extraction), usage
+learning from what replies actually use, topic-clustered consolidation windows,
+entity-aware L5 dedupe, and a one-time admin backlog pass (dry run → apply) for
+contradictions and page backfill.
+
+## 4.6.0 (released 2026-10-12)
 Recall knows what is current: extraction is shown the owner's nearest facts and open
 intentions and can supersede a fact whose value changed or an intention that is done;
 search fades older memories (floor 92%, per-layer half-lives) and hides intentions

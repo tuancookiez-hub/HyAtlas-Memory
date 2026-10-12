@@ -290,3 +290,115 @@ func TestParseExtractionTolerantIDs(t *testing.T) {
 		t.Errorf("string intention: %+v err=%v", ex, err)
 	}
 }
+
+// seedPage creates a page for owner u/a and returns it.
+func seedPage(t *testing.T, s *MemoryStore, name string, sets ...PageSet) Page {
+	t.Helper()
+	if _, _, err := s.pages.Apply("u", "a", "seed", []PageUpdate{{Name: name, Kind: "project", Set: sets}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, pg := range s.pages.List("u", "a") {
+		if pg.Name == name {
+			return pg
+		}
+	}
+	t.Fatal("seeded page missing")
+	return Page{}
+}
+
+func TestExtractPromptShowsRelatedPages(t *testing.T) {
+	srv, rec := newCtxServer(t, func() string { return `{"facts":[]}` })
+	mine := seedPage(t, srv.store, "HyAtlas", PageSet{Attr: "extraction model", Value: "stepfun step-5-preview"})
+	if _, _, err := srv.store.pages.Apply("other", "a", "seed", []PageUpdate{{Name: "HyAtlas", Set: []PageSet{{Attr: "extraction model", Value: "secret"}}}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	ctxRaw(t, srv.store, "raw1", "x")
+	if err := srv.extract(pageText(mine), "u", "a", "raw1"); err != nil {
+		t.Fatal(err)
+	}
+	got := rec.last()
+	for _, want := range []string{"Entity pages (id | name | current state):",
+		mine.ID + " | HyAtlas | extraction model: stepfun step-5-preview", `\"pages\"`, "id of a listed page"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt lacks %q", want)
+		}
+	}
+	if strings.Contains(got, "secret") {
+		t.Error("prompt leaks another owner's page")
+	}
+}
+
+func TestExtractContextFreePromptHasPagesButNoIDs(t *testing.T) {
+	srv, rec := newCtxServer(t, func() string { return `{"facts":[]}` })
+	ctxRaw(t, srv.store, "raw1", "hello there")
+	if err := srv.extract("hello there", "u", "a", "raw1"); err != nil {
+		t.Fatal(err)
+	}
+	got := rec.last()
+	if !strings.Contains(got, `\"pages\"`) || !strings.Contains(got, `\"page\": \"new\"`) {
+		t.Error("context-free prompt lacks the pages contract")
+	}
+	for _, bad := range []string{"id of a listed page", "Entity pages (id", "replaces"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("context-free prompt mentions %q", bad)
+		}
+	}
+}
+
+func TestExtractReplyUpdatesShownPageAndCreatesNew(t *testing.T) {
+	var pageID string
+	srv, _ := newCtxServer(t, func() string {
+		return `{"facts":[],"pages":[` +
+			`{"page":"` + pageID + `","name":"HyAtlas","set":[{"attr":"extraction model","value":"gemini"}],"event":"switched model"},` +
+			`{"page":"new","name":"Hermes","kind":"tool","set":[{"attr":"role","value":"agent host"}]}]}`
+	})
+	pg := seedPage(t, srv.store, "HyAtlas", PageSet{Attr: "extraction model", Value: "stepfun"})
+	pageID = pg.ID
+	ctxRaw(t, srv.store, "raw1", "x")
+	if err := srv.extract(pageText(pg), "u", "a", "raw1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(srv.store.pages.List("u", "a")) != 2 {
+		t.Fatalf("want 2 pages, got %d", len(srv.store.pages.List("u", "a")))
+	}
+	got, _ := srv.store.pages.Get(pg.ID)
+	if got.State[0].Value != "gemini" || len(got.History) != 2 ||
+		got.History[0].Text != "extraction model: stepfun → gemini" || got.History[1].Text != "switched model" {
+		t.Errorf("page not updated as asked: %+v", got)
+	}
+}
+
+func TestExtractReplyWithoutPagesLeavesPagesAlone(t *testing.T) {
+	srv, _ := newCtxServer(t, func() string {
+		return `{"facts":[{"data":"the build uses go 1.26 toolchain","layer":"decision"}]}`
+	})
+	pg := seedPage(t, srv.store, "HyAtlas", PageSet{Attr: "version", Value: "4.6.0"})
+	ctxRaw(t, srv.store, "raw1", "x")
+	if err := srv.extract(pageText(pg), "u", "a", "raw1"); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := srv.store.pages.Get(pg.ID)
+	if after.Updated != pg.Updated || len(after.History) != 0 || len(srv.store.pages.List("u", "a")) != 1 {
+		t.Errorf("page changed without a pages key: %+v", after)
+	}
+	live, _ := srv.store.List(memory.L3Fact, "u", "a", 10, 0, false)
+	if len(live) != 1 {
+		t.Errorf("facts still written as before? got %d", len(live))
+	}
+}
+
+func TestExtractGarbagePagesDoNotFailTheWrite(t *testing.T) {
+	srv, _ := newCtxServer(t, func() string {
+		return `{"facts":[{"data":"a durable fact about the setup","layer":"decision"}],"pages":"oops"}`
+	})
+	ctxRaw(t, srv.store, "raw1", "x")
+	if err := srv.extract("some input", "u", "a", "raw1"); err != nil {
+		t.Fatal(err)
+	}
+	if live, _ := srv.store.List(memory.L3Fact, "u", "a", 10, 0, false); len(live) != 1 {
+		t.Errorf("fact lost to a garbage pages field: %d", len(live))
+	}
+	if n := len(srv.store.pages.List("u", "a")); n != 0 {
+		t.Errorf("garbage created %d pages", n)
+	}
+}

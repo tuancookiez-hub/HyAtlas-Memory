@@ -2,9 +2,9 @@
 
 # HyAtlas Memory — Pure-Go Memory Core
 
-> **One binary. Seven layers. Three extraction modes.** One Go binary (the embedded release build is about 160 MB because it carries the BGE model), no Python at runtime, in-process BGE embeddings. Release binaries: **Linux amd64 · macOS arm64 · Windows amd64**. Other platforms build from source.
+> **One binary. Eight layers. Three extraction modes.** One Go binary (the embedded release build is about 160 MB because it carries the BGE model), no Python at runtime, in-process BGE embeddings. Release binaries: **Linux amd64 · macOS arm64 · Windows amd64**. Other platforms build from source.
 
-HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It replaces the Python floor (venv, zvec, Kuzu, FastAPI, HTTP embed subprocess) with a single binary: an embedded Chromem vector store, in-process BGE-small embeddings via onnxruntime-go, and LLM fact extraction, where `HYATLAS_MODE` sets how much the server reasons and `HYATLAS_SYNC_EXTRACT` sets whether a write waits for extraction. The 7-layer memory model (Profile · Raw · Fact · Summary · Knowledge · Schema · Intention) is implemented, including L4 Summary extraction, which was dormant in v3.5.
+HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It replaces the Python floor (venv, zvec, Kuzu, FastAPI, HTTP embed subprocess) with a single binary: an embedded Chromem vector store, in-process BGE-small embeddings via onnxruntime-go, and LLM fact extraction, where `HYATLAS_MODE` sets how much the server reasons and `HYATLAS_SYNC_EXTRACT` sets whether a write waits for extraction. The 8-layer memory model (Profile · Raw · Fact · Summary · Knowledge · Schema · Intention · Entity) is implemented, including L4 Summary extraction, which was dormant in v3.5.
 
 **Current release:** [v4.5.1](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v4.5.1). The last Python release was [v3.5.0](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.5.0) (Zvec/Kuzu); it is no longer maintained. [CHANGELOG.md](CHANGELOG.md) has the full history.
 
@@ -61,7 +61,7 @@ Useful env vars (installer only):
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.6.0` |
+| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.7.0` |
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the installer caches the model (source builds) | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
 | `HYATLAS_MODE` | Extraction mode written to the Hermes `.env`: `lite` \| `pro` \| `ultra`. Any other exported value stops the installer with an error and nothing is written | `ultra` (asked interactively) |
@@ -177,13 +177,13 @@ The three modes form a ladder of reasoning scope, not of latency:
 
 | Mode | LLM calls | Reasoning scope | Layers | Consolidation |
 |---|---|---|---|---|
-| `lite` | none | — | **1 / 7** — L2 Raw only | no |
-| `pro` | one per write | within one turn | **5 / 7** — L1, L2, L3, L4, L7 | no |
-| `ultra` *(default)* | one per write **+** periodic batch | **across memories and time** | **7 / 7** at steady state (6 / 7 with `HYATLAS_CONSOLIDATE_GRAPH=off`) | **yes** |
+| `lite` | none | — | **1 / 8** — L2 Raw only | no |
+| `pro` | one per write | within one turn | **6 / 8** — L1, L2, L3, L4, L7, L8 | no |
+| `ultra` *(default)* | one per write **+** periodic batch | **across memories and time** | **8 / 8** at steady state (7 / 8 with `HYATLAS_CONSOLIDATE_GRAPH=off`) | **yes** |
 
 The two systems own disjoint layers:
 
-- **System1 (per turn)** — L1 Profile, L2 Raw, L3 Fact, L4 Summary, L7 Intention.
+- **System1 (per turn)** — L1 Profile, L2 Raw, L3 Fact, L4 Summary, L7 Intention, L8 Entity pages.
   What one turn can actually evidence.
 - **System2 (slow path)** — L5 Knowledge, L6 Schema. A relation worth keeping is
   corroborated by more than one turn, and a schema is a *recurring* pattern, so
@@ -229,8 +229,8 @@ Facts that the ultra pass merges or drops are superseded, not deleted: they keep
 `invalid_at` and `superseded_by`, and `GET /api/v1/list` returns them only with
 `include_superseded=true`.
 
-The `7 / 7` above is steady state, not the first minute. A fresh ultra install
-sits at 5/7 until the slow path first runs, which is up to `6h` away by default. L5
+The `8 / 8` above is steady state, not the first minute. A fresh ultra install
+sits at 6/8 until the slow path first runs, which is up to `6h` away by default. L5
 is filled only when a pass finds relations corroborated by at least two turns, and L6 only when a pass finds recurring patterns. To run a pass now, instead of waiting for the tick:
 
 ```bash
@@ -316,6 +316,8 @@ the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
 | `HYATLAS_SNAPSHOT_EVERY` | `24h` | How often the server zips its data directory (first one a minute after start). `0` or `off` turns snapshots off |
 | `HYATLAS_SNAPSHOT_KEEP` | `7` | How many snapshots to keep; older ones are deleted |
 | `HYATLAS_SNAPSHOT_DIR` | `<data>-snapshots` | Where snapshots go: a folder next to the data directory by default; do not point it inside the data directory |
+| `HYATLAS_NOW_EVERY` | `15m` | How often an owner's Now page may be rebuilt after writes (pro and ultra only). `0` or `off` rebuilds after every write |
+| `HYATLAS_USAGE_LEARNING` | on | `off` stops search learning from which recalled memories replies actually used |
 
 The binary reads no settings from the command line. It answers only `--version`
 and `--help`; any other argument is refused instead of starting a second server.
@@ -339,6 +341,7 @@ and start it again.
 | **L5 Knowledge** | Entity/relation graph (JSON-persisted). Built by the ultra slow path from relations corroborated across at least two turns, each with evidence citations |
 | **L6 Schema** | Recurring patterns generalised by the ultra slow path |
 | **L7 Intention** | LLM-extracted current goal / next step |
+| **L8 Entity** | One page per thing that matters (a project, tool, person, place): its current state plus a dated history. Written by each extraction; a changed value moves the old one into history |
 
 ### Stack
 
@@ -429,6 +432,8 @@ if you depend on that. Every route is behind the Host/Origin guard described abo
 | `POST` or `DELETE` | `/api/v1/delete_all` | Query or body: `id`, `layer` (`*` = all), `user_id`, `agent_id`, `all` (`true`), `confirm` (`wipe-all`, the older spelling of `all`). Other methods return 405. A call with no scope (no `id`, `layer`, `user_id`, `agent_id`, or `all`) returns 400. Returns `deleted_count`. |
 | `POST` | `/api/v1/reprocess` | Body: `ids` (explicit raw IDs; extracted rows are re-extracted too), or `max` (default 200). Without `ids`, takes up to `max` raw rows that extraction has not reached, oldest first (by `ts`, then `id`). Extracted rows are dropped before the cut, so they do not use up `max`. Returns `reprocessed`, `failed`, `skipped`. `skipped` is 0 on both paths. In `lite` it extracts nothing: `skipped` is the number of rows it would have processed, and `note` says so. |
 | `GET` | `/api/v1/digest` | Slow-path state. Returns `digest_ok: true`, `runs`, `last`, `last_at`, `graph_nodes`, `graph_edges`. In `lite` or `pro` it returns `digest_ok: false` with a `reason`. |
+| `GET` | `/api/v1/now` | Query: `user_id`, `agent_id`. Returns `now`: the owner's Now page (`text`, `updated`) or `null`. |
+| `POST` | `/api/v1/feedback` | Body: `recalled_ids` (the memory IDs a recall returned), `reply` (the assistant's reply), `query` (optional: the recall's query, whose words do not count as use), `user_id`, `agent_id`. Counts which recalled memories the reply used. Returns `ok`, `shown`, `used`. The Hermes plugin sends this after every turn. |
 | `POST` | `/api/v1/digest` | Runs one slow-path pass now (ultra only). Returns `digest_ok` and `report` (fields in *Ultra-only tuning* above). A pass already running returns `digest_ok: false` with a `reason`. The pass is bounded by a 10-minute timeout, and a client that disconnects does not cancel it. |
 
 **Stubs.** These endpoints exist for the v3.5-shaped dashboard and return fixed values:
@@ -519,7 +524,9 @@ is not capped.
 Response shape:
 ```json
 {
+  "now": {"text": "...", "updated": "2026-10-12T06:10:00Z"},
   "memories": {
+    "pages": [...],
     "profile": [...],
     "proactive": [...],
     "normal": [...]
@@ -527,7 +534,52 @@ Response shape:
 }
 ```
 
+`now` is present when the search names an owner who has a Now page (the freshest
+page among the owner's aliases). `pages` holds L8 entity pages, at most 2 in a
+search over all layers.
+
+### Working memory, entity pages and learning
+
+Three parts of 4.7.0 change what recall is made of, not only how it is ranked.
+
+- **Now page.** One short page per owner (at most 12 lines: active work, open
+  threads, what is blocked, recent decisions), rebuilt in the background from the
+  owner's open intentions and recent summaries at most every `HYATLAS_NOW_EVERY`
+  (15 minutes) after writes. The plugin puts it first in every recall, so the agent
+  always knows what is going on. pro and ultra only.
+- **Entity pages (L8).** One page per thing that matters, with its current state and
+  a dated history. Extraction is shown the owner's 3 most related pages and can set
+  attributes and add events; a changed value moves the old one into history
+  (`extraction model: poolside → stepfun step-5-preview`), so two contradicting
+  statements cannot both be current. A page is matched by name with version labels
+  ignored ("HyAtlas v4" is "hyatlas"). Each update re-indexes the page and
+  supersedes its previous version.
+- **Usage learning.** After a turn the plugin sends what it recalled, the query it
+  recalled with, and the reply. A recalled memory whose distinctive words (or an
+  identifier such as `19528`) appear in the reply counts as used; words that were
+  already in the query do not count, because a reply naturally repeats the
+  question. Memories written under an alias of the caller's user ID count too. Once a memory has been recalled 3 times, its
+  ranking weight moves within ±6% by how often it was used, so memories the agent
+  never uses sink and the ones it relies on rise. `HYATLAS_USAGE_LEARNING=off`
+  turns it off.
+
+The slow path also groups facts by topic: each consolidation window is built from a
+fact and its nearest neighbours (similarity 0.55 and up), so two statements about the
+same thing meet in one call however far apart in time they were written. Facts
+without close neighbours fall back to time-ordered windows. Graph edges that restate
+an edge between the same entities (one endpoint equal, the other the same name with
+extra words, similarity 0.80 and up, same numbers) are not indexed again.
+
 ### Maintenance (admin)
+
+**Backlog pass** (4.7.0): `POST /api/v1/admin/backlog` with `{"dry_run": true}` (the
+default) starts a background job over every owner's facts, grouped by topic: one LLM
+call per group finds facts that a newer fact contradicts and proposes entity pages.
+It writes `<data>/backlog_plan.json` and changes nothing. `GET /api/v1/admin/backlog`
+reports progress and, when done, a summary with sample pairs. `{"dry_run": false}`
+applies the saved plan without any LLM call: each planned fact is checked to still be
+live, then superseded by its newer fact (reversible), and the pages are written. The
+plan is then renamed so it cannot be applied twice.
 
 Two `POST` endpoints for stores written before 4.5.0. Both are refused with 403
 unless the server runs with `HYATLAS_ADMIN=on`. Both are dry runs unless the body
@@ -707,7 +759,7 @@ HyAtlas v4 is a **binary replacement** for the Python v3.5 floor. The memory dat
 
 ## Known gaps (honest)
 
-- The slow path runs on a timer, not at startup: a fresh ultra server shows 5/7 layers until the first pass (7/7 after a pass that finds relations and patterns) (up to `HYATLAS_CONSOLIDATE_EVERY` later). `POST /api/v1/digest` runs one on demand.
+- The slow path runs on a timer, not at startup: a fresh ultra server shows 6/8 layers until the first pass (8/8 after a pass that finds relations and patterns) (up to `HYATLAS_CONSOLIDATE_EVERY` later). `POST /api/v1/digest` runs one on demand.
 - `/api/quality-metrics` returns `{available: false}` (v3.5-only feature; the dashboard adapter's quality endpoint, not a `/api/v1/` route)
 - Upscaling and codemode are not implemented (those were v3.5 features)
 - The coding layer is not in v4; the `/api/coding-*` endpoints return empty results

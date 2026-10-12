@@ -39,6 +39,10 @@ const (
 	// the model, so the refinement list cannot grow the prompt without bound.
 	maxPromptSchemas = 20
 
+	// maxPromptPageNames caps how many entity page names are offered to the model as
+	// canonical spellings for knowledge endpoints.
+	maxPromptPageNames = 40
+
 	// consolidateStateFile holds the per-owner watermarks and the rotation cursor.
 	// It sits next to doc_index.json, in the data dir.
 	consolidateStateFile = "consolidate_state.json"
@@ -167,6 +171,11 @@ type windowCursor struct {
 	LastFresh bool `json:"last_fresh,omitempty"`
 	Fails     int  `json:"fails,omitempty"`
 	FailWin   int  `json:"fail_win,omitempty"`
+	// Count is how many windows the owner was cut into on its last pass. Topic
+	// clustering makes the count depend on a search, so due reads it from here
+	// rather than clustering again just to decide whether to run. Zero (a state file
+	// from before clustering) falls back to the time-ordered count.
+	Count int `json:"count,omitempty"`
 }
 
 // maxWindowFails is how many consecutive failed passes on one window are tolerated
@@ -359,7 +368,12 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 		key := k.String()
 		fp := factsFingerprint(facts)
 		w := c.windows[key]
-		count := windowsOf(len(facts), c.batch)
+		// The windows are topic clusters, so contradictions about one subject meet in
+		// one call however far apart in time they were said; kinds names each window's
+		// kind for the log.
+		clusters, kinds := c.clusterPlan(facts)
+		count := len(clusters)
+		w.Count = count
 		// A changed owner sends the newest window, but only every other changed pass;
 		// the other passes continue the walk. Otherwise an owner that changes between
 		// every pass would never get past its newest window.
@@ -376,13 +390,17 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 			idx = 0
 		}
 		rep.OwnersRun++
-		window := c.windowAt(facts, idx)
+		window := clusters[idx]
 		late := called
 		called = true
 		callStart := time.Now()
 		ok, created := c.consolidateScope(ctx, k, window, rep)
-		log.Printf("consolidate: %s window %d/%d (%d facts) ok=%v in %s",
-			k, idx+1, count, len(window), ok, time.Since(callStart).Round(time.Second))
+		kind := "time"
+		if kinds[idx] {
+			kind = "topic"
+		}
+		log.Printf("consolidate: %s window %d/%d (%s, %d facts) ok=%v in %s",
+			k, idx+1, count, kind, len(window), ok, time.Since(callStart).Round(time.Second))
 		if !ok && late && ctx.Err() != nil {
 			// The pass deadline cut this owner off after earlier owners' calls had
 			// spent the time. The window is not at fault, so its walk state is left
@@ -504,7 +522,11 @@ func (c *Consolidator) due(k scopeKey, facts []DocIndex) bool {
 	if c.done[key] != factsFingerprint(facts) {
 		return true
 	}
-	return c.windows[key].Covered < windowsOf(len(facts), c.batch)
+	count := c.windows[key].Count
+	if count == 0 {
+		count = windowsOf(len(facts), c.batch)
+	}
+	return c.windows[key].Covered < count
 }
 
 // consolidateScope is one LLM pass over a window of a single owner's facts. It
@@ -1016,6 +1038,20 @@ func (c *Consolidator) ask(ctx context.Context, facts, schemas []DocIndex) (*Con
 	// The graph keys are asked for only when the graph is on, so a pass without it
 	// spends no reply tokens on edges or an arc.
 	graphKeys, graphRules := "", ""
+	// The owner's entity page names, so an edge says "HyAtlas" the way its page
+	// does instead of inventing "hyatlas server" or "HyAtlas v4" again.
+	var names strings.Builder
+	if c.graph && len(facts) > 0 && c.store.pages != nil {
+		for i, pg := range c.store.pages.List(facts[0].UserID, facts[0].AgentID) {
+			if i >= maxPromptPageNames {
+				break
+			}
+			if i == 0 {
+				names.WriteString("\nKnown entity names (use these exact spellings as knowledge endpoints when they apply):\n")
+			}
+			fmt.Fprintf(&names, "- %s\n", oneLine(pg.Name))
+		}
+	}
 	if c.graph {
 		graphKeys = `,
   "knowledge": [{"from": "<entity>", "relation": "<relation>", "to": "<entity>", "evidence": ["<id>", "<id>"]}],
@@ -1038,7 +1074,7 @@ Rules:
 Return ONLY valid JSON, no prose, no markdown fences.
 
 Facts:
-` + b.String() + existing.String()
+` + b.String() + existing.String() + names.String()
 
 	messages := []map[string]string{
 		{"role": "system", "content": system},

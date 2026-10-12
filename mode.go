@@ -9,7 +9,7 @@ import (
 )
 
 // Mode selects how much reasoning the server does. All three share the same
-// store, the same local embeddings and the same seven layers; they differ in
+// store, the same local embeddings and the same eight layers; they differ in
 // whether an LLM is called at all, and in how widely it reasons.
 //
 // The three modes form a real ladder — each is strictly more capable than the
@@ -117,13 +117,13 @@ func (m Mode) Rank() int {
 	}
 }
 
-// LayersActive is the count of the 7-layer model this mode populates.
+// LayersActive is the count of the 8-layer model this mode populates.
 //
 // The counts differ per tier because the two systems own different layers:
 //
 //	lite   1 — L2 raw only, nothing extracted
-//	pro    5 — System1 fills L1, L2, L3, L4, L7 from each turn
-//	ultra  7 — System1 plus the slow path, which adds L5 knowledge and L6
+//	pro    6 — System1 fills L1, L2, L3, L4, L7 and L8 entity pages from each turn
+//	ultra  8 — System1 plus the slow path, which adds L5 knowledge and L6
 //	           schemas. Those two are System2 products: a knowledge relation
 //	           worth keeping is corroborated by more than one turn, and a schema
 //	           is a *recurring* pattern, so neither can be produced from a single
@@ -133,9 +133,9 @@ func (m Mode) LayersActive() int {
 	case ModeLite:
 		return 1
 	case ModePro:
-		return 5
+		return 6
 	default:
-		return 7
+		return 8
 	}
 }
 
@@ -144,6 +144,7 @@ func (m Mode) LayersActive() int {
 func System1Layers() []memory.Layer {
 	return []memory.Layer{
 		memory.L1Profile, memory.L2Raw, memory.L3Fact, memory.L4Summary, memory.L7Intention,
+		memory.L8Entity,
 	}
 }
 
@@ -158,7 +159,7 @@ func (m Mode) Describe() string {
 	case ModeLite:
 		return "lite (raw + local embeddings, no LLM call, no text sent to an LLM)"
 	case ModePro:
-		return "pro (per-write extraction: L1-L4 + L7, no slow path)"
+		return "pro (per-write extraction: L1-L4, L7 and L8 entity pages, no slow path)"
 	default:
 		return "ultra (per-write extraction + slow path adding L5 knowledge and L6 schemas)"
 	}
