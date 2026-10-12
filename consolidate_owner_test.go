@@ -233,6 +233,10 @@ func TestCursorResumesAndRotatesOwners(t *testing.T) {
 		if cut {
 			cut = false
 			cancel()
+			// Fail the cut call outright. Answering 200 raced the cancel: a fast
+			// client could read the reply first and count alice as done, which made
+			// this test flaky on CI.
+			return http.StatusInternalServerError, `{"error":"cut"}`
 		}
 		return http.StatusOK, chatBody(t, Consolidation{})
 	})
@@ -285,6 +289,9 @@ func TestLateDeadlineCutDoesNotCountAsWindowFailure(t *testing.T) {
 	mock := scopeMock(t, &log, func(prompt string) (int, string) {
 		if cancel != nil && strings.Contains(prompt, "bob one") {
 			cancel() // the deadline lands during bob's call, the second of the pass
+			// Fail the cut call outright: answering 200 raced the cancel, and a fast
+			// client could count bob as done (flaky on CI).
+			return http.StatusInternalServerError, `{"error":"cut"}`
 		}
 		return http.StatusOK, chatBody(t, Consolidation{})
 	})
