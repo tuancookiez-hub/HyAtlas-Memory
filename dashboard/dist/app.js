@@ -50,7 +50,8 @@ const LAYERS = {
   'l4_summary': { name: 'Summaries', desc: 'Syntheses of multiple facts, events, and observations', color: '#4a6fa5' },
   'l5_knowledge': { name: 'Knowledge', desc: 'Consolidated understanding and expertise', color: '#3d8b8b' },
   'l6_schema': { name: 'Schemas', desc: 'Structural patterns and organizational frameworks', color: '#6b4c9a' },
-  'l7_intention': { name: 'Intentions', desc: 'Forward-looking goals and commitments (L7)', color: '#d4af37' }
+  'l7_intention': { name: 'Intentions', desc: 'Forward-looking goals and commitments (L7)', color: '#d4af37' },
+  'l8_entity': { name: 'Entity pages', desc: 'One page per thing: current state plus dated history (L8)', color: '#c0715b' }
 };
 
 // Navigation
@@ -605,10 +606,10 @@ function renderOverview() {
   // reads = searches counter; writes = write counter — from layer-counts endpoint
   const reads    = layerCountsData?.searches ?? statusData?.searches ?? 0;
   const memWrites = layerCountsData?.writes   ?? statusData?.writes   ?? 0;
-  // 7-layer model (L1-L7); skip any stray legacy l4_identity key defensively.
+  // 8-layer model (L1-L8); skip any stray legacy l4_identity key defensively.
   const coverageKeys = Object.keys(lc).filter(k => k !== 'l4_identity');
   const activeLayers = coverageKeys.filter(k => Number(lc[k]) > 0).length;
-  const totalLayers = 7;
+  const totalLayers = 8;
 
   // Stat cards
   const statsHtml = `

@@ -69,6 +69,9 @@ type MemoryStore struct {
 	// relation is not indexed as an L5 document because one for the same owner
 	// already says it. Zero turns the check off. Set once, before any indexing.
 	l5Dedupe float64
+	// pages is the entity-page store (L8). It is created with the store so every
+	// path that opens one gets pages.
+	pages *PageStore
 	// persisted index path (same dir as the chromem DB)
 	indexPath string
 	// usage counters — atomic so reads from /api/v1/status never block writes.
@@ -116,6 +119,11 @@ func NewMemoryStore(ctx context.Context, dir string, embed Embedder, graphPath s
 		}
 		s.cols[l] = col
 	}
+	pages, err := NewPageStore(dir, s)
+	if err != nil {
+		return nil, err
+	}
+	s.pages = pages
 	// Prefer the persisted doc index (carries exact-match fields chromem
 	// metadata loses, e.g. the extracted flag); rebuild from chromem only when
 	// the file is missing or its size disagrees with the collections.

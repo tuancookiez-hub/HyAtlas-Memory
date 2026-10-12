@@ -163,7 +163,9 @@ const defaultIntentionTTL = 7 * 24 * time.Hour
 // what is true now and is quickly overtaken.
 func recencyHalfLife(h SearchHit) time.Duration {
 	switch h.Layer {
-	case memory.L1Profile, memory.L6Schema:
+	case memory.L1Profile, memory.L6Schema, memory.L8Entity:
+		// An entity page is rewritten whenever its thing changes, so its state is
+		// current by construction; its age says nothing about staleness.
 		return 0
 	case memory.L7Intention:
 		return 3 * 24 * time.Hour

@@ -1,11 +1,11 @@
-// Package memory defines the HyAtlas v4 seven-layer memory model.
+// Package memory defines the HyAtlas v4 eight-layer memory model.
 //
 // This is the truthful layer set for the new system — no dead "identity" slot.
 // The former L4 IDENTITY (retired) is folded into Profile/Fact; L4 SUMMARY is a
 // real, enabled layer (session narrative arc), not dormant baggage.
 package memory
 
-// Layer identifies one of the seven memory layers.
+// Layer identifies one of the eight memory layers.
 type Layer string
 
 const (
@@ -23,11 +23,13 @@ const (
 	L6Schema Layer = "l6_schema"
 	// L7 Intention — what the user is trying to do (goals, current intent).
 	L7Intention Layer = "l7_intention"
+	// L8 Entity - entity pages: one page per thing that matters, current state plus dated history.
+	L8Entity Layer = "l8_entity"
 )
 
-// All returns the seven layers in pipeline order.
+// All returns the eight layers in pipeline order.
 func All() []Layer {
-	return []Layer{L1Profile, L2Raw, L3Fact, L4Summary, L5Knowledge, L6Schema, L7Intention}
+	return []Layer{L1Profile, L2Raw, L3Fact, L4Summary, L5Knowledge, L6Schema, L7Intention, L8Entity}
 }
 
 // String implements fmt.Stringer.

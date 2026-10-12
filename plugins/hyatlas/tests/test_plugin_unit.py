@@ -2209,3 +2209,172 @@ def test_format_prefetch_shows_dates():
     ]}}, "model")
     assert "- (l3_fact, 2026-10-09, score 0.80) extraction uses stepfun" in out
     assert "- (l3_fact, score 0.70) no date here" in out
+
+
+# ---------------------------------------------------------------------------
+# Now page, entity pages and usage feedback
+# ---------------------------------------------------------------------------
+
+def test_format_prefetch_puts_now_first_then_pages_before_normal():
+    """The Now page is working memory read before every reply, so it leads the block."""
+    p = mod.HyatlasMemoryProvider()
+    out = p._format_prefetch({
+        "now": {"text": "Shipping 4.7.0 this week.", "updated": "2026-10-12T09:00:00Z"},
+        "memories": {
+            "normal": [{"content": "a raw fact", "layer": "l3_fact", "score": 0.6}],
+            "pages": [{"content": "Entity page for HyAtlas.", "layer": "l8_entity",
+                       "score": 0.9, "gmt_created": 1791504000}],
+        },
+    }, "release")
+    now_at = out.index("[NOW] (updated 2026-10-12)")
+    assert "Shipping 4.7.0 this week." in out[now_at:]
+    assert now_at < out.index("[PAGES]") < out.index("[NORMAL]")
+    assert "- (l8_entity, 2026-10-09, score 0.90) Entity page for HyAtlas." in out
+
+
+def test_format_prefetch_gives_pages_600_chars_and_others_300():
+    p = mod.HyatlasMemoryProvider()
+    out = p._format_prefetch({"memories": {
+        "pages": [{"content": "P" * 700, "layer": "l8_entity", "score": 0.5}],
+        "normal": [{"content": "N" * 700, "layer": "l3_fact", "score": 0.5}],
+    }}, "q")
+    assert "P" * 600 in out and "P" * 601 not in out
+    assert "N" * 300 in out and "N" * 301 not in out
+
+
+def test_format_prefetch_caps_now_text_and_omits_missing_date():
+    p = mod.HyatlasMemoryProvider()
+    out = p._format_prefetch({"now": {"text": "x" * 2000}}, "q")
+    assert "[NOW]\n" in out
+    assert "x" * 1500 in out and "x" * 1501 not in out
+
+
+def test_format_prefetch_empty_without_now_text_or_items():
+    p = mod.HyatlasMemoryProvider()
+    assert p._format_prefetch({}, "q") == ""
+    assert p._format_prefetch({"now": {"text": "  "}, "memories": {"pages": []}}, "q") == ""
+
+
+def test_prefetch_stores_recalled_ids_for_the_session():
+    srv = FakeV4Server()
+    try:
+        p = _provider_at(srv.base)
+        p._client.add(text="the feedback loop uses recalled ids", user_id="u", agent_id="a")
+        p.prefetch("feedback loop", session_id="s1")
+        assert p._recalled["s1"] == ["m0"]
+        assert "s2" not in p._recalled
+    finally:
+        srv.stop()
+
+
+class _FeedbackRecorder:
+    """Stands in for client.feedback and records each call from the feedback thread."""
+
+    def __init__(self, raise_with=None):
+        self.calls = []
+        self.queries = []
+        self.done = threading.Event()
+        self._raise_with = raise_with
+
+    def __call__(self, recalled_ids, reply, user_id="", agent_id="", query=""):
+        self.calls.append((list(recalled_ids), reply, user_id, agent_id))
+        self.queries.append(query)
+        self.done.set()
+        if self._raise_with is not None:
+            raise self._raise_with
+        return {"ok": True}
+
+
+def test_sync_turn_posts_feedback_once_with_recalled_ids_and_clears_them(monkeypatch):
+    srv = FakeV4Server()
+    try:
+        p = _provider_at(srv.base)
+        p._client.add(text="the feedback loop uses recalled ids", user_id="u", agent_id="a")
+        p.prefetch("feedback loop", session_id="s1")
+        rec = _FeedbackRecorder()
+        monkeypatch.setattr(p._client, "feedback", rec)
+
+        p.sync_turn("what loop?", "the feedback loop uses recalled ids.", session_id="s1")
+
+        assert rec.done.wait(2.0), "feedback was not posted"
+        assert len(rec.calls) == 1
+        ids, reply, user_id, agent_id = rec.calls[0]
+        assert ids == ["m0"]
+        assert rec.queries[0] == "feedback loop"
+        assert reply == "the feedback loop uses recalled ids."
+        assert (user_id, agent_id) == ("u", "a")
+        assert "s1" not in p._recalled
+
+        p.sync_turn("again", "another reply", session_id="s1")
+        threading.Event().wait(0.2)
+        assert len(rec.calls) == 1, "recalled ids were not cleared after feedback"
+    finally:
+        srv.stop()
+
+
+def test_sync_turn_without_recalled_ids_sends_no_feedback(monkeypatch):
+    srv = FakeV4Server()
+    try:
+        p = _provider_at(srv.base)
+        rec = _FeedbackRecorder()
+        monkeypatch.setattr(p._client, "feedback", rec)
+        p.sync_turn("hello", "hi there", session_id="s9")
+        assert not rec.done.wait(0.3)
+        assert rec.calls == []
+    finally:
+        srv.stop()
+
+
+def test_feedback_failure_never_breaks_sync_turn(monkeypatch):
+    srv = FakeV4Server()
+    try:
+        p = _provider_at(srv.base)
+        p._client.add(text="the feedback loop uses recalled ids", user_id="u", agent_id="a")
+        p.prefetch("feedback loop", session_id="s1")
+        rec = _FeedbackRecorder(raise_with=HyatlasClientError("POST /api/v1/feedback -> HTTP 500"))
+        monkeypatch.setattr(p._client, "feedback", rec)
+
+        p.sync_turn("q", "a reply", session_id="s1")  # must not raise
+
+        assert rec.done.wait(2.0)
+        assert len(srv.store["memories"]) == 2, "the turn itself must still be stored"
+    finally:
+        srv.stop()
+
+
+class _FeedbackHandler(BaseHTTPRequestHandler):
+    received: list  # set per server instance
+
+    def log_message(self, *args):  # silence
+        pass
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(n) or b"{}")
+        self.received.append((self.path, body))
+        out = json.dumps({"ok": True, "shown": len(body["recalled_ids"]), "used": 1}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+
+def test_client_feedback_posts_recalled_ids_and_reply():
+    received = []
+    handler = type("H", (_FeedbackHandler,), {"received": received})
+    httpd = ThreadingHTTPServer(("127.0.0.1", _free_port()), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        c = HyatlasClient(base_url=f"http://127.0.0.1:{httpd.server_port}", timeout=5.0)
+        resp = c.feedback(["m1", "m2"], "the reply", user_id="u", agent_id="a", query="which loop")
+        assert resp == {"ok": True, "shown": 2, "used": 1}
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+    assert received == [("/api/v1/feedback", {
+        "recalled_ids": ["m1", "m2"], "reply": "the reply",
+        "user_id": "u", "agent_id": "a", "query": "which loop",
+    })]

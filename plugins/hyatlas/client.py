@@ -156,6 +156,30 @@ class HyatlasClient:
             body["layer"] = layer
         return self._post("/api/v1/search", body)
 
+    def feedback(
+        self,
+        recalled_ids: List[str],
+        reply: str,
+        user_id: str = "",
+        agent_id: str = "",
+        query: str = "",
+    ) -> Dict[str, Any]:
+        """Tell the server which recalled memories the agent's reply actually used.
+
+        The server compares the reply with what it recalled, so a memory that was
+        shown and ignored can be told apart from one that was read. The call is
+        advisory; callers decide whether a failure matters.
+        """
+        body: Dict[str, Any] = {
+            "recalled_ids": list(recalled_ids),
+            "reply": reply,
+            "user_id": user_id,
+            "agent_id": agent_id,
+            # The words of the question do not count as use: a reply repeats them.
+            "query": query,
+        }
+        return self._post("/api/v1/feedback", body)
+
     def _server_mode(self) -> str:
         """The server's mode from /api/v1/status ("lite", "pro", "ultra"), or ""."""
         try:

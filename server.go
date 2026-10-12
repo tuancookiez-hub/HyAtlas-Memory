@@ -27,7 +27,7 @@ import (
 // It is exposed on /api/v1/status and /api/info so every client (Desktop pane,
 // web dashboard, CLI) reports the real running version instead of hardcoding
 // a "v4" badge that silently goes stale on each release. Bump in one place.
-const Version = "4.6.0"
+const Version = "4.7.0"
 
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {
@@ -57,6 +57,14 @@ type Server struct {
 	// of results. The zero values turn both off, as for minScore.
 	recency      bool
 	intentionTTL time.Duration
+	// now keeps each owner's working-memory page (HYATLAS_NOW_EVERY); usage counts
+	// which recalled memories replies actually used (HYATLAS_USAGE_LEARNING). Either
+	// may be nil, as in tests built without main, which turns that feature off.
+	now   *NowPages
+	usage *UsageStats
+	// backlog is the one-time admin pass over facts stored before 4.7.0
+	// (/api/v1/admin/backlog): contradictions and entity pages.
+	backlog *BacklogJob
 
 	// mu guards lastExtractErr: the extraction goroutines write it from
 	// background contexts while /api/v1/status reads it on request.
@@ -262,6 +270,17 @@ func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext,
 	} else {
 		store.applyIntentions(ex, ec, "", sourceID)
 	}
+	// L8 Entity pages. Failures are logged and never fail the write: the facts
+	// above are already stored, and a page is a refinement of them.
+	if store.pages != nil && len(ex.Pages) > 0 {
+		created, updated, err := store.pages.Apply(userID, agentID, sourceID, ex.Pages, ec.shownPages())
+		if err != nil {
+			log.Printf("extract: pages: %v", err)
+		}
+		if created+updated > 0 {
+			log.Printf("extract: pages: created %d, updated %d (source %s)", created, updated, sourceID)
+		}
+	}
 }
 
 func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
@@ -370,6 +389,11 @@ func (s *Server) extract(text, userID, agentID, id string) error {
 	promoteExtractionCtx(s.store, ex, ec, userID, agentID, id, s.dedupeScore)
 	_ = s.store.SetExtracted(id, true)
 	s.setExtractErr("")
+	// The Now page is rebuilt from intentions and summaries, so a write that may
+	// have added some asks for a refresh; Touch rate-limits and never blocks.
+	if s.now != nil {
+		s.now.Touch(userID, agentID)
+	}
 	return nil
 }
 
@@ -455,8 +479,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if s.recency {
 		res = rerankRecency(res, now)
 	}
+	if s.usage != nil {
+		res = rerankUsage(res, s.usage)
+	}
 	if body.Layer == "" {
 		res = capLayer(res, memory.L5Knowledge, l5Share(limit))
+		// An entity page is a whole summary of one thing, so two are plenty; the
+		// rest of the slots go to the facts and rules around them.
+		res = capLayer(res, memory.L8Entity, 2)
 	}
 	if len(res) > limit {
 		res = res[:limit]
@@ -470,6 +500,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		UserID     string  `json:"user_id,omitempty"`
 		AgentID    string  `json:"agent_id,omitempty"`
 	}
+	pageHits := []hit{}
 	profileHits := []hit{}
 	proactiveHits := []hit{}
 	normalHits := []hit{}
@@ -478,6 +509,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			Layer: string(h.Layer), GmtCreated: gmtCreated(h.Meta["ts"]),
 			UserID: h.Meta["user_id"], AgentID: h.Meta["agent_id"]}
 		switch h.Layer {
+		case memory.L8Entity:
+			pageHits = append(pageHits, it)
 		case memory.L1Profile, memory.L6Schema:
 			profileHits = append(profileHits, it)
 		case memory.L7Intention:
@@ -486,10 +519,72 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			normalHits = append(normalHits, it)
 		}
 	}
-	// plugin channel order: profile -> proactive -> normal
-	jsonResponse(w, 200, map[string]any{"memories": map[string]any{
-		"profile": profileHits, "proactive": proactiveHits, "normal": normalHits,
-	}})
+	// plugin channel order: now -> pages -> profile -> proactive -> normal
+	out := map[string]any{"memories": map[string]any{
+		"pages": pageHits, "profile": profileHits, "proactive": proactiveHits, "normal": normalHits,
+	}}
+	if np, ok := s.nowFor(users, agentID); ok {
+		out["now"] = np
+	}
+	jsonResponse(w, 200, out)
+}
+
+// handleBacklog serves /api/v1/admin/backlog (see backlog.go). Without a job, as in
+// tests built without main, it is refused like any admin route.
+func (s *Server) handleBacklog(w http.ResponseWriter, r *http.Request) {
+	if s.backlog == nil {
+		jsonResponse(w, 403, map[string]any{"error": "backlog pass not available"})
+		return
+	}
+	s.backlog.HandleBacklog(w, r)
+}
+
+// handleNow serves GET /api/v1/now: the owner's working-memory page, or null.
+func (s *Server) handleNow(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonResponse(w, 405, map[string]any{"error": "GET only"})
+		return
+	}
+	if s.now == nil {
+		jsonResponse(w, 200, map[string]any{"now": nil})
+		return
+	}
+	s.now.HandleNow(w, r)
+}
+
+// handleFeedback serves POST /api/v1/feedback: which recalled memories a reply
+// used. With usage learning off it accepts the call and records nothing, so the
+// plugin does not need to know the setting.
+func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonResponse(w, 405, map[string]any{"error": "POST only"})
+		return
+	}
+	if s.usage == nil {
+		jsonResponse(w, 200, map[string]any{"ok": true, "shown": 0, "used": 0})
+		return
+	}
+	s.usage.HandleFeedback(s.store, s.expandOwners)(w, r)
+}
+
+// nowFor returns the freshest Now page among the searched owners. Writes keep the
+// page under the ID they were made with, and one person may write under several
+// (HYATLAS_USER_ALIASES), so every searched ID is checked. No owner, no page.
+func (s *Server) nowFor(users []string, agentID string) (NowPage, bool) {
+	var best NowPage
+	found := false
+	if s.now == nil {
+		return best, false
+	}
+	for _, u := range users {
+		if u == "" {
+			continue
+		}
+		if p, ok := s.now.Get(u, agentID); ok && (!found || p.Updated > best.Updated) {
+			best, found = p, true
+		}
+	}
+	return best, found
 }
 
 // refineHits drops hits scoring below minScore, then drops hits whose text repeats an
@@ -1479,6 +1574,23 @@ func main() {
 	srv.admin = rt.Admin
 	srv.recency = !envOff("HYATLAS_RECENCY")
 	srv.intentionTTL = parseDuration("HYATLAS_INTENTION_TTL", defaultIntentionTTL)
+	// The Now page needs an LLM; lite never calls one, so it gets none and only
+	// serves pages already stored.
+	var nowLLM *LLMClient
+	if rt.Mode.UsesLLM() {
+		nowLLM = llm
+	}
+	srv.now = NewNowPages(dir, store, nowLLM, resolveNowEvery())
+	if !envOff("HYATLAS_USAGE_LEARNING") {
+		srv.usage = NewUsageStats(dir)
+	}
+	// The backlog pass groups facts by topic with the consolidator's clustering, so
+	// it gets one even in pro, where no slow path runs (this one is never started).
+	backlogCons := srv.cons
+	if backlogCons == nil {
+		backlogCons = NewConsolidator(store, llm, rt.Consolidate, rt.Retention, rt.Batch)
+	}
+	srv.backlog = NewBacklogJob(dir, store, backlogCons, nowLLM, func() bool { return srv.admin })
 	snap := resolveSnapshot(dir)
 	log.Print(snapshotLine(snap))
 	go runSnapshots(ctx, store, dir, snap)
@@ -1508,6 +1620,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/v1/reprocess", s.handleReprocess)
 	mux.HandleFunc("/api/v1/admin/compact_raw", s.handleCompactRaw)
 	mux.HandleFunc("/api/v1/admin/dedupe_facts", s.handleDedupeFacts)
+	mux.HandleFunc("/api/v1/admin/backlog", s.handleBacklog)
+	mux.HandleFunc("/api/v1/now", s.handleNow)
+	mux.HandleFunc("/api/v1/feedback", s.handleFeedback)
 	// Dashboard UI (embedded single-file frontend)
 	// --- v3.5 dashboard adapter endpoints (real v4 data, v3.5 shapes) ---
 	mux.HandleFunc("/api/status", s.handleDashStatus)
