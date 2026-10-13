@@ -235,3 +235,36 @@ func TestDedupeFactsL6Layer(t *testing.T) {
 		t.Errorf("live L6 = %v, want new and other", live)
 	}
 }
+
+// /api/v1/admin/restore is admin-only and a dry run unless told otherwise.
+func TestAdminRestoreEndpoint(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	ids := seed(t, srv.store, 2, "restore")
+	if _, err := srv.store.Supersede([]string{ids[0]}, ids[1]); err != nil {
+		t.Fatal(err)
+	}
+	call := func(body string) (int, map[string]any) {
+		w := httptest.NewRecorder()
+		srv.handleRestore(w, httptest.NewRequest("POST", "/api/v1/admin/restore", strings.NewReader(body)))
+		var out map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		return w.Code, out
+	}
+	srv.admin = false
+	if code, _ := call(`{"ids":["` + ids[0] + `"],"dry_run":false}`); code != 403 {
+		t.Fatalf("without admin: %d, want 403", code)
+	}
+	srv.admin = true
+	if code, out := call(`{"ids":["` + ids[0] + `"]}`); code != 200 || out["superseded"] != float64(1) || out["restored"] != nil {
+		t.Fatalf("dry run: %d %v", code, out)
+	}
+	if isSuperseded(srv.store.GetMany([]string{ids[0]})[0]) == false {
+		t.Fatal("dry run restored the row")
+	}
+	if code, out := call(`{"ids":["` + ids[0] + `"],"dry_run":false}`); code != 200 || out["restored"] != float64(1) {
+		t.Fatalf("apply: %d %v", code, out)
+	}
+	if isSuperseded(srv.store.GetMany([]string{ids[0]})[0]) {
+		t.Fatal("row still superseded after restore")
+	}
+}

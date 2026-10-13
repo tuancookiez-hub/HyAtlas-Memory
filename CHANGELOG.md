@@ -25,6 +25,12 @@ live store (1,900 superseded facts).
   timestamp, which every consolidation pass writes, came back in a different
   order on each request, so pages skipped and repeated rows. Ties now break by id.
 
+### Added
+
+- `POST /api/v1/admin/restore` (needs `HYATLAS_ADMIN=on`; dry run by default)
+  makes named superseded rows live again, to undo a merge or drop the model got
+  wrong.
+
 ### Notes
 
 - The similarity guards stand aside with the `HYATLAS_EMBED_BASE=local` stub,

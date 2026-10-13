@@ -148,3 +148,37 @@ func TestListPagesAreStable(t *testing.T) {
 		t.Fatalf("paging returned %d of %d rows", len(seen), len(want))
 	}
 }
+
+// Restore makes a superseded row live again and leaves a live row alone.
+func TestRestoreMakesRowLive(t *testing.T) {
+	st := openHistoryStore(t, t.TempDir())
+	defer st.Close()
+	a := addHistFact(t, st, "wrongly merged fact")
+	b := addHistFact(t, st, "unrelated merged text")
+	if _, err := st.Supersede([]string{a}, b); err != nil {
+		t.Fatal(err)
+	}
+	n, err := st.Restore([]string{a, b, "m-missing"})
+	if err != nil || n != 1 {
+		t.Fatalf("Restore = %d, %v; want 1 row", n, err)
+	}
+	m := metaOf(t, st, a)
+	if m["invalid_at"] != "" || m["superseded_by"] != "" || m["restored_at"] == "" {
+		t.Fatalf("restored row meta = %v", m)
+	}
+	if live, _ := st.List("l3_fact", "", "", 10, 0, false); len(live) != 2 {
+		t.Fatalf("live facts = %d, want 2", len(live))
+	}
+	// A search finds it again: the superseded bookkeeping was updated.
+	hits, err := st.Search("wrongly merged fact", 5, "l3_fact", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, h := range hits {
+		found = found || h.ID == a
+	}
+	if !found {
+		t.Error("restored fact is not searchable")
+	}
+}

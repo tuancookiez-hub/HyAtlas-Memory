@@ -622,6 +622,11 @@ says `{"dry_run": false}`.
   ones); the graph itself is not changed. With `"layer": "l6_schema"` it merges
   schemas that restate each other. Response: `layer`, `owners`, `facts`,
   `duplicates`, `sample`, and when applied, `rows_superseded`.
+- `POST /api/v1/admin/restore` makes superseded rows live again, undoing a merge
+  or drop the model got wrong. The body names them: `{"ids": ["m…", "m…"]}`. Each
+  restored row loses `invalid_at`, `superseded_by` and `drop_reason` and gets
+  `restored_at`. Response: `requested`, `superseded`, `rows` (what would be or was
+  restored), and when applied, `restored`.
 
 **Warning: `compact_raw` is irreversible. The removed text is gone.** Read the dry
 run's `sample` before you apply it.

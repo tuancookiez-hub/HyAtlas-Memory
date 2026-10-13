@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"sort"
+	"time"
 
 	chromem "github.com/philippgille/chromem-go"
 	"github.com/tuancookiez-hub/hyatlas-v4/memory"
@@ -75,17 +76,45 @@ func (s *MemoryStore) relinkHistory(successors map[string]string) (int, error) {
 	s.mu.RUnlock()
 	sort.Slice(fixes, func(i, j int) bool { return fixes[i].id < fixes[j].id })
 
+	edits := make([]historyEdit, len(fixes))
+	for i, f := range fixes {
+		f := f
+		edits[i] = historyEdit{id: f.id, edit: func(meta map[string]string) {
+			meta["superseded_by"] = f.by
+			for k, v := range f.extra {
+				meta[k] = v
+			}
+		}}
+	}
+	n, err := s.rewriteSuperseded(edits)
+	if n > 0 {
+		log.Printf("history: relinked %d superseded rows", n)
+	}
+	return n, err
+}
+
+// historyEdit changes the metadata of one superseded row.
+type historyEdit struct {
+	id   string
+	edit func(meta map[string]string)
+}
+
+// rewriteSuperseded applies each edit to its row, if the row is still superseded,
+// and writes the row back to chromem and the index. Content and vector are kept. It
+// takes rowMu per row the way Supersede does, so a same-id Add is never
+// overwritten, and writes the index file once. It returns how many rows changed.
+func (s *MemoryStore) rewriteSuperseded(edits []historyEdit) (int, error) {
 	n := 0
 	var firstErr error
-	for _, f := range fixes {
+	for _, e := range edits {
 		s.rowMu.Lock()
 		s.mu.RLock()
-		cur, ok := s.index[f.id]
+		cur, ok := s.index[e.id]
 		col := s.cols[memory.Layer(cur.Layer)]
 		var old chromem.Document
 		var err error
 		if ok && isSuperseded(cur) && col != nil {
-			old, err = col.GetByID(s.ctx, f.id)
+			old, err = col.GetByID(s.ctx, e.id)
 		}
 		s.mu.RUnlock()
 		if !ok || !isSuperseded(cur) || col == nil {
@@ -103,12 +132,9 @@ func (s *MemoryStore) relinkHistory(successors map[string]string) (int, error) {
 		for k, v := range cur.Meta {
 			meta[k] = v
 		}
-		meta["superseded_by"] = f.by
-		for k, v := range f.extra {
-			meta[k] = v
-		}
+		e.edit(meta)
 		if err := col.AddDocument(s.ctx, chromem.Document{
-			ID: f.id, Content: old.Content, Embedding: old.Embedding, Metadata: meta,
+			ID: e.id, Content: old.Content, Embedding: old.Embedding, Metadata: meta,
 		}); err != nil {
 			s.rowMu.Unlock()
 			if firstErr == nil {
@@ -129,7 +155,24 @@ func (s *MemoryStore) relinkHistory(successors map[string]string) (int, error) {
 			firstErr = err
 		}
 		s.mu.Unlock()
-		log.Printf("history: relinked %d superseded rows", n)
 	}
 	return n, firstErr
+}
+
+// Restore makes superseded rows live again: it removes invalid_at, superseded_by
+// and drop_reason and records restored_at. It undoes a supersede the model got
+// wrong, such as a fact merged into unrelated text. A row that is live or missing
+// is skipped. It returns how many rows were restored.
+func (s *MemoryStore) Restore(ids []string) (int, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	edits := make([]historyEdit, 0, len(ids))
+	for _, id := range ids {
+		edits = append(edits, historyEdit{id: id, edit: func(meta map[string]string) {
+			delete(meta, "invalid_at")
+			delete(meta, "superseded_by")
+			delete(meta, "drop_reason")
+			meta["restored_at"] = now
+		}})
+	}
+	return s.rewriteSuperseded(edits)
 }

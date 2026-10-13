@@ -172,6 +172,8 @@ type maintenanceRequest struct {
 	Threshold float64 `json:"threshold"`
 	// Layer is what dedupe_facts walks: "l3_fact" (the default) or "l5_knowledge".
 	Layer string `json:"layer"`
+	// IDs are the superseded rows restore makes live again.
+	IDs []string `json:"ids"`
 }
 
 // readMaintenance refuses the request unless the server runs with HYATLAS_ADMIN=on,
@@ -358,6 +360,45 @@ func (s *Server) handleDedupeFacts(w http.ResponseWriter, r *http.Request) {
 		resp["rows_superseded"] = marked
 		if firstErr != nil {
 			resp["error"] = firstErr.Error()
+		}
+	}
+	jsonResponse(w, 200, resp)
+}
+
+// handleRestore is POST /api/v1/admin/restore: it makes the superseded rows named
+// in "ids" live again (see MemoryStore.Restore). A dry run lists which of them are
+// superseded and would be restored; {"dry_run": false} restores them.
+func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
+	body, dry, ok := s.readMaintenance(w, r)
+	if !ok {
+		return
+	}
+	if len(body.IDs) == 0 {
+		jsonResponse(w, 400, map[string]any{"error": "ids is required"})
+		return
+	}
+	type row struct {
+		ID           string `json:"id"`
+		Layer        string `json:"layer"`
+		Content      string `json:"content"`
+		SupersededBy string `json:"superseded_by,omitempty"`
+		DropReason   string `json:"drop_reason,omitempty"`
+	}
+	var rows []row
+	var ids []string
+	for _, d := range s.store.GetMany(body.IDs) {
+		if !isSuperseded(d) {
+			continue
+		}
+		ids = append(ids, d.ID)
+		rows = append(rows, row{d.ID, d.Layer, utf8Trunc(d.Content, 200), d.Meta["superseded_by"], d.Meta["drop_reason"]})
+	}
+	resp := map[string]any{"dry_run": dry, "requested": len(body.IDs), "superseded": len(ids), "rows": rows}
+	if !dry && len(ids) > 0 {
+		n, err := s.store.Restore(ids)
+		resp["restored"] = n
+		if err != nil {
+			resp["error"] = err.Error()
 		}
 	}
 	jsonResponse(w, 200, resp)
