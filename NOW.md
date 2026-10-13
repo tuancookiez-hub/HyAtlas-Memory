@@ -8,7 +8,12 @@
 - Plugin: `hyatlas` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hyatlas\` + Hermes Desktop pane. The catalog entry `plugin-catalog/hyatlas.yaml` (NousResearch/hermes-agent) pins 4.5.0; 4.5.1 changed no plugin code, so there was no catalog bump.
 - Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`)
 
-## 4.7.2 (branch fix/4.7.2-review)
+## 4.7.3 (branch fix/4.7.3-consolidation-quality)
+Consolidation quality: off-topic merge guard (0.65), schemas chosen by relevance
+with a 0.92 duplicate guard, history relink on delete and at start, stable list
+paging.
+
+## 4.7.2 (released 2026-10-13)
 Code-review fixes: provider-wide failures are not charged to clusters and skipped
 clusters retry after 24 h; consolidation groups alias IDs as one owner; the
 fallback never gets the primary key on another host; catch-up after restart and

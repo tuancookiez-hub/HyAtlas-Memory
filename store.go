@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"maps"
 	"os"
 	"path/filepath"
@@ -131,6 +132,12 @@ func NewMemoryStore(ctx context.Context, dir string, embed Embedder, graphPath s
 		if err := s.rebuildIndex(); err != nil {
 			return nil, err
 		}
+	}
+	// Repair history left by older versions: links to rows deleted since, and
+	// drops made before reasons were recorded. A store with nothing to repair is
+	// not written.
+	if _, err := s.relinkHistory(nil); err != nil {
+		log.Printf("history: relink at start: %v", err)
 	}
 	return s, nil
 }
@@ -390,8 +397,15 @@ func (s *MemoryStore) list(layer memory.Layer, userID, agentID string, limit, of
 		}
 		all = append(all, d)
 	}
-	// stable sort by ts desc
-	sort.Slice(all, func(i, j int) bool { return all[i].Ts > all[j].Ts })
+	// Newest first, ties broken by id. Rows come out of a map in random order and a
+	// consolidation pass writes many rows with the same second, so without the
+	// tie-break two requests disagree on the order and paging skips or repeats rows.
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Ts != all[j].Ts {
+			return all[i].Ts > all[j].Ts
+		}
+		return all[i].ID > all[j].ID
+	})
 	total := len(all)
 	if offset > total {
 		offset = total
@@ -407,7 +421,23 @@ func (s *MemoryStore) list(layer memory.Layer, userID, agentID string, limit, of
 }
 
 // Delete removes docs by id (or by layer/user/agent scope). Returns count deleted.
+//
+// Rows that a deleted row had replaced keep a readable history: relinkHistory
+// points them at the deleted row's own successor, or records why they were dropped.
 func (s *MemoryStore) Delete(ids []string, layer memory.Layer, userID, agentID string) (int, error) {
+	successors := map[string]string{}
+	deleted, err := s.deleteRows(ids, layer, userID, agentID, successors)
+	if deleted > 0 {
+		if _, rerr := s.relinkHistory(successors); rerr != nil && err == nil {
+			err = rerr
+		}
+	}
+	return deleted, err
+}
+
+// deleteRows is Delete without the history repair. It records in successors what
+// each deleted row had been superseded by.
+func (s *MemoryStore) deleteRows(ids []string, layer memory.Layer, userID, agentID string, successors map[string]string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	targets := map[string]bool{}
@@ -434,6 +464,7 @@ func (s *MemoryStore) Delete(ids []string, layer memory.Layer, userID, agentID s
 	deleted := 0
 	for id := range targets {
 		d := s.index[id]
+		successors[id] = d.Meta["superseded_by"]
 		if col, ok := s.cols[memory.Layer(d.Layer)]; ok {
 			_ = col.Delete(s.ctx, nil, nil, id)
 		}
@@ -651,6 +682,28 @@ func (s *MemoryStore) GetMany(ids []string) []DocIndex {
 	for _, id := range ids {
 		if d, ok := s.index[id]; ok {
 			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// vectors returns the stored embeddings of the given rows, keyed by id. Missing
+// rows and rows whose vector cannot be read are left out.
+func (s *MemoryStore) vectors(ids []string) map[string][]float32 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string][]float32, len(ids))
+	for _, id := range ids {
+		d, ok := s.index[id]
+		if !ok {
+			continue
+		}
+		col := s.cols[memory.Layer(d.Layer)]
+		if col == nil {
+			continue
+		}
+		if doc, err := col.GetByID(s.ctx, id); err == nil && len(doc.Embedding) > 0 {
+			out[id] = doc.Embedding
 		}
 	}
 	return out

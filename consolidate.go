@@ -39,6 +39,18 @@ const (
 	// the model, so the refinement list cannot grow the prompt without bound.
 	maxPromptSchemas = 20
 
+	// mergeMinSimilarity is the least cosine similarity a fact must have to the
+	// merged text to be absorbed by it. On the live store 99% of merges score above
+	// it; the ones below folded a fact into an unrelated one ("fast strategies lose,
+	// hold/trend/rotate survive" into "4 new NVDA-dip pilots promoted"), which hides
+	// the fact behind text that does not say it. Such a fact stays live instead.
+	mergeMinSimilarity = 0.65
+
+	// schemaDupScore is the similarity at which a new schema counts as one already
+	// stored and is not written. It is the dedupe floor, never lower: at 0.88 two
+	// different rules about the same subject still look alike.
+	schemaDupScore = defaultDedupeScore
+
 	// maxPromptPageNames caps how many entity page names are offered to the model as
 	// canonical spellings for knowledge endpoints.
 	maxPromptPageNames = 40
@@ -160,13 +172,16 @@ type Report struct {
 	Absorbed int `json:"absorbed"`
 	// Dropped counts facts the model dropped as stale or obvious, each with a
 	// reason. It used to include Absorbed, which made merges look like data loss.
-	Dropped    int      `json:"dropped"`
-	Schemas    int      `json:"schemas"`
-	Arc        bool     `json:"arc"`
-	PrunedRaw  int      `json:"pruned_raw"`
-	Protected  int      `json:"protected_raw"`
-	DurationMs int64    `json:"duration_ms"`
-	Errors     []string `json:"errors,omitempty"`
+	Dropped int `json:"dropped"`
+	// KeptOffTopic counts facts a merge named that were left live because the
+	// merged text was not about them (see mergeMinSimilarity).
+	KeptOffTopic int      `json:"kept_off_topic"`
+	Schemas      int      `json:"schemas"`
+	Arc          bool     `json:"arc"`
+	PrunedRaw    int      `json:"pruned_raw"`
+	Protected    int      `json:"protected_raw"`
+	DurationMs   int64    `json:"duration_ms"`
+	Errors       []string `json:"errors,omitempty"`
 }
 
 // consolidateState is what survives a restart: the stable topic clusters of each
@@ -869,6 +884,7 @@ func (r *Report) absorb(s *Report) {
 	r.Edges += s.Edges
 	r.Absorbed += s.Absorbed
 	r.Dropped += s.Dropped
+	r.KeptOffTopic += s.KeptOffTopic
 	r.Schemas += s.Schemas
 	r.Arc = r.Arc || s.Arc
 	r.Errors = append(r.Errors, s.Errors...)
@@ -897,8 +913,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 	soft := func(msg string) {
 		rep.Errors = append(rep.Errors, owner.String()+": "+msg)
 	}
-	schemas := c.liveOf(memory.L6Schema, owner)
-	cons, err := c.ask(ctx, facts, schemas)
+	cons, err := c.ask(ctx, facts, c.relevantSchemas(owner, facts))
 	if err != nil {
 		fatal(err.Error())
 		return false, nil
@@ -935,6 +950,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 			seen[id] = true
 			absorbed = append(absorbed, byID[id])
 		}
+		absorbed = c.onTopic(text, absorbed, rep)
 		if len(absorbed) < 2 {
 			// A "merge" of one fact is a rewrite, not a consolidation. Dropping
 			// it avoids losing the original's provenance for no gain.
@@ -1048,7 +1064,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 	// the same pattern or retired the schema this one refines.
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	schemas = c.liveOf(memory.L6Schema, owner)
+	schemas := c.liveOf(memory.L6Schema, owner)
 
 	// Generalised schemas: patterns that only become visible across many turns.
 	// A pattern whose normalised text matches a live schema of this owner is
@@ -1067,6 +1083,9 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 			continue
 		}
 		known[key] = true
+		if c.schemaKnown(owner, pattern, sc.Supersedes) {
+			continue
+		}
 		id := newID()
 		if err := c.store.Add(memory.L6Schema, id, pattern, map[string]string{
 			"user_id": owner.user, "agent_id": owner.agent,
@@ -1159,7 +1178,7 @@ func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed [
 	}
 	rep.Absorbed += len(marked)
 	if len(marked) == 0 {
-		_, retractErr := c.store.Supersede([]string{mergedID}, "")
+		_, retractErr := c.store.supersedeWith([]string{mergedID}, "", map[string]string{"drop_reason": reasonMergeRetracted})
 		msg := fmt.Sprintf("merge supersede: 0 of %d absorbed facts marked; replacement retracted", len(ids))
 		if retractErr != nil {
 			msg += ": retract: " + retractErr.Error()
@@ -1191,6 +1210,126 @@ func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed [
 		}
 	}
 	return mergedID
+}
+
+// semantic reports whether the store's vectors carry meaning. The LocalEmbedder
+// fallback hashes bytes, so similarity between its vectors says nothing about what
+// two texts mean, and the similarity guards stand aside rather than guess.
+// An embedder that wraps another says so with Unwrap, and the inner one decides.
+func (c *Consolidator) semantic() bool {
+	e := c.store.embed
+	for {
+		if _, hashed := e.(*LocalEmbedder); hashed {
+			return false
+		}
+		w, ok := e.(interface{ Unwrap() Embedder })
+		if !ok {
+			return true
+		}
+		e = w.Unwrap()
+	}
+}
+
+// onTopic returns the facts in absorbed that the merged text is about, judged by
+// the cosine similarity of their stored vectors to the text's. A fact below
+// mergeMinSimilarity is left out, so it stays live, and is counted in
+// rep.KeptOffTopic. When the text cannot be embedded or a vector is missing, that
+// fact is kept: the guard never blocks a merge it cannot judge.
+func (c *Consolidator) onTopic(text string, absorbed []DocIndex, rep *Report) []DocIndex {
+	if len(absorbed) < 2 || !c.semantic() {
+		return absorbed
+	}
+	tv, err := c.store.embed.Embed(c.store.ctx, text)
+	if err != nil {
+		return absorbed
+	}
+	vecs := c.store.vectors(idsOf(absorbed))
+	kept := absorbed[:0:0]
+	for _, d := range absorbed {
+		v, ok := vecs[d.ID]
+		if ok && cosineSim(tv, v) < mergeMinSimilarity {
+			log.Printf("consolidate: merge left %s live: %.2f similar to the merged text", d.ID, cosineSim(tv, v))
+			rep.KeptOffTopic++
+			continue
+		}
+		kept = append(kept, d)
+	}
+	return kept
+}
+
+// relevantSchemas picks the owner's schemas to show the model beside a cluster:
+// those nearest to the cluster's facts, at most maxPromptSchemas. The model is
+// told not to repeat them and may refine them, which it can only do for patterns
+// it is shown; the newest schemas, shown before, were mostly about other topics.
+// Without vectors it falls back to the newest schemas.
+func (c *Consolidator) relevantSchemas(owner scopeKey, facts []DocIndex) []DocIndex {
+	all := c.liveOf(memory.L6Schema, owner)
+	if len(all) <= maxPromptSchemas || !c.semantic() {
+		if len(all) > maxPromptSchemas {
+			return all[:maxPromptSchemas]
+		}
+		return all
+	}
+	vecs := c.store.vectors(idsOf(facts))
+	if len(vecs) == 0 {
+		return all[:maxPromptSchemas]
+	}
+	// Each fact nominates its nearest schemas; a schema ranks by its best score.
+	best := map[string]float32{}
+	where := map[string]string{"user_id": owner.user, "agent_id": owner.agent}
+	for _, f := range facts {
+		v, ok := vecs[f.ID]
+		if !ok {
+			continue
+		}
+		hits, err := c.store.searchWhere(v, 3, memory.L6Schema, where)
+		if err != nil {
+			continue
+		}
+		for _, h := range hits {
+			if h.Score > best[h.ID] {
+				best[h.ID] = h.Score
+			}
+		}
+	}
+	if len(best) == 0 {
+		return all[:maxPromptSchemas]
+	}
+	var out []DocIndex
+	for _, sc := range all {
+		if _, ok := best[sc.ID]; ok {
+			out = append(out, sc)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return best[out[i].ID] > best[out[j].ID] })
+	if len(out) > maxPromptSchemas {
+		out = out[:maxPromptSchemas]
+	}
+	return out
+}
+
+// schemaKnown reports whether the owner already has a live schema that says the
+// same as pattern (similarity at or above schemaDupScore). A schema the new one is
+// meant to replace does not count: a refinement is expected to resemble it.
+func (c *Consolidator) schemaKnown(owner scopeKey, pattern string, replaces []string) bool {
+	if !c.semantic() {
+		return false
+	}
+	v, err := c.store.embed.Embed(c.store.ctx, pattern)
+	if err != nil {
+		return false
+	}
+	hits, err := c.store.searchWhere(v, 3, memory.L6Schema,
+		map[string]string{"user_id": owner.user, "agent_id": owner.agent})
+	if err != nil {
+		return false
+	}
+	for _, h := range hits {
+		if float64(h.Score) >= schemaDupScore && !containsID(replaces, h.ID) {
+			return true
+		}
+	}
+	return false
 }
 
 // retireMirrors supersedes the L1 Profile rows that mirror superseded

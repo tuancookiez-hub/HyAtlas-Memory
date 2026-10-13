@@ -118,6 +118,10 @@ type flakyEmbedder struct {
 	fail  atomic.Bool
 }
 
+// Unwrap exposes the inner embedder, so the consolidator can tell its vectors
+// carry no meaning.
+func (f *flakyEmbedder) Unwrap() Embedder { return f.inner }
+
 func (f *flakyEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	if f.fail.Load() {
 		return nil, errors.New("embedder down")

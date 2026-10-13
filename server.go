@@ -27,7 +27,7 @@ import (
 // It is exposed on /api/v1/status and /api/info so every client (Desktop pane,
 // web dashboard, CLI) reports the real running version instead of hardcoding
 // a "v4" badge that silently goes stale on each release. Bump in one place.
-const Version = "4.7.2"
+const Version = "4.7.3"
 
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {
@@ -1618,7 +1618,7 @@ func main() {
 	log.Print(snapshotLine(snap))
 	go runSnapshots(ctx, store, dir, snap)
 	if rt.Admin {
-		log.Print("HYATLAS_ADMIN=on: /api/v1/admin/compact_raw and /api/v1/admin/dedupe_facts are enabled")
+		log.Print("HYATLAS_ADMIN=on: /api/v1/admin/compact_raw, /api/v1/admin/dedupe_facts and /api/v1/admin/restore are enabled")
 	}
 	hs := &http.Server{Addr: net.JoinHostPort(rt.Host, port), Handler: srv.routes(), ReadHeaderTimeout: readHeaderTimeout}
 	log.Fatal(hs.ListenAndServe())
@@ -1644,6 +1644,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/v1/admin/compact_raw", s.handleCompactRaw)
 	mux.HandleFunc("/api/v1/admin/dedupe_facts", s.handleDedupeFacts)
 	mux.HandleFunc("/api/v1/admin/backlog", s.handleBacklog)
+	mux.HandleFunc("/api/v1/admin/restore", s.handleRestore)
 	mux.HandleFunc("/api/v1/now", s.handleNow)
 	mux.HandleFunc("/api/v1/feedback", s.handleFeedback)
 	// Dashboard UI (embedded single-file frontend)
