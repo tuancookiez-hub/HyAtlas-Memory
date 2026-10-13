@@ -26,7 +26,7 @@
 #      environment are saved to $HERMES_HOME/.env (default ~/.hermes/.env, 0600).
 #
 # Environment variables (all optional):
-#   HYATLAS_VERSION   — release tag to install (default: v4.7.2). A source build
+#   HYATLAS_VERSION   — release tag to install (default: v4.7.3). A source build
 #                       clones this tag. If the tag is missing, the default branch
 #                       is built with a loud warning, unless HYATLAS_VERSION is set
 #                       explicitly; then the install fails instead.
@@ -54,7 +54,7 @@
 set -euo pipefail
 
 REPO="tuancookiez-hub/HyAtlas-Memory"
-VERSION="${HYATLAS_VERSION:-v4.7.2}"
+VERSION="${HYATLAS_VERSION:-v4.7.3}"
 INSTALL_DIR="${HYATLAS_INSTALL_DIR:-}"
 MODEL_DIR="${HYATLAS_MODEL_DIR:-}"
 NO_MODEL="${HYATLAS_NO_MODEL:-0}"

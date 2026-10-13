@@ -1,5 +1,35 @@
 # Changelog
 
+## [4.7.3] — 2026-10-13
+
+Consolidation quality, from a spot-check of what the 4.7.x backlog retired on the
+live store (1,900 superseded facts).
+
+### Fixed
+
+- **A merge no longer hides a fact under unrelated text.** About 1% of merges
+  folded in a fact the merged text barely resembled (cosine below 0.65), for
+  example "fast strategies lose, hold/trend/rotate survive" into "4 new NVDA-dip
+  pilots promoted". A fact below 0.65 now stays live, and a merge left with fewer
+  than two facts is not made. The pass report counts these as `kept_off_topic`.
+- **The model sees the schemas that matter.** Each call was shown the owner's 20
+  newest schemas, mostly about other topics, so it could neither avoid repeating
+  nor refine the ones that applied. It now gets the schemas nearest the cluster's
+  facts. A new schema that matches a stored one at 0.92 or above (the dedupe
+  floor) is not written, unless it is the refinement replacing that one.
+- **History stays readable.** Deleting a fact that had replaced others now points
+  them at its own successor, or records "the fact that replaced it was later
+  deleted". At start, rows dropped before reasons were recorded get "dropped
+  without a recorded reason". A retracted merge records why.
+- **Paging through `/api/v1/list` returns every row once.** Rows with the same
+  timestamp, which every consolidation pass writes, came back in a different
+  order on each request, so pages skipped and repeated rows. Ties now break by id.
+
+### Notes
+
+- The similarity guards stand aside with the `HYATLAS_EMBED_BASE=local` stub,
+  whose hashed vectors carry no meaning.
+
 ## [4.7.2] — 2026-10-13
 
 Fixes from a code review of 4.7.1.
