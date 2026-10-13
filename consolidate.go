@@ -950,7 +950,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 			seen[id] = true
 			absorbed = append(absorbed, byID[id])
 		}
-		absorbed = c.onTopic(text, absorbed, rep)
+		absorbed, vec := c.onTopic(text, absorbed, rep)
 		if len(absorbed) < 2 {
 			// A "merge" of one fact is a rewrite, not a consolidation. Dropping
 			// it avoids losing the original's provenance for no gain.
@@ -960,7 +960,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		if label == "" {
 			label = "consolidated"
 		}
-		if id := c.applyMerge(owner, text, label, absorbed, now, live, rep, fatal, soft); id != "" {
+		if id := c.applyMerge(owner, text, vec, label, absorbed, now, live, rep, fatal, soft); id != "" {
 			created = append(created, id)
 		}
 	}
@@ -1083,14 +1083,15 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 			continue
 		}
 		known[key] = true
-		if c.schemaKnown(owner, pattern, sc.Supersedes) {
+		dup, vec := c.schemaKnown(owner, pattern, sc.Supersedes)
+		if dup {
 			continue
 		}
 		id := newID()
-		if err := c.store.Add(memory.L6Schema, id, pattern, map[string]string{
+		if err := c.store.addWithVector(memory.L6Schema, id, pattern, map[string]string{
 			"user_id": owner.user, "agent_id": owner.agent,
 			"context": sc.Context, "ts": now, "consolidated": "true",
-		}); err != nil {
+		}, vec); err != nil {
 			soft("schema: " + err.Error())
 			continue
 		}
@@ -1147,7 +1148,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 // originals superseded by a fact that no longer exists. The unmarked originals
 // stay live beside it, and the failure is reported so the owner is retried. The
 // replacement write and the supersedes are fatal; the L1 mirror writes are soft.
-func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed []DocIndex, now string,
+func (c *Consolidator) applyMerge(owner scopeKey, text string, vec []float32, label string, absorbed []DocIndex, now string,
 	live map[string]bool, rep *Report, fatal, soft func(string)) string {
 	srcs := distinctSources(absorbed)
 	// The merged fact inherits the conversations it absorbed, so L5
@@ -1161,7 +1162,7 @@ func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed [
 		meta["source_ids"] = strings.Join(srcs, ",")
 	}
 	mergedID := newID()
-	if err := c.store.Add(memory.L3Fact, mergedID, text, meta); err != nil {
+	if err := c.store.addWithVector(memory.L3Fact, mergedID, text, meta, vec); err != nil {
 		fatal("merge add: " + err.Error())
 		return ""
 	}
@@ -1212,49 +1213,33 @@ func (c *Consolidator) applyMerge(owner scopeKey, text, label string, absorbed [
 	return mergedID
 }
 
-// semantic reports whether the store's vectors carry meaning. The LocalEmbedder
-// fallback hashes bytes, so similarity between its vectors says nothing about what
-// two texts mean, and the similarity guards stand aside rather than guess.
-// An embedder that wraps another says so with Unwrap, and the inner one decides.
-func (c *Consolidator) semantic() bool {
-	e := c.store.embed
-	for {
-		if _, hashed := e.(*LocalEmbedder); hashed {
-			return false
-		}
-		w, ok := e.(interface{ Unwrap() Embedder })
-		if !ok {
-			return true
-		}
-		e = w.Unwrap()
-	}
-}
-
 // onTopic returns the facts in absorbed that the merged text is about, judged by
 // the cosine similarity of their stored vectors to the text's. A fact below
 // mergeMinSimilarity is left out, so it stays live, and is counted in
 // rep.KeptOffTopic. When the text cannot be embedded or a vector is missing, that
-// fact is kept: the guard never blocks a merge it cannot judge.
-func (c *Consolidator) onTopic(text string, absorbed []DocIndex, rep *Report) []DocIndex {
-	if len(absorbed) < 2 || !c.semantic() {
-		return absorbed
+// fact is kept: the guard never blocks a merge it cannot judge. It also returns
+// the text's vector (nil if not computed), so the merged fact is not embedded twice.
+func (c *Consolidator) onTopic(text string, absorbed []DocIndex, rep *Report) ([]DocIndex, []float32) {
+	if len(absorbed) < 2 || !c.store.semantic {
+		return absorbed, nil
 	}
 	tv, err := c.store.embed.Embed(c.store.ctx, text)
 	if err != nil {
-		return absorbed
+		return absorbed, nil
 	}
 	vecs := c.store.vectors(idsOf(absorbed))
 	kept := absorbed[:0:0]
 	for _, d := range absorbed {
-		v, ok := vecs[d.ID]
-		if ok && cosineSim(tv, v) < mergeMinSimilarity {
-			log.Printf("consolidate: merge left %s live: %.2f similar to the merged text", d.ID, cosineSim(tv, v))
-			rep.KeptOffTopic++
-			continue
+		if v, ok := vecs[d.ID]; ok {
+			if sim := cosineSim(tv, v); sim < mergeMinSimilarity {
+				log.Printf("consolidate: merge left %s live: %.2f similar to the merged text", d.ID, sim)
+				rep.KeptOffTopic++
+				continue
+			}
 		}
 		kept = append(kept, d)
 	}
-	return kept
+	return kept, tv
 }
 
 // relevantSchemas picks the owner's schemas to show the model beside a cluster:
@@ -1264,16 +1249,13 @@ func (c *Consolidator) onTopic(text string, absorbed []DocIndex, rep *Report) []
 // Without vectors it falls back to the newest schemas.
 func (c *Consolidator) relevantSchemas(owner scopeKey, facts []DocIndex) []DocIndex {
 	all := c.liveOf(memory.L6Schema, owner)
-	if len(all) <= maxPromptSchemas || !c.semantic() {
-		if len(all) > maxPromptSchemas {
-			return all[:maxPromptSchemas]
-		}
+	if len(all) <= maxPromptSchemas {
 		return all
 	}
-	vecs := c.store.vectors(idsOf(facts))
-	if len(vecs) == 0 {
+	if !c.store.semantic {
 		return all[:maxPromptSchemas]
 	}
+	vecs := c.store.vectors(idsOf(facts))
 	// Each fact nominates its nearest schemas; a schema ranks by its best score.
 	best := map[string]float32{}
 	where := map[string]string{"user_id": owner.user, "agent_id": owner.agent}
@@ -1310,26 +1292,27 @@ func (c *Consolidator) relevantSchemas(owner scopeKey, facts []DocIndex) []DocIn
 
 // schemaKnown reports whether the owner already has a live schema that says the
 // same as pattern (similarity at or above schemaDupScore). A schema the new one is
-// meant to replace does not count: a refinement is expected to resemble it.
-func (c *Consolidator) schemaKnown(owner scopeKey, pattern string, replaces []string) bool {
-	if !c.semantic() {
-		return false
+// meant to replace does not count: a refinement is expected to resemble it. It
+// also returns the pattern's vector (nil if not computed) for the write.
+func (c *Consolidator) schemaKnown(owner scopeKey, pattern string, replaces []string) (bool, []float32) {
+	if !c.store.semantic {
+		return false, nil
 	}
 	v, err := c.store.embed.Embed(c.store.ctx, pattern)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	hits, err := c.store.searchWhere(v, 3, memory.L6Schema,
 		map[string]string{"user_id": owner.user, "agent_id": owner.agent})
 	if err != nil {
-		return false
+		return false, v
 	}
 	for _, h := range hits {
 		if float64(h.Score) >= schemaDupScore && !containsID(replaces, h.ID) {
-			return true
+			return true, v
 		}
 	}
-	return false
+	return false, v
 }
 
 // retireMirrors supersedes the L1 Profile rows that mirror superseded

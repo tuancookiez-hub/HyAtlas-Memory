@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- A drop made without a reason records "dropped without a recorded reason" when
+  it is written, instead of waiting for the next start to label it.
+- The merged text of a merge and each new schema are embedded once, not twice.
+- Whether vectors carry meaning is now a property of the embedder (the hashed
+  local stub says no), decided once when the store opens.
+
 ## [4.7.3] — 2026-10-13
 
 Consolidation quality, from a spot-check of what the 4.7.x backlog retired on the

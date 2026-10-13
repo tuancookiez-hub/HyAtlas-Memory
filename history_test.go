@@ -5,7 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/tuancookiez-hub/hyatlas-v4/memory"
 )
+
+func nowTS() string { return time.Now().UTC().Format(time.RFC3339) }
 
 func openHistoryStore(t *testing.T, dir string) *MemoryStore {
 	t.Helper()
@@ -14,17 +18,6 @@ func openHistoryStore(t *testing.T, dir string) *MemoryStore {
 		t.Fatal(err)
 	}
 	return st
-}
-
-func addHistFact(t *testing.T, st *MemoryStore, text string) string {
-	t.Helper()
-	id := newID()
-	if err := st.Add("l3_fact", id, text, map[string]string{
-		"user_id": "u", "agent_id": "a", "ts": time.Now().UTC().Format(time.RFC3339),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return id
 }
 
 func metaOf(t *testing.T, st *MemoryStore, id string) map[string]string {
@@ -41,9 +34,9 @@ func metaOf(t *testing.T, st *MemoryStore, id string) map[string]string {
 func TestDeleteRelinksHistory(t *testing.T) {
 	st := openHistoryStore(t, t.TempDir())
 	defer st.Close()
-	a := addHistFact(t, st, "old fact a")
-	b := addHistFact(t, st, "newer fact b")
-	c := addHistFact(t, st, "newest fact c")
+	a := addRow(t, st, memory.L3Fact, "old fact a", nowTS())
+	b := addRow(t, st, memory.L3Fact, "newer fact b", nowTS())
+	c := addRow(t, st, memory.L3Fact, "newest fact c", nowTS())
 	if _, err := st.Supersede([]string{a}, b); err != nil {
 		t.Fatal(err)
 	}
@@ -78,16 +71,24 @@ func TestDeleteRelinksHistory(t *testing.T) {
 func TestOpenRepairsOldHistory(t *testing.T) {
 	dir := t.TempDir()
 	st := openHistoryStore(t, dir)
-	dangling := addHistFact(t, st, "replaced by a row deleted long ago")
-	bare := addHistFact(t, st, "dropped by an old version")
-	reasoned := addHistFact(t, st, "dropped with a reason")
-	linked := addHistFact(t, st, "replaced by a live row")
-	live := addHistFact(t, st, "the live row")
+	dangling := addRow(t, st, memory.L3Fact, "replaced by a row deleted long ago", nowTS())
+	bare := addRow(t, st, memory.L3Fact, "dropped by an old version", nowTS())
+	reasoned := addRow(t, st, memory.L3Fact, "dropped with a reason", nowTS())
+	linked := addRow(t, st, memory.L3Fact, "replaced by a live row", nowTS())
+	live := addRow(t, st, memory.L3Fact, "the live row", nowTS())
 	if _, err := st.Supersede([]string{dangling}, "m-ghost"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Supersede([]string{bare}, ""); err != nil {
 		t.Fatal(err)
+	}
+	// Supersede now records a reason itself; strip it to stand in for a drop made
+	// by a version before 4.6.0.
+	if _, err := st.rewriteSuperseded([]historyEdit{{id: bare, del: []string{"drop_reason"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if m := metaOf(t, st, bare); m["drop_reason"] != "" {
+		t.Fatalf("legacy stand-in still has drop_reason %q", m["drop_reason"])
 	}
 	if _, err := st.supersedeWith([]string{reasoned}, "", map[string]string{"drop_reason": "stale"}); err != nil {
 		t.Fatal(err)
@@ -153,8 +154,8 @@ func TestListPagesAreStable(t *testing.T) {
 func TestRestoreMakesRowLive(t *testing.T) {
 	st := openHistoryStore(t, t.TempDir())
 	defer st.Close()
-	a := addHistFact(t, st, "wrongly merged fact")
-	b := addHistFact(t, st, "unrelated merged text")
+	a := addRow(t, st, memory.L3Fact, "wrongly merged fact", nowTS())
+	b := addRow(t, st, memory.L3Fact, "unrelated merged text", nowTS())
 	if _, err := st.Supersede([]string{a}, b); err != nil {
 		t.Fatal(err)
 	}
