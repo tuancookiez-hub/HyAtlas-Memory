@@ -128,6 +128,9 @@ type ConsolidatedSchema struct {
 	Pattern    string   `json:"pattern"`
 	Context    string   `json:"context,omitempty"`
 	Supersedes []string `json:"supersedes,omitempty"`
+	// Evidence are the fact IDs from the batch that show the pattern. A schema is
+	// linked to its facts so it can be checked and explained at read time.
+	Evidence idList `json:"evidence,omitempty"`
 }
 
 // Consolidation is the JSON contract for one consolidation call.
@@ -1088,10 +1091,23 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 			continue
 		}
 		id := newID()
-		if err := c.store.addWithVector(memory.L6Schema, id, pattern, map[string]string{
+		meta := map[string]string{
 			"user_id": owner.user, "agent_id": owner.agent,
 			"context": sc.Context, "ts": now, "consolidated": "true",
-		}, vec); err != nil {
+		}
+		// Evidence counts only facts the model was shown, each once. Two or more
+		// are needed to call it a pattern; with fewer, the schema is still written
+		// without the key, since losing the pattern would be worse.
+		var evidence []string
+		for _, fid := range sc.Evidence {
+			if batch[fid] && !containsID(evidence, fid) {
+				evidence = append(evidence, fid)
+			}
+		}
+		if len(evidence) >= 2 {
+			meta["evidence"] = strings.Join(evidence, ",")
+		}
+		if err := c.store.addWithVector(memory.L6Schema, id, pattern, meta, vec); err != nil {
 			soft("schema: " + err.Error())
 			continue
 		}
@@ -1539,12 +1555,12 @@ func (c *Consolidator) ask(ctx context.Context, facts, schemas []DocIndex) (*Con
 {
   "merges": [{"text": "<one fact that replaces several>", "layer": "user_preferences|project_state|technical_lesson|decision|negative_knowledge", "supersedes": ["<id>", "<id>"]}],
   "drops": [{"id": "<id>", "reason": "<why this fact is stale or trivially obvious>"}],
-  "schemas": [{"pattern": "<a recurring pattern only visible across many facts>", "context": "<when it applies>", "supersedes": ["<schema_id>"]}]` + graphKeys + `
+  "schemas": [{"pattern": "<a recurring pattern only visible across many facts>", "context": "<when it applies>", "evidence": ["<fact id>", "<fact id>"], "supersedes": ["<schema_id>"]}]` + graphKeys + `
 }
 Rules:
 - merges: ONLY combine facts that genuinely say the same thing or contradict each other. For a contradiction, keep the newer statement (later date) and supersede the older. supersedes MUST list at least 2 ids. Use only ids from the input.
 - drops: facts that are stale (a temporary state that has since passed) or trivially obvious, each with a short reason. A durable fact — a preference, a decision, where something lives, how something works — is never stale just because it is old. A drop without a reason is ignored. Be conservative.
-- schemas: 0-3 patterns that generalise beyond the individual facts, each a full sentence that says what the pattern is and when it applies (not a 3-word label such as "pilot trade within cap"). Do not repeat a schema already stored (listed below, if any). To refine a stored schema, return the refined pattern and list the schema_id it replaces in "supersedes"; otherwise leave "supersedes" empty.` + graphRules + `
+- schemas: 0-3 patterns that generalise beyond the individual facts, each a full sentence that says what the pattern is and when it applies (not a 3-word label such as "pilot trade within cap"). Do not repeat a schema already stored (listed below, if any). To refine a stored schema, return the refined pattern and list the schema_id it replaces in "supersedes"; otherwise leave "supersedes" empty. Each schema lists in "evidence" the ids of the facts above that show the pattern, at least two.` + graphRules + `
 - Never invent an id. Never reference a fact not listed.
 Return ONLY valid JSON, no prose, no markdown fences.
 
