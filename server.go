@@ -62,6 +62,9 @@ type Server struct {
 	// may be nil, as in tests built without main, which turns that feature off.
 	now   *NowPages
 	usage *UsageStats
+	// episodes groups each owner's writes into stretches of work and summarises
+	// each once it ends (HYATLAS_EPISODE_GAP). nil in lite mode.
+	episodes *Episodes
 	// backlog is the one-time admin pass over facts stored before 4.7.0
 	// (/api/v1/admin/backlog): contradictions and entity pages.
 	backlog *BacklogJob
@@ -130,6 +133,15 @@ type Status struct {
 	ExtractSync      string  `json:"extract_sync"`
 	Consolidations   int     `json:"consolidations"`
 	LastConsolidated *Report `json:"last_consolidated,omitempty"`
+	// Episodes counts episodes still open and closed ones waiting for a summary.
+	// Absent when episodes are off (lite mode or HYATLAS_EPISODE_GAP=off).
+	Episodes *EpisodeCounts `json:"episodes,omitempty"`
+}
+
+// EpisodeCounts is the episodes part of /api/v1/status.
+type EpisodeCounts struct {
+	Open    int `json:"open"`
+	Pending int `json:"pending"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -173,11 +185,22 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		ExtractSync:      s.sync.Describe(s.mode),
 		Consolidations:   consRuns,
 		LastConsolidated: lastCons,
+		Episodes:         s.episodeCounts(),
 	})
 }
 
+// episodeCounts is the episodes field of /api/v1/status, or nil when episodes are off.
+func (s *Server) episodeCounts() *EpisodeCounts {
+	if s.episodes == nil {
+		return nil
+	}
+	open, pending := s.episodes.Counts()
+	return &EpisodeCounts{Open: open, Pending: pending}
+}
+
 // promoteExtraction writes one System1 pass to the layers that pass owns:
-// L3 facts (and the L1 profile mirror for preferences), L4 summary, L7 intention.
+// L3 facts (and the L1 profile mirror for preferences), L7 intention and entity
+// pages.
 //
 // L5 knowledge and L6 schemas are deliberately NOT written here. They are
 // System2 products: a knowledge relation worth keeping is one corroborated by
@@ -211,6 +234,7 @@ func promoteExtractionDedupe(store *MemoryStore, ex *Extraction, userID, agentID
 // that are in ec are honoured, because the reply is model output and an id it
 // invents or garbles must never supersede a real row. With an empty ec it is
 // promoteExtractionDedupe exactly.
+// It returns the ids of the L3 facts it wrote, which episodes group.
 func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext, userID, agentID, sourceID string, dedupe float64) []string {
 	now := time.Now().UTC().Format(time.RFC3339)
 	var factIDs []string
@@ -412,8 +436,9 @@ func (s *Server) extract(text, userID, agentID, id string) error {
 		s.setExtractErr(err.Error())
 		return err
 	}
-	promoteExtractionCtx(s.store, ex, ec, userID, agentID, id, s.dedupeScore)
+	factIDs := promoteExtractionCtx(s.store, ex, ec, userID, agentID, id, s.dedupeScore)
 	_ = s.store.SetExtracted(id, true)
+	s.episodes.Note(userID, agentID, factIDs, time.Now())
 	s.setExtractErr("")
 	// The Now page is rebuilt from intentions and summaries, so a write that may
 	// have added some asks for a refresh; Touch rate-limits and never blocks.
@@ -421,6 +446,25 @@ func (s *Server) extract(text, userID, agentID, id string) error {
 		s.now.Touch(userID, agentID)
 	}
 	return nil
+}
+
+// appendNewHits adds the hits in extra whose ids res does not already hold, after
+// the existing ones, keeping both orders.
+func appendNewHits(res, extra []SearchHit) []SearchHit {
+	if len(extra) == 0 {
+		return res
+	}
+	have := make(map[string]bool, len(res))
+	for _, h := range res {
+		have[h.ID] = true
+	}
+	for _, h := range extra {
+		if !have[h.ID] {
+			have[h.ID] = true
+			res = append(res, h)
+		}
+	}
+	return res
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
@@ -498,16 +542,36 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			res = requireTerms(res, terms)
 		}
 	}
+	// A query that names a time ("last week", "on 2026-10-05") favours memories
+	// dated in that window: dated facts the vector search missed join the pool,
+	// then out-of-window hits move down a few places. Only L3 facts carry dates.
+	now := time.Now()
+	if win, ok := parseTimeWindow(body.Query, now); ok {
+		if body.Layer == "" || memory.Layer(body.Layer) == memory.L3Fact {
+			if qv, err := s.store.embed.Embed(s.store.ctx, body.Query); err == nil {
+				res = appendNewHits(res, s.store.windowCandidates(qv, users, agentID, win, limit, minScore))
+			}
+		}
+		res = rerankWindow(res, win)
+	}
 	// Time before the L5 cap, so the cap keeps the relations that rank best once
 	// age is counted.
-	now := time.Now()
 	res = dropStaleIntentions(res, s.intentionTTL, now)
 	if s.recency {
-		res = rerankRecency(res, now)
+		// Age counts from the later of written and last used, so an old memory the
+		// agent still relies on does not sink.
+		var lastUsed func(string) time.Time
+		if s.usage != nil {
+			lastUsed = s.usage.LastUsed
+		}
+		res = rerankRecencyUsed(res, now, lastUsed)
 	}
 	if s.usage != nil {
 		res = rerankUsage(res, s.usage)
 	}
+	// Two near-identical lines waste a slot; the lower one moves to the end, where
+	// the limit usually cuts it.
+	res = s.store.demoteNearDuplicates(res, nearDupScore)
 	if body.Layer == "" {
 		res = capLayer(res, memory.L5Knowledge, l5Share(limit))
 		// An entity page is a whole summary of one thing, so two are plenty; the
@@ -525,7 +589,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		GmtCreated int64   `json:"gmt_created"`
 		UserID     string  `json:"user_id,omitempty"`
 		AgentID    string  `json:"agent_id,omitempty"`
+		// EventDate is when the fact happened or is due, when extraction found one.
+		EventDate string `json:"event_date,omitempty"`
+		// History holds the older versions this hit replaced, newest first.
+		History []HistoryEntry `json:"history,omitempty"`
 	}
+	ids := make([]string, len(res))
+	for i, h := range res {
+		ids[i] = h.ID
+	}
+	history := s.store.historyOf(ids, historyPerHit)
 	pageHits := []hit{}
 	profileHits := []hit{}
 	proactiveHits := []hit{}
@@ -533,7 +606,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	for _, h := range res {
 		it := hit{MemoryID: h.ID, Content: h.Content, Score: float64(h.Score),
 			Layer: string(h.Layer), GmtCreated: gmtCreated(h.Meta["ts"]),
-			UserID: h.Meta["user_id"], AgentID: h.Meta["agent_id"]}
+			UserID: h.Meta["user_id"], AgentID: h.Meta["agent_id"],
+			EventDate: normalizeEventDate(h.Meta[metaEventAt]), History: history[h.ID]}
 		switch h.Layer {
 		case memory.L8Entity:
 			pageHits = append(pageHits, it)
@@ -1629,6 +1703,10 @@ func main() {
 		nowLLM = llm
 	}
 	srv.now = NewNowPages(dir, store, nowLLM, resolveNowEvery())
+	srv.episodes = NewEpisodes(dir, store, nowLLM, resolveEpisodeGap())
+	if srv.episodes != nil {
+		go srv.episodes.Run(ctx)
+	}
 	if !envOff("HYATLAS_USAGE_LEARNING") {
 		srv.usage = NewUsageStats(dir)
 	}
