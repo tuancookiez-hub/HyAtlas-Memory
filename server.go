@@ -91,11 +91,15 @@ func (s *Server) extractErr() string {
 // /api/v1/status, the dashboard and the startup line cannot disagree.
 //
 //	unused        — this mode makes no LLM call
+//	awaiting_key  — endpoint and model are set; the key has not been handed over yet
 //	unconfigured  — the mode needs one but endpoint, model or key is unset
 //	ok            — a credential resolved
 func (s *Server) llmState() string {
 	if !s.mode.UsesLLM() {
 		return "unused"
+	}
+	if s.llm.AwaitingKey() {
+		return "awaiting_key"
 	}
 	if !s.llm.Configured() {
 		return "unconfigured"
@@ -402,6 +406,9 @@ func (s *Server) extractForMode(text, userID, agentID, id string) string {
 	if !s.mode.UsesLLM() {
 		return "skipped"
 	}
+	if s.llm.AwaitingKey() {
+		return "awaiting_key"
+	}
 	if !s.llm.Configured() {
 		return "unconfigured"
 	}
@@ -463,6 +470,41 @@ func windowFloor(minScore float64) float64 {
 		return f
 	}
 	return 0
+}
+
+// maxPushedKey caps the size of a key handed over at runtime. Provider keys and
+// JWTs are a few hundred bytes to a few kilobytes.
+const maxPushedKey = 16 << 10
+
+// handleLLMKey is POST /api/v1/llm/key: the Hermes plugin hands over the current
+// provider key, which the server keeps in memory only and uses for its LLM calls.
+// This is how a rotating credential (a 1-hour Nous Portal token) reaches the server
+// without the server or its launcher ever opening another application's credential
+// file. The key is never logged or echoed back. {"key": ""} clears it.
+func (s *Server) handleLLMKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		jsonResponse(w, 405, map[string]any{"error": "method not allowed: use POST"})
+		return
+	}
+	var body struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPushedKey+1024)).Decode(&body); err != nil {
+		jsonResponse(w, 400, map[string]any{"error": "bad body"})
+		return
+	}
+	key := strings.TrimSpace(body.Key)
+	if len(key) > maxPushedKey || strings.IndexFunc(key, func(c rune) bool { return c <= ' ' || c == 0x7f }) >= 0 {
+		jsonResponse(w, 400, map[string]any{"error": "key must be one line without spaces"})
+		return
+	}
+	if s.llm == nil {
+		jsonResponse(w, 409, map[string]any{"error": "this server has no LLM endpoint configured"})
+		return
+	}
+	s.llm.SetPushedKey(key)
+	jsonResponse(w, 200, map[string]any{"ok": true, "llm": s.llmState()})
 }
 
 // appendNewHits adds the hits in extra whose ids res does not already hold, after
@@ -1766,6 +1808,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/v1/admin/dedupe_facts", s.handleDedupeFacts)
 	mux.HandleFunc("/api/v1/admin/backlog", s.handleBacklog)
 	mux.HandleFunc("/api/v1/admin/restore", s.handleRestore)
+	mux.HandleFunc("/api/v1/llm/key", s.handleLLMKey)
 	mux.HandleFunc("/api/v1/now", s.handleNow)
 	mux.HandleFunc("/api/v1/feedback", s.handleFeedback)
 	// Dashboard UI (embedded single-file frontend)

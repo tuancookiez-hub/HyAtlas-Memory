@@ -17,6 +17,7 @@ config_schema:
   agent_id: {type: str, default: "default", label: "Agent ID", description: "Default agent_id (overridden by agent identity per session)"}
   auto_start: {type: bool, default: false, label: "Auto-start server", description: "Spawn the hyatlas-go binary when the server is unreachable"}
   binary_path: {type: str, default: "", label: "Binary path", description: "Path to hyatlas-go (empty = discover from PATH)"}
+  share_llm_key: {type: bool, default: false, label: "Share Hermes's Nous key", description: "Hand Hermes's current Nous Portal key to the HyAtlas server over localhost, where it is kept in memory only, so neither the server nor its launcher reads Hermes's credential file. Sent only when the server's LLM endpoint is the Nous Portal."}
   launcher_path: {type: str, default: "", label: "Launcher script", description: "Windows only. Optional hyatlas-go.ps1 that `hermes hyatlas start|stop` runs instead of spawning the binary. Run as given, so only point it at a script you trust. Empty = spawn the binary directly."}
   request_timeout: {type: float, default: 15.0, label: "Request timeout (s)", description: "HTTP timeout for server calls"}
   data_dir: {type: str, default: "", label: "Data directory", description: "Server data directory (vector store, graph). Passed to a spawned server as HYATLAS_GO_DATA and used by `hermes backup`. Empty = HYATLAS_GO_DATA, then the conventional defaults."}

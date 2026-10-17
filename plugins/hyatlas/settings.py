@@ -72,6 +72,14 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
                        "spawn the binary directly.",
     },
     {
+        "key": "share_llm_key", "type": "bool", "default": False,
+        "label": "Share Hermes's Nous key",
+        "description": "Hand Hermes's current Nous Portal key to the HyAtlas server "
+                       "over localhost, where it is kept in memory only, so neither "
+                       "the server nor its launcher reads Hermes's credential file. "
+                       "Sent only when the server's LLM endpoint is the Nous Portal.",
+    },
+    {
         "key": "request_timeout", "type": "float", "default": 15.0,
         "label": "Request timeout (s)",
         "description": "HTTP timeout for server calls",
@@ -198,6 +206,7 @@ ENV: Tuple[Tuple[str, str, Any], ...] = (
     ("HYATLAS_AUTO_START", "auto_start", lambda v: v.lower() in ("1", "true", "yes")),
     ("HYATLAS_BINARY_PATH", "binary_path", str),
     ("HYATLAS_LAUNCHER_PATH", "launcher_path", str),
+    ("HYATLAS_SHARE_LLM_KEY", "share_llm_key", lambda v: v.lower() in ("1", "true", "yes")),
     ("HYATLAS_REQUEST_TIMEOUT", "request_timeout", float),
     ("HYATLAS_GO_DATA", "data_dir", str),
     ("HYATLAS_MODE", "mode", lambda v: v.lower()),

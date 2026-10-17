@@ -120,6 +120,10 @@ class HyatlasClient:
     def status(self) -> Dict[str, Any]:
         return self._get("/api/v1/status")
 
+    def push_llm_key(self, key: str) -> Dict[str, Any]:
+        """Hand the server the current LLM key; it is kept in the server's memory only."""
+        return self._post("/api/v1/llm/key", {"key": key})
+
     def add(
         self,
         text: str,

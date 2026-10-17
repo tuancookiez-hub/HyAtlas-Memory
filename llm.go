@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 )
@@ -33,6 +34,33 @@ type LLMClient struct {
 	// FallbackKey is the bearer key for the fallback. Empty means the primary's
 	// key resolution (Key / KeyFile) is used.
 	FallbackKey string
+
+	// pushed is a key handed over at runtime through POST /api/v1/llm/key, typically
+	// by the Hermes plugin, which holds the user's provider credential. It is kept
+	// in memory only and wins over APIKey and KeyFile. This lets the server run
+	// without ever reading another application's credential file, which security
+	// software rightly treats as a credential-theft pattern.
+	pushed atomic.Pointer[string]
+}
+
+// SetPushedKey replaces the in-memory key handed over at runtime. An empty key
+// clears it, so the static configuration applies again.
+func (l *LLMClient) SetPushedKey(key string) {
+	if l == nil {
+		return
+	}
+	if key == "" {
+		l.pushed.Store(nil)
+		return
+	}
+	l.pushed.Store(&key)
+}
+
+// AwaitingKey reports whether the endpoint and model are set but no key is
+// available yet, as when the plugin has not handed one over since the server
+// started.
+func (l *LLMClient) AwaitingKey() bool {
+	return l != nil && l.BaseURL != "" && l.Model != "" && l.resolveKey() == ""
 }
 
 // fallbackKey is the bearer token for a fallback call to base: FallbackKey when set,
@@ -103,6 +131,9 @@ func (l *LLMClient) Configured() bool {
 // keeps fresh in auth.json — never goes stale the way a startup-frozen env
 // value does. Any read/parse failure falls back to the static APIKey.
 func (l *LLMClient) resolveKey() string {
+	if k := l.pushed.Load(); k != nil && *k != "" {
+		return *k
+	}
 	if l.KeyFile == "" {
 		return l.APIKey
 	}

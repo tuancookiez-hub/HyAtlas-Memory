@@ -362,9 +362,7 @@ The plugin runs no shell. It starts child processes in these cases only:
   run that script with `powershell -NoProfile -ExecutionPolicy Bypass -File <script> start|stop`.
   Its output goes to `hyatlas-launcher.out` in the system temp folder. The script is
   never discovered automatically. Only set `launcher_path` to a script you trust.
-  The repository's `hyatlas-go.ps1` reads Hermes' `auth.json` to obtain a Nous
-  Portal token (see Credentials). Do not point `launcher_path` at it unless you
-  want that. On `start` it also runs `hyatlas-go.local.ps1` from its own folder, if
+  The repository's `hyatlas-go.ps1` reads no credentials. On `start` it also runs `hyatlas-go.local.ps1` from its own folder, if
   that file exists: a git-ignored file for your own `HYATLAS_*` settings (model,
   batch size, owner aliases); see `hyatlas-go.local.ps1.example`.
 - **Windows, stop and liveness checks.** The plugin runs `taskkill` to stop the
@@ -412,10 +410,23 @@ starts it.
   settings where you have not exported a value yourself. It does not receive other
   tools' keys (for example `OPENAI_API_KEY`). A `HYATLAS_LLM_KEY` exported in your
   environment does reach it.
+- **`share_llm_key`** (off by default) hands Hermes's own Nous Portal key to the
+  server. When it is on, the plugin asks Hermes for the current key through
+  Hermes's resolver (`hermes_cli.runtime_provider.resolve_runtime_provider`, the
+  call Hermes's bundled plugins use; it also renews the one-hour token) and posts
+  it to the server's `POST /api/v1/llm/key` over localhost. It checks once a minute
+  and sends again when the key changes, every 15 minutes, or when the server
+  reports `llm: "awaiting_key"` after a restart. The key is sent only when the
+  server's LLM endpoint is on the same host as Hermes's Nous endpoint, so it never
+  reaches another provider. The server keeps it in memory only. Neither side logs
+  it or writes it to disk. This is how HyAtlas uses a Nous login without any
+  program but Hermes opening Hermes's credential file.
 - **`HYATLAS_LLM_KEY_FILE`** is a server feature. If you export it, the server reads
   the bearer token from that file on every call. The plugin has no setting for it,
-  but it passes the variable through. If you point it at another tool's credential
-  file, the server will use that tool's login.
+  but it passes the variable through. Point it only at a key file of your own:
+  pointing it at another program's credential file (such as Hermes' `auth.json`)
+  is the pattern antivirus software flags as credential theft. Use
+  `share_llm_key` for a Hermes login instead.
 - The plugin does not read another tool's login, token store or browser profile.
 
 ### Listening address

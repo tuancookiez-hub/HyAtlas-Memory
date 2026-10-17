@@ -297,9 +297,20 @@ When the Hermes plugin spawns this server it passes an explicitly allowlisted
 environment — OS essentials plus `HYATLAS_*` only — rather than a copy of the
 agent's environment, so provider API keys the agent holds do not reach the
 server process. The plugin forwards only the non-secret LLM endpoint and model
-settings, and only when you have set them in the plugin config. It never forwards
-the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
-`HYATLAS_LLM_KEY_FILE`) yourself.
+settings, and only when you have set them in the plugin config. It forwards no
+LLM key at spawn time. A key reaches the server only if you export
+`HYATLAS_LLM_KEY` yourself, or if you turn on the plugin's `share_llm_key`
+setting: then Hermes hands its current Nous Portal key to the running server over
+localhost (`POST /api/v1/llm/key`), only when the server's endpoint is the Nous
+Portal, and the server keeps it in memory only. Until a key arrives,
+`/api/v1/status` reports `llm: "awaiting_key"` and writes are stored without
+extraction.
+
+**Neither the server nor its launcher reads another program's credential file.**
+Earlier versions of the sample launcher read Hermes' `auth.json`; a program that
+opens another application's credentials and then calls the internet is what
+credential stealers do, and behaviour-based antivirus (Bitdefender, for one) can
+quarantine it together with every file it wrote. `share_llm_key` replaces that.
 
 **All configuration is via environment variables** — the binary reads no settings from its command line:
 
@@ -330,7 +341,7 @@ the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
 | `HYATLAS_LLM_BASE` | *(unset)* | OpenAI-compatible LLM endpoint. **Memory text is sent here once you set it** — see *Privacy* above. Unset means no LLM call at all. |
 | `HYATLAS_LLM_MODEL` | *(unset)* | LLM model name. Base, model and key must all be set for extraction to run. |
 | `HYATLAS_LLM_KEY` | (empty) | LLM bearer token |
-| `HYATLAS_LLM_KEY_FILE` | (empty) | Read the key live from this file on every call (rotating creds, e.g. Hermes auth.json). Accepts `providers.nous.agent_key` / `access_token` JSON, or a plain-text token. Wins over `HYATLAS_LLM_KEY`, which becomes the fallback if the file cannot be read. |
+| `HYATLAS_LLM_KEY_FILE` | (empty) | Read the key live from this file on every call, for a rotating key file of your own. Accepts `providers.nous.agent_key` / `access_token` JSON, or a plain-text token. Wins over `HYATLAS_LLM_KEY`, which becomes the fallback if the file cannot be read. Do not point it at another program's credential file (such as Hermes' `auth.json`): antivirus flags that as credential theft. For a Hermes login, use the plugin's `share_llm_key` instead, whose key wins over both. |
 | `HYATLAS_RECENCY` | on | `off` stops newer memories winning close calls in search (see *Search*) |
 | `HYATLAS_INTENTION_TTL` | `168h` (7 days) | How long an L7 intention without a due date stays in search results. Older intentions are kept but not returned. `0` returns them all. An intention with a due date stays until a day after it is due, then drops out |
 | `HYATLAS_SNAPSHOT_EVERY` | `24h` | How often the server zips its data directory (first one a minute after start). `0` or `off` turns snapshots off |
@@ -616,6 +627,17 @@ same thing meet in one call however far apart in time they were written, and onl
 clusters that changed are sent again. Graph edges that restate
 an edge between the same entities (one endpoint equal, the other the same name with
 extra words, similarity 0.80 and up, same numbers) are not indexed again.
+
+### LLM key hand-over
+
+`POST /api/v1/llm/key` with `{"key": "..."}` gives the server the key for its LLM
+endpoint, kept in memory only and never logged or echoed. It wins over
+`HYATLAS_LLM_KEY` and `HYATLAS_LLM_KEY_FILE`; `{"key": ""}` clears it. The Hermes
+plugin's `share_llm_key` setting uses it to supply Hermes's Nous Portal login, so
+no program but Hermes opens Hermes's credential file. A restarted server has no
+key until it is handed over again and reports `llm: "awaiting_key"` meanwhile;
+the plugin checks once a minute. A key with spaces or line breaks is refused
+(400).
 
 ### Maintenance (admin)
 

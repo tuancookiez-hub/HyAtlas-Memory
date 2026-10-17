@@ -37,6 +37,7 @@ from agent.memory_provider import MemoryProvider
 
 from .client import HyatlasClient, HyatlasClientError, HyatlasUnreachable
 from .formatting import format_hit_line, iso_date  # noqa: E402
+from .keyshare import KeySharer  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,26 @@ from .schemas import (  # noqa: E402
     HYATLAS_RECENT_SCHEMA,
     HYATLAS_ADD_SCHEMA,
 )
+
+# One key-sharing loop per Hermes process (Hermes makes a provider per session).
+_KEY_SHARER: Optional[KeySharer] = None
+_KEY_SHARER_LOCK = threading.Lock()
+
+
+def _start_key_sharer(base_url: str, timeout: float) -> None:
+    """Start the loop that hands Hermes's Nous key to the server, once per process.
+
+    It has its own client, because a session's client is closed when the session
+    ends while the loop outlives it.
+    """
+    global _KEY_SHARER
+    with _KEY_SHARER_LOCK:
+        if _KEY_SHARER is not None:
+            return
+        client = HyatlasClient(base_url=base_url, timeout=timeout)
+        _KEY_SHARER = KeySharer(status=client.status, push=client.push_llm_key)
+        _KEY_SHARER.start()
+
 
 # Per-message and per-turn caps on what sync_turn sends. A turn is the user's
 # message and the assistant's reply. Tool output and compaction summaries are not
@@ -227,6 +248,11 @@ class HyatlasMemoryProvider(MemoryProvider):
         if agent_context in ("cron", "flush"):
             logger.debug("hyatlas skipping init for context=%s", agent_context)
             return
+
+        # Hand Hermes's key to the server when enabled, so the server never has to
+        # read Hermes's credential file (see keyshare.py).
+        if settings.truthy(self._config.get("share_llm_key")):
+            _start_key_sharer(f"http://{self._origin()}", float(self._config.get("request_timeout", 15.0)))
 
         # Auto-start the server if configured
         if settings.truthy(self._config.get("auto_start")) and not self._client.is_reachable():

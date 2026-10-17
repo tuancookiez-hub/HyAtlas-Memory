@@ -26,6 +26,23 @@ Hy-Memory 2.0 ("Hunyuan"). Still one LLM call per write.
 - Superseded rows record how they were retired (`superseded_how`: replaced,
   updated, restated or merged).
 
+### Security
+
+- **No HyAtlas program reads another application's credentials any more.** The
+  sample launcher read Hermes' `auth.json` to get a Nous Portal token, and the
+  server could be pointed at that file (`HYATLAS_LLM_KEY_FILE`). Reading another
+  program's credentials and then calling the internet is the pattern
+  behaviour-based antivirus treats as credential theft: on 2026-10-17 Bitdefender
+  quarantined a Hermes session's whole process tree, including the HyAtlas server,
+  its settings and every file it had written. Now:
+  - the server accepts its key over localhost (`POST /api/v1/llm/key`) and keeps
+    it in memory only; `/api/v1/status` reports `llm: "awaiting_key"` until then;
+  - the plugin's new `share_llm_key` setting (off by default) asks Hermes for its
+    current Nous key through Hermes's own resolver and hands it over, only when
+    the server's endpoint is the Nous Portal, every 15 minutes or when the server
+    restarts;
+  - the launcher reads no credentials.
+
 ### Fixed
 
 - **Usage learning survives restarts.** Since 4.7.0 it shared `usage.json` with the
