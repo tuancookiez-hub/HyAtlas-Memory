@@ -298,6 +298,47 @@ settings, and only when you have set them in the plugin config. It never forward
 the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
 `HYATLAS_LLM_KEY_FILE`) yourself.
 
+**Optional: a local memory model (Hy-Memory-30B-A3B).** If you want extraction
+and consolidation to stay on your machine, Tencent's
+[Hy-Memory-30B-A3B](https://huggingface.co/tencent/Hy-Memory-30B-A3B) (Apache-2.0)
+is a good fit. It is trained for exactly this job, writing long-term memory:
+deciding what to keep and how new facts update old ones. Tencent's model card
+scores it level with large general models as a memory writer. It is a
+mixture-of-experts model with about 30B parameters in total and about 3B active
+per token, so it runs faster than its size suggests. **It is heavy**, though:
+
+| Build | File | Fits |
+|---|---|---|
+| Q4_K_M GGUF | about 18 GB | 24 GB+ of VRAM, or less VRAM with the experts kept in system RAM (32 GB of RAM is a tight minimum) |
+| Q8_0 GGUF | about 32 GB | 48 GB of VRAM, or 64 GB of RAM |
+| BF16 (vLLM, SGLang) | about 60 GB | Data-centre GPUs |
+
+Serve it from any OpenAI-compatible server and point HyAtlas at it. For example,
+with llama.cpp and a community GGUF:
+
+```bash
+llama-server -m Hy-Memory-30B-A3B-Q4_K_M.gguf --port 8080 -c 32768 --n-cpu-moe 48 --jinja --chat-template-kwargs '{"reasoning_effort":"no_think"}'
+```
+```bash
+export HYATLAS_LLM_BASE="http://127.0.0.1:8080/v1"
+export HYATLAS_LLM_MODEL="hy-memory"
+export HYATLAS_LLM_KEY="local"   # any non-empty value; a local server ignores it
+```
+
+Notes:
+- `--n-cpu-moe` keeps that many layers' experts in system RAM. Raise it until
+  the model fits your VRAM, and lower it for speed.
+- The model card runs it with `reasoning_effort: "no_think"`. Set that on the
+  server as shown, because HyAtlas does not send it per request.
+- To try it without giving up a hosted model, set it as the fallback instead
+  (`HYATLAS_LLM_FALLBACK_BASE`, `HYATLAS_LLM_FALLBACK_MODEL`). It then answers
+  only when the primary fails.
+- Consolidation prompts are several thousand tokens. On a mid-range desktop
+  with the experts in RAM, expect minutes per consolidation call. That is fine
+  for a background pass, but slower than a hosted model.
+- It was trained on the Mem0, MemOS and Hy-Memory prompt formats. HyAtlas uses
+  its own, so check a few consolidation passes before relying on it.
+
 **All configuration is via environment variables** — the binary reads no settings from its command line:
 
 | Variable | Default | Purpose |
