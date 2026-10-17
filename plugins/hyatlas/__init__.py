@@ -157,7 +157,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         # The query each recall was made with, keyed like _recalled: feedback leaves
         # its words out, because a reply naturally repeats the question.
         self._recalled_query: Dict[str, str] = {}
-        self._version = "4.8.0"
+        self._version = "4.8.1"
         # Message count already synced per session, so _build_turn_text sends
         # only what the server has not seen. Bounded: a long-lived gateway
         # touches far more sessions than it can hold, and the cost of evicting
@@ -858,6 +858,17 @@ def register(ctx: Any) -> None:
             ).start()
     except Exception as e:
         logger.debug("hyatlas auto_start at load not scheduled: %s", e)
+    # With share_llm_key, the key is handed over from load, not from the first
+    # conversation: consolidation and episode summaries run in the background and
+    # need it before anyone chats. Registration must never fail because of this.
+    try:
+        if settings.truthy(provider._config.get("share_llm_key")):
+            _start_key_sharer(
+                f"http://{provider._origin()}",
+                float(provider._config.get("request_timeout", 15.0)),
+            )
+    except Exception as e:
+        logger.debug("hyatlas key sharing at load not started: %s", e)
     # Also register a slash command for diagnostics
     try:
         ctx.register_command(

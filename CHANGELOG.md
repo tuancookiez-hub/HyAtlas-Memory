@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.8.1] — 2026-10-18
+
+### Fixed
+
+- **The key is handed over as soon as Hermes loads the plugin.** With `share_llm_key`
+  on, the hand-over started at the first conversation, so after a gateway restart
+  consolidation and episode summaries had no key until someone chatted. It now
+  starts when the plugin is registered.
+
 ## [4.8.0] — 2026-10-17
 
 Precision per fact and smarter recall, from a code-level comparison with Tencent's
