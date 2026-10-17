@@ -61,7 +61,7 @@ Useful env vars (installer only):
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.8.0` |
+| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.8.1` |
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the installer caches the model (source builds) | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
 | `HYATLAS_MODE` | Extraction mode written to the Hermes `.env`: `lite` \| `pro` \| `ultra`. Any other exported value stops the installer with an error and nothing is written | `ultra` (asked interactively) |
