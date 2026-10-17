@@ -148,7 +148,7 @@ func TestCapLayerKeepsOrderAndLimitsL5(t *testing.T) {
 
 func TestIdentifierTerms(t *testing.T) {
 	cases := map[string][]string{
-		"HYATLAS_SYNC_EXTRACT":              {"hyatlas", "sync", "extract"},
+		"HYATLAS_SYNC_EXTRACT":              {"hyatla", "sync", "extract"},
 		"RSI(2)":                            {"rsi"},
 		"19528":                             {"19528"},
 		"Reg-T margin":                      {"reg"},

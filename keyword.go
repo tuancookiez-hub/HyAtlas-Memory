@@ -32,8 +32,10 @@ var keywordStopwords = map[string]bool{
 
 // keywordTokens splits text into lower-case search terms: runs of letters or digits.
 // Everything else separates terms, so HYATLAS_SYNC_EXTRACT is hyatlas, sync, extract.
-// Terms shorter than two characters and stopwords are dropped. Order is kept and
-// repeats stay, because document term counts need them.
+// Terms shorter than two characters and stopwords are dropped, and each kept term is
+// passed through stemTerm. Order is kept and repeats stay, because document term counts
+// need them. Every caller tokenises with this function, so the stemming is symmetric:
+// a query for "libraries" matches a memory that says "library".
 func keywordTokens(text string) []string {
 	fields := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
@@ -43,9 +45,101 @@ func keywordTokens(text string) []string {
 		if utf8.RuneCountInString(t) < 2 || keywordStopwords[t] {
 			continue
 		}
-		out = append(out, t)
+		out = append(out, stemTerm(t))
 	}
 	return out
+}
+
+// irregularStems maps common irregular verb forms to their base form. It is checked
+// before the length gate, because "ran", "went" and "made" are too short for the
+// suffix rules and would otherwise never be reached.
+var irregularStems = map[string]string{
+	"broken":  "break",
+	"broke":   "break",
+	"built":   "build",
+	"made":    "make",
+	"went":    "go",
+	"ran":     "run",
+	"running": "run",
+	"written": "write",
+	"wrote":   "write",
+	"chosen":  "choose",
+	"chose":   "choose",
+	"taken":   "take",
+	"took":    "take",
+	"given":   "give",
+	"gave":    "give",
+}
+
+// stemTerm reduces an English term to a rough base form, so that "sessions" and
+// "session" share one index term. It handles irregular verbs first, then the first
+// suffix rule that applies, in this order: ies to y; ing and ed, with a doubled final
+// consonant reduced to one (stopping to stop) except ll, ss and zz; es, only after ss,
+// x, ch or sh; and s, unless the word ends in ss, us or is. Every rule keeps a stem of
+// at least three letters. Terms with a digit or a non-ASCII letter, and terms shorter
+// than five letters, are returned unchanged.
+//
+// Why so crude: a full stemmer would be a dependency for a small gain, and it is
+// deliberately not exact (embedding and keyword search only need matching forms to
+// meet, not the linguistically right stem). The same function runs on documents and
+// queries, so a mistake such as "embedded" to "embed" still matches itself.
+func stemTerm(t string) string {
+	if s, ok := irregularStems[t]; ok {
+		return s
+	}
+	if len(t) < 5 || !isLowerASCII(t) {
+		return t
+	}
+	if strings.HasSuffix(t, "ies") && len(t)-3 >= 3 {
+		return t[:len(t)-3] + "y"
+	}
+	if strings.HasSuffix(t, "ing") && len(t)-3 >= 3 {
+		return undoubleConsonant(t[:len(t)-3])
+	}
+	if strings.HasSuffix(t, "ed") && len(t)-2 >= 3 {
+		return undoubleConsonant(t[:len(t)-2])
+	}
+	if strings.HasSuffix(t, "es") && len(t)-2 >= 3 {
+		stem := t[:len(t)-2]
+		if strings.HasSuffix(stem, "ss") || strings.HasSuffix(stem, "x") ||
+			strings.HasSuffix(stem, "ch") || strings.HasSuffix(stem, "sh") {
+			return stem
+		}
+	}
+	if strings.HasSuffix(t, "s") && len(t)-1 >= 3 &&
+		!strings.HasSuffix(t, "ss") && !strings.HasSuffix(t, "us") && !strings.HasSuffix(t, "is") {
+		return t[:len(t)-1]
+	}
+	return t
+}
+
+// undoubleConsonant drops one letter when stem ends in a doubled consonant other than
+// ll, ss or zz, so "stopp" becomes "stop" but "fail" and "pass" keep their letters.
+// It is the step that undoes consonant doubling before ing and ed.
+func undoubleConsonant(stem string) string {
+	n := len(stem)
+	if n < 2 {
+		return stem
+	}
+	last := stem[n-1]
+	if stem[n-2] != last || strings.IndexByte("aeiou", last) >= 0 || last < 'a' || last > 'z' {
+		return stem
+	}
+	switch stem[n-2:] {
+	case "ll", "ss", "zz":
+		return stem
+	}
+	return stem[:n-1]
+}
+
+// isLowerASCII reports whether s holds only the letters a to z.
+func isLowerASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 'a' || s[i] > 'z' {
+			return false
+		}
+	}
+	return true
 }
 
 // sameNumbers reports whether a and b contain the same set of numbers (runs of

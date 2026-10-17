@@ -168,6 +168,29 @@ func (u *UsageStats) Factor(id string) float64 {
 	return 0.94 + 0.12*float64(e.Used+1)/float64(e.Shown+2)
 }
 
+// LastUsed returns when memory id was last used in a reply. It returns the zero time
+// when the memory has no usage record, the record has no readable timestamp, or u is
+// nil.
+//
+// Why: recency ranking measures age from the later of creation and last use, so a
+// memory the agent keeps relying on does not sink just because it was written long ago.
+func (u *UsageStats) LastUsed(id string) time.Time {
+	if u == nil {
+		return time.Time{}
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	e, ok := u.m[id]
+	if !ok {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, e.Last)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
 // rerankUsage reorders hits by position weight 1/(rrfK+i+1) times Factor (stable
 // sort, new slice, Score untouched). nil UsageStats returns hits unchanged.
 //
