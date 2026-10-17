@@ -100,3 +100,35 @@ func TestFuseHitsWeighted(t *testing.T) {
 		t.Errorf("vector-weighted fusion put %s first", got[0].ID)
 	}
 }
+
+// An experience from extraction is stored and comes back in its own channel.
+func TestExtractedExperienceHasItsOwnChannel(t *testing.T) {
+	srv, _ := newCtxServer(t, func() string {
+		return `{"facts":[],"experiences":[{"task":"rebuild the HyAtlas binary on Windows","solution":"stop the server first, then go build, because the running exe is locked","environment":"Windows 11","confidence":"high"}]}`
+	})
+	ctxRaw(t, srv.store, "raw1", "fixed the locked exe build")
+	if err := srv.extract("fixed the locked exe build", "u", "a", "raw1"); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"query":"rebuild the HyAtlas binary on Windows","user_id":"u","agent_id":"a","min_score":0}`
+	w := httptest.NewRecorder()
+	srv.handleSearch(w, httptest.NewRequest("POST", "/api/v1/search", strings.NewReader(body)))
+	var resp struct {
+		Memories map[string][]map[string]any `json:"memories"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Memories["experiences"]) != 1 {
+		t.Fatalf("experiences=%v", resp.Memories["experiences"])
+	}
+	// The experience is not also listed among normal facts (the raw turn may be).
+	for _, h := range resp.Memories["normal"] {
+		if h["memory_id"] == resp.Memories["experiences"][0]["memory_id"] {
+			t.Fatal("experience also listed in normal")
+		}
+	}
+	if !strings.Contains(resp.Memories["experiences"][0]["content"].(string), "stop the server first") {
+		t.Fatalf("experience text: %v", resp.Memories["experiences"][0]["content"])
+	}
+}

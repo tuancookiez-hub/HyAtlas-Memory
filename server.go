@@ -447,8 +447,17 @@ func (s *Server) extract(text, userID, agentID, id string) error {
 		return err
 	}
 	factIDs := promoteExtractionCtx(s.store, ex, ec, userID, agentID, id, s.dedupeScore)
+	// Task experiences: reusable "what solved it, where" lessons, stored as L3 facts
+	// labelled experience so they have their own search channel.
+	expIDs := s.store.writeExperiences(ex.Experiences, userID, agentID, id, time.Now().UTC().Format(time.RFC3339))
 	_ = s.store.SetExtracted(id, true)
-	s.episodes.Note(userID, agentID, factIDs, time.Now())
+	// Optional second call (HYATLAS_RECONCILE=on, meant for a local model): compare
+	// the new facts with similar stored ones and update or replace them. It logs its
+	// own failures, and the facts are stored already, so an error changes nothing.
+	if reconcileEnabled() && len(factIDs) > 0 {
+		_, _ = s.store.reconcile(ctx, s.llm, factIDs, userID, agentID)
+	}
+	s.episodes.Note(userID, agentID, append(factIDs, expIDs...), time.Now())
 	s.setExtractErr("")
 	// The Now page is rebuilt from intentions and summaries, so a write that may
 	// have added some asks for a refresh; Touch rate-limits and never blocks.
@@ -714,6 +723,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	profileHits := []hit{}
 	proactiveHits := []hit{}
 	normalHits := []hit{}
+	experienceHits := []hit{}
 	for _, h := range res {
 		it := hit{MemoryID: h.ID, Content: h.Content, Score: float64(h.Score),
 			Layer: string(h.Layer), GmtCreated: gmtCreated(h.Meta["ts"]),
@@ -727,12 +737,17 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		case memory.L7Intention:
 			proactiveHits = append(proactiveHits, it)
 		default:
-			normalHits = append(normalHits, it)
+			if isExperience(h) {
+				experienceHits = append(experienceHits, it)
+			} else {
+				normalHits = append(normalHits, it)
+			}
 		}
 	}
-	// plugin channel order: now -> pages -> profile -> proactive -> normal
+	// plugin channel order: now -> pages -> profile -> proactive -> experiences -> normal
 	out := map[string]any{"memories": map[string]any{
-		"pages": pageHits, "profile": profileHits, "proactive": proactiveHits, "normal": normalHits,
+		"pages": pageHits, "profile": profileHits, "proactive": proactiveHits,
+		"experiences": experienceHits, "normal": normalHits,
 	}}
 	if np, ok := s.nowFor(users, agentID); ok {
 		out["now"] = np

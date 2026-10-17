@@ -694,7 +694,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         now_text = str(now.get("text") or "").strip()
         memories = results.get("memories") or {}
         channels = []
-        for channel_name in ("pages", "profile", "proactive", "normal"):
+        for channel_name in ("pages", "profile", "proactive", "experiences", "normal"):
             items = memories.get(channel_name, [])
             if not items:
                 continue
