@@ -461,3 +461,18 @@ func TestExtractTodayLineAndIntentionDue(t *testing.T) {
 		t.Fatalf("intention due_at missing: %+v", items)
 	}
 }
+
+// A date on a preference is dropped: preferences are timeless.
+func TestExtractDropsEventDateOnPreference(t *testing.T) {
+	srv, _ := newCtxServer(t, func() string {
+		return `{"facts":[{"data":"Alex only drinks dark roast coffee","layer":"user_preferences","when":"2026-10-17"}]}`
+	})
+	ctxRaw(t, srv.store, "raw1", "My friend Alex only drinks dark roast coffee")
+	if err := srv.extract("My friend Alex only drinks dark roast coffee", "u", "a", "raw1"); err != nil {
+		t.Fatal(err)
+	}
+	live, _ := srv.store.List(memory.L3Fact, "u", "a", 10, 0, false)
+	if len(live) != 1 || live[0].Meta[metaEventAt] != "" {
+		t.Fatalf("preference kept event_at: %+v", live)
+	}
+}

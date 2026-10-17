@@ -275,7 +275,10 @@ func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext,
 			"user_id": userID, "agent_id": agentID,
 			"source_layer_label": f.Layer, "source_id": sourceID, "ts": now,
 		}
-		if when := normalizeEventDate(f.When); when != "" {
+		// A preference or trait is timeless, so a date the model attaches to it is
+		// dropped: the free models tested date "Alex drinks dark roast" to the day
+		// it was said, which would make a time-window search treat it as an event.
+		if when := normalizeEventDate(f.When); when != "" && f.Layer != "user_preferences" {
 			meta[metaEventAt] = when
 		}
 		if err := store.Add(memory.L3Fact, factID, f.Data, meta); err != nil {
