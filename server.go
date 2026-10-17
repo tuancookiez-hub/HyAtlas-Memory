@@ -576,6 +576,24 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, 500, map[string]any{"error": err.Error()})
 		return
 	}
+	// One query embedding, shared by the long-fact clauses and the time window.
+	var qv []float32
+	queryVec := func() []float32 {
+		if qv == nil {
+			qv, _ = s.store.embed.Embed(s.store.ctx, body.Query)
+		}
+		return qv
+	}
+	factsWanted := body.Layer == "" || memory.Layer(body.Layer) == memory.L3Fact
+	// A long fact is also found by any one of its sentences (clauses.go), so it no
+	// longer loses to short facts on a query about one part of it.
+	if factsWanted {
+		if v := queryVec(); len(v) > 0 {
+			res = mergeBest(res, s.store.clauseHitsOwners(v, users, agentID, limit*3))
+		}
+	}
+	// Every vector candidate, before the floor, for graph-assisted recall below.
+	vecAll := res
 	// Keyword search catches exact identifiers (HYATLAS_SYNC_EXTRACT, a port, a
 	// ticker) that the embedding scores low; the two rankings are fused.
 	switch reader := parseReader(body.Reader); reader {
@@ -594,7 +612,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		if reader == readKeyword {
 			res = nil
 		}
-		res = fuseHits(res, kw, minScore, 0)
+		// The query's kind sets how much each ranking counts: identifiers lean on
+		// keyword search, "how" and "why" questions on meaning.
+		wVec, wKw := intentWeights(classifyQuery(body.Query))
+		res = fuseHitsWeighted(res, kw, minScore, 0, wVec, wKw)
 		// A query that is an identifier (RSI(2), HYATLAS_SYNC_EXTRACT, a port) is
 		// answered only by memories that mention it; embedding look-alikes are noise.
 		if terms := identifierTerms(body.Query); len(terms) > 0 {
@@ -606,12 +627,21 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// then out-of-window hits move down a few places. Only L3 facts carry dates.
 	now := time.Now()
 	if win, ok := parseTimeWindow(body.Query, now); ok {
-		if body.Layer == "" || memory.Layer(body.Layer) == memory.L3Fact {
-			if qv, err := s.store.embed.Embed(s.store.ctx, body.Query); err == nil {
-				res = appendNewHits(res, s.store.windowCandidates(qv, users, agentID, win, limit, windowFloor(minScore)))
+		if factsWanted {
+			if v := queryVec(); len(v) > 0 {
+				res = appendNewHits(res, s.store.windowCandidates(v, users, agentID, win, limit, windowFloor(minScore)))
 			}
 		}
 		res = rerankWindow(res, win)
+	}
+	// A query naming one of the owner's entities (an entity page's name or alias)
+	// favours hits about it, and facts linked to it in the knowledge graph may pass
+	// a slightly lower floor: they are related even when their wording is not.
+	if names := s.store.queryEntities(body.Query, users, agentID); len(names) > 0 {
+		res = rerankEntities(res, names)
+		if nb := s.store.graphNeighbourNames(names, users, agentID); len(nb) > 0 {
+			res = graphAdmit(vecAll, res, nb, minScore-0.10, graphRecallMax)
+		}
 	}
 	// Time before the L5 cap, so the cap keeps the relations that rank best once
 	// age is counted.
@@ -636,6 +666,28 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		// An entity page is a whole summary of one thing, so two are plenty; the
 		// rest of the slots go to the facts and rules around them.
 		res = capLayer(res, memory.L8Entity, 2)
+		// The patterns behind the facts found (schemas citing them as evidence) and
+		// an open intention that ranked just below the cut each get a slot, so the
+		// profile and proactive channels are not crowded out by facts.
+		var factIDs []string
+		for i, h := range res {
+			if i >= limit {
+				break
+			}
+			if h.Layer == memory.L3Fact {
+				factIDs = append(factIDs, h.ID)
+			}
+		}
+		res = ensureQuota(res, s.store.schemasSupporting(factIDs, users, agentID, schemaEvidenceMax), memory.L6Schema, limit)
+		if len(res) > limit {
+			var intents []SearchHit
+			for _, h := range res[limit:] {
+				if h.Layer == memory.L7Intention {
+					intents = append(intents, h)
+				}
+			}
+			res = ensureQuota(res, intents, memory.L7Intention, limit)
+		}
 	}
 	if len(res) > limit {
 		res = res[:limit]
@@ -1762,6 +1814,8 @@ func main() {
 		nowLLM = llm
 	}
 	srv.now = NewNowPages(dir, store, nowLLM, resolveNowEvery())
+	// Facts stored before clause indexing get their clauses in the background.
+	go store.backfillClauses()
 	srv.episodes = NewEpisodes(dir, store, nowLLM, resolveEpisodeGap())
 	if srv.episodes != nil {
 		go srv.episodes.Run(ctx)

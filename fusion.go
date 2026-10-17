@@ -45,13 +45,20 @@ func parseReader(v string) searchReader {
 // scores low. Each hit keeps its cosine Score; only the order comes from the fusion.
 // Both inputs must be sorted best first.
 func fuseHits(vec, kw []SearchHit, minScore float64, limit int) []SearchHit {
+	return fuseHitsWeighted(vec, kw, minScore, limit, 1, 1)
+}
+
+// fuseHitsWeighted is fuseHits with a weight on each ranking's contribution, so a
+// query's intent (see classifyQuery) can lean on keyword search for identifiers or
+// on meaning for "how" and "why" questions.
+func fuseHitsWeighted(vec, kw []SearchHit, minScore float64, limit int, wVec, wKw float64) []SearchHit {
 	type fused struct {
 		hit  SearchHit
 		rank float64
 	}
 	byID := map[string]*fused{}
 	var order []string
-	add := func(h SearchHit, rank int) {
+	add := func(h SearchHit, rank int, weight float64) {
 		f, ok := byID[h.ID]
 		if !ok {
 			f = &fused{hit: h}
@@ -60,7 +67,7 @@ func fuseHits(vec, kw []SearchHit, minScore float64, limit int) []SearchHit {
 		} else if h.Score > f.hit.Score {
 			f.hit.Score = h.Score
 		}
-		f.rank += 1.0 / float64(rrfK+rank)
+		f.rank += weight / float64(rrfK+rank)
 	}
 	rank := 0
 	for _, h := range vec {
@@ -68,10 +75,10 @@ func fuseHits(vec, kw []SearchHit, minScore float64, limit int) []SearchHit {
 			continue
 		}
 		rank++
-		add(h, rank)
+		add(h, rank, wVec)
 	}
 	for i, h := range kw {
-		add(h, i+1)
+		add(h, i+1, wKw)
 	}
 	out := make([]fused, 0, len(order))
 	for _, id := range order {

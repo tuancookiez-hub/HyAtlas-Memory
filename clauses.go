@@ -119,6 +119,9 @@ func (s *MemoryStore) writeClauses(d DocIndex) (int, error) {
 	if !live {
 		return 0, nil
 	}
+	// A row re-added under the same id may be shorter now: old clauses would map a
+	// stale sentence to the new text, so they go first.
+	s.dropClauses(d.ID)
 	pieces := splitClauses(d.Content)
 	if len(pieces) == 0 {
 		return 0, nil
