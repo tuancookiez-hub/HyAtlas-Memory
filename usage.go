@@ -41,16 +41,27 @@ const usageMinShown = 3
 // Pruning to 90% of the cap leaves headroom, so it does not run on every write.
 const usageMaxEntries = 20000
 
-// NewUsageStats loads <dataDir>/usage.json if it exists. A missing or unreadable
-// file starts empty, because usage counts are advisory and must never block startup.
-// An empty dataDir keeps the counts in memory only.
+// usageLearningFile is where usage learning is persisted. Before 4.8.0 it shared
+// usage.json with the store's write and search counters, so each overwrote the
+// other and neither survived a restart reliably.
+const usageLearningFile = "usage_learning.json"
+
+// NewUsageStats loads <dataDir>/usage_learning.json if it exists. Without it, a
+// usage.json from before 4.8.0 is read once if it holds per-memory entries rather
+// than the store's counters. A missing or unreadable file starts empty, because
+// usage counts are advisory and must never block startup. An empty dataDir keeps
+// the counts in memory only.
 func NewUsageStats(dataDir string) *UsageStats {
 	u := &UsageStats{m: map[string]usageEntry{}}
 	if dataDir == "" {
 		return u
 	}
-	u.path = filepath.Join(dataDir, "usage.json")
-	if b, err := os.ReadFile(u.path); err == nil {
+	u.path = filepath.Join(dataDir, usageLearningFile)
+	b, err := os.ReadFile(u.path)
+	if err != nil {
+		b, err = os.ReadFile(filepath.Join(dataDir, "usage.json"))
+	}
+	if err == nil {
 		var m map[string]usageEntry
 		if json.Unmarshal(b, &m) == nil && m != nil {
 			u.m = m
@@ -166,6 +177,29 @@ func (u *UsageStats) Factor(id string) float64 {
 		return 1.0
 	}
 	return 0.94 + 0.12*float64(e.Used+1)/float64(e.Shown+2)
+}
+
+// LastUsed returns when memory id was last used in a reply. It returns the zero time
+// when the memory has no usage record, the record has no readable timestamp, or u is
+// nil.
+//
+// Why: recency ranking measures age from the later of creation and last use, so a
+// memory the agent keeps relying on does not sink just because it was written long ago.
+func (u *UsageStats) LastUsed(id string) time.Time {
+	if u == nil {
+		return time.Time{}
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	e, ok := u.m[id]
+	if !ok {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, e.Last)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // rerankUsage reorders hits by position weight 1/(rrfK+i+1) times Factor (stable

@@ -1170,7 +1170,7 @@ func (c *Consolidator) applyMerge(owner scopeKey, text string, vec []float32, la
 	for i, d := range absorbed {
 		ids[i] = d.ID
 	}
-	_, supErr := c.store.Supersede(ids, mergedID)
+	_, supErr := c.store.supersedeWith(ids, mergedID, map[string]string{metaSupersededHow: howMerged})
 
 	// Count what the store marked, not what was asked for.
 	marked := c.supersededOf(ids)

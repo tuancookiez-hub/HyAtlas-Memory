@@ -246,8 +246,12 @@ func TestExtractWithoutNewKeysRegression(t *testing.T) {
 	if dead, _ := ctxSuperseded(t, srv.store, "int-x"); dead {
 		t.Error("intention closed without intentions_done")
 	}
+	// A summary the model sends anyway is ignored: summaries come from episodes.
+	if _, n := srv.store.List(memory.L4Summary, "u", "a", 50, 0, false); n != 0 {
+		t.Errorf("per-write L4 summary written (%d rows)", n)
+	}
 	for layer, want := range map[memory.Layer]string{memory.L3Fact: "Cats are great", memory.L1Profile: "Cats are great",
-		memory.L4Summary: "s", memory.L7Intention: "pet the cat"} {
+		memory.L7Intention: "pet the cat"} {
 		items, _ := srv.store.List(layer, "u", "a", 50, 0, false)
 		ok := false
 		for _, d := range items {
@@ -400,5 +404,75 @@ func TestExtractGarbagePagesDoNotFailTheWrite(t *testing.T) {
 	}
 	if n := len(srv.store.pages.List("u", "a")); n != 0 {
 		t.Errorf("garbage created %d pages", n)
+	}
+}
+
+// A fact the model says replaces a shown fact retires it as "replaced", one it says
+// updates a shown fact retires it as "updated", and an id in both lists counts as
+// replaced. The new fact keeps a valid "when" as event_at and drops an invalid one.
+func TestExtractRecordsHowFactsWereSuperseded(t *testing.T) {
+	srv, _ := newCtxServer(t, func() string {
+		return `{"facts":[` +
+			`{"data":"HyAtlas extraction now uses stepfun","layer":"decision","when":"2026-10-05","replaces":["f-model"],"updates":["f-runs","f-model"]},` +
+			`{"data":"The user tested twice","layer":"project_state","when":"soon"}]}`
+	})
+	now := time.Now()
+	ctxAdd(t, srv.store, memory.L3Fact, "f-model", "HyAtlas extraction uses poolside", "u", now.Add(-time.Hour))
+	ctxAdd(t, srv.store, memory.L3Fact, "f-runs", "HyAtlas extraction ran on poolside once", "u", now.Add(-time.Hour))
+	ctxRaw(t, srv.store, "raw1", "HyAtlas extraction now uses stepfun")
+	if err := srv.extract("HyAtlas extraction now uses stepfun", "u", "a", "raw1"); err != nil {
+		t.Fatal(err)
+	}
+	how := func(id string) string { return srv.store.GetMany([]string{id})[0].Meta[metaSupersededHow] }
+	if got := how("f-model"); got != howReplaced {
+		t.Errorf("f-model superseded_how = %q, want %q", got, howReplaced)
+	}
+	if got := how("f-runs"); got != howUpdated {
+		t.Errorf("f-runs superseded_how = %q, want %q", got, howUpdated)
+	}
+	live, _ := srv.store.List(memory.L3Fact, "u", "a", 50, 0, false)
+	byText := map[string]DocIndex{}
+	for _, d := range live {
+		byText[d.Content] = d
+	}
+	if d := byText["HyAtlas extraction now uses stepfun"]; d.Meta[metaEventAt] != "2026-10-05" {
+		t.Errorf("event_at = %q, want 2026-10-05", d.Meta[metaEventAt])
+	}
+	if d, ok := byText["The user tested twice"]; !ok || d.Meta[metaEventAt] != "" {
+		t.Errorf("invalid when stored as event_at %q (found %v)", d.Meta[metaEventAt], ok)
+	}
+}
+
+// The extraction prompt carries today's date so relative dates can be resolved, and
+// an intention's valid due date is stored as due_at.
+func TestExtractTodayLineAndIntentionDue(t *testing.T) {
+	srv, rec := newCtxServer(t, func() string {
+		return `{"facts":[],"intention":{"goal":"finish the report","due":"2026-11-01"}}`
+	})
+	ctxRaw(t, srv.store, "raw1", "I need to finish the report by November 1")
+	if err := srv.extract("I need to finish the report by November 1", "u", "a", "raw1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rec.last(), "Today: "+time.Now().Format("2006-01-02")) {
+		t.Error("extraction prompt lacks today's date")
+	}
+	items, _ := srv.store.List(memory.L7Intention, "u", "a", 10, 0, false)
+	if len(items) != 1 || items[0].Meta[metaDueAt] != "2026-11-01" {
+		t.Fatalf("intention due_at missing: %+v", items)
+	}
+}
+
+// A date on a preference is dropped: preferences are timeless.
+func TestExtractDropsEventDateOnPreference(t *testing.T) {
+	srv, _ := newCtxServer(t, func() string {
+		return `{"facts":[{"data":"Alex only drinks dark roast coffee","layer":"user_preferences","when":"2026-10-17"}]}`
+	})
+	ctxRaw(t, srv.store, "raw1", "My friend Alex only drinks dark roast coffee")
+	if err := srv.extract("My friend Alex only drinks dark roast coffee", "u", "a", "raw1"); err != nil {
+		t.Fatal(err)
+	}
+	live, _ := srv.store.List(memory.L3Fact, "u", "a", 10, 0, false)
+	if len(live) != 1 || live[0].Meta[metaEventAt] != "" {
+		t.Fatalf("preference kept event_at: %+v", live)
 	}
 }

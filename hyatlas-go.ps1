@@ -19,14 +19,6 @@ function Start-V4 {
         exit 1
     }
 
-    $authPath = Join-Path $env:USERPROFILE "AppData\Local\hermes\auth.json"
-    if (-not (Test-Path $authPath)) { Write-Error "auth.json not found: $authPath"; exit 1 }
-    $auth   = Get-Content $authPath -Raw | ConvertFrom-Json
-    $nous   = $auth.providers.nous
-    $llmKey = $nous.agent_key
-    if (-not $llmKey) { $llmKey = $nous.access_token }
-    if (-not $llmKey) { Write-Error "No Nous Portal agent_key in Hermes auth.json. Run: hermes auth login"; exit 1 }
-
     $env:HYATLAS_GO_PORT    = $port
     $env:HYATLAS_GO_DATA    = $data
     $env:HYATLAS_GRAPH_PATH = (Join-Path $data "graph.json")
@@ -46,17 +38,17 @@ function Start-V4 {
 
     if ($env:HYATLAS_MODE) { Write-Host "  mode: $env:HYATLAS_MODE" }
 
-    # This launcher pairs the key below (a Nous Portal JWT from auth.json) with
-    # that provider's endpoint, so it sets them -- but only when unset, so an
-    # explicit export always wins. The server itself assumes no endpoint.
+    # The Nous Portal endpoint and a free model, set only when unset so the local
+    # settings always win. The server itself assumes no endpoint.
     if (-not $env:HYATLAS_LLM_BASE)  { $env:HYATLAS_LLM_BASE  = "https://inference-api.nousresearch.com/v1" }
     if (-not $env:HYATLAS_LLM_MODEL) { $env:HYATLAS_LLM_MODEL = "poolside/laguna-s-2.1:free" }
-    # The Nous Portal key is a 1-hour JWT that Hermes keeps fresh in auth.json.
-    # Point the server at the file so it reads the current key per call, instead
-    # of freezing today's JWT for the whole process lifetime. $llmKey stays as
-    # the bootstrap/fallback for any moment the file is mid-rewrite.
-    $env:HYATLAS_LLM_KEY      = $llmKey
-    $env:HYATLAS_LLM_KEY_FILE = $authPath
+    # No key is read here. This launcher never opens Hermes's credential file: a
+    # program reading another application's credentials is what credential
+    # stealers do, and antivirus rightly blocks it. With the Hermes plugin's
+    # share_llm_key setting on, Hermes hands its current Nous key to the running
+    # server over localhost (kept in memory only); until then status shows
+    # llm: "awaiting_key". A key of your own can go in hyatlas-go.local.ps1 as
+    # HYATLAS_LLM_KEY.
 
     Set-Location $goDir
     $proc = Start-Process -FilePath ".\hyatlas-go.exe" -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError "$log.err" -PassThru

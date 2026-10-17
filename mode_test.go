@@ -370,12 +370,18 @@ func TestExtractForModeReportsUnconfigured(t *testing.T) {
 		t.Errorf("extraction_status = %q, want \"unconfigured\"", got)
 	}
 
-	// Client present but no credential — the fresh-install case.
+	// Endpoint and model set but no key yet: the key may still be handed over
+	// (POST /api/v1/llm/key), so the state says so instead of "unconfigured".
 	srv2 := newTestServer(t, "test-model", "http://127.0.0.1:1/v1")
 	srv2.mode = ModePro
 	srv2.llm = NewLLMClient("http://127.0.0.1:1/v1", "", "test-model")
+	if got := srv2.extractForMode("text", "u", "a", "id2"); got != "awaiting_key" {
+		t.Errorf("with an empty key extraction_status = %q, want \"awaiting_key\"", got)
+	}
+	// No model either: genuinely unconfigured.
+	srv2.llm = NewLLMClient("http://127.0.0.1:1/v1", "", "")
 	if got := srv2.extractForMode("text", "u", "a", "id2"); got != "unconfigured" {
-		t.Errorf("with an empty key extraction_status = %q, want \"unconfigured\"", got)
+		t.Errorf("with no model extraction_status = %q, want \"unconfigured\"", got)
 	}
 
 	// A client WITH a credential must not report unconfigured (it will fail on

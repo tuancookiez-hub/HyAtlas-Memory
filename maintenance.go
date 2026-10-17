@@ -346,7 +346,7 @@ func (s *Server) handleDedupeFacts(w http.ResponseWriter, r *http.Request) {
 		marked := 0
 		var firstErr error
 		for _, survivor := range order {
-			n, err := s.store.Supersede(bySurvivor[survivor], survivor)
+			n, err := s.store.supersedeWith(bySurvivor[survivor], survivor, map[string]string{metaSupersededHow: howRestated})
 			marked += n
 			if err != nil && firstErr == nil {
 				firstErr = err

@@ -27,7 +27,7 @@ import (
 // It is exposed on /api/v1/status and /api/info so every client (Desktop pane,
 // web dashboard, CLI) reports the real running version instead of hardcoding
 // a "v4" badge that silently goes stale on each release. Bump in one place.
-const Version = "4.7.3"
+const Version = "4.8.0"
 
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {
@@ -62,6 +62,9 @@ type Server struct {
 	// may be nil, as in tests built without main, which turns that feature off.
 	now   *NowPages
 	usage *UsageStats
+	// episodes groups each owner's writes into stretches of work and summarises
+	// each once it ends (HYATLAS_EPISODE_GAP). nil in lite mode.
+	episodes *Episodes
 	// backlog is the one-time admin pass over facts stored before 4.7.0
 	// (/api/v1/admin/backlog): contradictions and entity pages.
 	backlog *BacklogJob
@@ -88,11 +91,15 @@ func (s *Server) extractErr() string {
 // /api/v1/status, the dashboard and the startup line cannot disagree.
 //
 //	unused        — this mode makes no LLM call
+//	awaiting_key  — endpoint and model are set; the key has not been handed over yet
 //	unconfigured  — the mode needs one but endpoint, model or key is unset
 //	ok            — a credential resolved
 func (s *Server) llmState() string {
 	if !s.mode.UsesLLM() {
 		return "unused"
+	}
+	if s.llm.AwaitingKey() {
+		return "awaiting_key"
 	}
 	if !s.llm.Configured() {
 		return "unconfigured"
@@ -130,6 +137,15 @@ type Status struct {
 	ExtractSync      string  `json:"extract_sync"`
 	Consolidations   int     `json:"consolidations"`
 	LastConsolidated *Report `json:"last_consolidated,omitempty"`
+	// Episodes counts episodes still open and closed ones waiting for a summary.
+	// Absent when episodes are off (lite mode or HYATLAS_EPISODE_GAP=off).
+	Episodes *EpisodeCounts `json:"episodes,omitempty"`
+}
+
+// EpisodeCounts is the episodes part of /api/v1/status.
+type EpisodeCounts struct {
+	Open    int `json:"open"`
+	Pending int `json:"pending"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -173,11 +189,22 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		ExtractSync:      s.sync.Describe(s.mode),
 		Consolidations:   consRuns,
 		LastConsolidated: lastCons,
+		Episodes:         s.episodeCounts(),
 	})
 }
 
+// episodeCounts is the episodes field of /api/v1/status, or nil when episodes are off.
+func (s *Server) episodeCounts() *EpisodeCounts {
+	if s.episodes == nil {
+		return nil
+	}
+	open, pending := s.episodes.Counts()
+	return &EpisodeCounts{Open: open, Pending: pending}
+}
+
 // promoteExtraction writes one System1 pass to the layers that pass owns:
-// L3 facts (and the L1 profile mirror for preferences), L4 summary, L7 intention.
+// L3 facts (and the L1 profile mirror for preferences), L7 intention and entity
+// pages.
 //
 // L5 knowledge and L6 schemas are deliberately NOT written here. They are
 // System2 products: a knowledge relation worth keeping is one corroborated by
@@ -211,34 +238,58 @@ func promoteExtractionDedupe(store *MemoryStore, ex *Extraction, userID, agentID
 // that are in ec are honoured, because the reply is model output and an id it
 // invents or garbles must never supersede a real row. With an empty ec it is
 // promoteExtractionDedupe exactly.
-func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext, userID, agentID, sourceID string, dedupe float64) {
+// It returns the ids of the L3 facts it wrote, which episodes group.
+func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext, userID, agentID, sourceID string, dedupe float64) []string {
 	now := time.Now().UTC().Format(time.RFC3339)
+	var factIDs []string
 	// L3 Facts
 	for _, f := range ex.Facts {
 		if f.Data == "" {
 			continue
 		}
-		// Found before the new rows are written, so the new L1 mirror is not
-		// taken for one of the old fact's mirrors.
-		var stale []string
+		// What the new fact retires, and how, so history on read can say "was X"
+		// for a contradiction but not for a restatement. Found before the new rows
+		// are written, so the new L1 mirror is not taken for one of the old fact's
+		// mirrors.
+		stale := map[string][]string{}
 		if dedupe > 0 {
 			near, err := store.search(f.Data, 1, memory.L3Fact, userID, agentID)
 			if err == nil && len(near) > 0 && float64(near[0].Score) >= dedupe && sameNumbers(near[0].Content, f.Data) {
 				old := near[0]
-				stale = append([]string{old.ID}, store.MirrorsOf(memory.L1Profile, old.Meta["source_id"], old.Content)...)
+				stale[howRestated] = append([]string{old.ID}, store.MirrorsOf(memory.L1Profile, old.Meta["source_id"], old.Content)...)
 			}
 		}
-		// The model named related facts this one updates or contradicts. Same
-		// lookup point as above, for the same reason: before the new rows exist.
+		// The model named related facts this one contradicts or extends. Only ids
+		// it was shown count; an id in both lists is taken as replaced.
 		replaced := shown(f.Replaces, ec.hasRelated)
 		if len(replaced) > 0 {
-			stale = append(stale, store.withMirrors(replaced)...)
+			stale[howReplaced] = append(stale[howReplaced], store.withMirrors(replaced)...)
+		}
+		var updated []string
+		for _, id := range shown(f.Updates, ec.hasRelated) {
+			if !containsID(replaced, id) {
+				updated = append(updated, id)
+			}
+		}
+		if len(updated) > 0 {
+			stale[howUpdated] = append(stale[howUpdated], store.withMirrors(updated)...)
 		}
 		factID := newID()
-		_ = store.Add(memory.L3Fact, factID, f.Data, map[string]string{
+		meta := map[string]string{
 			"user_id": userID, "agent_id": agentID,
 			"source_layer_label": f.Layer, "source_id": sourceID, "ts": now,
-		})
+		}
+		// A preference or trait is timeless, so a date the model attaches to it is
+		// dropped: the free models tested date "Alex drinks dark roast" to the day
+		// it was said, which would make a time-window search treat it as an event.
+		if when := normalizeEventDate(f.When); when != "" && f.Layer != "user_preferences" {
+			meta[metaEventAt] = when
+		}
+		if err := store.Add(memory.L3Fact, factID, f.Data, meta); err != nil {
+			log.Printf("extract: fact: %v", err)
+			continue
+		}
+		factIDs = append(factIDs, factID)
 		// L1 Profile: user_preferences are stable identity — mirror to profile layer.
 		if f.Layer == "user_preferences" {
 			_ = store.Add(memory.L1Profile, newID(), f.Data, map[string]string{
@@ -246,26 +297,31 @@ func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext,
 				"source_id": sourceID, "ts": now,
 			})
 		}
-		if len(stale) > 0 {
-			if n, err := store.Supersede(stale, factID); err != nil {
-				log.Printf("dedupe: supersede %s: %v", stale[0], err)
-			} else if len(replaced) > 0 {
-				log.Printf("extract: fact %s replaces %d of %d stale row(s) %v", factID, n, len(stale), replaced)
+		for _, how := range []string{howRestated, howReplaced, howUpdated} {
+			ids := stale[how]
+			if len(ids) == 0 {
+				continue
+			}
+			n, err := store.supersedeWith(ids, factID, map[string]string{metaSupersededHow: how})
+			if err != nil {
+				log.Printf("extract: supersede (%s) %s: %v", how, ids[0], err)
+			} else if how != howRestated {
+				log.Printf("extract: fact %s %s %d of %d row(s)", factID, how, n, len(ids))
 			}
 		}
 	}
-	// L4 Summary (enabled layer — the narrative arc)
-	if ex.Summary != nil && strings.TrimSpace(ex.Summary.Text) != "" {
-		_ = store.Add(memory.L4Summary, newID(), ex.Summary.Text, map[string]string{
-			"user_id": userID, "agent_id": agentID, "ts": now,
-		})
-	}
+	// No L4 summary per write: a summary of one turn restated its facts. Episodes
+	// (episode.go) summarise a whole stretch of work once it ends.
 	// L7 Intention
 	if ex.Intention != nil && strings.TrimSpace(ex.Intention.Goal) != "" {
 		introID := newID()
-		_ = store.Add(memory.L7Intention, introID, ex.Intention.Goal, map[string]string{
-			"user_id": userID, "agent_id": agentID, "ts": now,
-		})
+		meta := map[string]string{"user_id": userID, "agent_id": agentID, "ts": now}
+		// A due date keeps the intention live until it is due (dropStaleIntentions),
+		// instead of the fixed lifetime an undated goal gets.
+		if due := normalizeEventDate(ex.Intention.Due); due != "" {
+			meta[metaDueAt] = due
+		}
+		_ = store.Add(memory.L7Intention, introID, ex.Intention.Goal, meta)
 		store.applyIntentions(ex, ec, introID, sourceID)
 	} else {
 		store.applyIntentions(ex, ec, "", sourceID)
@@ -281,6 +337,7 @@ func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext,
 			log.Printf("extract: pages: created %d, updated %d (source %s)", created, updated, sourceID)
 		}
 	}
+	return factIDs
 }
 
 func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
@@ -349,6 +406,9 @@ func (s *Server) extractForMode(text, userID, agentID, id string) string {
 	if !s.mode.UsesLLM() {
 		return "skipped"
 	}
+	if s.llm.AwaitingKey() {
+		return "awaiting_key"
+	}
 	if !s.llm.Configured() {
 		return "unconfigured"
 	}
@@ -386,8 +446,9 @@ func (s *Server) extract(text, userID, agentID, id string) error {
 		s.setExtractErr(err.Error())
 		return err
 	}
-	promoteExtractionCtx(s.store, ex, ec, userID, agentID, id, s.dedupeScore)
+	factIDs := promoteExtractionCtx(s.store, ex, ec, userID, agentID, id, s.dedupeScore)
 	_ = s.store.SetExtracted(id, true)
+	s.episodes.Note(userID, agentID, factIDs, time.Now())
 	s.setExtractErr("")
 	// The Now page is rebuilt from intentions and summaries, so a write that may
 	// have added some asks for a refresh; Touch rate-limits and never blocks.
@@ -395,6 +456,74 @@ func (s *Server) extract(text, userID, agentID, id string) error {
 		s.now.Touch(userID, agentID)
 	}
 	return nil
+}
+
+// windowFloorRelax is how far below the score floor a fact dated inside the asked
+// window may score and still be recalled. A query such as "what did I do last week"
+// carries little meaning besides its date, so its best answers score low against
+// it; the date is the evidence they are relevant.
+const windowFloorRelax = 0.20
+
+// windowFloor is the score floor for facts dated inside the asked window.
+func windowFloor(minScore float64) float64 {
+	if f := minScore - windowFloorRelax; f > 0 {
+		return f
+	}
+	return 0
+}
+
+// maxPushedKey caps the size of a key handed over at runtime. Provider keys and
+// JWTs are a few hundred bytes to a few kilobytes.
+const maxPushedKey = 16 << 10
+
+// handleLLMKey is POST /api/v1/llm/key: the Hermes plugin hands over the current
+// provider key, which the server keeps in memory only and uses for its LLM calls.
+// This is how a rotating credential (a 1-hour Nous Portal token) reaches the server
+// without the server or its launcher ever opening another application's credential
+// file. The key is never logged or echoed back. {"key": ""} clears it.
+func (s *Server) handleLLMKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		jsonResponse(w, 405, map[string]any{"error": "method not allowed: use POST"})
+		return
+	}
+	var body struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPushedKey+1024)).Decode(&body); err != nil {
+		jsonResponse(w, 400, map[string]any{"error": "bad body"})
+		return
+	}
+	key := strings.TrimSpace(body.Key)
+	if len(key) > maxPushedKey || strings.IndexFunc(key, func(c rune) bool { return c <= ' ' || c == 0x7f }) >= 0 {
+		jsonResponse(w, 400, map[string]any{"error": "key must be one line without spaces"})
+		return
+	}
+	if s.llm == nil {
+		jsonResponse(w, 409, map[string]any{"error": "this server has no LLM endpoint configured"})
+		return
+	}
+	s.llm.SetPushedKey(key)
+	jsonResponse(w, 200, map[string]any{"ok": true, "llm": s.llmState()})
+}
+
+// appendNewHits adds the hits in extra whose ids res does not already hold, after
+// the existing ones, keeping both orders.
+func appendNewHits(res, extra []SearchHit) []SearchHit {
+	if len(extra) == 0 {
+		return res
+	}
+	have := make(map[string]bool, len(res))
+	for _, h := range res {
+		have[h.ID] = true
+	}
+	for _, h := range extra {
+		if !have[h.ID] {
+			have[h.ID] = true
+			res = append(res, h)
+		}
+	}
+	return res
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
@@ -472,16 +601,36 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			res = requireTerms(res, terms)
 		}
 	}
+	// A query that names a time ("last week", "on 2026-10-05") favours memories
+	// dated in that window: dated facts the vector search missed join the pool,
+	// then out-of-window hits move down a few places. Only L3 facts carry dates.
+	now := time.Now()
+	if win, ok := parseTimeWindow(body.Query, now); ok {
+		if body.Layer == "" || memory.Layer(body.Layer) == memory.L3Fact {
+			if qv, err := s.store.embed.Embed(s.store.ctx, body.Query); err == nil {
+				res = appendNewHits(res, s.store.windowCandidates(qv, users, agentID, win, limit, windowFloor(minScore)))
+			}
+		}
+		res = rerankWindow(res, win)
+	}
 	// Time before the L5 cap, so the cap keeps the relations that rank best once
 	// age is counted.
-	now := time.Now()
 	res = dropStaleIntentions(res, s.intentionTTL, now)
 	if s.recency {
-		res = rerankRecency(res, now)
+		// Age counts from the later of written and last used, so an old memory the
+		// agent still relies on does not sink.
+		var lastUsed func(string) time.Time
+		if s.usage != nil {
+			lastUsed = s.usage.LastUsed
+		}
+		res = rerankRecencyUsed(res, now, lastUsed)
 	}
 	if s.usage != nil {
 		res = rerankUsage(res, s.usage)
 	}
+	// Two near-identical lines waste a slot; the lower one moves to the end, where
+	// the limit usually cuts it.
+	res = s.store.demoteNearDuplicates(res, nearDupScore)
 	if body.Layer == "" {
 		res = capLayer(res, memory.L5Knowledge, l5Share(limit))
 		// An entity page is a whole summary of one thing, so two are plenty; the
@@ -499,7 +648,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		GmtCreated int64   `json:"gmt_created"`
 		UserID     string  `json:"user_id,omitempty"`
 		AgentID    string  `json:"agent_id,omitempty"`
+		// EventDate is when the fact happened or is due, when extraction found one.
+		EventDate string `json:"event_date,omitempty"`
+		// History holds the older versions this hit replaced, newest first.
+		History []HistoryEntry `json:"history,omitempty"`
 	}
+	ids := make([]string, len(res))
+	for i, h := range res {
+		ids[i] = h.ID
+	}
+	history := s.store.historyOf(ids, historyPerHit)
 	pageHits := []hit{}
 	profileHits := []hit{}
 	proactiveHits := []hit{}
@@ -507,7 +665,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	for _, h := range res {
 		it := hit{MemoryID: h.ID, Content: h.Content, Score: float64(h.Score),
 			Layer: string(h.Layer), GmtCreated: gmtCreated(h.Meta["ts"]),
-			UserID: h.Meta["user_id"], AgentID: h.Meta["agent_id"]}
+			UserID: h.Meta["user_id"], AgentID: h.Meta["agent_id"],
+			EventDate: normalizeEventDate(h.Meta[metaEventAt]), History: history[h.ID]}
 		switch h.Layer {
 		case memory.L8Entity:
 			pageHits = append(pageHits, it)
@@ -1603,6 +1762,10 @@ func main() {
 		nowLLM = llm
 	}
 	srv.now = NewNowPages(dir, store, nowLLM, resolveNowEvery())
+	srv.episodes = NewEpisodes(dir, store, nowLLM, resolveEpisodeGap())
+	if srv.episodes != nil {
+		go srv.episodes.Run(ctx)
+	}
 	if !envOff("HYATLAS_USAGE_LEARNING") {
 		srv.usage = NewUsageStats(dir)
 	}
@@ -1645,6 +1808,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/v1/admin/dedupe_facts", s.handleDedupeFacts)
 	mux.HandleFunc("/api/v1/admin/backlog", s.handleBacklog)
 	mux.HandleFunc("/api/v1/admin/restore", s.handleRestore)
+	mux.HandleFunc("/api/v1/llm/key", s.handleLLMKey)
 	mux.HandleFunc("/api/v1/now", s.handleNow)
 	mux.HandleFunc("/api/v1/feedback", s.handleFeedback)
 	// Dashboard UI (embedded single-file frontend)
