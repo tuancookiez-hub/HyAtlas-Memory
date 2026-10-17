@@ -191,6 +191,18 @@ type Extraction struct {
 	// Pages are entity-page updates: the durable things this input is about, with
 	// their current state and what happened. Empty when the model omits them.
 	Pages pageUpdates `json:"pages,omitempty"`
+	// Experiences are reusable lessons from a task this input shows solved. Empty
+	// when the model omits them.
+	Experiences []Experience `json:"experiences,omitempty"`
+}
+
+// Experience is a reusable lesson from a task solved in this input: what was
+// being done, what worked, the environment it depends on, and how sure that is.
+type Experience struct {
+	Task        string `json:"task"`
+	Solution    string `json:"solution"`
+	Environment string `json:"environment"`
+	Confidence  string `json:"confidence"` // high / medium / low
 }
 
 // Fact is a single durable fact (L3).
