@@ -35,7 +35,7 @@ func TestIntentWeights(t *testing.T) {
 		vector, kw float64
 	}{
 		{intentNavigational, 0.6, 1.4},
-		{intentConceptual, 1.3, 0.7},
+		{intentConceptual, 1.15, 0.85},
 		{intentFactual, 1, 1},
 	}
 	for _, c := range cases {

@@ -59,7 +59,9 @@ func intentWeights(i queryIntent) (vector, keyword float64) {
 	case intentNavigational:
 		return 0.6, 1.4
 	case intentConceptual:
-		return 1.3, 0.7
+		// Mild: at 1.3/0.7 a "why" question lost a directly relevant fact that
+		// matched by keyword to a vaguer relation (4.9.0 check on live data).
+		return 1.15, 0.85
 	default:
 		return 1, 1
 	}
