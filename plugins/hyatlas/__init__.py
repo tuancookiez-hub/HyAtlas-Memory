@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional
 from agent.memory_provider import MemoryProvider
 
 from .client import HyatlasClient, HyatlasClientError, HyatlasUnreachable
+from .formatting import format_hit_line, iso_date  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -77,14 +78,7 @@ def _is_compaction(text: str) -> bool:
 
 def _iso_date(unix_seconds: Any) -> str:
     """YYYY-MM-DD (UTC) for a search hit's gmt_created, or "" when it has none."""
-    try:
-        ts = int(unix_seconds)
-    except (TypeError, ValueError):
-        return ""
-    if ts <= 0:
-        return ""
-    import datetime
-    return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime("%Y-%m-%d")
+    return iso_date(unix_seconds)
 
 
 # =============================================================================
@@ -681,18 +675,12 @@ class HyatlasMemoryProvider(MemoryProvider):
             limit = 600 if channel_name == "pages" else 300
             channel_lines = [f"[{channel_name.upper()}]"]
             for m in items[:5]:
-                content = m.get("content", "")
-                layer = m.get("layer", "")
-                score = m.get("score", 0.0)
-                if content:
-                    snippet = content[:limit]
-                    # The date lets the agent tell "true on Oct 6" from "true now":
-                    # without it an old status line reads like the current one.
-                    date = _iso_date(m.get("gmt_created"))
-                    when = f", {date}" if date else ""
-                    channel_lines.append(
-                        f"- ({layer}{when}, score {score:.2f}) {snippet}"
-                    )
+                # The date lets the agent tell "true on Oct 6" from "true now":
+                # without it an old status line reads like the current one. The
+                # event date and superseded versions are added by format_hit_line.
+                line = format_hit_line(m, limit)
+                if line:
+                    channel_lines.append(line)
             if len(channel_lines) > 1:
                 channels.append("\n".join(channel_lines))
         if not now_text and not channels:
