@@ -150,6 +150,7 @@ writes to `.env`. The plugin does not use a key found in `hyatlas.json` or
 | `auto_start` | `HYATLAS_AUTO_START` | `false` | Start the server binary when it is unreachable |
 | `binary_path` | `HYATLAS_BINARY_PATH` | *(discover)* | Path to `hyatlas-go` |
 | `launcher_path` | `HYATLAS_LAUNCHER_PATH` | *(none)* | Windows only: a `hyatlas-go.ps1` that `hermes hyatlas start\|stop` runs instead of the binary |
+| `share_llm_key` | `HYATLAS_SHARE_LLM_KEY` | `false` | Hand Hermes's current Nous Portal key to the server over localhost, kept in its memory only, so no program but Hermes reads Hermes's credentials. Sent only when the server's endpoint is the Nous Portal (see Credentials) |
 | `request_timeout` | `HYATLAS_REQUEST_TIMEOUT` | `15.0` | HTTP timeout for server calls, in seconds |
 | `data_dir` | `HYATLAS_GO_DATA` | *(conventional)* | Server data directory. Also used by `hermes backup` |
 | `llm_base` | `HYATLAS_LLM_BASE` | *(none)* | Base URL of an OpenAI-compatible extraction endpoint |
