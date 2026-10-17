@@ -80,3 +80,12 @@ func TestSearchTimeWindowFavoursDatedFact(t *testing.T) {
 		t.Fatalf("first hit = %v, want the fact dated %s", hits, day)
 	}
 }
+
+// In-window facts may score windowFloorRelax below the floor, never below zero.
+func TestWindowFloor(t *testing.T) {
+	for in, want := range map[float64]float64{0.60: 0.40, 0.10: 0, 0: 0} {
+		if got := windowFloor(in); got < want-1e-9 || got > want+1e-9 {
+			t.Errorf("windowFloor(%v) = %v, want %v", in, got, want)
+		}
+	}
+}

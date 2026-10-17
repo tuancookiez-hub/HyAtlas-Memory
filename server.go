@@ -448,6 +448,20 @@ func (s *Server) extract(text, userID, agentID, id string) error {
 	return nil
 }
 
+// windowFloorRelax is how far below the score floor a fact dated inside the asked
+// window may score and still be recalled. A query such as "what did I do last week"
+// carries little meaning besides its date, so its best answers score low against
+// it; the date is the evidence they are relevant.
+const windowFloorRelax = 0.20
+
+// windowFloor is the score floor for facts dated inside the asked window.
+func windowFloor(minScore float64) float64 {
+	if f := minScore - windowFloorRelax; f > 0 {
+		return f
+	}
+	return 0
+}
+
 // appendNewHits adds the hits in extra whose ids res does not already hold, after
 // the existing ones, keeping both orders.
 func appendNewHits(res, extra []SearchHit) []SearchHit {
@@ -549,7 +563,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if win, ok := parseTimeWindow(body.Query, now); ok {
 		if body.Layer == "" || memory.Layer(body.Layer) == memory.L3Fact {
 			if qv, err := s.store.embed.Embed(s.store.ctx, body.Query); err == nil {
-				res = appendNewHits(res, s.store.windowCandidates(qv, users, agentID, win, limit, minScore))
+				res = appendNewHits(res, s.store.windowCandidates(qv, users, agentID, win, limit, windowFloor(minScore)))
 			}
 		}
 		res = rerankWindow(res, win)
