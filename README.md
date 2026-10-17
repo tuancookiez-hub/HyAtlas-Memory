@@ -368,63 +368,26 @@ and start it again.
 
 ## Architecture
 
-**Writing and background work.** One LLM call per write; everything else runs on a
-schedule.
-
 ```mermaid
-flowchart TB
-  P1["Hermes plugin: each turn's user message and reply"]
-  P4["Hermes plugin, share_llm_key (opt-in):<br/>hands over Hermes's Nous key"]
+flowchart TD
+  A["POST /api/v1/add"] --> RAW["Embed + store L2 raw"]
+  RAW --> CTX["Gather context: 5 related facts (>= 0.70),<br/>open intentions, entity pages"]
+  CTX --> X["Extract (LLM, one call): facts with dates,<br/>replaces / updates, intention with due date,<br/>intentions done, entity pages"]
+  X --> P["Promote: L3 facts (0.92 restatement fold),<br/>L1 mirror, L7 intention, L8 pages"]
+  P --> NOW["Now page (LLM),<br/>at most every 15 min"]
+  P --> EP["Episode summary (LLM),<br/>after a 30-min gap"]
+  P --> ST[("chromem vectors L1-L8<br/>+ doc index")]
+  EP --> ST
+  KEY["Hermes plugin hands over its key<br/>(localhost, memory only)"] -.-> X
 
-  subgraph WRITE["Write"]
-    W1["Embed with local BGE, store L2 raw"]
-    W2["Gather context: related facts,<br/>open intentions, entity pages"]
-    W3["Extract (LLM): facts with dates,<br/>replaces / updates, intention with due date,<br/>entity page updates"]
-    W4["Promote: L3 facts, L1 profile,<br/>L7 intentions, L8 pages"]
-    W1 --> W2 --> W3 --> W4
-  end
+  T["Ticker: 6h, catch-up while due"] --> CL["Topic clusters (0.55),<br/>only changed clusters"]
+  CL --> C["Consolidate (LLM, per cluster): merges,<br/>drops + reason, schemas, L5 edges, arc"]
+  C --> G["Guards: merge >= 0.65, schema dup >= 0.92,<br/>restore, history relink"]
+  G --> ST
+  C --> KG["L5 graph with evidence"]
 
-  subgraph STORE["Store: one Go binary, no database server"]
-    S1[("chromem vectors, L1 to L8,<br/>exact doc index")]
-    S2[("L5 knowledge graph,<br/>edges with evidence")]
-    S3[("Now pages, entity pages,<br/>episodes, usage")]
-  end
-
-  subgraph BG["Background"]
-    B1["Episodes: a 30-minute gap ends one,<br/>then one L4 summary (LLM)"]
-    B2["Now page: rewritten at most<br/>every 15 minutes (LLM)"]
-    B3["Consolidation, ultra: topic clusters,<br/>only the changed ones"]
-    B4["Per cluster (LLM): merges, drops with reasons,<br/>schemas, L5 edges, arc"]
-    B5["Guards: merge similarity 0.65, schema dup 0.92,<br/>restore, history relink"]
-    B3 --> B4 --> B5
-  end
-
-  P1 --> W1
-  P4 -.->|"localhost, kept in memory"| W3
-  W4 --> S1
-  W4 --> S3
-  W4 --> B1
-  B1 --> S1
-  S1 --> B2 --> S3
-  S1 --> B3
-  B5 --> S1
-  B4 --> S2
-```
-
-**Search.** No LLM call.
-
-```mermaid
-flowchart LR
-  P2["Hermes plugin:<br/>recall before each reply"]
-  S[("vectors, graph,<br/>Now and entity pages")]
-  Q1["Vector + stemmed keyword,<br/>fused by rank"]
-  Q2["Dates in the query:<br/>dated facts join,<br/>others move down"]
-  Q3["Recency by idle time,<br/>usage feedback,<br/>near-duplicate demotion,<br/>layer caps"]
-  Q4["Now, pages, profile,<br/>proactive, normal, with<br/>event dates and<br/>replaced versions"]
-  P3["Hermes plugin:<br/>what the reply used"]
-  P2 --> Q1 --> Q2 --> Q3 --> Q4 --> P2
-  S --> Q1
-  P3 -->|"usage feedback"| S
+  Q["POST /api/v1/search"] --> F["Vector + stemmed keyword RRF, min score 0.60,<br/>dates in the query, intention due dates,<br/>idle-time recency, usage feedback,<br/>near-duplicate demotion"]
+  F --> OUT["Now -> pages -> profile -> proactive -> normal,<br/>with event dates and replaced versions"]
 ```
 
 Lite mode keeps only the raw write and search: no LLM call at all. Pro adds extraction,
