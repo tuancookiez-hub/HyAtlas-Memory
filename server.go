@@ -455,7 +455,10 @@ func (s *Server) extract(text, userID, agentID, id string) error {
 	// the new facts with similar stored ones and update or replace them. It logs its
 	// own failures, and the facts are stored already, so an error changes nothing.
 	if reconcileEnabled() && len(factIDs) > 0 {
-		_, _ = s.store.reconcile(ctx, s.llm, factIDs, userID, agentID)
+		// Its own deadline: the extraction call may have used most of ctx.
+		rctx, rcancel := context.WithTimeout(context.Background(), extractTimeout)
+		_, _ = s.store.reconcile(rctx, s.llm, factIDs, userID, agentID)
+		rcancel()
 	}
 	s.episodes.Note(userID, agentID, append(factIDs, expIDs...), time.Now())
 	s.setExtractErr("")

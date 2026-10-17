@@ -94,7 +94,7 @@ func (s *MemoryStore) reconcileCandidates(f DocIndex, users []string, agentID st
 			continue
 		}
 		for _, h := range found {
-			if seen[h.ID] || float64(h.Score) < reconcileMinScore {
+			if seen[h.ID] || isExperience(h) || float64(h.Score) < reconcileMinScore {
 				continue
 			}
 			seen[h.ID] = true

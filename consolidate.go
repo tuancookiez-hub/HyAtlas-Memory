@@ -1166,6 +1166,20 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 // replacement write and the supersedes are fatal; the L1 mirror writes are soft.
 func (c *Consolidator) applyMerge(owner scopeKey, text string, vec []float32, label string, absorbed []DocIndex, now string,
 	live map[string]bool, rep *Report, fatal, soft func(string)) string {
+	// An experience may only merge with another experience: a mixed merge is refused
+	// and every row stays live. An all-experience merge keeps the experience label.
+	exps := 0
+	for _, d := range absorbed {
+		if d.Meta["source_layer_label"] == experienceLabel {
+			exps++
+		}
+	}
+	if exps > 0 && exps < len(absorbed) {
+		return ""
+	}
+	if exps > 0 {
+		label = experienceLabel
+	}
 	srcs := distinctSources(absorbed)
 	// The merged fact inherits the conversations it absorbed, so L5
 	// corroboration and the raw-decay citation guard still see them.
