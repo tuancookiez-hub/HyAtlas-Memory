@@ -114,6 +114,19 @@ func (s *MemoryStore) rewriteSuperseded(edits []historyEdit) (int, error) {
 // rewriteOneSuperseded applies one edit. It holds rowMu the way Supersede does,
 // so a same-id Add is never overwritten. A row that is missing or live is skipped.
 func (s *MemoryStore) rewriteOneSuperseded(e historyEdit) (bool, error) {
+	live, changed, err := s.rewriteRow(e)
+	// The clause hook runs after rowMu is released, because it embeds and the
+	// embedder must not run under rowMu. It fires only when the edit made the row live.
+	if changed && live != nil {
+		s.indexClauses(*live)
+	}
+	return changed, err
+}
+
+// rewriteRow applies one edit under rowMu and returns the row's new index record when
+// the edit left it live (for a restore), or nil when it is still superseded. The
+// bool reports whether the row was changed.
+func (s *MemoryStore) rewriteRow(e historyEdit) (*DocIndex, bool, error) {
 	s.rowMu.Lock()
 	defer s.rowMu.Unlock()
 	s.mu.RLock()
@@ -121,12 +134,12 @@ func (s *MemoryStore) rewriteOneSuperseded(e historyEdit) (bool, error) {
 	col := s.cols[memory.Layer(cur.Layer)]
 	if !ok || !isSuperseded(cur) || col == nil {
 		s.mu.RUnlock()
-		return false, nil
+		return nil, false, nil
 	}
 	old, err := col.GetByID(s.ctx, e.id)
 	s.mu.RUnlock()
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	meta := make(map[string]string, len(cur.Meta)+len(e.set))
 	for k, v := range cur.Meta {
@@ -142,13 +155,16 @@ func (s *MemoryStore) rewriteOneSuperseded(e historyEdit) (bool, error) {
 	if err := col.AddDocument(s.ctx, chromem.Document{
 		ID: e.id, Content: old.Content, Embedding: old.Embedding, Metadata: meta,
 	}); err != nil {
-		return false, err
+		return nil, false, err
 	}
 	s.mu.Lock()
 	cur.Meta = meta
 	s.putLocked(cur)
 	s.mu.Unlock()
-	return true, nil
+	if isSuperseded(cur) {
+		return nil, true, nil
+	}
+	return &cur, true, nil
 }
 
 // Restore makes superseded rows live again: it removes invalid_at, superseded_by
