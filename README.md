@@ -307,11 +307,17 @@ scores it level with large general models as a memory writer. It is a
 mixture-of-experts model with about 30B parameters in total and about 3B active
 per token, so it runs faster than its size suggests. **It is heavy**, though:
 
-| Build | File | Fits |
+| Setup | Build | Needs |
 |---|---|---|
-| Q4_K_M GGUF | about 18 GB | 24 GB+ of VRAM, or less VRAM with the experts kept in system RAM (32 GB of RAM is a tight minimum) |
-| Q8_0 GGUF | about 32 GB | 48 GB of VRAM, or 64 GB of RAM |
-| BF16 (vLLM, SGLang) | about 60 GB | Data-centre GPUs |
+| **Minimum** | Q4_0 / Q4_K_M GGUF (17–18 GB) | 24 GB of RAM and a modern 6-core CPU with AVX2. No GPU needed: with about 3B parameters active per token it runs on the CPU, roughly 8–15 tokens/s on DDR4 |
+| Comfortable | Q4_K_M GGUF | 32 GB of RAM plus a 6–8 GB GPU, with the experts kept in system RAM (about 1.5–2× faster) |
+| Full speed | Q4_K_M GGUF | 24 GB+ of VRAM, with the whole model on the GPU |
+| Higher precision | Q8_0 GGUF (about 32 GB) | 48 GB of VRAM, or 64 GB of RAM |
+| Full weights | BF16 (vLLM, SGLang), about 60 GB | Data-centre GPUs |
+
+The model stays loaded the whole time, so on a 24–32 GB machine it takes most of
+the memory. Builds below 4 bits (Q2, Q1, TQ1, 4–9 GB) load on 12–16 GB of RAM, but
+they lose too much accuracy for memory writing: wrong facts and broken JSON.
 
 Serve it from any OpenAI-compatible server and point HyAtlas at it. For example,
 with llama.cpp and a community GGUF:
