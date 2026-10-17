@@ -41,16 +41,27 @@ const usageMinShown = 3
 // Pruning to 90% of the cap leaves headroom, so it does not run on every write.
 const usageMaxEntries = 20000
 
-// NewUsageStats loads <dataDir>/usage.json if it exists. A missing or unreadable
-// file starts empty, because usage counts are advisory and must never block startup.
-// An empty dataDir keeps the counts in memory only.
+// usageLearningFile is where usage learning is persisted. Before 4.8.0 it shared
+// usage.json with the store's write and search counters, so each overwrote the
+// other and neither survived a restart reliably.
+const usageLearningFile = "usage_learning.json"
+
+// NewUsageStats loads <dataDir>/usage_learning.json if it exists. Without it, a
+// usage.json from before 4.8.0 is read once if it holds per-memory entries rather
+// than the store's counters. A missing or unreadable file starts empty, because
+// usage counts are advisory and must never block startup. An empty dataDir keeps
+// the counts in memory only.
 func NewUsageStats(dataDir string) *UsageStats {
 	u := &UsageStats{m: map[string]usageEntry{}}
 	if dataDir == "" {
 		return u
 	}
-	u.path = filepath.Join(dataDir, "usage.json")
-	if b, err := os.ReadFile(u.path); err == nil {
+	u.path = filepath.Join(dataDir, usageLearningFile)
+	b, err := os.ReadFile(u.path)
+	if err != nil {
+		b, err = os.ReadFile(filepath.Join(dataDir, "usage.json"))
+	}
+	if err == nil {
 		var m map[string]usageEntry
 		if json.Unmarshal(b, &m) == nil && m != nil {
 			u.m = m

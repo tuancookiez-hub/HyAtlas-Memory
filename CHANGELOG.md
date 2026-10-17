@@ -26,6 +26,12 @@ Hy-Memory 2.0 ("Hunyuan"). Still one LLM call per write.
 - Superseded rows record how they were retired (`superseded_how`: replaced,
   updated, restated or merged).
 
+### Fixed
+
+- **Usage learning survives restarts.** Since 4.7.0 it shared `usage.json` with the
+  store's write and search counters, so each overwrote the other. It now has its own
+  `usage_learning.json`; an old `usage.json` holding usage entries is read once.
+
 ### Changed
 
 - Facts are written with an explicit subject ("The user …", or the named person).

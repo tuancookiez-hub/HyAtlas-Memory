@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -157,5 +160,31 @@ func TestStemTerm(t *testing.T) {
 		if got := stemTerm(c.in); got != c.want {
 			t.Errorf("stemTerm(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// Usage learning and the store's counters keep separate files, so writing one does
+// not erase the other. A pre-4.8.0 usage.json holding entries is still read once.
+func TestUsageLearningHasItsOwnFile(t *testing.T) {
+	dir := t.TempDir()
+	st, err := NewMemoryStore(context.Background(), dir, NewLocalEmbedder(384), filepath.Join(dir, "graph.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := NewUsageStats(dir)
+	u.Record([]string{"m1"}, map[string]string{"m1": "port 19528 is the HyAtlas port"}, "use port 19528", "")
+	if err := st.Add("l3_fact", newID(), "a fact", map[string]string{"user_id": "u"}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	if got := NewUsageStats(dir).m["m1"].Shown; got != 1 {
+		t.Fatalf("usage entry lost after a store write: shown=%d", got)
+	}
+	legacy := t.TempDir()
+	if err := os.WriteFile(filepath.Join(legacy, "usage.json"), []byte(`{"m9":{"shown":4,"used":2,"last":""}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := NewUsageStats(legacy).m["m9"].Shown; got != 4 {
+		t.Fatalf("legacy usage.json not read: shown=%d", got)
 	}
 }
