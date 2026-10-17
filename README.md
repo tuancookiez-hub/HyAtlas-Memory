@@ -61,7 +61,7 @@ Useful env vars (installer only):
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.8.1` |
+| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.9.0` |
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the installer caches the model (source builds) | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
 | `HYATLAS_MODE` | Extraction mode written to the Hermes `.env`: `lite` \| `pro` \| `ultra`. Any other exported value stops the installer with an error and nothing is written | `ultra` (asked interactively) |
@@ -394,6 +394,7 @@ Notes:
 | `HYATLAS_SNAPSHOT_EVERY` | `24h` | How often the server zips its data directory (first one a minute after start). `0` or `off` turns snapshots off |
 | `HYATLAS_SNAPSHOT_KEEP` | `7` | How many snapshots to keep; older ones are deleted |
 | `HYATLAS_SNAPSHOT_DIR` | `<data>-snapshots` | Where snapshots go: a folder next to the data directory by default; do not point it inside the data directory |
+| `HYATLAS_RECONCILE` | `off` | `on`: after extraction, one more LLM call compares the new facts with similar stored ones (cosine 0.70 or more) and updates or replaces them. Doubles the LLM calls per write: meant for a local model, not a hosted free tier |
 | `HYATLAS_EPISODE_GAP` | `30m` | pro and ultra: a gap between an owner's writes longer than this ends an episode of work, which then gets one L4 summary. `0` or `off` writes no episode summaries |
 | `HYATLAS_NOW_EVERY` | `15m` | How often an owner's Now page may be rebuilt after writes (pro and ultra only). `0` or `off` rebuilds after every write |
 | `HYATLAS_USAGE_LEARNING` | on | `off` stops search learning from which recalled memories replies actually used |
@@ -419,22 +420,24 @@ and start it again.
 flowchart TD
   A["POST /api/v1/add"] --> RAW["Embed + store L2 raw"]
   RAW --> CTX["Gather context: 5 related facts (>= 0.70),<br/>open intentions, entity pages"]
-  CTX --> X["Extract (LLM, one call): facts with dates,<br/>replaces / updates, intention with due date,<br/>intentions done, entity pages"]
+  CTX --> X["Extract (LLM, one call): facts with dates,<br/>replaces / updates, intention with due date,<br/>intentions done, entity pages, task experiences"]
+  X -.-> RC["Reconcile (LLM, opt-in, local models):<br/>update / replace similar stored facts"]
   X --> P["Promote: L3 facts (0.92 restatement fold),<br/>L1 mirror, L7 intention, L8 pages"]
   P --> NOW["Now page (LLM),<br/>at most every 15 min"]
   P --> EP["Episode summary (LLM),<br/>after a 30-min gap"]
-  P --> ST[("chromem vectors L1-L8<br/>+ doc index")]
+  P --> ST[("chromem vectors L1-L8,<br/>long-fact clauses, doc index")]
   EP --> ST
   KEY["Hermes plugin hands over its key<br/>(localhost, memory only)"] -.-> X
 
   T["Ticker: 6h, catch-up while due"] --> CL["Topic clusters (0.55),<br/>only changed clusters"]
   CL --> C["Consolidate (LLM, per cluster): merges,<br/>drops + reason, schemas, L5 edges, arc"]
-  C --> G["Guards: merge >= 0.65, schema dup >= 0.92,<br/>restore, history relink"]
+  C --> G["Guards: merge >= 0.65, schema dup >= 0.92,<br/>schemas keep their evidence, restore"]
   G --> ST
   C --> KG["L5 graph with evidence"]
 
-  Q["POST /api/v1/search"] --> F["Vector + stemmed keyword RRF, min score 0.60,<br/>dates in the query, intention due dates,<br/>idle-time recency, usage feedback,<br/>near-duplicate demotion"]
-  F --> OUT["Now -> pages -> profile -> proactive -> normal,<br/>with event dates and replaced versions"]
+  Q["POST /api/v1/search"] --> F["Vector (+ long-fact clauses) and stemmed keyword,<br/>fused by rank, weighted by the kind of query"]
+  F --> F2["Dates in the query, entity boost,<br/>graph-assisted recall, idle-time recency,<br/>usage feedback, near-duplicate demotion"]
+  F2 --> OUT["Now -> pages -> profile (+ schemas behind the facts)<br/>-> proactive -> experiences -> normal,<br/>with event dates and replaced versions"]
 ```
 
 Lite mode keeps only the raw write and search: no LLM call at all. Pro adds extraction,
@@ -633,6 +636,23 @@ happened ("yesterday" is resolved against the write date).
 **Fewer repeats.** Of two hits that say the same thing (cosine 0.95 or more and the
 same numbers), the lower one moves to the end of the results.
 
+**Long facts.** A fact over 300 characters (consolidation merges make many) is also
+indexed by its sentences, up to 6, in a separate search-only collection. A query about
+one part of it finds the whole fact at that sentence's score, instead of losing to
+shorter facts. Existing facts are indexed in the background at start.
+
+**The kind of query.** A query with an identifier (`HYATLAS_SYNC_EXTRACT`, `19528`)
+leans on keyword search; a "how / why / prefer" question leans slightly on meaning.
+
+**Entities and the graph.** A query naming one of the owner's entity pages (by name or
+alias) moves hits about it up a few places, and up to 3 facts that mention something
+the knowledge graph links to it may pass a floor 0.10 lower.
+
+**Schemas and intentions get a slot.** Consolidation records which facts support each
+schema (`evidence`). When the results include such facts, the schema behind them gets
+a place in the profile channel. An open intention that ranked just below the cut gets
+a place in the proactive channel.
+
 With an owner filter (`user_id`, aliases included), memories that have no owner at
 all are also returned: rows written before owners were recorded, which in an older
 store is most of the knowledge graph. The graph endpoints already show them under
@@ -652,10 +672,16 @@ Response shape:
     "pages": [...],
     "profile": [...],
     "proactive": [...],
+    "experiences": [...],
     "normal": [...]
   }
 }
 ```
+
+`experiences` holds task experiences: reusable lessons extraction records when a
+turn shows a task actually solved, as "Task: … Solution: … Environment: …", with a
+`confidence` (high, medium, low). They are L3 facts labelled `experience`; a repeat
+of the same lesson updates the stored one.
 
 `now` is present when the search names an owner who has a Now page (the freshest
 page among the owner's aliases). `pages` holds L8 entity pages, at most 2 in a

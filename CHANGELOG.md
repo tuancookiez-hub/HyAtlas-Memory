@@ -1,5 +1,30 @@
 # Changelog
 
+## [4.9.0] — 2026-10-18
+
+The rest of what was worth adopting from Hunyuan (Tencent Hy-Memory 2.0), as planned
+after 4.8.0. Still one LLM call per write unless `HYATLAS_RECONCILE` is turned on.
+
+### Added
+
+- **Task experiences.** When a turn shows a task actually solved, extraction records
+  the lesson: task, what solved it, the environment it depends on, and confidence.
+  They come back in their own `experiences` search channel, and a repeat of the same
+  lesson updates the stored one.
+- **Schemas keep their evidence.** Consolidation records which facts support each
+  schema, and a search that returns those facts also returns the schema behind them.
+- **Long facts are found by their parts.** Facts over 300 characters are also indexed
+  by their sentences, in a search-only collection that counts and lists never see.
+- **Entity boost and graph-assisted recall.** A query naming an entity page favours
+  hits about it, and facts the knowledge graph links to it may pass a slightly lower
+  floor.
+- **Search adapts to the kind of query.** Identifiers lean on keyword search; "how /
+  why" questions lean slightly on meaning.
+- **Slots for schemas and intentions.** The patterns behind the facts found, and an
+  open intention just below the cut, each get a place in the results.
+- **`HYATLAS_RECONCILE=on`** (off by default): a second LLM call per write compares new
+  facts with similar stored ones and updates or replaces them. Meant for local models.
+
 ## [4.8.1] — 2026-10-18
 
 ### Fixed

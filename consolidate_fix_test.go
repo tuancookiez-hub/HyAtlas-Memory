@@ -291,3 +291,27 @@ func TestOldFormatWatermarkRunsOwnerOnce(t *testing.T) {
 		t.Errorf("calls = %d, want 1: an old-format watermark must not skip the owner", n)
 	}
 }
+
+// An experience never merges with an ordinary fact: the merge is refused and both
+// rows stay live.
+func TestMergeRefusesExperienceWithFact(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	fact := seedSourced(t, srv.store, "alice", "a1", "ra-1", "alice likes tea")
+	exp := newID()
+	if err := srv.store.Add(memory.L3Fact, exp, "Task: x. Solution: y.", map[string]string{
+		"user_id": "alice", "agent_id": "a1", "source_layer_label": experienceLabel,
+		"ts": time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := NewConsolidator(srv.store, nil, time.Hour, 0, 200)
+	id := c.applyMerge(scopeKey{user: "alice", agent: "a1"}, "merged", nil, "consolidated",
+		srv.store.GetMany([]string{fact, exp}), time.Now().UTC().Format(time.RFC3339),
+		map[string]bool{fact: true, exp: true}, &Report{}, func(string) {}, func(string) {})
+	if id != "" {
+		t.Fatalf("mixed merge was applied: %s", id)
+	}
+	if got := liveRows(t, srv.store, memory.L3Fact, "alice", "a1"); len(got) != 2 {
+		t.Errorf("live = %d rows, want 2", len(got))
+	}
+}
