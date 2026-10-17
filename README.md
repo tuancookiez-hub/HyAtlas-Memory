@@ -312,6 +312,53 @@ opens another application's credentials and then calls the internet is what
 credential stealers do, and behaviour-based antivirus (Bitdefender, for one) can
 quarantine it together with every file it wrote. `share_llm_key` replaces that.
 
+**Optional: a local memory model (Hy-Memory-30B-A3B).** If you want extraction
+and consolidation to stay on your machine, Tencent's
+[Hy-Memory-30B-A3B](https://huggingface.co/tencent/Hy-Memory-30B-A3B) (Apache-2.0)
+is a good fit. It is trained for exactly this job, writing long-term memory:
+deciding what to keep and how new facts update old ones. Tencent's model card
+scores it level with large general models as a memory writer. It is a
+mixture-of-experts model with about 30B parameters in total and about 3B active
+per token, so it runs faster than its size suggests. **It is heavy**, though:
+
+| Setup | Build | Needs |
+|---|---|---|
+| **Minimum** | Q4_0 / Q4_K_M GGUF (17–18 GB) | 24 GB of RAM and a modern 6-core CPU with AVX2. No GPU needed: with about 3B parameters active per token it runs on the CPU, roughly 8–15 tokens/s on DDR4 |
+| Comfortable | Q4_K_M GGUF | 32 GB of RAM plus a 6–8 GB GPU, with the experts kept in system RAM (about 1.5–2× faster) |
+| Full speed | Q4_K_M GGUF | 24 GB+ of VRAM, with the whole model on the GPU |
+| Higher precision | Q8_0 GGUF (about 32 GB) | 48 GB of VRAM, or 64 GB of RAM |
+| Full weights | BF16 (vLLM, SGLang), about 60 GB | Data-centre GPUs |
+
+The model stays loaded the whole time, so on a 24–32 GB machine it takes most of
+the memory. Builds below 4 bits (Q2, Q1, TQ1, 4–9 GB) load on 12–16 GB of RAM, but
+they lose too much accuracy for memory writing: wrong facts and broken JSON.
+
+Serve it from any OpenAI-compatible server and point HyAtlas at it. For example,
+with llama.cpp and a community GGUF:
+
+```bash
+llama-server -m Hy-Memory-30B-A3B-Q4_K_M.gguf --port 8080 -c 32768 --n-cpu-moe 48 --jinja --chat-template-kwargs '{"reasoning_effort":"no_think"}'
+```
+```bash
+export HYATLAS_LLM_BASE="http://127.0.0.1:8080/v1"
+export HYATLAS_LLM_MODEL="hy-memory"
+export HYATLAS_LLM_KEY="local"   # any non-empty value; a local server ignores it
+```
+
+Notes:
+- `--n-cpu-moe` keeps that many layers' experts in system RAM. Raise it until
+  the model fits your VRAM, and lower it for speed.
+- The model card runs it with `reasoning_effort: "no_think"`. Set that on the
+  server as shown, because HyAtlas does not send it per request.
+- To try it without giving up a hosted model, set it as the fallback instead
+  (`HYATLAS_LLM_FALLBACK_BASE`, `HYATLAS_LLM_FALLBACK_MODEL`). It then answers
+  only when the primary fails.
+- Consolidation prompts are several thousand tokens. On a mid-range desktop
+  with the experts in RAM, expect minutes per consolidation call. That is fine
+  for a background pass, but slower than a hosted model.
+- It was trained on the Mem0, MemOS and Hy-Memory prompt formats. HyAtlas uses
+  its own, so check a few consolidation passes before relying on it.
+
 **All configuration is via environment variables** — the binary reads no settings from its command line:
 
 | Variable | Default | Purpose |
