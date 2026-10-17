@@ -291,12 +291,7 @@ func (s *Server) handleDedupeFacts(w http.ResponseWriter, r *http.Request) {
 	var pairs []pair
 	oldDoc := map[string]DocIndex{}
 	for k, fs := range byOwner {
-		sort.SliceStable(fs, func(i, j int) bool {
-			if fs[i].Ts != fs[j].Ts {
-				return fs[i].Ts > fs[j].Ts
-			}
-			return fs[i].ID > fs[j].ID
-		})
+		sort.SliceStable(fs, func(i, j int) bool { return newerFirst(fs[i], fs[j]) })
 		gone := map[string]bool{}
 		visited := map[string]bool{}
 		for _, f := range fs {

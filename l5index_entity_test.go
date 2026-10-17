@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"path/filepath"
 	"testing"
 
 	"github.com/tuancookiez-hub/hyatlas-v4/memory"
@@ -30,12 +29,7 @@ func simTo(s float64) []float32 {
 // default HYATLAS_DEDUPE_SCORE.
 func newL5EntityStore(t *testing.T, vecs vecEmbedder) *MemoryStore {
 	t.Helper()
-	dir := t.TempDir()
-	st, err := NewMemoryStore(context.Background(), dir, vecs, filepath.Join(dir, "graph.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(st.Close)
+	st := guardStore(t, vecs)
 	st.l5Dedupe = 0.92
 	return st
 }

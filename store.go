@@ -45,8 +45,11 @@ type MemoryStore struct {
 	db    *chromem.DB
 	g     *graph.Store
 	embed Embedder
-	ctx   context.Context
-	cols  map[memory.Layer]*chromem.Collection
+	// semantic is false when the embedder's vectors carry no meaning (the hashed
+	// local stub), so similarity guards must not judge by them.
+	semantic bool
+	ctx      context.Context
+	cols     map[memory.Layer]*chromem.Collection
 
 	mu    sync.RWMutex
 	index map[string]DocIndex
@@ -106,7 +109,7 @@ func NewMemoryStore(ctx context.Context, dir string, embed Embedder, graphPath s
 	ef := func(c context.Context, text string) ([]float32, error) {
 		return embed.Embed(c, text)
 	}
-	s := &MemoryStore{db: db, g: g, embed: embed, ctx: ctx,
+	s := &MemoryStore{db: db, g: g, embed: embed, semantic: isSemantic(embed), ctx: ctx,
 		cols: map[memory.Layer]*chromem.Collection{}, index: map[string]DocIndex{},
 		superseded: map[string]memory.Layer{}, hidden: map[memory.Layer]int{},
 		indexPath:  filepath.Join(dir, "doc_index.json"),
@@ -171,6 +174,13 @@ func (s *MemoryStore) loadIndex() bool {
 
 // Add writes a doc into a layer collection and updates the exact index.
 func (s *MemoryStore) Add(layer memory.Layer, id, content string, meta map[string]string) error {
+	return s.addWithVector(layer, id, content, meta, nil)
+}
+
+// addWithVector is Add with the content's embedding already computed, so a caller
+// that embedded the text to judge it does not pay for a second embedding. A nil
+// emb is computed here.
+func (s *MemoryStore) addWithVector(layer memory.Layer, id, content string, meta map[string]string, emb []float32) error {
 	doc := chromem.Document{ID: id, Content: content}
 	if meta != nil {
 		doc.Metadata = meta
@@ -182,9 +192,11 @@ func (s *MemoryStore) Add(layer memory.Layer, id, content string, meta map[strin
 	// Embed before rowMu. The embedder can be a slow or hung HTTP call, and holding
 	// the row lock across it would stall every Add and Supersede. Chromem uses the
 	// vector given here rather than embedding the content a second time.
-	emb, err := s.embed.Embed(s.ctx, content)
-	if err != nil {
-		return fmt.Errorf("couldn't create embedding of document: %w", err)
+	var err error
+	if emb == nil {
+		if emb, err = s.embed.Embed(s.ctx, content); err != nil {
+			return fmt.Errorf("couldn't create embedding of document: %w", err)
+		}
 	}
 	doc.Embedding = emb
 	// rowMu keeps this write apart from a Supersede rewrite of the same row, so a
@@ -204,6 +216,17 @@ func (s *MemoryStore) Add(layer memory.Layer, id, content string, meta map[strin
 	s.writes.Add(1)
 	s.persistUsageAsync()
 	return s.persistIndex()
+}
+
+// newerFirst orders rows newest first, ties broken by id. Rows come out of a map
+// in random order and a consolidation pass writes many rows with the same second,
+// so without the tie-break two requests disagree on the order and paging skips or
+// repeats rows.
+func newerFirst(a, b DocIndex) bool {
+	if a.Ts != b.Ts {
+		return a.Ts > b.Ts
+	}
+	return a.ID > b.ID
 }
 
 // isSuperseded reports whether the slow path replaced or dropped a doc. Such a
@@ -397,15 +420,7 @@ func (s *MemoryStore) list(layer memory.Layer, userID, agentID string, limit, of
 		}
 		all = append(all, d)
 	}
-	// Newest first, ties broken by id. Rows come out of a map in random order and a
-	// consolidation pass writes many rows with the same second, so without the
-	// tie-break two requests disagree on the order and paging skips or repeats rows.
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].Ts != all[j].Ts {
-			return all[i].Ts > all[j].Ts
-		}
-		return all[i].ID > all[j].ID
-	})
+	sort.Slice(all, func(i, j int) bool { return newerFirst(all[i], all[j]) })
 	total := len(all)
 	if offset > total {
 		offset = total
@@ -425,8 +440,7 @@ func (s *MemoryStore) list(layer memory.Layer, userID, agentID string, limit, of
 // Rows that a deleted row had replaced keep a readable history: relinkHistory
 // points them at the deleted row's own successor, or records why they were dropped.
 func (s *MemoryStore) Delete(ids []string, layer memory.Layer, userID, agentID string) (int, error) {
-	successors := map[string]string{}
-	deleted, err := s.deleteRows(ids, layer, userID, agentID, successors)
+	deleted, successors, err := s.deleteRows(ids, layer, userID, agentID)
 	if deleted > 0 {
 		if _, rerr := s.relinkHistory(successors); rerr != nil && err == nil {
 			err = rerr
@@ -435,9 +449,9 @@ func (s *MemoryStore) Delete(ids []string, layer memory.Layer, userID, agentID s
 	return deleted, err
 }
 
-// deleteRows is Delete without the history repair. It records in successors what
-// each deleted row had been superseded by.
-func (s *MemoryStore) deleteRows(ids []string, layer memory.Layer, userID, agentID string, successors map[string]string) (int, error) {
+// deleteRows is Delete without the history repair. It also returns what each
+// deleted row had been superseded by.
+func (s *MemoryStore) deleteRows(ids []string, layer memory.Layer, userID, agentID string) (int, map[string]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	targets := map[string]bool{}
@@ -462,6 +476,7 @@ func (s *MemoryStore) deleteRows(ids []string, layer memory.Layer, userID, agent
 		}
 	}
 	deleted := 0
+	successors := make(map[string]string, len(targets))
 	for id := range targets {
 		d := s.index[id]
 		successors[id] = d.Meta["superseded_by"]
@@ -471,7 +486,7 @@ func (s *MemoryStore) deleteRows(ids []string, layer memory.Layer, userID, agent
 		s.forgetLocked(id)
 		deleted++
 	}
-	return deleted, s.persistIndexLocked()
+	return deleted, successors, s.persistIndexLocked()
 }
 
 // LayerCounts returns the number of live docs per layer (exact). L5 is the
@@ -580,6 +595,10 @@ func (s *MemoryStore) supersedeWith(ids []string, by string, extra map[string]st
 		meta["superseded_by"] = by
 		for k, v := range extra {
 			meta[k] = v
+		}
+		// A drop always says why, so history never shows an unexplained gap.
+		if by == "" && meta["drop_reason"] == "" {
+			meta["drop_reason"] = reasonNotRecorded
 		}
 		meta["layer"] = d.Layer
 		if getErr != nil {
