@@ -50,6 +50,9 @@ type MemoryStore struct {
 	semantic bool
 	ctx      context.Context
 	cols     map[memory.Layer]*chromem.Collection
+	// clauses holds the search-only clause rows of long L3 facts (see clauses.go).
+	// It is not a memory.Layer, so counts, lists and normal search never see it.
+	clauses *chromem.Collection
 
 	mu    sync.RWMutex
 	index map[string]DocIndex
@@ -123,6 +126,11 @@ func NewMemoryStore(ctx context.Context, dir string, embed Embedder, graphPath s
 		}
 		s.cols[l] = col
 	}
+	clauses, err := db.GetOrCreateCollection(clauseCollection, nil, ef)
+	if err != nil {
+		return nil, err
+	}
+	s.clauses = clauses
 	pages, err := NewPageStore(dir, s)
 	if err != nil {
 		return nil, err
@@ -215,6 +223,9 @@ func (s *MemoryStore) addWithVector(layer memory.Layer, id, content string, meta
 	}
 	s.writes.Add(1)
 	s.persistUsageAsync()
+	// Clause rows are written after the parent is indexed, so a clause hit can map
+	// back to it. A failure there is logged and does not fail the write.
+	s.indexClauses(docIndexFrom(id, string(layer), content, meta))
 	return s.persistIndex()
 }
 
@@ -483,6 +494,7 @@ func (s *MemoryStore) deleteRows(ids []string, layer memory.Layer, userID, agent
 		if col, ok := s.cols[memory.Layer(d.Layer)]; ok {
 			_ = col.Delete(s.ctx, nil, nil, id)
 		}
+		s.dropClauses(id)
 		s.forgetLocked(id)
 		deleted++
 	}
@@ -636,6 +648,8 @@ func (s *MemoryStore) supersedeWith(ids []string, by string, extra map[string]st
 		}
 		cur.Meta = r.meta
 		s.putLocked(cur)
+		// A superseded fact is no longer searchable, so its clause rows go too.
+		s.dropClauses(cur.ID)
 		marked++
 	}
 	if err := s.persistIndexLocked(); err != nil && firstErr == nil {
