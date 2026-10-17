@@ -166,9 +166,15 @@ type Extraction struct {
 type Fact struct {
 	Data  string `json:"data"`
 	Layer string `json:"layer"` // user_preferences / project_state / technical_lesson / decision / negative_knowledge
+	// When is the date the fact's event happened or is due (YYYY-MM-DD or YYYY-MM),
+	// resolved by the model against the write date. Empty for timeless facts.
+	When string `json:"when,omitempty"`
 	// Replaces names related facts (shown to the model as context) that this fact
-	// updates or contradicts: same subject, new value or state.
+	// contradicts: same subject, new value or state.
 	Replaces idList `json:"replaces,omitempty"`
+	// Updates names related facts this one extends without contradicting: more
+	// detail, or the same kind of event again. The new text carries the old one.
+	Updates idList `json:"updates,omitempty"`
 }
 
 // idList is a list of memory ids the model sent back. Small models get the
@@ -244,6 +250,9 @@ type Schema struct {
 // Intention is the user's current goal / intent (L7). Accepts string or object.
 type Intention struct {
 	Goal string
+	// Due is when the goal is due (YYYY-MM-DD or YYYY-MM), resolved by the model
+	// against the write date. Empty when no deadline was stated.
+	Due string
 	// Replaces names open intentions (shown to the model as context) that this
 	// goal continues or supersedes.
 	Replaces idList
@@ -258,12 +267,14 @@ func (i *Intention) UnmarshalJSON(b []byte) error {
 	}
 	var obj struct {
 		Goal     string `json:"goal"`
+		Due      string `json:"due"`
 		Replaces idList `json:"replaces"`
 	}
 	if err := json.Unmarshal(b, &obj); err != nil {
 		return err
 	}
 	i.Goal = obj.Goal
+	i.Due = obj.Due
 	i.Replaces = obj.Replaces
 	return nil
 }
@@ -292,14 +303,17 @@ func (l *LLMClient) CompleteWith(ctx context.Context, text string, ec ExtractCon
 }
 
 func (l *LLMClient) completeOnce(ctx context.Context, text string, reinforce bool, ec ExtractContext) (*Extraction, error) {
-	// System1: this pass sees ONE turn, so it may only produce what a single
-	// turn can actually evidence — facts, a narrative summary of itself, and the
-	// current intention. L5 knowledge and L6 schemas are deliberately NOT
-	// requested here: a recurring pattern is by definition not observable in one
-	// turn, and asking for one produced guesses that then competed with the real
-	// thing at retrieval time. The slow path owns those layers.
+	// System1: this pass sees ONE turn, so it may only produce what a single turn
+	// can actually evidence: facts, the current intention and entity pages.
+	// Summaries come from episodes (episode.go), not from each turn. L5 knowledge
+	// and L6 schemas are deliberately NOT requested here: a recurring pattern is by
+	// definition not observable in one turn, and asking for one produced guesses
+	// that then competed with the real thing at retrieval time. The slow path owns
+	// those layers.
 	system := extractSystemPrompt(!ec.Empty())
-	user := ec.promptSection() + "Input: " + text
+	// The date lets the model resolve "yesterday" or "next Tuesday" into a fact's
+	// "when"; without it relative dates could only be copied as words.
+	user := todayLine(time.Now()) + ec.promptSection() + "Input: " + text
 	messages := []map[string]string{
 		{"role": "system", "content": system},
 		{"role": "user", "content": user},
@@ -454,6 +468,12 @@ func parseExtraction(content string) (*Extraction, error) {
 		ex.Facts = []Fact{}
 	}
 	return &ex, nil
+}
+
+// todayLine is the date line put before an extraction input, in local time
+// because "today" is the user's day, not UTC's.
+func todayLine(now time.Time) string {
+	return "Today: " + now.Format("2006-01-02") + " (" + now.Weekday().String() + ")\n\n"
 }
 
 func trimFences(s string) string {

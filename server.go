@@ -211,34 +211,54 @@ func promoteExtractionDedupe(store *MemoryStore, ex *Extraction, userID, agentID
 // that are in ec are honoured, because the reply is model output and an id it
 // invents or garbles must never supersede a real row. With an empty ec it is
 // promoteExtractionDedupe exactly.
-func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext, userID, agentID, sourceID string, dedupe float64) {
+func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext, userID, agentID, sourceID string, dedupe float64) []string {
 	now := time.Now().UTC().Format(time.RFC3339)
+	var factIDs []string
 	// L3 Facts
 	for _, f := range ex.Facts {
 		if f.Data == "" {
 			continue
 		}
-		// Found before the new rows are written, so the new L1 mirror is not
-		// taken for one of the old fact's mirrors.
-		var stale []string
+		// What the new fact retires, and how, so history on read can say "was X"
+		// for a contradiction but not for a restatement. Found before the new rows
+		// are written, so the new L1 mirror is not taken for one of the old fact's
+		// mirrors.
+		stale := map[string][]string{}
 		if dedupe > 0 {
 			near, err := store.search(f.Data, 1, memory.L3Fact, userID, agentID)
 			if err == nil && len(near) > 0 && float64(near[0].Score) >= dedupe && sameNumbers(near[0].Content, f.Data) {
 				old := near[0]
-				stale = append([]string{old.ID}, store.MirrorsOf(memory.L1Profile, old.Meta["source_id"], old.Content)...)
+				stale[howRestated] = append([]string{old.ID}, store.MirrorsOf(memory.L1Profile, old.Meta["source_id"], old.Content)...)
 			}
 		}
-		// The model named related facts this one updates or contradicts. Same
-		// lookup point as above, for the same reason: before the new rows exist.
+		// The model named related facts this one contradicts or extends. Only ids
+		// it was shown count; an id in both lists is taken as replaced.
 		replaced := shown(f.Replaces, ec.hasRelated)
 		if len(replaced) > 0 {
-			stale = append(stale, store.withMirrors(replaced)...)
+			stale[howReplaced] = append(stale[howReplaced], store.withMirrors(replaced)...)
+		}
+		var updated []string
+		for _, id := range shown(f.Updates, ec.hasRelated) {
+			if !containsID(replaced, id) {
+				updated = append(updated, id)
+			}
+		}
+		if len(updated) > 0 {
+			stale[howUpdated] = append(stale[howUpdated], store.withMirrors(updated)...)
 		}
 		factID := newID()
-		_ = store.Add(memory.L3Fact, factID, f.Data, map[string]string{
+		meta := map[string]string{
 			"user_id": userID, "agent_id": agentID,
 			"source_layer_label": f.Layer, "source_id": sourceID, "ts": now,
-		})
+		}
+		if when := normalizeEventDate(f.When); when != "" {
+			meta[metaEventAt] = when
+		}
+		if err := store.Add(memory.L3Fact, factID, f.Data, meta); err != nil {
+			log.Printf("extract: fact: %v", err)
+			continue
+		}
+		factIDs = append(factIDs, factID)
 		// L1 Profile: user_preferences are stable identity — mirror to profile layer.
 		if f.Layer == "user_preferences" {
 			_ = store.Add(memory.L1Profile, newID(), f.Data, map[string]string{
@@ -246,26 +266,31 @@ func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext,
 				"source_id": sourceID, "ts": now,
 			})
 		}
-		if len(stale) > 0 {
-			if n, err := store.Supersede(stale, factID); err != nil {
-				log.Printf("dedupe: supersede %s: %v", stale[0], err)
-			} else if len(replaced) > 0 {
-				log.Printf("extract: fact %s replaces %d of %d stale row(s) %v", factID, n, len(stale), replaced)
+		for _, how := range []string{howRestated, howReplaced, howUpdated} {
+			ids := stale[how]
+			if len(ids) == 0 {
+				continue
+			}
+			n, err := store.supersedeWith(ids, factID, map[string]string{metaSupersededHow: how})
+			if err != nil {
+				log.Printf("extract: supersede (%s) %s: %v", how, ids[0], err)
+			} else if how != howRestated {
+				log.Printf("extract: fact %s %s %d of %d row(s)", factID, how, n, len(ids))
 			}
 		}
 	}
-	// L4 Summary (enabled layer — the narrative arc)
-	if ex.Summary != nil && strings.TrimSpace(ex.Summary.Text) != "" {
-		_ = store.Add(memory.L4Summary, newID(), ex.Summary.Text, map[string]string{
-			"user_id": userID, "agent_id": agentID, "ts": now,
-		})
-	}
+	// No L4 summary per write: a summary of one turn restated its facts. Episodes
+	// (episode.go) summarise a whole stretch of work once it ends.
 	// L7 Intention
 	if ex.Intention != nil && strings.TrimSpace(ex.Intention.Goal) != "" {
 		introID := newID()
-		_ = store.Add(memory.L7Intention, introID, ex.Intention.Goal, map[string]string{
-			"user_id": userID, "agent_id": agentID, "ts": now,
-		})
+		meta := map[string]string{"user_id": userID, "agent_id": agentID, "ts": now}
+		// A due date keeps the intention live until it is due (dropStaleIntentions),
+		// instead of the fixed lifetime an undated goal gets.
+		if due := normalizeEventDate(ex.Intention.Due); due != "" {
+			meta[metaDueAt] = due
+		}
+		_ = store.Add(memory.L7Intention, introID, ex.Intention.Goal, meta)
 		store.applyIntentions(ex, ec, introID, sourceID)
 	} else {
 		store.applyIntentions(ex, ec, "", sourceID)
@@ -281,6 +306,7 @@ func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext,
 			log.Printf("extract: pages: created %d, updated %d (source %s)", created, updated, sourceID)
 		}
 	}
+	return factIDs
 }
 
 func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {

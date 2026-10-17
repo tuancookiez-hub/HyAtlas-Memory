@@ -162,3 +162,21 @@ func TestRelevantSchemasPicksNearest(t *testing.T) {
 		t.Fatalf("%d schemas shown, cap is %d", len(got), maxPromptSchemas)
 	}
 }
+
+// A consolidation merge records that its originals were merged, so history on read
+// does not present them as older, contradicted versions.
+func TestMergeRecordsHowMerged(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	st := guardStore(t, vecEmbedder{"merged": {1, 0, 0}, "close": simTo(0.9), "near": simTo(0.8)})
+	a := addRow(t, st, memory.L3Fact, "close", now)
+	b := addRow(t, st, memory.L3Fact, "near", now)
+	runScope(t, st, map[string]any{
+		"merges": []any{map[string]any{"text": "merged", "supersedes": []string{a, b}}},
+		"drops":  []any{}, "schemas": []any{},
+	})
+	for _, d := range st.GetMany([]string{a, b}) {
+		if d.Meta[metaSupersededHow] != howMerged {
+			t.Errorf("%s superseded_how = %q, want %q", d.ID, d.Meta[metaSupersededHow], howMerged)
+		}
+	}
+}
