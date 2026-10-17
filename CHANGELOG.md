@@ -1,8 +1,42 @@
 # Changelog
 
-## [Unreleased]
+## [4.8.0] — 2026-10-17
+
+Precision per fact and smarter recall, from a code-level comparison with Tencent's
+Hy-Memory 2.0 ("Hunyuan"). Still one LLM call per write.
+
+### Added
+
+- **Event dates.** Extraction is told today's date and gives each fact the date its
+  event happened or is due (`event_at`). Search returns it as `event_date`, and the
+  plugin shows "happened 2026-10-05".
+- **Dates in the query.** "yesterday", "last week", "in november", "2026-10-05" and
+  similar are read from the query: facts dated in that window join the results and
+  hits outside it move down.
+- **Updates with counts.** Besides replacing a contradicted fact, extraction can
+  extend one: new detail, or the same event again ("has injured the ankle twice:
+  …"), instead of writing a near-duplicate.
+- **Intention due dates.** "The interview next Tuesday" stays in recall until a day
+  after it is due, instead of a fixed 7 days.
+- **Episode summaries.** One L4 summary per stretch of work (`HYATLAS_EPISODE_GAP`,
+  30 minutes), instead of one per write. `/api/v1/status` shows open and pending
+  episodes.
+- **History on read.** A hit that replaced an older fact carries it under `history`,
+  and the plugin shows "was: … (until …)".
+- Superseded rows record how they were retired (`superseded_how`: replaced,
+  updated, restated or merged).
 
 ### Changed
+
+- Facts are written with an explicit subject ("The user …", or the named person).
+- Recency counts from the later of when a memory was written and when a reply last
+  used it, so an old memory still in use does not sink.
+- Of two near-identical hits (cosine 0.95, same numbers), the lower one moves to the
+  end of the results.
+- Keyword search matches word forms (tests/test, fixed/fix, broken/break) through a
+  small built-in stemmer.
+- The Now page also reads the owner's newest facts, since summaries now wait for an
+  episode to end.
 
 - A drop made without a reason records "dropped without a recorded reason" when
   it is written, instead of waiting for the next start to label it.
