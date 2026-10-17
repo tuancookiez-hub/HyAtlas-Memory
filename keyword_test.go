@@ -11,7 +11,7 @@ import (
 // TestKeywordTokens checks that identifiers split on punctuation and stopwords drop out.
 func TestKeywordTokens(t *testing.T) {
 	got := keywordTokens("What is HYATLAS_SYNC_EXTRACT on port 19528? RSI(2) Reg-T")
-	want := []string{"hyatlas", "sync", "extract", "port", "19528", "rsi", "reg"}
+	want := []string{"hyatla", "sync", "extract", "port", "19528", "rsi", "reg"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("keywordTokens: want %v, got %v", want, got)
 	}

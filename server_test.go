@@ -136,16 +136,17 @@ func TestPromoteExtractionMirrorsPreferencesToProfile(t *testing.T) {
 	}
 }
 
-// Summary and intention are System1 products and must still be written.
-func TestPromoteExtractionWritesSummaryAndIntention(t *testing.T) {
+// The intention is a System1 product and is written; a per-write summary is not,
+// because episodes (episode.go) summarise whole stretches of work instead.
+func TestPromoteExtractionWritesIntentionNotSummary(t *testing.T) {
 	srv := newTestServer(t, "test", "test")
 	promoteExtraction(srv.store, &Extraction{
 		Summary:   &Summary{Text: "configured the service port"},
 		Intention: &Intention{Goal: "ship the listener"},
 	}, "default", "default", "mem-si-source")
 
-	if _, n := srv.store.List("l4_summary", "", "", 1, 0, false); n != 1 {
-		t.Errorf("L4 summary count = %d, want 1", n)
+	if _, n := srv.store.List("l4_summary", "", "", 1, 0, false); n != 0 {
+		t.Errorf("L4 summary count = %d, want 0", n)
 	}
 	if _, n := srv.store.List("l7_intention", "", "", 1, 0, false); n != 1 {
 		t.Errorf("L7 intention count = %d, want 1", n)

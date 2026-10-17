@@ -18,8 +18,8 @@ const (
 	// reasonReplacementDeleted is the drop_reason of a row whose replacement was
 	// deleted and had no live successor to point at instead.
 	reasonReplacementDeleted = "the fact that replaced it was later deleted"
-	// reasonNotRecorded is the drop_reason of a row dropped by a version that did
-	// not record why (before 4.6.0) or retracted without one.
+	// reasonNotRecorded is the drop_reason of a row dropped without a reason: by a
+	// caller that gave none, or by a version before 4.6.0 that did not record one.
 	reasonNotRecorded = "dropped without a recorded reason"
 	// reasonMergeRetracted is the drop_reason of a merged fact taken back because
 	// none of the facts it replaced could be marked.
@@ -35,14 +35,8 @@ const (
 //
 // It rewrites only rows that are already superseded, which a Supersede pass never
 // touches, so it does not take supMu: Delete runs it and may itself be called
-// while a pass is in flight. It takes rowMu per row the way Supersede does, so a
-// same-id Add is never overwritten.
+// while a pass is in flight.
 func (s *MemoryStore) relinkHistory(successors map[string]string) (int, error) {
-	type fix struct {
-		id    string
-		by    string
-		extra map[string]string
-	}
 	s.mu.RLock()
 	resolve := func(by string) string {
 		seen := map[string]bool{}
@@ -55,7 +49,7 @@ func (s *MemoryStore) relinkHistory(successors map[string]string) (int, error) {
 		}
 		return ""
 	}
-	var fixes []fix
+	var edits []historyEdit
 	for id := range s.superseded {
 		d := s.index[id]
 		by := d.Meta["superseded_by"]
@@ -65,27 +59,18 @@ func (s *MemoryStore) relinkHistory(successors map[string]string) (int, error) {
 				continue
 			}
 			if next := resolve(successors[by]); next != "" {
-				fixes = append(fixes, fix{id, next, nil})
+				edits = append(edits, historyEdit{id: id, set: map[string]string{"superseded_by": next}})
 			} else {
-				fixes = append(fixes, fix{id, "", map[string]string{"drop_reason": reasonReplacementDeleted}})
+				edits = append(edits, historyEdit{id: id, set: map[string]string{
+					"superseded_by": "", "drop_reason": reasonReplacementDeleted}})
 			}
 		case d.Meta["drop_reason"] == "":
-			fixes = append(fixes, fix{id, "", map[string]string{"drop_reason": reasonNotRecorded}})
+			edits = append(edits, historyEdit{id: id, set: map[string]string{"drop_reason": reasonNotRecorded}})
 		}
 	}
 	s.mu.RUnlock()
-	sort.Slice(fixes, func(i, j int) bool { return fixes[i].id < fixes[j].id })
+	sort.Slice(edits, func(i, j int) bool { return edits[i].id < edits[j].id })
 
-	edits := make([]historyEdit, len(fixes))
-	for i, f := range fixes {
-		f := f
-		edits[i] = historyEdit{id: f.id, edit: func(meta map[string]string) {
-			meta["superseded_by"] = f.by
-			for k, v := range f.extra {
-				meta[k] = v
-			}
-		}}
-	}
 	n, err := s.rewriteSuperseded(edits)
 	if n > 0 {
 		log.Printf("history: relinked %d superseded rows", n)
@@ -93,61 +78,28 @@ func (s *MemoryStore) relinkHistory(successors map[string]string) (int, error) {
 	return n, err
 }
 
-// historyEdit changes the metadata of one superseded row.
+// historyEdit changes the metadata of one superseded row: the keys in del are
+// removed, then the keys in set are written.
 type historyEdit struct {
-	id   string
-	edit func(meta map[string]string)
+	id  string
+	set map[string]string
+	del []string
 }
 
-// rewriteSuperseded applies each edit to its row, if the row is still superseded,
-// and writes the row back to chromem and the index. Content and vector are kept. It
-// takes rowMu per row the way Supersede does, so a same-id Add is never
-// overwritten, and writes the index file once. It returns how many rows changed.
+// rewriteSuperseded applies each edit to its row while the row is still
+// superseded, keeping content and vector, and writes the index file once. It
+// returns how many rows changed and the first error.
 func (s *MemoryStore) rewriteSuperseded(edits []historyEdit) (int, error) {
 	n := 0
 	var firstErr error
 	for _, e := range edits {
-		s.rowMu.Lock()
-		s.mu.RLock()
-		cur, ok := s.index[e.id]
-		col := s.cols[memory.Layer(cur.Layer)]
-		var old chromem.Document
-		var err error
-		if ok && isSuperseded(cur) && col != nil {
-			old, err = col.GetByID(s.ctx, e.id)
+		changed, err := s.rewriteOneSuperseded(e)
+		if changed {
+			n++
 		}
-		s.mu.RUnlock()
-		if !ok || !isSuperseded(cur) || col == nil {
-			s.rowMu.Unlock()
-			continue
+		if err != nil && firstErr == nil {
+			firstErr = err
 		}
-		if err != nil {
-			s.rowMu.Unlock()
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		meta := make(map[string]string, len(cur.Meta)+1)
-		for k, v := range cur.Meta {
-			meta[k] = v
-		}
-		e.edit(meta)
-		if err := col.AddDocument(s.ctx, chromem.Document{
-			ID: e.id, Content: old.Content, Embedding: old.Embedding, Metadata: meta,
-		}); err != nil {
-			s.rowMu.Unlock()
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		s.mu.Lock()
-		cur.Meta = meta
-		s.putLocked(cur)
-		s.mu.Unlock()
-		s.rowMu.Unlock()
-		n++
 	}
 	if n > 0 {
 		s.mu.Lock()
@@ -159,20 +111,56 @@ func (s *MemoryStore) rewriteSuperseded(edits []historyEdit) (int, error) {
 	return n, firstErr
 }
 
+// rewriteOneSuperseded applies one edit. It holds rowMu the way Supersede does,
+// so a same-id Add is never overwritten. A row that is missing or live is skipped.
+func (s *MemoryStore) rewriteOneSuperseded(e historyEdit) (bool, error) {
+	s.rowMu.Lock()
+	defer s.rowMu.Unlock()
+	s.mu.RLock()
+	cur, ok := s.index[e.id]
+	col := s.cols[memory.Layer(cur.Layer)]
+	if !ok || !isSuperseded(cur) || col == nil {
+		s.mu.RUnlock()
+		return false, nil
+	}
+	old, err := col.GetByID(s.ctx, e.id)
+	s.mu.RUnlock()
+	if err != nil {
+		return false, err
+	}
+	meta := make(map[string]string, len(cur.Meta)+len(e.set))
+	for k, v := range cur.Meta {
+		meta[k] = v
+	}
+	for _, k := range e.del {
+		delete(meta, k)
+	}
+	for k, v := range e.set {
+		meta[k] = v
+	}
+	meta["layer"] = cur.Layer
+	if err := col.AddDocument(s.ctx, chromem.Document{
+		ID: e.id, Content: old.Content, Embedding: old.Embedding, Metadata: meta,
+	}); err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	cur.Meta = meta
+	s.putLocked(cur)
+	s.mu.Unlock()
+	return true, nil
+}
+
 // Restore makes superseded rows live again: it removes invalid_at, superseded_by
 // and drop_reason and records restored_at. It undoes a supersede the model got
 // wrong, such as a fact merged into unrelated text. A row that is live or missing
 // is skipped. It returns how many rows were restored.
 func (s *MemoryStore) Restore(ids []string) (int, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	edits := make([]historyEdit, 0, len(ids))
-	for _, id := range ids {
-		edits = append(edits, historyEdit{id: id, edit: func(meta map[string]string) {
-			delete(meta, "invalid_at")
-			delete(meta, "superseded_by")
-			delete(meta, "drop_reason")
-			meta["restored_at"] = now
-		}})
+	set := map[string]string{"restored_at": time.Now().UTC().Format(time.RFC3339)}
+	del := []string{"invalid_at", "superseded_by", "drop_reason"}
+	edits := make([]historyEdit, len(ids))
+	for i, id := range ids {
+		edits[i] = historyEdit{id: id, set: set, del: del}
 	}
 	return s.rewriteSuperseded(edits)
 }

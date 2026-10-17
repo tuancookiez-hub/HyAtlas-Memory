@@ -61,7 +61,7 @@ Useful env vars (installer only):
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.7.3` |
+| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.8.0` |
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the installer caches the model (source builds) | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
 | `HYATLAS_MODE` | Extraction mode written to the Hermes `.env`: `lite` \| `pro` \| `ultra`. Any other exported value stops the installer with an error and nothing is written | `ultra` (asked interactively) |
@@ -178,13 +178,16 @@ The three modes form a ladder of reasoning scope, not of latency:
 | Mode | LLM calls | Reasoning scope | Layers | Consolidation |
 |---|---|---|---|---|
 | `lite` | none | — | **1 / 8** — L2 Raw only | no |
-| `pro` | one per write | within one turn | **6 / 8** — L1, L2, L3, L4, L7, L8 | no |
+| `pro` | one per write, plus one per episode summary | within one turn | **6 / 8** — L1, L2, L3, L4, L7, L8 | no |
 | `ultra` *(default)* | one per write **+** periodic batch | **across memories and time** | **8 / 8** at steady state (7 / 8 with `HYATLAS_CONSOLIDATE_GRAPH=off`) | **yes** |
 
 The two systems own disjoint layers:
 
-- **System1 (per turn)** — L1 Profile, L2 Raw, L3 Fact, L4 Summary, L7 Intention, L8 Entity pages.
-  What one turn can actually evidence.
+- **System1 (per turn)** — L1 Profile, L2 Raw, L3 Fact, L7 Intention, L8 Entity pages.
+  What one turn can actually evidence. L4 Summary comes from **episodes**: the
+  writes of one owner with no gap longer than `HYATLAS_EPISODE_GAP` (30 minutes)
+  form one stretch of work, which gets one summary when it ends. That costs one LLM
+  call per episode, not per write.
 - **System2 (slow path)** — L5 Knowledge, L6 Schema. A relation worth keeping is
   corroborated by more than one turn, and a schema is a *recurring* pattern, so
   neither can come from a single turn. Ultra is the only mode that runs System2,
@@ -294,9 +297,20 @@ When the Hermes plugin spawns this server it passes an explicitly allowlisted
 environment — OS essentials plus `HYATLAS_*` only — rather than a copy of the
 agent's environment, so provider API keys the agent holds do not reach the
 server process. The plugin forwards only the non-secret LLM endpoint and model
-settings, and only when you have set them in the plugin config. It never forwards
-the LLM key, which reaches the server only if you export `HYATLAS_LLM_KEY` (or
-`HYATLAS_LLM_KEY_FILE`) yourself.
+settings, and only when you have set them in the plugin config. It forwards no
+LLM key at spawn time. A key reaches the server only if you export
+`HYATLAS_LLM_KEY` yourself, or if you turn on the plugin's `share_llm_key`
+setting: then Hermes hands its current Nous Portal key to the running server over
+localhost (`POST /api/v1/llm/key`), only when the server's endpoint is the Nous
+Portal, and the server keeps it in memory only. Until a key arrives,
+`/api/v1/status` reports `llm: "awaiting_key"` and writes are stored without
+extraction.
+
+**Neither the server nor its launcher reads another program's credential file.**
+Earlier versions of the sample launcher read Hermes' `auth.json`; a program that
+opens another application's credentials and then calls the internet is what
+credential stealers do, and behaviour-based antivirus (Bitdefender, for one) can
+quarantine it together with every file it wrote. `share_llm_key` replaces that.
 
 **Optional: a local memory model (Hy-Memory-30B-A3B).** If you want extraction
 and consolidation to stay on your machine, Tencent's
@@ -374,12 +388,13 @@ Notes:
 | `HYATLAS_LLM_BASE` | *(unset)* | OpenAI-compatible LLM endpoint. **Memory text is sent here once you set it** — see *Privacy* above. Unset means no LLM call at all. |
 | `HYATLAS_LLM_MODEL` | *(unset)* | LLM model name. Base, model and key must all be set for extraction to run. |
 | `HYATLAS_LLM_KEY` | (empty) | LLM bearer token |
-| `HYATLAS_LLM_KEY_FILE` | (empty) | Read the key live from this file on every call (rotating creds, e.g. Hermes auth.json). Accepts `providers.nous.agent_key` / `access_token` JSON, or a plain-text token. Wins over `HYATLAS_LLM_KEY`, which becomes the fallback if the file cannot be read. |
+| `HYATLAS_LLM_KEY_FILE` | (empty) | Read the key live from this file on every call, for a rotating key file of your own. Accepts `providers.nous.agent_key` / `access_token` JSON, or a plain-text token. Wins over `HYATLAS_LLM_KEY`, which becomes the fallback if the file cannot be read. Do not point it at another program's credential file (such as Hermes' `auth.json`): antivirus flags that as credential theft. For a Hermes login, use the plugin's `share_llm_key` instead, whose key wins over both. |
 | `HYATLAS_RECENCY` | on | `off` stops newer memories winning close calls in search (see *Search*) |
-| `HYATLAS_INTENTION_TTL` | `168h` (7 days) | How long an L7 intention stays in search results. Older intentions are kept but not returned. `0` returns them all |
+| `HYATLAS_INTENTION_TTL` | `168h` (7 days) | How long an L7 intention without a due date stays in search results. Older intentions are kept but not returned. `0` returns them all. An intention with a due date stays until a day after it is due, then drops out |
 | `HYATLAS_SNAPSHOT_EVERY` | `24h` | How often the server zips its data directory (first one a minute after start). `0` or `off` turns snapshots off |
 | `HYATLAS_SNAPSHOT_KEEP` | `7` | How many snapshots to keep; older ones are deleted |
 | `HYATLAS_SNAPSHOT_DIR` | `<data>-snapshots` | Where snapshots go: a folder next to the data directory by default; do not point it inside the data directory |
+| `HYATLAS_EPISODE_GAP` | `30m` | pro and ultra: a gap between an owner's writes longer than this ends an episode of work, which then gets one L4 summary. `0` or `off` writes no episode summaries |
 | `HYATLAS_NOW_EVERY` | `15m` | How often an owner's Now page may be rebuilt after writes (pro and ultra only). `0` or `off` rebuilds after every write |
 | `HYATLAS_USAGE_LEARNING` | on | `off` stops search learning from which recalled memories replies actually used |
 | `HYATLAS_LLM_FALLBACK_MODEL` | *(unset)* | A second model, tried only when a call to the primary fails (error, empty reply or timeout). The primary then gets two thirds of the call's time. Unset means no fallback |
@@ -400,12 +415,38 @@ and start it again.
 
 ## Architecture
 
+```mermaid
+flowchart TD
+  A["POST /api/v1/add"] --> RAW["Embed + store L2 raw"]
+  RAW --> CTX["Gather context: 5 related facts (>= 0.70),<br/>open intentions, entity pages"]
+  CTX --> X["Extract (LLM, one call): facts with dates,<br/>replaces / updates, intention with due date,<br/>intentions done, entity pages"]
+  X --> P["Promote: L3 facts (0.92 restatement fold),<br/>L1 mirror, L7 intention, L8 pages"]
+  P --> NOW["Now page (LLM),<br/>at most every 15 min"]
+  P --> EP["Episode summary (LLM),<br/>after a 30-min gap"]
+  P --> ST[("chromem vectors L1-L8<br/>+ doc index")]
+  EP --> ST
+  KEY["Hermes plugin hands over its key<br/>(localhost, memory only)"] -.-> X
+
+  T["Ticker: 6h, catch-up while due"] --> CL["Topic clusters (0.55),<br/>only changed clusters"]
+  CL --> C["Consolidate (LLM, per cluster): merges,<br/>drops + reason, schemas, L5 edges, arc"]
+  C --> G["Guards: merge >= 0.65, schema dup >= 0.92,<br/>restore, history relink"]
+  G --> ST
+  C --> KG["L5 graph with evidence"]
+
+  Q["POST /api/v1/search"] --> F["Vector + stemmed keyword RRF, min score 0.60,<br/>dates in the query, intention due dates,<br/>idle-time recency, usage feedback,<br/>near-duplicate demotion"]
+  F --> OUT["Now -> pages -> profile -> proactive -> normal,<br/>with event dates and replaced versions"]
+```
+
+Lite mode keeps only the raw write and search: no LLM call at all. Pro adds extraction,
+episodes and the Now page. Ultra adds consolidation, which is what fills L5 and L6.
+Every LLM step goes to the endpoint you configure; nothing else leaves the machine.
+
 | Layer | What it holds |
 |---|---|
 | **L1 Profile** | User preferences, style, constraints (mirrors L3 facts labelled `user_preferences`) |
 | **L2 Raw** | Every incoming memory as-is |
 | **L3 Fact** | LLM-extracted factual atoms |
-| **L4 Summary** | LLM-extracted session summaries (**enabled in v4; was dormant in v3.5**) |
+| **L4 Summary** | One summary per episode of work (writes with no gap over `HYATLAS_EPISODE_GAP`), plus one rolling arc per owner from consolidation |
 | **L5 Knowledge** | Entity/relation graph (JSON-persisted). Built by the ultra slow path from relations corroborated across at least two turns, each with evidence citations |
 | **L6 Schema** | Recurring patterns generalised by the ultra slow path |
 | **L7 Intention** | LLM-extracted current goal / next step |
@@ -415,7 +456,7 @@ and start it again.
 
 - **Vector store:** [Chromem-go](https://github.com/philippgille/chromem-go) v0.7.0 — embedded, disk-persisted, no server process
 - **Embeddings:** `bge/bge.go` — BGE-small-en-v1.5 (384-dim) via onnxruntime-go (cgo). WordPiece tokenizer, mean-pool, L2-normalize. No Python.
-- **LLM extraction:** Via any OpenAI-compatible endpoint. One structured call per write (pro, ultra) fills L3 Fact, L4 Summary, L7 Intention and, for user preferences, L1 Profile from the L2 Raw entry. The call is shown the owner's few nearest existing facts and open intentions, so it can mark a fact whose value changed as replaced, and an intention as moved on or done; those rows are superseded, not deleted. An intention is written only for a goal beyond the one exchange, and not again for a turn that just continues an open one. The plugin shows each recalled memory with its date. Blocking or background follows `HYATLAS_SYNC_EXTRACT`. L5 and L6 come from the separate ultra consolidation pass.
+- **LLM extraction:** Via any OpenAI-compatible endpoint. One structured call per write (pro, ultra) fills L3 Fact, L7 Intention, L8 entity pages and, for user preferences, L1 Profile from the L2 Raw entry. The call is given today's date and shown the owner's few nearest existing facts and open intentions, so it can date a fact (`event_at`) or an intention (`due_at`), mark a fact whose value changed as replaced, fold new detail or a repeat of the same event into an existing fact as updated (with a count), and mark an intention as moved on or done; those rows are superseded, not deleted, and record how (`superseded_how`). An intention is written only for a goal beyond the one exchange, and not again for a turn that just continues an open one. The plugin shows each recalled memory with its date. Blocking or background follows `HYATLAS_SYNC_EXTRACT`. L5 and L6 come from the separate ultra consolidation pass.
 - **Graph:** `graph/graph.go` — exact-match traversal over JSON-persisted nodes and relations, scoped per owner
 - **HTTP:** Standard Go `net/http`. No framework.
 
@@ -570,13 +611,27 @@ Hits whose text repeats another hit's (case and whitespace ignored) are dropped.
 an L3 fact and its L1 Profile copy, the L1 copy is kept.
 
 **Time counts.** Newer memories win close calls: each hit's ranking weight fades with
-age to no less than 92% of its value (enough to move it about five places), on a half-life that follows how fast that kind of
+age (counted from the later of when it was written and when a reply last used it, so
+an old memory still in use does not sink) to no less than 92% of its value (enough to move it about five places), on a half-life that follows how fast that kind of
 memory goes stale — 3 days for intentions, 30 days for project state, summaries, raw
 turns and graph relations, 180 days for preferences, decisions and lessons, and never
 for L1 Profile and L6 Schema. Relevance still decides anything that is not close.
 `HYATLAS_RECENCY=off` turns this off. L7 intentions older than
 `HYATLAS_INTENTION_TTL` (7 days) are left out of results altogether: an intention
-is what the user is doing now, and weeks later it is history.
+is what the user is doing now, and weeks later it is history. An intention with a
+due date ("the interview next Tuesday") stays until a day after it is due instead.
+
+**Dates in the query.** A query that names a time is read for it: `today`,
+`yesterday`, `N days ago`, `last 3 days` / `past 2 weeks`, `this week`, `last week`,
+`this month`, `last month`, `last monday`, `oct 5` / `5 october`, `in november` /
+`november 2026`, `2026-10-05` and `2026-10`. Facts dated in that window (by the
+`event_at` extraction gives them, or else by when they were written) that the
+search did not find yet are added, and hits outside the window move down a few
+places. Extraction gives a fact `event_at` when the input says or implies when it
+happened ("yesterday" is resolved against the write date).
+
+**Fewer repeats.** Of two hits that say the same thing (cosine 0.95 or more and the
+same numbers), the lower one moves to the end of the results.
 
 With an owner filter (`user_id`, aliases included), memories that have no owner at
 all are also returned: rows written before owners were recorded, which in an older
@@ -606,13 +661,21 @@ Response shape:
 page among the owner's aliases). `pages` holds L8 entity pages, at most 2 in a
 search over all layers.
 
+Each hit has `memory_id`, `content`, `score`, `layer`, `gmt_created` (when it was
+written, unix seconds) and the owner. Two fields appear only when they apply:
+
+- `event_date`: when the fact happened or is due (`YYYY-MM-DD` or `YYYY-MM`).
+- `history`: up to two older versions this fact replaced, newest first, each
+  `{"content", "date", "how": "replaced"}`. Only contradictions are listed: a fact
+  that extended or restated an older one already carries what it said.
+
 ### Working memory, entity pages and learning
 
 Three parts of 4.7.0 change what recall is made of, not only how it is ranked.
 
 - **Now page.** One short page per owner (at most 12 lines: active work, open
   threads, what is blocked, recent decisions), rebuilt in the background from the
-  owner's open intentions and recent summaries at most every `HYATLAS_NOW_EVERY`
+  owner's open intentions, recent summaries and newest facts at most every `HYATLAS_NOW_EVERY`
   (15 minutes) after writes. The plugin puts it first in every recall, so the agent
   always knows what is going on. pro and ultra only.
 - **Entity pages (L8).** One page per thing that matters, with its current state and
@@ -637,6 +700,17 @@ same thing meet in one call however far apart in time they were written, and onl
 clusters that changed are sent again. Graph edges that restate
 an edge between the same entities (one endpoint equal, the other the same name with
 extra words, similarity 0.80 and up, same numbers) are not indexed again.
+
+### LLM key hand-over
+
+`POST /api/v1/llm/key` with `{"key": "..."}` gives the server the key for its LLM
+endpoint, kept in memory only and never logged or echoed. It wins over
+`HYATLAS_LLM_KEY` and `HYATLAS_LLM_KEY_FILE`; `{"key": ""}` clears it. The Hermes
+plugin's `share_llm_key` setting uses it to supply Hermes's Nous Portal login, so
+no program but Hermes opens Hermes's credential file. A restarted server has no
+key until it is handed over again and reports `llm: "awaiting_key"` meanwhile;
+the plugin checks once a minute. A key with spaces or line breaks is refused
+(400).
 
 ### Maintenance (admin)
 

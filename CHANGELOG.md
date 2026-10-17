@@ -1,5 +1,72 @@
 # Changelog
 
+## [4.8.0] — 2026-10-17
+
+Precision per fact and smarter recall, from a code-level comparison with Tencent's
+Hy-Memory 2.0 ("Hunyuan"). Still one LLM call per write.
+
+### Added
+
+- **Event dates.** Extraction is told today's date and gives each fact the date its
+  event happened or is due (`event_at`). Search returns it as `event_date`, and the
+  plugin shows "happened 2026-10-05".
+- **Dates in the query.** "yesterday", "last week", "in november", "2026-10-05" and
+  similar are read from the query: facts dated in that window join the results and
+  hits outside it move down.
+- **Updates with counts.** Besides replacing a contradicted fact, extraction can
+  extend one: new detail, or the same event again ("has injured the ankle twice:
+  …"), instead of writing a near-duplicate.
+- **Intention due dates.** "The interview next Tuesday" stays in recall until a day
+  after it is due, instead of a fixed 7 days.
+- **Episode summaries.** One L4 summary per stretch of work (`HYATLAS_EPISODE_GAP`,
+  30 minutes), instead of one per write. `/api/v1/status` shows open and pending
+  episodes.
+- **History on read.** A hit that replaced an older fact carries it under `history`,
+  and the plugin shows "was: … (until …)".
+- Superseded rows record how they were retired (`superseded_how`: replaced,
+  updated, restated or merged).
+
+### Security
+
+- **No HyAtlas program reads another application's credentials any more.** The
+  sample launcher read Hermes' `auth.json` to get a Nous Portal token, and the
+  server could be pointed at that file (`HYATLAS_LLM_KEY_FILE`). Reading another
+  program's credentials and then calling the internet is the pattern
+  behaviour-based antivirus treats as credential theft: on 2026-10-17 Bitdefender
+  quarantined a Hermes session's whole process tree, including the HyAtlas server,
+  its settings and every file it had written. Now:
+  - the server accepts its key over localhost (`POST /api/v1/llm/key`) and keeps
+    it in memory only; `/api/v1/status` reports `llm: "awaiting_key"` until then;
+  - the plugin's new `share_llm_key` setting (off by default) asks Hermes for its
+    current Nous key through Hermes's own resolver and hands it over, only when
+    the server's endpoint is the Nous Portal, every 15 minutes or when the server
+    restarts;
+  - the launcher reads no credentials.
+
+### Fixed
+
+- **Usage learning survives restarts.** Since 4.7.0 it shared `usage.json` with the
+  store's write and search counters, so each overwrote the other. It now has its own
+  `usage_learning.json`; an old `usage.json` holding usage entries is read once.
+
+### Changed
+
+- Facts are written with an explicit subject ("The user …", or the named person).
+- Recency counts from the later of when a memory was written and when a reply last
+  used it, so an old memory still in use does not sink.
+- Of two near-identical hits (cosine 0.95, same numbers), the lower one moves to the
+  end of the results.
+- Keyword search matches word forms (tests/test, fixed/fix, broken/break) through a
+  small built-in stemmer.
+- The Now page also reads the owner's newest facts, since summaries now wait for an
+  episode to end.
+
+- A drop made without a reason records "dropped without a recorded reason" when
+  it is written, instead of waiting for the next start to label it.
+- The merged text of a merge and each new schema are embedded once, not twice.
+- Whether vectors carry meaning is now a property of the embedder (the hashed
+  local stub says no), decided once when the store opens.
+
 ## [4.7.3] — 2026-10-13
 
 Consolidation quality, from a spot-check of what the 4.7.x backlog retired on the

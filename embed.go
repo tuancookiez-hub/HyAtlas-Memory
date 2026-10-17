@@ -69,6 +69,19 @@ type LocalEmbedder struct{ dim int }
 
 func NewLocalEmbedder(dim int) *LocalEmbedder { return &LocalEmbedder{dim: dim} }
 
+// Semantic reports false: the vectors hash bytes, so their similarity says
+// nothing about what two texts mean.
+func (e *LocalEmbedder) Semantic() bool { return false }
+
+// isSemantic reports whether e's vectors carry meaning. An embedder that knows
+// they do not says so with a Semantic method; any other is taken at its word.
+func isSemantic(e Embedder) bool {
+	if s, ok := e.(interface{ Semantic() bool }); ok {
+		return s.Semantic()
+	}
+	return true
+}
+
 func (e *LocalEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	v := make([]float32, e.dim)
 	for i, b := range []byte(text) {

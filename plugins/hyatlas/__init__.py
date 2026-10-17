@@ -36,6 +36,8 @@ from typing import Any, Dict, List, Optional
 from agent.memory_provider import MemoryProvider
 
 from .client import HyatlasClient, HyatlasClientError, HyatlasUnreachable
+from .formatting import format_hit_line, iso_date  # noqa: E402
+from .keyshare import KeySharer  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,26 @@ from .schemas import (  # noqa: E402
     HYATLAS_RECENT_SCHEMA,
     HYATLAS_ADD_SCHEMA,
 )
+
+# One key-sharing loop per Hermes process (Hermes makes a provider per session).
+_KEY_SHARER: Optional[KeySharer] = None
+_KEY_SHARER_LOCK = threading.Lock()
+
+
+def _start_key_sharer(base_url: str, timeout: float) -> None:
+    """Start the loop that hands Hermes's Nous key to the server, once per process.
+
+    It has its own client, because a session's client is closed when the session
+    ends while the loop outlives it.
+    """
+    global _KEY_SHARER
+    with _KEY_SHARER_LOCK:
+        if _KEY_SHARER is not None:
+            return
+        client = HyatlasClient(base_url=base_url, timeout=timeout)
+        _KEY_SHARER = KeySharer(status=client.status, push=client.push_llm_key)
+        _KEY_SHARER.start()
+
 
 # Per-message and per-turn caps on what sync_turn sends. A turn is the user's
 # message and the assistant's reply. Tool output and compaction summaries are not
@@ -77,14 +99,7 @@ def _is_compaction(text: str) -> bool:
 
 def _iso_date(unix_seconds: Any) -> str:
     """YYYY-MM-DD (UTC) for a search hit's gmt_created, or "" when it has none."""
-    try:
-        ts = int(unix_seconds)
-    except (TypeError, ValueError):
-        return ""
-    if ts <= 0:
-        return ""
-    import datetime
-    return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime("%Y-%m-%d")
+    return iso_date(unix_seconds)
 
 
 # =============================================================================
@@ -142,7 +157,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         # The query each recall was made with, keyed like _recalled: feedback leaves
         # its words out, because a reply naturally repeats the question.
         self._recalled_query: Dict[str, str] = {}
-        self._version = "4.7.3"
+        self._version = "4.8.0"
         # Message count already synced per session, so _build_turn_text sends
         # only what the server has not seen. Bounded: a long-lived gateway
         # touches far more sessions than it can hold, and the cost of evicting
@@ -233,6 +248,11 @@ class HyatlasMemoryProvider(MemoryProvider):
         if agent_context in ("cron", "flush"):
             logger.debug("hyatlas skipping init for context=%s", agent_context)
             return
+
+        # Hand Hermes's key to the server when enabled, so the server never has to
+        # read Hermes's credential file (see keyshare.py).
+        if settings.truthy(self._config.get("share_llm_key")):
+            _start_key_sharer(f"http://{self._origin()}", float(self._config.get("request_timeout", 15.0)))
 
         # Auto-start the server if configured
         if settings.truthy(self._config.get("auto_start")) and not self._client.is_reachable():
@@ -681,18 +701,12 @@ class HyatlasMemoryProvider(MemoryProvider):
             limit = 600 if channel_name == "pages" else 300
             channel_lines = [f"[{channel_name.upper()}]"]
             for m in items[:5]:
-                content = m.get("content", "")
-                layer = m.get("layer", "")
-                score = m.get("score", 0.0)
-                if content:
-                    snippet = content[:limit]
-                    # The date lets the agent tell "true on Oct 6" from "true now":
-                    # without it an old status line reads like the current one.
-                    date = _iso_date(m.get("gmt_created"))
-                    when = f", {date}" if date else ""
-                    channel_lines.append(
-                        f"- ({layer}{when}, score {score:.2f}) {snippet}"
-                    )
+                # The date lets the agent tell "true on Oct 6" from "true now":
+                # without it an old status line reads like the current one. The
+                # event date and superseded versions are added by format_hit_line.
+                line = format_hit_line(m, limit)
+                if line:
+                    channel_lines.append(line)
             if len(channel_lines) > 1:
                 channels.append("\n".join(channel_lines))
         if not now_text and not channels:

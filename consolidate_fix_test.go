@@ -118,9 +118,8 @@ type flakyEmbedder struct {
 	fail  atomic.Bool
 }
 
-// Unwrap exposes the inner embedder, so the consolidator can tell its vectors
-// carry no meaning.
-func (f *flakyEmbedder) Unwrap() Embedder { return f.inner }
+// Semantic passes on whether the inner embedder's vectors carry meaning.
+func (f *flakyEmbedder) Semantic() bool { return isSemantic(f.inner) }
 
 func (f *flakyEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	if f.fail.Load() {
@@ -181,7 +180,7 @@ func TestPartialMergeKeepsReplacementLive(t *testing.T) {
 	rep := &Report{}
 	absorbed := append(srv.store.GetMany([]string{a}), DocIndex{ID: "ghost-not-stored"})
 	live := map[string]bool{a: true, "ghost-not-stored": true}
-	id := c.applyMerge(scopeKey{user: "alice", agent: "a1"}, "merged text", "consolidated",
+	id := c.applyMerge(scopeKey{user: "alice", agent: "a1"}, "merged text", nil, "consolidated",
 		absorbed, time.Now().UTC().Format(time.RFC3339), live, rep, fail, fail)
 	if id == "" {
 		t.Fatal("replacement retracted although one original was marked")
@@ -207,7 +206,7 @@ func TestMergeWithNothingMarkedIsRetracted(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
 	c := NewConsolidator(srv.store, nil, time.Hour, 0, 200)
 	var errs []string
-	id := c.applyMerge(scopeKey{user: "alice", agent: "a1"}, "merged text", "consolidated",
+	id := c.applyMerge(scopeKey{user: "alice", agent: "a1"}, "merged text", nil, "consolidated",
 		[]DocIndex{{ID: "ghost-1"}, {ID: "ghost-2"}}, time.Now().UTC().Format(time.RFC3339),
 		map[string]bool{}, &Report{}, func(m string) { errs = append(errs, m) }, func(m string) { errs = append(errs, m) })
 	if id != "" {

@@ -56,6 +56,10 @@ func TestNowPromptContainsWindowedRowsOnly(t *testing.T) {
 	nowAddRow(t, srv.store, memory.L4Summary, "s-mine", "summary-mine", "u", 24*time.Hour)
 	nowAddRow(t, srv.store, memory.L4Summary, "s-old", "summary-old", "u", 5*24*time.Hour)
 	nowAddRow(t, srv.store, memory.L4Summary, "s-other", "summary-other", "other", time.Hour)
+	// Newest facts show work in progress before its episode summary exists.
+	nowAddRow(t, srv.store, memory.L3Fact, "f-mine", "fact-mine", "u", time.Hour)
+	nowAddRow(t, srv.store, memory.L3Fact, "f-old", "fact-old", "u", 4*24*time.Hour)
+	nowAddRow(t, srv.store, memory.L3Fact, "f-other", "fact-other", "other", time.Hour)
 
 	n := NewNowPages(t.TempDir(), srv.store, srv.llm, time.Hour)
 	n.pages[nowOwnerKey("u", "a")] = NowPage{Text: "current-page-text"}
@@ -63,12 +67,12 @@ func TestNowPromptContainsWindowedRowsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := rec.last()
-	for _, want := range []string{"intent-mine", "summary-mine", "current-page-text"} {
+	for _, want := range []string{"intent-mine", "summary-mine", "fact-mine", "current-page-text"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("prompt missing %q", want)
 		}
 	}
-	for _, bad := range []string{"intent-other", "intent-old", "summary-other", "summary-old"} {
+	for _, bad := range []string{"intent-other", "intent-old", "summary-other", "summary-old", "fact-other", "fact-old"} {
 		if strings.Contains(body, bad) {
 			t.Errorf("prompt should not contain %q", bad)
 		}
