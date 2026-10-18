@@ -123,7 +123,8 @@ func (s *MemoryStore) writeClauses(d DocIndex) (int, error) {
 	// stale sentence to the new text, so they go first.
 	s.dropClauses(d.ID)
 	pieces := splitClauses(d.Content)
-	if len(pieces) == 0 {
+	// One piece would only duplicate the parent's own vector, so it is not written.
+	if len(pieces) < 2 {
 		return 0, nil
 	}
 	docs := make([]chromem.Document, 0, len(pieces))
@@ -140,10 +141,9 @@ func (s *MemoryStore) writeClauses(d DocIndex) (int, error) {
 			Metadata:  map[string]string{"parent": d.ID, "user_id": d.UserID, "agent_id": d.AgentID},
 		})
 	}
-	// Replace the old clause rows of d, then write the new ones. A supersede or
-	// delete that lands while the rows are written drops them under s.mu; the check
-	// below catches a supersede that marked d before this write became visible.
-	s.dropClauses(d.ID)
+	// Write the new rows. A supersede or delete that lands while the rows are written
+	// drops them under s.mu; the check below catches a supersede that marked d before
+	// this write became visible.
 	for _, doc := range docs {
 		if err := s.clauses.AddDocument(s.ctx, doc); err != nil {
 			s.dropClauses(d.ID)
@@ -165,7 +165,11 @@ func (s *MemoryStore) writeClauses(d DocIndex) (int, error) {
 // so it may run under s.mu. A failure is logged: a stale clause row only makes a
 // search skip its parent, because clauseHits checks that the parent is live.
 func (s *MemoryStore) dropClauses(id string) {
-	if err := s.clauses.Delete(s.ctx, map[string]string{"parent": id}, nil); err != nil {
+	ids := make([]string, clauseMax)
+	for i := range ids {
+		ids[i] = clauseID(id, i)
+	}
+	if err := s.clauses.Delete(s.ctx, nil, nil, ids...); err != nil {
 		log.Printf("clauses: drop %s: %v", id, err)
 	}
 }

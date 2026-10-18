@@ -7,19 +7,11 @@ import "sort"
 // An empty users list searches every owner (agentID still applies when set).
 func (s *MemoryStore) clauseHitsOwners(qv []float32, users []string, agentID string, limit int) []SearchHit {
 	if len(users) == 0 {
-		var where map[string]string
-		if agentID != "" {
-			where = map[string]string{"agent_id": agentID}
-		}
-		return s.clauseHits(qv, where, limit)
+		return s.clauseHits(qv, ownerWhere("", agentID), limit)
 	}
 	var out []SearchHit
 	for _, u := range users {
-		where := map[string]string{"user_id": u}
-		if agentID != "" {
-			where["agent_id"] = agentID
-		}
-		out = mergeBest(out, s.clauseHits(qv, where, limit))
+		out = mergeBest(out, s.clauseHits(qv, ownerWhere(u, agentID), limit))
 	}
 	return out
 }

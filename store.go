@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -56,6 +57,11 @@ type MemoryStore struct {
 
 	mu    sync.RWMutex
 	index map[string]DocIndex
+	// replacedBy maps a successor id to the ids of the rows it replaced, for rows whose
+	// superseded_how is howReplaced. historyOf reads it so it never walks every
+	// superseded row. It is kept in step with superseded by putLocked, forgetLocked
+	// and rebuildSupersededLocked.
+	replacedBy map[string][]string
 	// superseded is the set of index ids that are superseded, with their layer, and
 	// hidden counts those per layer. Search reads hidden to decide how far to
 	// over-fetch, and checks membership in superseded, so neither scans the index.
@@ -87,6 +93,17 @@ type MemoryStore struct {
 	searches   atomic.Uint64
 	countsPath string
 
+	// dirty is set (by markDirtyLocked, with s.mu held) when the index has changed
+	// since the last write to indexPath. The flusher goroutine and Flush clear it.
+	dirty atomic.Bool
+	// flushMu serialises index file writes, so two flushes never share the .tmp path.
+	flushMu sync.Mutex
+	// indexWrites counts index file writes. It is read only by tests.
+	indexWrites atomic.Uint64
+	// stopFlush asks the flusher goroutine to exit, and flushDone closes when it has.
+	stopFlush chan struct{}
+	flushDone chan struct{}
+
 	// pending tracks in-flight persistUsageAsync goroutines so Close can wait
 	// for them; without it a goroutine writes into the data dir after the caller
 	// has moved on (which makes t.TempDir() cleanup fail with "directory not
@@ -115,8 +132,10 @@ func NewMemoryStore(ctx context.Context, dir string, embed Embedder, graphPath s
 	s := &MemoryStore{db: db, g: g, embed: embed, semantic: isSemantic(embed), ctx: ctx,
 		cols: map[memory.Layer]*chromem.Collection{}, index: map[string]DocIndex{},
 		superseded: map[string]memory.Layer{}, hidden: map[memory.Layer]int{},
+		replacedBy: map[string][]string{},
 		indexPath:  filepath.Join(dir, "doc_index.json"),
-		countsPath: filepath.Join(dir, "usage.json")}
+		countsPath: filepath.Join(dir, "usage.json"),
+		stopFlush:  make(chan struct{}), flushDone: make(chan struct{})}
 	// load persisted counters before rebuildIndex so writes/searches survive restart.
 	s.loadUsage()
 	for _, l := range memory.All() {
@@ -150,6 +169,7 @@ func NewMemoryStore(ctx context.Context, dir string, embed Embedder, graphPath s
 	if _, err := s.relinkHistory(nil); err != nil {
 		log.Printf("history: relink at start: %v", err)
 	}
+	go s.flushLoop()
 	return s, nil
 }
 
@@ -215,6 +235,7 @@ func (s *MemoryStore) addWithVector(layer memory.Layer, id, content string, meta
 	if err == nil {
 		s.mu.Lock()
 		s.putLocked(docIndexFrom(id, string(layer), content, meta))
+		s.markDirtyLocked()
 		s.mu.Unlock()
 	}
 	s.rowMu.Unlock()
@@ -226,7 +247,7 @@ func (s *MemoryStore) addWithVector(layer memory.Layer, id, content string, meta
 	// Clause rows are written after the parent is indexed, so a clause hit can map
 	// back to it. A failure there is logged and does not fail the write.
 	s.indexClauses(docIndexFrom(id, string(layer), content, meta))
-	return s.persistIndex()
+	return nil
 }
 
 // newerFirst orders rows newest first, ties broken by id. Rows come out of a map
@@ -322,6 +343,12 @@ func (s *MemoryStore) search(query string, limit int, layer memory.Layer, userID
 // searchVec is search with the query already embedded, so one embedding serves
 // every layer (and, from SearchOwners, every user ID) instead of one per query.
 func (s *MemoryStore) searchVec(qv []float32, limit int, layer memory.Layer, userID, agentID string) ([]SearchHit, error) {
+	return s.searchWhere(qv, limit, layer, ownerWhere(userID, agentID))
+}
+
+// ownerWhere builds the metadata filter for an owner: a key for each non-empty
+// value, and nil when both are empty.
+func ownerWhere(userID, agentID string) map[string]string {
 	where := map[string]string{}
 	if userID != "" {
 		where["user_id"] = userID
@@ -330,9 +357,46 @@ func (s *MemoryStore) searchVec(qv []float32, limit int, layer memory.Layer, use
 		where["agent_id"] = agentID
 	}
 	if len(where) == 0 {
-		where = nil
+		return nil
 	}
-	return s.searchWhere(qv, limit, layer, where)
+	return where
+}
+
+// docTime parses an index timestamp as RFC3339 with or without fractional seconds.
+// It returns the zero time when ts does not parse.
+func docTime(ts string) time.Time {
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// liveDocs returns the live (not superseded) rows of layer whose UserID is in users
+// (any user when users is empty) and whose AgentID equals agentID when that is
+// non-empty. Rows with no owner are not special-cased: they match only when users is
+// empty. Each row's Meta is a copy, so callers may keep it.
+func (s *MemoryStore) liveDocs(layer memory.Layer, users []string, agentID string) []DocIndex {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []DocIndex
+	for _, d := range s.index {
+		if d.Layer != string(layer) || isSuperseded(d) {
+			continue
+		}
+		if _, dead := s.superseded[d.ID]; dead {
+			continue
+		}
+		if len(users) > 0 && !slices.Contains(users, d.UserID) {
+			continue
+		}
+		if agentID != "" && d.AgentID != agentID {
+			continue
+		}
+		d.Meta = maps.Clone(d.Meta)
+		out = append(out, d)
+	}
+	return out
 }
 
 // searchWhere is searchVec with the metadata filter given as is. An empty value
@@ -498,7 +562,10 @@ func (s *MemoryStore) deleteRows(ids []string, layer memory.Layer, userID, agent
 		s.forgetLocked(id)
 		deleted++
 	}
-	return deleted, successors, s.persistIndexLocked()
+	if deleted > 0 {
+		s.markDirtyLocked()
+	}
+	return deleted, successors, nil
 }
 
 // LayerCounts returns the number of live docs per layer (exact). L5 is the
@@ -652,8 +719,8 @@ func (s *MemoryStore) supersedeWith(ids []string, by string, extra map[string]st
 		s.dropClauses(cur.ID)
 		marked++
 	}
-	if err := s.persistIndexLocked(); err != nil && firstErr == nil {
-		firstErr = err
+	if marked > 0 {
+		s.markDirtyLocked()
 	}
 	return marked, firstErr
 }
@@ -703,8 +770,9 @@ func (s *MemoryStore) SetExtracted(id string, v bool) error {
 	if d, ok := s.index[id]; ok {
 		d.Extracted = v
 		s.putLocked(d)
+		s.markDirtyLocked()
 	}
-	return s.persistIndexLocked()
+	return nil
 }
 
 // GetMany returns the docs for the given ids in order (missing ids are skipped).
@@ -796,6 +864,12 @@ func (s *MemoryStore) persistUsageAsync() {
 // no goroutine writes into the data dir afterwards. Safe to call multiple times.
 func (s *MemoryStore) Close() {
 	s.closeOnce.Do(func() {
+		// Stop the index flusher and write what it had not yet, before anything else.
+		close(s.stopFlush)
+		<-s.flushDone
+		if err := s.Flush(); err != nil {
+			log.Printf("index: flush at close: %v", err)
+		}
 		// Stop new async writes...
 		s.closeMu.Lock()
 		s.closed = true
@@ -845,8 +919,8 @@ func docIndexFrom(id, layer, content string, meta map[string]string) DocIndex {
 	return d
 }
 
-// putLocked stores d in the exact index and keeps the superseded set and the
-// per-layer counts in step. The caller holds s.mu for writing.
+// putLocked stores d in the exact index and keeps the superseded set, the replaced-by
+// map and the per-layer counts in step. The caller holds s.mu for writing.
 func (s *MemoryStore) putLocked(d DocIndex) {
 	s.forgetLocked(d.ID)
 	s.index[d.ID] = d
@@ -854,6 +928,18 @@ func (s *MemoryStore) putLocked(d DocIndex) {
 		l := memory.Layer(d.Layer)
 		s.superseded[d.ID] = l
 		s.hidden[l]++
+		s.noteReplacedLocked(d)
+	}
+}
+
+// noteReplacedLocked records d in replacedBy when it was replaced by another row.
+// The caller holds s.mu for writing.
+func (s *MemoryStore) noteReplacedLocked(d DocIndex) {
+	if d.Meta[metaSupersededHow] != howReplaced {
+		return
+	}
+	if by := d.Meta["superseded_by"]; by != "" {
+		s.replacedBy[by] = append(s.replacedBy[by], d.ID)
 	}
 }
 
@@ -866,52 +952,112 @@ func (s *MemoryStore) forgetLocked(id string) {
 		if s.hidden[l] <= 0 {
 			delete(s.hidden, l)
 		}
+		if d, ok := s.index[id]; ok && d.Meta[metaSupersededHow] == howReplaced {
+			by := d.Meta["superseded_by"]
+			if ids := slices.DeleteFunc(s.replacedBy[by], func(x string) bool { return x == id }); len(ids) == 0 {
+				delete(s.replacedBy, by)
+			} else {
+				s.replacedBy[by] = ids
+			}
+		}
 	}
 	delete(s.index, id)
 }
 
-// rebuildSupersededLocked recomputes the superseded set and per-layer counts from
-// the whole index. It runs once after the index is loaded from disk.
+// rebuildSupersededLocked recomputes the superseded set, the replaced-by map and
+// per-layer counts from the whole index. It runs once after the index is loaded from
+// disk.
 func (s *MemoryStore) rebuildSupersededLocked() {
 	s.superseded = map[string]memory.Layer{}
 	s.hidden = map[memory.Layer]int{}
+	s.replacedBy = map[string][]string{}
 	for id, d := range s.index {
 		if isSuperseded(d) {
 			l := memory.Layer(d.Layer)
 			s.superseded[id] = l
 			s.hidden[l]++
+			s.noteReplacedLocked(d)
 		}
 	}
 }
 
-// persistIndex takes the write lock, not a read lock. Concurrent Adds (the
-// background extraction goroutines) all write the same doc_index.json.tmp path,
-// and two readers holding RLock would interleave those writes and rename a
-// half-written file over the index.
+// indexFlushEvery is the most often the flusher writes the index file while rows are
+// changing.
+const indexFlushEvery = 1 * time.Second
+
+// markDirtyLocked records that the index changed and needs writing. The caller holds
+// s.mu; the flusher or Flush does the write.
+func (s *MemoryStore) markDirtyLocked() { s.dirty.Store(true) }
+
+// persistIndex marks the index dirty under the write lock. It no longer writes the
+// file: the flusher does, at most once per indexFlushEvery.
 func (s *MemoryStore) persistIndex() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.persistIndexLocked()
 }
 
-// persistIndexLocked writes the index assuming the caller already holds s.mu.
-// It does NOT take any lock (avoids double-lock / RLock-while-WriteLock deadlocks).
+// persistIndexLocked marks the index dirty, assuming the caller already holds s.mu.
+// It keeps the old name so callers in other files need no change, and it never fails.
 func (s *MemoryStore) persistIndexLocked() error {
-	if s.indexPath == "" {
+	s.markDirtyLocked()
+	return nil
+}
+
+// flushLoop writes the index at most once per indexFlushEvery while it is dirty, and
+// exits when stopFlush closes. A write error is logged and leaves the index dirty, so
+// the next tick retries.
+func (s *MemoryStore) flushLoop() {
+	defer close(s.flushDone)
+	t := time.NewTicker(indexFlushEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.stopFlush:
+			return
+		case <-t.C:
+			if err := s.Flush(); err != nil {
+				log.Printf("index: flush: %v", err)
+			}
+		}
+	}
+}
+
+// Flush writes the index file now when it has changed since the last write. The
+// index is marshalled compactly under the read lock and written to a temp file and
+// renamed outside it. Flushes are serialised. A failure leaves the index dirty.
+// Callers must not hold s.mu.
+func (s *MemoryStore) Flush() error {
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
+	if !s.dirty.Load() {
 		return nil
 	}
-	data, err := json.MarshalIndent(s.index, "", "  ")
-	if err != nil {
-		return err
+	if s.indexPath == "" {
+		s.dirty.Store(false)
+		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(s.indexPath), 0o755); err != nil {
-		return err
+	s.mu.RLock()
+	// Writers set dirty under the write lock, so clearing it here cannot lose a change.
+	s.dirty.Store(false)
+	data, err := json.Marshal(s.index)
+	s.mu.RUnlock()
+	if err == nil {
+		err = os.MkdirAll(filepath.Dir(s.indexPath), 0o755)
 	}
 	tmp := s.indexPath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err == nil {
+		err = os.WriteFile(tmp, data, 0o644)
+	}
+	if err == nil {
+		err = os.Rename(tmp, s.indexPath)
+	}
+	if err != nil {
+		s.dirty.Store(true)
 		return err
 	}
-	return os.Rename(tmp, s.indexPath)
+	s.indexWrites.Add(1)
+	return nil
 }
 
 // rebuildIndex reconstructs the exact index from chromem by enumerating all docs.
@@ -936,7 +1082,8 @@ func (s *MemoryStore) rebuildIndex() error {
 			s.putLocked(docIndexFrom(r.ID, string(l), r.Content, r.Metadata))
 		}
 	}
-	return s.persistIndex()
+	s.dirty.Store(true)
+	return nil
 }
 
 func dimFor(l memory.Layer) int { return 384 }
