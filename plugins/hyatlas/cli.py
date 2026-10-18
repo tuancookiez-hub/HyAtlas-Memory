@@ -197,7 +197,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
 def _key_is_set() -> bool:
     """True when an extraction key is available to the plugin; the key itself is never read out."""
-    if os.environ.get("HYATLAS_LLM_KEY", "").strip():
+    if settings.llm_key():
         return True
     key_file = os.environ.get("HYATLAS_LLM_KEY_FILE", "").strip()
     return bool(key_file) and Path(key_file).is_file()

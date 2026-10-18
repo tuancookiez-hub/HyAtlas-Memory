@@ -252,6 +252,53 @@ CASTS = {key: cast for _, key, cast in ENV}
 LEGACY_ENV = ("HY_MEMORY_HOST", "HY_MEMORY_PORT")
 
 
+LLM_KEY_ENV = "HYATLAS_LLM_KEY"
+
+
+def llm_key() -> str:
+    """The plugin's own AI key (the ``llm_key`` secret, HYATLAS_LLM_KEY), or "".
+
+    Read through Hermes's secret route, ``agent.secret_scope.get_secret``, which
+    honours the active profile: a bare ``os.environ`` read could pick up another
+    profile's key when one gateway serves several (catalog rule 11). Outside Hermes,
+    or on a release without the route, it falls back to the environment. When Hermes
+    refuses the read (multiplexing with no profile scope), there is no key: the
+    plugin fails closed rather than guess.
+    """
+    try:
+        from agent.secret_scope import get_secret
+    except ImportError:
+        return os.environ.get(LLM_KEY_ENV, "").strip()
+    try:
+        return (get_secret(LLM_KEY_ENV) or "").strip()
+    except Exception as e:  # noqa: BLE001 — UnscopedSecretError: no profile scope
+        logger.warning("HyAtlas: the AI key is not readable here (%s)", type(e).__name__)
+        return ""
+
+
+def _hermes_config() -> Dict[str, Any]:
+    """Hermes's config.yaml as a dict ({} when there is none).
+
+    Read through Hermes's public ``hermes_cli.config`` loader, which knows the
+    active profile and the YAML library this release uses. Without Hermes (tests,
+    the standalone CLI) the file is parsed with PyYAML when it is installed.
+    """
+    try:
+        from hermes_cli.config import load_config_readonly
+    except ImportError:
+        load_config_readonly = None
+    if load_config_readonly is not None:
+        data = load_config_readonly()
+        return data if isinstance(data, dict) else {}
+    cfg_path = home() / "config.yaml"
+    if not cfg_path.exists():
+        return {}
+    import yaml  # older Hermes releases ship PyYAML
+
+    data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    return data if isinstance(data, dict) else {}
+
+
 def home() -> Path:
     """The Hermes home the plugin is operating against.
 
@@ -350,17 +397,8 @@ def load_with_sources() -> Tuple[Dict[str, Any], Dict[str, str]]:
             _warn_unreadable(profile, type(e).__name__)
 
     try:
-        try:
-            # Current Hermes parses YAML with ruamel through hermes_yaml and no
-            # longer ships PyYAML; without this the config.yaml layer would be
-            # silently skipped.
-            import hermes_yaml as yaml
-        except ImportError:
-            import yaml  # older Hermes releases
-
-        cfg_path = home() / "config.yaml"
-        if cfg_path.exists():
-            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        data = _hermes_config()
+        if data:
             plugins = data.get("plugins") or {}
             for source in (
                 plugins.get("hyatlas") or {},

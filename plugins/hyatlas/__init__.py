@@ -837,7 +837,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         ``force`` is set. Returns True when a key was handed over. Neither the key
         nor its hash is ever logged.
         """
-        key = os.environ.get("HYATLAS_LLM_KEY", "").strip()
+        key = settings.llm_key()
         if not key:
             return False
         if not settings.is_loopback_host(self._config.get("server_host") or "127.0.0.1"):

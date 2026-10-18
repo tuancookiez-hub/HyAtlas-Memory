@@ -176,7 +176,7 @@ def run_doctor(
     non-empty setting counts as chosen.
     """
     marks = marks or symbols()
-    env_key = os.environ.get("HYATLAS_LLM_KEY", "").strip()
+    env_key = settings.llm_key()
     rep = _Report(emit, marks, [env_key, str(cfg.get("llm_key") or "").strip()])
     origin = getattr(client, "base_url", None) or settings.base_url(cfg)
     host = cfg.get("server_host") or "127.0.0.1"

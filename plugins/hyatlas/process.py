@@ -307,8 +307,13 @@ class HyatlasProcess:
         allow = _ENV_ALLOW
         env: Dict[str, str] = {
             k: v for k, v in os.environ.items()
-            if k in allow or k.startswith("HYATLAS_")
+            if (k in allow or k.startswith("HYATLAS_")) and k != settings.LLM_KEY_ENV
         }
+        # The key comes through Hermes's profile-scoped secret route, not straight
+        # from this process's environment, which may hold another profile's value.
+        key = settings.llm_key()
+        if key:
+            env[settings.LLM_KEY_ENV] = key
         env.setdefault("HYATLAS_GO_HOST", str(self._config.get("server_host") or "127.0.0.1"))
         env.setdefault("HYATLAS_GO_PORT", str(self._config.get("server_port", 19528)))
         # The client resolves both of those from config, so the spawned server has
@@ -342,8 +347,8 @@ class HyatlasProcess:
 
         # The key is deliberately NOT forwarded from config: it is declared
         # secret, so the setup wizard routes it to Hermes' .env and save_config
-        # strips it. It reaches the child through the HYATLAS_* prefix rule above
-        # like any other exported variable, and never through this code path.
+        # strips it. It reaches the child only through settings.llm_key() above,
+        # Hermes's profile-scoped secret read, and never from config.
         return env
 
     def start(self, lock_wait: float = DEFAULT_LOCK_WAIT) -> None:

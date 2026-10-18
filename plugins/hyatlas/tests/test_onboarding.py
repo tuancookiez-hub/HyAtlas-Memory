@@ -456,6 +456,16 @@ def test_key_never_appears_in_logs(provider_for, caplog):
     assert _SECRET not in caplog.text
 
 
+def test_ai_key_is_read_through_hermes_secret_route():
+    """Catalog rule 11: the key is read with get_secret, never straight from os.environ."""
+    for f in sorted(Path(_PKG).rglob("*.py")):
+        if "tests" in f.parts:
+            continue
+        text = f.read_text(encoding="utf-8", errors="replace")
+        assert 'environ.get("HYATLAS_LLM_KEY"' not in text, f.name
+    assert "get_secret" in (Path(_PKG) / "settings.py").read_text(encoding="utf-8")
+
+
 def test_plugin_never_touches_hermes_provider_tokens():
     """Only the plugin's own key is shared; no Hermes sign-in or provider token is read."""
     offenders = []
@@ -463,6 +473,8 @@ def test_plugin_never_touches_hermes_provider_tokens():
         if "tests" in f.parts:
             continue
         text = f.read_text(encoding="utf-8", errors="replace")
+        # The one Hermes import allowed: its public, read-only config.yaml loader.
+        text = text.replace("from hermes_cli.config import load_config_readonly", "")
         for needle in ("runtime_provider", "auth.json", "import hermes_cli", "from hermes_cli"):
             if needle in text:
                 offenders.append(f"{f.name}: {needle}")
