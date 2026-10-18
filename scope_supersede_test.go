@@ -578,6 +578,11 @@ func TestDecayRawKeepsRowsBehindLiveFacts(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
+		// Extracted, as rows with facts behind them are: decay never takes an
+		// unextracted row.
+		if err := srv.store.SetExtracted(id, true); err != nil {
+			t.Fatal(err)
+		}
 	}
 	seedSourced(t, srv.store, "u", "a", liveRaw, "still believed")
 	stale := seedSourced(t, srv.store, "u", "a", supersededRaw, "no longer believed")

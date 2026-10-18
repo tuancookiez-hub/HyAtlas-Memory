@@ -73,6 +73,7 @@ def _origin() -> str:
 
 BASE = _origin()
 TIMEOUT = 15.0
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def _forward(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
@@ -84,7 +85,9 @@ def _forward(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
         headers={"Content-Type": "application/json"} if body else {},
     )
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        # No proxy: the server is on loopback, and an HTTP_PROXY from the
+        # environment must never see memory traffic.
+        with _OPENER.open(req, timeout=TIMEOUT) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:200]

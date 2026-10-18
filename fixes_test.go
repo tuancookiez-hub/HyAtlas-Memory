@@ -384,6 +384,9 @@ func TestConcurrentAddsKeepIndexValid(t *testing.T) {
 	for err := range errs {
 		t.Errorf("concurrent add: %v", err)
 	}
+	if err := srv.store.Flush(); err != nil {
+		t.Fatal(err)
+	}
 	b, err := os.ReadFile(filepath.Join(srv.store.indexPath))
 	if err != nil {
 		t.Fatal(err)

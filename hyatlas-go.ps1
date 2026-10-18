@@ -66,6 +66,8 @@ function Start-V4 {
 }
 
 function Stop-V4 {
+    # Stop-Process is a hard kill, so ask the server to write its buffered state first.
+    try { Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/v1/flush" -Method Post -TimeoutSec 3 -UseBasicParsing | Out-Null } catch { }
     Get-Process -Name "hyatlas-go" -ErrorAction SilentlyContinue | ForEach-Object {
         Write-Host "Stopped hyatlas-go.exe (pid $($_.Id))"
         Stop-Process -Id $_.Id -Force

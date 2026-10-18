@@ -75,6 +75,11 @@ func snapshotLine(cfg snapshotConfig) string {
 // built under a temporary name and renamed into place, so an interrupted
 // snapshot never looks complete.
 func (s *MemoryStore) Snapshot(dataDir, dst string) error {
+	// The index file is written in the background, so bring it up to date first.
+	// Flush takes its own locks, none of the ones below.
+	if err := s.Flush(); err != nil {
+		log.Printf("snapshot: flush index: %v", err)
+	}
 	// Same lock order as Supersede and Add, so the snapshot cannot deadlock with them.
 	s.supMu.Lock()
 	defer s.supMu.Unlock()

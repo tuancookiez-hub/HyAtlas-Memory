@@ -177,6 +177,9 @@ func TestUsageLearningHasItsOwnFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Close()
+	if err := u.Flush(); err != nil {
+		t.Fatal(err)
+	}
 	if got := NewUsageStats(dir).m["m1"].Shown; got != 1 {
 		t.Fatalf("usage entry lost after a store write: shown=%d", got)
 	}

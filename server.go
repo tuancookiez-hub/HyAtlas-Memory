@@ -10,12 +10,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -1863,7 +1865,51 @@ func main() {
 		log.Print("HYATLAS_ADMIN=on: /api/v1/admin/compact_raw, /api/v1/admin/dedupe_facts and /api/v1/admin/restore are enabled")
 	}
 	hs := &http.Server{Addr: net.JoinHostPort(rt.Host, port), Handler: srv.routes(), ReadHeaderTimeout: readHeaderTimeout}
-	log.Fatal(hs.ListenAndServe())
+	// Ctrl-C or a service stop ends the server cleanly, writing what is still
+	// buffered (the doc index and usage counts). A hard kill skips this, which is
+	// why the Windows launcher calls /api/v1/flush before it stops the process.
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	go func() {
+		<-sigCtx.Done()
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = hs.Shutdown(sctx)
+	}()
+	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal(err)
+	}
+	srv.flush()
+	store.Close()
+	log.Print("stopped")
+}
+
+// flush writes the buffered state (the doc index and the usage counts) to disk now.
+// It is what a clean stop does, and the /api/v1/flush route lets a launcher ask for
+// it before a hard kill.
+func (s *Server) flush() error {
+	err := s.store.Flush()
+	if s.usage != nil {
+		if uerr := s.usage.Flush(); uerr != nil && err == nil {
+			err = uerr
+		}
+	}
+	return err
+}
+
+// handleFlush is POST /api/v1/flush: write buffered state to disk now. It changes no
+// data, so it needs no admin switch.
+func (s *Server) handleFlush(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		jsonResponse(w, 405, map[string]any{"error": "method not allowed: use POST"})
+		return
+	}
+	if err := s.flush(); err != nil {
+		jsonResponse(w, 500, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	jsonResponse(w, 200, map[string]any{"ok": true})
 }
 
 // routes is the complete HTTP surface. Lifted out of main so the body limit and
@@ -1889,6 +1935,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/v1/admin/restore", s.handleRestore)
 	mux.HandleFunc("/api/v1/llm/key", s.handleLLMKey)
 	mux.HandleFunc("/api/v1/now", s.handleNow)
+	mux.HandleFunc("/api/v1/flush", s.handleFlush)
 	mux.HandleFunc("/api/v1/feedback", s.handleFeedback)
 	// Dashboard UI (embedded single-file frontend)
 	// --- v3.5 dashboard adapter endpoints (real v4 data, v3.5 shapes) ---

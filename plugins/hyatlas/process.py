@@ -107,6 +107,19 @@ def _serving(config: Optional[Dict[str, Any]]) -> bool:
         return False
 
 
+def _flush(config: Optional[Dict[str, Any]]) -> None:
+    """Ask the server to write its buffered state before a hard kill.
+
+    The server writes its doc index and usage counts in the background; a clean stop
+    flushes them, but ``taskkill /F`` gives it no chance. Best effort: a server that
+    does not answer, or predates the route, is simply killed as before.
+    """
+    try:
+        HyatlasClient(base_url=f"http://{_origin(config)}", timeout=3.0)._post("/api/v1/flush", {})
+    except Exception as e:
+        logger.debug("flush before stop: %s", e)
+
+
 def _read_pid() -> Optional[int]:
     try:
         return int(PID_FILE.read_text(encoding="utf-8").strip())
@@ -560,6 +573,7 @@ class HyatlasProcess:
 
         if pid is not None and HyatlasProcess._is_server(pid):
             if sys.platform == "win32":
+                _flush(cfg)
                 subprocess.run(["taskkill", "/F", "/PID", str(pid)],
                                capture_output=True, timeout=5)
             else:
