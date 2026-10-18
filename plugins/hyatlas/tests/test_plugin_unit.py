@@ -330,16 +330,17 @@ def test_sync_turn_skips_empty():
         srv.stop()
 
 
-def test_on_memory_write_mirrors_add_only():
+def test_on_memory_write_mirrors_add_replace_and_remove():
     srv = FakeV4Server()
     try:
         p = _provider_at(srv.base)
         p.on_memory_write("add", "memory", "user prefers concise answers")
         assert len(srv.store["memories"]) == 1
-        p.on_memory_write("replace", "memory", "x")  # not mirrored
-        p.on_memory_write("remove", "memory", "y")  # not mirrored
+        p.on_memory_write("replace", "memory", "x")  # no previous_content: forget nothing, add x
+        assert len(srv.store["memories"]) == 2
+        p.on_memory_write("remove", "memory", "y")  # no previous_content: nothing sent
         p.on_memory_write("add", "memory", "")       # empty content skipped
-        assert len(srv.store["memories"]) == 1
+        assert len(srv.store["memories"]) == 2
     finally:
         srv.stop()
 

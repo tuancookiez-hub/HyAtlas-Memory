@@ -750,6 +750,17 @@ key until it is handed over again and reports `llm: "awaiting_key"` meanwhile;
 the plugin checks once a minute. A key with spaces or line breaks is refused
 (400).
 
+### Forget (Hermes memory replace and remove)
+
+`POST /api/v1/forget` with `{"text": "...", "user_id": "...", "agent_id": "...",
+"reason": "..."}` retires what Hermes's memory tool wrote with that text. It matches
+the owner's raw rows whose `write_origin` is `memory_tool` and whose content equals
+the text after trimming spaces, then retires each one and every live row derived from
+it, as `forgotten`. The response is `{"forgotten": n, "derived": n}`. The Hermes
+plugin sends it on a memory `replace` or `remove`, with the replaced entry as the
+text. It is not admin-gated because the retirement is reversible through
+`/api/v1/admin/restore`. Empty text is a 400, and a method other than POST is a 405.
+
 ### Maintenance (admin)
 
 **Backlog pass** (4.7.0): `POST /api/v1/admin/backlog` with `{"dry_run": true}` (the

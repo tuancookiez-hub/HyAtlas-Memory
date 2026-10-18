@@ -1751,6 +1751,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/v1/now", s.handleNow)
 	mux.HandleFunc("/api/v1/flush", s.handleFlush)
 	mux.HandleFunc("/api/v1/feedback", s.handleFeedback)
+	mux.HandleFunc("/api/v1/forget", s.handleForget)
 	// Dashboard UI (embedded single-file frontend)
 	// --- v3.5 dashboard adapter endpoints (real v4 data, v3.5 shapes) ---
 	mux.HandleFunc("/api/status", s.handleDashStatus)

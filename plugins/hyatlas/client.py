@@ -167,6 +167,26 @@ class HyatlasClient:
             body["metadata"] = metadata
         return self._post("/api/v1/add", body)
 
+    def forget(
+        self,
+        text: str,
+        user_id: str = "",
+        agent_id: str = "",
+        reason: str = "",
+    ) -> Dict[str, Any]:
+        """Retire the memory-tool rows that match text, and what was derived from them.
+
+        The server marks them as forgotten, which keeps them restorable. Returns
+        ``forgotten`` (raw rows retired) and ``derived`` (rows derived from them).
+        """
+        body: Dict[str, Any] = {
+            "text": text,
+            "user_id": user_id,
+            "agent_id": agent_id,
+            "reason": reason,
+        }
+        return self._post("/api/v1/forget", body)
+
     def search(
         self,
         query: str,

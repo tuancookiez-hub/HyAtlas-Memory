@@ -38,7 +38,10 @@ with a graph view, and a web dashboard panel. The server is a separate binary,
   the server as a plain add and stored as a raw memory (L2), tagged with its
   target in the metadata. It is not written to L1 Profile directly. L1 fills
   later, when extraction labels the memory as a user preference (`pro` and
-  `ultra`). `replace` and `remove` are not mirrored.
+  `ultra`). A `replace` or `remove` forgets the entry it replaces or removes, using
+  the old text Hermes sends as `previous_content`. The server marks those raw rows,
+  and what was derived from them, as forgotten, which keeps them restorable. A
+  `replace` then adds the new content as an `add` does.
 - **Desktop pane.** Overview (health and layer counts), Graph, Memories, Search,
   Add. Its design is in [`desktop/SPEC.md`](desktop/SPEC.md).
 - **CLI and slash command.** `hermes hyatlas status|search|add|recent|start|stop`

@@ -469,17 +469,28 @@ class HyatlasMemoryProvider(MemoryProvider):
         content: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Mirror Hermes' built-in memory tool ``add`` writes to v4.
+        """Mirror Hermes' built-in memory tool writes to v4.
 
-        The write is a plain ``/api/v1/add``: it is stored as a raw (L2) memory,
+        ``add`` is a plain ``/api/v1/add``: it is stored as a raw (L2) memory,
         tagged with ``write_origin`` and ``target`` in its metadata. It does not
         write to L1 Profile directly. L1 fills later, when extraction labels the
-        memory as a user preference (pro and ultra modes). replace and remove
-        are handled by Hermes' built-in file store and are not mirrored.
+        memory as a user preference (pro and ultra modes).
+
+        ``replace`` and ``remove`` forget the previous entry, which Hermes gives as
+        ``metadata["previous_content"]``, so HyAtlas stops recalling it. The forget
+        is reversible on the server. ``replace`` then adds the new content as
+        ``add`` does; ``remove`` with no previous content does nothing. Never raises.
         """
-        if action != "add" or not self._client or not content:
+        if not self._client or action not in ("add", "replace", "remove"):
             return
         meta = dict(metadata or {})
+        if action in ("replace", "remove"):
+            previous = meta.pop("previous_content", None)
+            self._forget_previous(previous, action)
+            if action == "remove" or not content:
+                return
+        if action == "add" and not content:
+            return
         meta.setdefault("write_origin", "memory_tool")
         meta.setdefault("target", target)
         try:
@@ -492,6 +503,25 @@ class HyatlasMemoryProvider(MemoryProvider):
             )
         except Exception as e:
             logger.debug("on_memory_write failed: %s", e)
+
+    def _forget_previous(self, previous: Any, action: str) -> None:
+        """Forget the previous entry of a Hermes memory replace or remove.
+
+        Nothing is sent when the previous content is missing or blank. Never raises.
+        """
+        if not isinstance(previous, str) or not previous.strip():
+            logger.debug("on_memory_write: %s has no previous_content to forget", action)
+            return
+        reason = "replaced with Hermes's memory tool" if action == "replace" else ""
+        try:
+            self._client.forget(
+                text=previous,
+                user_id=self._user_id,
+                agent_id=self._agent_id,
+                reason=reason,
+            )
+        except Exception as e:
+            logger.debug("on_memory_write forget failed: %s", e)
 
     # --- Optional: on_session_end (final flush) ---
 
