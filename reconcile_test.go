@@ -327,7 +327,7 @@ func TestAddLinkDedupesAndCaps(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		st.addLink(id, fmt.Sprintf("t%d:related", i))
 	}
-	links := parseLinks(st.GetMany([]string{id})[0].Meta[metaLinks])
+	links := splitLinks(st.GetMany([]string{id})[0].Meta[metaLinks])
 	if len(links) != linksMax {
 		t.Fatalf("links = %d, want %d", len(links), linksMax)
 	}

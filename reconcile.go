@@ -22,11 +22,9 @@ const (
 	reconcileTotal    = 20
 )
 
-// Metadata keys that LINK and a recurring event write on a row. metaLinks holds the
-// comma-separated "id:relation" links of a row, and metaSeriesCount and metaSeriesDates
-// hold the count and the dates of a recurring event.
+// Metadata keys a recurring event writes on a row: the count and the dates of the
+// event. Links use metaLinks (graphrecall.go).
 const (
-	metaLinks       = "links"
 	metaSeriesCount = "series_count"
 	metaSeriesDates = "series_dates"
 )
@@ -378,7 +376,7 @@ func (s *MemoryStore) addLink(id, entry string) bool {
 	if len(rows) == 0 {
 		return false
 	}
-	links := parseLinks(rows[0].Meta[metaLinks])
+	links := splitLinks(rows[0].Meta[metaLinks])
 	for _, l := range links {
 		if l == entry {
 			return false
@@ -395,9 +393,10 @@ func (s *MemoryStore) addLink(id, entry string) bool {
 	return true
 }
 
-// parseLinks splits the stored links of a row into its "id:relation" entries, in the
-// order they were written, and drops empty ones.
-func parseLinks(v string) []string {
+// splitLinks splits the stored links of a row into its raw "id:relation" entries, in
+// the order they were written, and drops empty ones. Unlike parseLinks (graphrecall.go)
+// it keeps entries as written, so a rewrite never changes links it does not add.
+func splitLinks(v string) []string {
 	var out []string
 	for _, l := range strings.Split(v, ",") {
 		if l = strings.TrimSpace(l); l != "" {
