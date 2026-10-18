@@ -135,3 +135,66 @@ func TestCompleteNamesAnEmptyReply(t *testing.T) {
 		t.Errorf("err = %v, want it to name an empty message", err)
 	}
 }
+
+// A chat call that fails at the HTTP level is returned at once. Retrying the same
+// request would fail the same way, and a second call only adds load to a provider
+// that is already erroring. The request also names the HyAtlas version.
+func TestCompleteChatErrorIsNotRetried(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if !strings.HasPrefix(r.Header.Get("User-Agent"), "HyAtlas/"+Version+" ") {
+			t.Errorf("User-Agent = %q, want it to carry the HyAtlas version", r.Header.Get("User-Agent"))
+		}
+		http.Error(w, "upstream down", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	client := NewLLMClient(srv.URL, "test-key", "mock-model")
+	if _, err := client.Complete(context.Background(), "input"); err == nil {
+		t.Fatal("want an error for an HTTP 500, got nil")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("LLM calls: want 1 (a chat error is not retried), got %d", got)
+	}
+}
+
+// A confidence written as a number, a bool or something else must not fail the
+// whole extraction. The lessons decode, and each confidence maps to high, medium,
+// low or empty as Experience.UnmarshalJSON describes.
+func TestExperienceTolerantConfidence(t *testing.T) {
+	ex, err := parseExtraction(`{"facts":[{"data":"fact one","layer":"project_state"}],"experiences":[
+		{"task":"t1","solution":"s1","environment":"e1","confidence":0.9},
+		{"task":"t2","solution":"s2","environment":"e2","confidence":0.5},
+		{"task":"t3","solution":"s3","environment":"e3","confidence":0.1},
+		{"task":"t4","solution":"s4","environment":"e4","confidence":true},
+		{"task":"t5","solution":"s5","environment":"e5","confidence":false},
+		{"task":"t6","solution":"s6","environment":"e6","confidence":"high"},
+		{"task":"t7","solution":"s7","environment":"e7","confidence":["very","sure"]},
+		{"task":7,"solution":{"x":1},"environment":null,"confidence":{"a":1}},
+		"junk",
+		{"task":"t10","solution":"s10","environment":"e10","confidence":null}
+	]}`)
+	if err != nil {
+		t.Fatalf("extraction with tolerant experiences: %v", err)
+	}
+	if len(ex.Facts) != 1 || ex.Facts[0].Data != "fact one" {
+		t.Errorf("facts = %+v, want the fact to survive", ex.Facts)
+	}
+	want := []struct{ task, confidence string }{
+		{"t1", "high"}, {"t2", "medium"}, {"t3", "low"}, {"t4", "high"}, {"t5", "low"},
+		{"t6", "high"}, {"t7", ""}, {"", ""}, {"", ""}, {"t10", ""},
+	}
+	if len(ex.Experiences) != len(want) {
+		t.Fatalf("experiences = %d, want %d: %+v", len(ex.Experiences), len(want), ex.Experiences)
+	}
+	for i, w := range want {
+		if got := ex.Experiences[i]; got.Task != w.task || got.Confidence != w.confidence {
+			t.Errorf("experience %d = {task %q, confidence %q}, want {task %q, confidence %q}",
+				i, got.Task, got.Confidence, w.task, w.confidence)
+		}
+	}
+	if e := ex.Experiences[0]; e.Solution != "s1" || e.Environment != "e1" {
+		t.Errorf("first experience = %+v, want its string fields kept", e)
+	}
+}

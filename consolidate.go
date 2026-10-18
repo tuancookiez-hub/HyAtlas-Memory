@@ -1098,12 +1098,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		// Evidence counts only facts the model was shown, each once. Two or more
 		// are needed to call it a pattern; with fewer, the schema is still written
 		// without the key, since losing the pattern would be worse.
-		var evidence []string
-		for _, fid := range sc.Evidence {
-			if batch[fid] && !containsID(evidence, fid) {
-				evidence = append(evidence, fid)
-			}
-		}
+		evidence := shown(sc.Evidence, func(id string) bool { return batch[id] })
 		if len(evidence) >= 2 {
 			meta["evidence"] = strings.Join(evidence, ",")
 		}
@@ -1453,9 +1448,11 @@ func (c *Consolidator) saveState() error {
 }
 
 // decayRaw removes old L2 raw memories, but never one that a live L5 edge
-// cites. Every graph edge stores its source memory IDs as evidence, so deleting
-// a cited row would leave the knowledge graph pointing at a memory that no
-// longer exists — a dangling citation is worse than the disk space it saves.
+// cites, and never one that has not been extracted yet. Every graph edge stores
+// its source memory IDs as evidence, so deleting a cited row would leave the
+// knowledge graph pointing at a memory that no longer exists — a dangling
+// citation is worse than the disk space it saves. An unextracted row has not
+// yet been read by the extraction pass, so deleting it would lose it for good.
 func (c *Consolidator) decayRaw() (pruned, protected int) {
 	if c.retention <= 0 {
 		return 0, 0
@@ -1474,12 +1471,16 @@ func (c *Consolidator) decayRaw() (pruned, protected int) {
 			}
 		}
 	}
-	// A raw row that a live fact was extracted from is still that fact's
-	// provenance, so it is protected too. Superseded facts do not count: they
-	// are history, and their raw rows age out with them.
-	for _, layer := range []memory.Layer{memory.L1Profile, memory.L3Fact} {
-		for _, f := range c.listAllLive(layer) {
-			for _, src := range sourcesOf(f) {
+	// A raw row that a live memory of any layer was extracted from or refers to is
+	// still that memory's provenance, so it is protected too. L2 is skipped, since
+	// its rows are what this pass decays. Superseded rows do not count: they are
+	// history, and their raw rows age out with them.
+	for _, layer := range memory.All() {
+		if layer == memory.L2Raw {
+			continue
+		}
+		for _, d := range c.listAllLive(layer) {
+			for _, src := range sourcesOf(d) {
 				cited[src] = true
 			}
 		}
@@ -1501,6 +1502,9 @@ func (c *Consolidator) decayRaw() (pruned, protected int) {
 		}
 		if cited[d.ID] {
 			protected++
+			continue
+		}
+		if !d.Extracted {
 			continue
 		}
 		old = append(old, d.ID)
@@ -1604,17 +1608,9 @@ func factDate(ts string) string {
 // parseConsolidation tolerantly extracts the JSON object, mirroring the
 // extraction parser: small models wrap objects in prose or fences.
 func parseConsolidation(content string) (*Consolidation, error) {
-	content = trimFences(content)
 	var cons Consolidation
-	if err := json.Unmarshal([]byte(content), &cons); err == nil {
-		return &cons, nil
-	}
-	start, end := strings.Index(content, "{"), strings.LastIndex(content, "}")
-	if start == -1 || end <= start {
-		return nil, fmt.Errorf("consolidation parse failed (raw %.80s)", content)
-	}
-	if err := json.Unmarshal([]byte(content[start:end+1]), &cons); err != nil {
-		return nil, err
+	if err := decodeLenient(content, &cons); err != nil {
+		return nil, fmt.Errorf("consolidation parse failed: %w", err)
 	}
 	return &cons, nil
 }
@@ -1689,12 +1685,7 @@ func idSetOf(facts []DocIndex) map[string]bool {
 // sortNewestFirst orders an owner's facts by timestamp, newest first, then by ID,
 // so a window is the same set on every pass.
 func sortNewestFirst(facts []DocIndex) {
-	sort.Slice(facts, func(i, j int) bool {
-		if facts[i].Ts != facts[j].Ts {
-			return facts[i].Ts > facts[j].Ts
-		}
-		return facts[i].ID > facts[j].ID
-	})
+	sort.Slice(facts, func(i, j int) bool { return newerFirst(facts[i], facts[j]) })
 }
 
 // normalizeText is the comparison key for schemas: case, runs of whitespace and

@@ -106,6 +106,10 @@ func TestDecayRawProtectsEverySourceOfEdge(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Decay only removes rows the extraction pass has read.
+	if err := srv.store.SetExtracted(uncited, true); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := srv.store.Graph().AddEdgeWithSources("u", "a", "x", "r", "y", []string{r1, r2}); err != nil {
 		t.Fatal(err)
 	}

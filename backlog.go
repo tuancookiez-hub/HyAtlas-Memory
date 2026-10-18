@@ -492,16 +492,9 @@ func (b *BacklogJob) askCluster(ctx context.Context, cluster []DocIndex) (cluste
 // ids belong to this cluster, differ, and the newer fact is not older than the one
 // it replaces. A missing key is an empty list.
 func parseBacklogReply(content string, cluster []DocIndex) (clusterAnswer, error) {
-	content = trimFences(content)
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(content), &raw); err != nil {
-		start, end := strings.Index(content, "{"), strings.LastIndex(content, "}")
-		if start == -1 || end <= start {
-			return clusterAnswer{}, fmt.Errorf("backlog reply parse failed (raw %.80s)", content)
-		}
-		if err := json.Unmarshal([]byte(content[start:end+1]), &raw); err != nil {
-			return clusterAnswer{}, err
-		}
+	if err := decodeLenient(content, &raw); err != nil {
+		return clusterAnswer{}, fmt.Errorf("backlog reply parse failed: %w", err)
 	}
 	byID := byIDOf(cluster)
 	var ans clusterAnswer

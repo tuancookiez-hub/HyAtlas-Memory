@@ -170,20 +170,11 @@ func extractKey(b []byte) string {
 	return ""
 }
 
-// Facts, Summary, Knowledge, Schema, Intention is the structured output the LLM
-// returns for one raw input. It drives the full 7-layer promotion.
 // Extraction is the structured result of one System1 pass over a single input.
-//
-// Knowledge and Schemas are retained for tolerant parsing — a model that
-// volunteers them must not break the decode — but the per-turn prompt no longer
-// requests them and promoteExtraction no longer writes them. L5 knowledge and
-// L6 schemas are System2 products, synthesised across many memories by the
-// consolidation pass.
+// Keys it does not name, such as the retired summary, knowledge and schemas, are
+// ignored by the decoder, so a reply that still sends them keeps decoding.
 type Extraction struct {
 	Facts     []Fact     `json:"facts"`
-	Summary   *Summary   `json:"summary,omitempty"`
-	Knowledge []Relation `json:"knowledge,omitempty"`
-	Schemas   []Schema   `json:"schemas,omitempty"`
 	Intention *Intention `json:"intention,omitempty"`
 	// IntentionsDone lists open intentions (shown to the model as context) that
 	// this input shows finished or abandoned. Empty when the model omits it.
@@ -203,6 +194,66 @@ type Experience struct {
 	Solution    string `json:"solution"`
 	Environment string `json:"environment"`
 	Confidence  string `json:"confidence"` // high / medium / low
+}
+
+// UnmarshalJSON decodes an experience tolerantly and never returns an error, so
+// one malformed lesson cannot discard the whole extraction. A string field takes
+// a JSON string and becomes empty for any other type. Confidence takes a string
+// as it is, a number (0.75 or more is high, under 0.4 is low, otherwise medium)
+// or a bool (true is high, false is low). A value that is not an object yields
+// an empty Experience.
+func (e *Experience) UnmarshalJSON(b []byte) error {
+	*e = Experience{}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return nil
+	}
+	e.Task = looseString(obj["task"])
+	e.Solution = looseString(obj["solution"])
+	e.Environment = looseString(obj["environment"])
+	e.Confidence = looseConfidence(obj["confidence"])
+	return nil
+}
+
+// looseString returns raw as a string, or "" when raw is missing, null or not a
+// JSON string.
+func looseString(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return s
+}
+
+// looseConfidence maps a raw confidence value to high, medium or low, as
+// Experience.UnmarshalJSON describes. A missing, null or unusable value yields "".
+func looseConfidence(raw json.RawMessage) string {
+	if t := bytes.TrimSpace(raw); len(t) == 0 || string(t) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var f float64
+	if json.Unmarshal(raw, &f) == nil {
+		switch {
+		case f >= 0.75:
+			return "high"
+		case f < 0.4:
+			return "low"
+		default:
+			return "medium"
+		}
+	}
+	var t bool
+	if json.Unmarshal(raw, &t) == nil {
+		if t {
+			return "high"
+		}
+		return "low"
+	}
+	return ""
 }
 
 // Fact is a single durable fact (L3).
@@ -254,42 +305,6 @@ func splitIDs(s string) []string {
 	})
 }
 
-// Summary is the session narrative arc (L4). The LLM may return it as either
-// a string or an object, so this custom type accepts both.
-type Summary struct {
-	Text string
-}
-
-// UnmarshalJSON accepts both `"summary": "text"` and `"summary": {"text":"..."}`.
-func (s *Summary) UnmarshalJSON(b []byte) error {
-	var raw string
-	if err := json.Unmarshal(b, &raw); err == nil {
-		s.Text = raw
-		return nil
-	}
-	var obj struct {
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(b, &obj); err != nil {
-		return err
-	}
-	s.Text = obj.Text
-	return nil
-}
-
-// Relation is a knowledge-graph edge (L5): entity A <rel> entity B.
-type Relation struct {
-	From     string `json:"from"`
-	Relation string `json:"relation"`
-	To       string `json:"to"`
-}
-
-// Schema is a recurring pattern / structural template (L6).
-type Schema struct {
-	Pattern string `json:"pattern"`
-	Context string `json:"context,omitempty"`
-}
-
 // Intention is the user's current goal / intent (L7). Accepts string or object.
 type Intention struct {
 	Goal string
@@ -333,19 +348,28 @@ func (l *LLMClient) Complete(ctx context.Context, text string) (*Extraction, err
 // CompleteWith is Complete that also shows the model what the store already
 // holds about this input, so it can say which stored facts and open intentions
 // the input updates, finishes or abandons. An empty ec yields the plain prompt.
+//
+// The reinforced retry runs only when the chat call succeeded and its reply did
+// not parse. A failed chat call (an HTTP error, a timeout, an empty reply) is
+// returned at once, because the same request would fail the same way again.
 func (l *LLMClient) CompleteWith(ctx context.Context, text string, ec ExtractContext) (*Extraction, error) {
-	ex, err := l.completeOnce(ctx, text, false, ec)
+	ex, chatFailed, err := l.completeOnce(ctx, text, false, ec)
 	if err == nil {
 		return ex, nil
 	}
-	ex2, err2 := l.completeOnce(ctx, text, true, ec)
+	if chatFailed {
+		return nil, err
+	}
+	ex2, _, err2 := l.completeOnce(ctx, text, true, ec)
 	if err2 == nil {
 		return ex2, nil
 	}
 	return nil, fmt.Errorf("after retry: %w", err2)
 }
 
-func (l *LLMClient) completeOnce(ctx context.Context, text string, reinforce bool, ec ExtractContext) (*Extraction, error) {
+// completeOnce makes one chat call and parses its reply. It also reports whether
+// the chat call itself failed, which tells CompleteWith a retry would not help.
+func (l *LLMClient) completeOnce(ctx context.Context, text string, reinforce bool, ec ExtractContext) (*Extraction, bool, error) {
 	// System1: this pass sees ONE turn, so it may only produce what a single turn
 	// can actually evidence: facts, the current intention and entity pages.
 	// Summaries come from episodes (episode.go), not from each turn. L5 knowledge
@@ -369,9 +393,13 @@ func (l *LLMClient) completeOnce(ctx context.Context, text string, reinforce boo
 	}
 	content, err := l.chat(ctx, messages, 0.2)
 	if err != nil {
-		return nil, err
+		return nil, true, err
 	}
-	return parseExtraction(content)
+	ex, err := parseExtraction(content)
+	if err != nil {
+		return nil, false, err
+	}
+	return ex, false, nil
 }
 
 // chat sends one chat-completions request and returns the assistant's text,
@@ -434,7 +462,7 @@ func (l *LLMClient) chatOnce(ctx context.Context, base, model, key string, messa
 	// The Nous Portal sits behind Cloudflare, which 403s Go's default
 	// "Go-http-client" User-Agent; identify honestly so the WAF lets the
 	// extraction call through.
-	req.Header.Set("User-Agent", "HyAtlas/4.3 (+https://github.com/tuancookiez-hub/HyAtlas-Memory)")
+	req.Header.Set("User-Agent", "HyAtlas/"+Version+" (+https://github.com/tuancookiez-hub/HyAtlas-Memory)")
 	// Resolve the key per request so a rotating credential (KeyFile) never
 	// goes stale the way a startup-frozen env value does.
 	k := key
@@ -490,21 +518,31 @@ func (l *LLMClient) chatOnce(ctx context.Context, base, model, key string, messa
 	return msg.Content, nil
 }
 
+// decodeLenient decodes the JSON object in an LLM reply into v. It tries the whole
+// reply first, then the span from the first "{" to the last "}", since a model may
+// wrap the object in fences or prose. On failure the error names up to 80 bytes of
+// the raw reply.
+func decodeLenient(content string, v any) error {
+	content = trimFences(content)
+	err := json.Unmarshal([]byte(content), v)
+	if err == nil {
+		return nil
+	}
+	start, end := strings.Index(content, "{"), strings.LastIndex(content, "}")
+	if start != -1 && end > start {
+		err = json.Unmarshal([]byte(content[start:end+1]), v)
+		if err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w (raw %.80s)", err, content)
+}
+
 // parseExtraction tolerantly extracts the JSON object from the LLM reply.
 func parseExtraction(content string) (*Extraction, error) {
-	content = trimFences(content)
-	// the model may wrap the object or add trailing text; try direct first
 	var ex Extraction
-	if err := json.Unmarshal([]byte(content), &ex); err != nil {
-		// try to find the first { ... } block
-		start := strings.Index(content, "{")
-		end := strings.LastIndex(content, "}")
-		if start == -1 || end == -1 || end <= start {
-			return nil, fmt.Errorf("extraction parse: %w (raw %.80s)", err, content)
-		}
-		if err := json.Unmarshal([]byte(content[start:end+1]), &ex); err != nil {
-			return nil, err
-		}
+	if err := decodeLenient(content, &ex); err != nil {
+		return nil, fmt.Errorf("extraction parse: %w", err)
 	}
 	// normalize fields
 	if ex.Facts == nil {

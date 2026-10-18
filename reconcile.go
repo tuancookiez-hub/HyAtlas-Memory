@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
@@ -36,29 +35,19 @@ Reply with JSON only, in this form:
 Reply {"ops": []} when nothing applies.`
 
 // reconcileOp is one decision from the reconcile model. Fact is the id of the new
-// fact it is about. Targets are stored fact ids that were shown as candidates.
+// fact it is about. Targets are stored fact ids that were shown as candidates. Targets
+// uses idList, which accepts the odd shapes small models produce for a list of ids.
 type reconcileOp struct {
-	Op      string   `json:"op"`      // ADD | UPDATE | SUPERSEDE
-	Fact    string   `json:"fact"`    // the new fact id this op is about
-	Targets []string `json:"targets"` // stored fact ids (UPDATE, SUPERSEDE)
-	Text    string   `json:"text"`    // UPDATE only: the merged text
-	Reason  string   `json:"reason"`  // SUPERSEDE only
+	Op      string `json:"op"`      // ADD | UPDATE | SUPERSEDE
+	Fact    string `json:"fact"`    // the new fact id this op is about
+	Targets idList `json:"targets"` // stored fact ids (UPDATE, SUPERSEDE)
+	Text    string `json:"text"`    // UPDATE only: the merged text
+	Reason  string `json:"reason"`  // SUPERSEDE only
 }
 
-// reconcileReply is the model's JSON answer. Ops are decoded through reconcileOpWire,
-// so a bare string or a comma-separated string as targets does not reject the reply.
+// reconcileReply is the model's JSON answer.
 type reconcileReply struct {
-	Ops []reconcileOpWire `json:"ops"`
-}
-
-// reconcileOpWire is reconcileOp as the model may send it. Targets uses idList,
-// which accepts the odd shapes small models produce for a list of ids.
-type reconcileOpWire struct {
-	Op      string `json:"op"`
-	Fact    string `json:"fact"`
-	Targets idList `json:"targets"`
-	Text    string `json:"text"`
-	Reason  string `json:"reason"`
+	Ops []reconcileOp `json:"ops"`
 }
 
 // reconcileEnabled reports whether the second reconcile call is switched on. It is
@@ -88,7 +77,7 @@ func (s *MemoryStore) reconcileCandidates(f DocIndex, users []string, agentID st
 		if agentID != "" {
 			where["agent_id"] = agentID
 		}
-		found, err := s.searchWhere(qv, reconcilePerFact, memory.L3Fact, where)
+		found, err := s.searchWhere(qv, 2*reconcilePerFact, memory.L3Fact, where)
 		if err != nil {
 			log.Printf("reconcile: search for fact %s: %v", f.ID, err)
 			continue
@@ -199,24 +188,14 @@ func reconcileMessages(news, cands []DocIndex) []map[string]string {
 // parseReconcile decodes the model's reply into its ops. It tolerates code fences
 // and text around the object, as parseExtraction does.
 func parseReconcile(content string) ([]reconcileOp, error) {
-	content = trimFences(content)
 	var rep reconcileReply
-	if err := json.Unmarshal([]byte(content), &rep); err != nil {
-		start := strings.Index(content, "{")
-		end := strings.LastIndex(content, "}")
-		if start == -1 || end == -1 || end <= start {
-			return nil, fmt.Errorf("parse reply: %w (raw %.80s)", err, content)
-		}
-		if err := json.Unmarshal([]byte(content[start:end+1]), &rep); err != nil {
-			return nil, fmt.Errorf("parse reply: %w", err)
-		}
+	if err := decodeLenient(content, &rep); err != nil {
+		return nil, fmt.Errorf("parse reply: %w", err)
 	}
-	out := make([]reconcileOp, 0, len(rep.Ops))
-	for _, w := range rep.Ops {
-		out = append(out, reconcileOp{Op: w.Op, Fact: w.Fact, Targets: w.Targets,
-			Text: w.Text, Reason: w.Reason})
+	if rep.Ops == nil {
+		return []reconcileOp{}, nil
 	}
-	return out, nil
+	return rep.Ops, nil
 }
 
 // applyReconcile applies ops that name only shown ids. An id the model invented is
@@ -234,7 +213,7 @@ func (s *MemoryStore) applyReconcile(ops []reconcileOp, newSet, candSet map[stri
 		if !newSet[fact] {
 			continue
 		}
-		targets := keepShown(op.Targets, candSet, used)
+		targets := shown(op.Targets, func(id string) bool { return candSet[id] && !used[id] })
 		switch strings.ToUpper(strings.TrimSpace(op.Op)) {
 		case "UPDATE":
 			text := strings.TrimSpace(op.Text)
@@ -271,22 +250,6 @@ func (s *MemoryStore) applyReconcile(ops []reconcileOp, newSet, candSet map[stri
 		// ADD, and any op the model made up, changes nothing.
 	}
 	return applied
-}
-
-// keepShown returns the ids that were shown as candidates and are not already used,
-// without repeats, in the order the model gave them.
-func keepShown(ids []string, shown, used map[string]bool) []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if !shown[id] || used[id] || seen[id] {
-			continue
-		}
-		seen[id] = true
-		out = append(out, id)
-	}
-	return out
 }
 
 // applyUpdate writes the merged text as one new fact and retires the new fact and
