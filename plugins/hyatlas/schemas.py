@@ -30,8 +30,10 @@ HYATLAS_SEARCH_SCHEMA: Dict[str, Any] = {
     "name": "hyatlas_search",
     "description": (
         "Semantic search the HyAtlas v4 memory store for memories relevant "
-        "to the query. Returns the 3-channel response (profile, proactive, "
-        "normal) with score, layer, content, and timestamps. Prefer this over "
+        "to the query. Returns the channels pages, profile, proactive, "
+        "experiences and normal, each hit with score, layer, content, timestamp "
+        "and, when known, its event date and the older versions it replaced. "
+        "Queries may name a time ('last week', '2026-10-05'). Prefer this over "
         "relying on prefetched context when you need explicit, up-to-date recall."
     ),
     "parameters": {
@@ -51,10 +53,10 @@ HYATLAS_SEARCH_SCHEMA: Dict[str, Any] = {
             },
             "layer": {
                 "type": "string",
-                "description": "Restrict to one layer: l1_profile, l2_raw, l3_fact, l4_summary, l5_knowledge, l6_schema, l7_intention",
+                "description": "Restrict to one layer: l1_profile, l2_raw, l3_fact, l4_summary, l5_knowledge, l6_schema, l7_intention, l8_entity",
                 "enum": [
                     "l1_profile", "l2_raw", "l3_fact", "l4_summary",
-                    "l5_knowledge", "l6_schema", "l7_intention",
+                    "l5_knowledge", "l6_schema", "l7_intention", "l8_entity",
                 ],
             },
             "limit": {
@@ -85,7 +87,7 @@ HYATLAS_RECENT_SCHEMA: Dict[str, Any] = {
                 "description": "Restrict to one layer",
                 "enum": [
                     "l1_profile", "l2_raw", "l3_fact", "l4_summary",
-                    "l5_knowledge", "l6_schema", "l7_intention",
+                    "l5_knowledge", "l6_schema", "l7_intention", "l8_entity",
                 ],
             },
             "limit": {
@@ -107,9 +109,10 @@ HYATLAS_ADD_SCHEMA: Dict[str, Any] = {
     "name": "hyatlas_add",
     "description": (
         "Save a memory directly to HyAtlas v4. Use this to record durable "
-        "facts the agent wants remembered. The server's LLM runs async and "
-        "promotes the text to all 7 layers (L1 profile / L2 raw / L3 fact / "
-        "L4 summary / L5 knowledge graph / L6 schema / L7 intention). Prefer "
+        "facts the agent wants remembered. The text is stored raw (L2), and in "
+        "pro and ultra mode the server's LLM extracts facts with dates, "
+        "preferences, intentions, entity pages and task experiences from it; "
+        "summaries and the knowledge graph follow in the background. Prefer "
         "the built-in memory tool (`memory` / `memory add`) for atomic facts; "
         "this tool is for richer context dumps."
     ),
