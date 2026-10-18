@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -155,10 +157,12 @@ func TestEpisodeSkipsWithOneLiveFact(t *testing.T) {
 }
 
 // TestEpisodeDroppedAfterMaxTries checks that an episode whose model keeps failing
-// is kept for two retries and then dropped on the third tick, with no L4 row.
+// gets a retry time after each failure below the max, and is dropped on the
+// episodeMaxTries-th failure with no L4 row. Each loop advances the clock past the
+// longest backoff, so every tick is due.
 func TestEpisodeDroppedAfterMaxTries(t *testing.T) {
 	st := openHistoryStore(t, t.TempDir())
-	_, llm := newEpisodeLLMStub(t, http.StatusInternalServerError, "")
+	stub, llm := newEpisodeLLMStub(t, http.StatusInternalServerError, "")
 	e := NewEpisodes(t.TempDir(), st, llm, 30*time.Minute)
 
 	id1 := addRow(t, st, memory.L3Fact, "one fact", episodeTestTime.Format(time.RFC3339))
@@ -169,19 +173,128 @@ func TestEpisodeDroppedAfterMaxTries(t *testing.T) {
 	ctx := context.Background()
 	now := episodeTestTime.Add(time.Hour)
 	for want := 1; want <= episodeMaxTries; want++ {
+		now = now.Add(episodeRetryMax + time.Minute)
 		e.tick(ctx, now)
 		e.mu.Lock()
 		if want < episodeMaxTries {
 			if len(e.pending) != 1 || e.pending[0].Tries != want {
 				t.Fatalf("after tick %d: pending=%d, want 1 episode with Tries=%d", want, len(e.pending), want)
 			}
+			if e.pending[0].NextTry == "" {
+				t.Fatalf("after tick %d: NextTry is empty, want a retry time", want)
+			}
 		} else if len(e.pending) != 0 {
 			t.Fatalf("after tick %d: pending=%d, want 0 (dropped)", want, len(e.pending))
 		}
 		e.mu.Unlock()
 	}
+	if n := stub.calls.Load(); n != int32(episodeMaxTries) {
+		t.Fatalf("model calls = %d, want %d", n, episodeMaxTries)
+	}
 	if rows, _ := st.List(memory.L4Summary, "u", "a", 10, 0, false); len(rows) != 0 {
 		t.Fatalf("L4 rows = %d, want 0", len(rows))
+	}
+}
+
+// TestEpisodeRetryWaitsForBackoff checks that a failed summary waits its backoff
+// before the next model call. A tick inside the wait makes no call, and a tick after
+// the wait makes exactly one.
+func TestEpisodeRetryWaitsForBackoff(t *testing.T) {
+	st := openHistoryStore(t, t.TempDir())
+	stub, llm := newEpisodeLLMStub(t, http.StatusInternalServerError, "")
+	e := NewEpisodes(t.TempDir(), st, llm, 30*time.Minute)
+
+	id1 := addRow(t, st, memory.L3Fact, "one fact", episodeTestTime.Format(time.RFC3339))
+	id2 := addRow(t, st, memory.L3Fact, "another fact", episodeTestTime.Add(time.Minute).Format(time.RFC3339))
+	e.Note("u", "a", []string{id1}, episodeTestTime)
+	e.Note("u", "a", []string{id2}, episodeTestTime.Add(time.Minute))
+
+	ctx := context.Background()
+	now := episodeTestTime.Add(time.Hour)
+	e.tick(ctx, now)
+	if n := stub.calls.Load(); n != 1 {
+		t.Fatalf("calls after first tick = %d, want 1", n)
+	}
+	e.mu.Lock()
+	if len(e.pending) != 1 || e.pending[0].Tries != 1 {
+		e.mu.Unlock()
+		t.Fatalf("after first failure: pending=%d, want 1 episode with Tries=1", len(e.pending))
+	}
+	wantNext := now.Add(5 * time.Minute).UTC().Format(time.RFC3339)
+	if got := e.pending[0].NextTry; got != wantNext {
+		e.mu.Unlock()
+		t.Fatalf("NextTry = %q, want %q", got, wantNext)
+	}
+	e.mu.Unlock()
+
+	e.tick(ctx, now.Add(4*time.Minute))
+	if n := stub.calls.Load(); n != 1 {
+		t.Fatalf("calls after tick inside backoff = %d, want still 1", n)
+	}
+	e.mu.Lock()
+	if e.pending[0].Tries != 1 {
+		e.mu.Unlock()
+		t.Fatalf("Tries after tick inside backoff = %d, want 1", e.pending[0].Tries)
+	}
+	e.mu.Unlock()
+
+	e.tick(ctx, now.Add(6*time.Minute))
+	if n := stub.calls.Load(); n != 2 {
+		t.Fatalf("calls after tick past backoff = %d, want 2", n)
+	}
+}
+
+// TestEpisodeRetryDelay checks the backoff for each failure count: doubling from
+// episodeRetryBase, capped at episodeRetryMax, and a count below 1 treated as 1.
+func TestEpisodeRetryDelay(t *testing.T) {
+	cases := []struct {
+		tries int
+		want  time.Duration
+	}{
+		{tries: 0, want: 5 * time.Minute},
+		{tries: 1, want: 5 * time.Minute},
+		{tries: 2, want: 10 * time.Minute},
+		{tries: 5, want: 80 * time.Minute},
+		{tries: 6, want: 2 * time.Hour},
+		{tries: 10, want: 2 * time.Hour},
+	}
+	for _, c := range cases {
+		if got := episodeRetryDelay(c.tries); got != c.want {
+			t.Errorf("episodeRetryDelay(%d) = %v, want %v", c.tries, got, c.want)
+		}
+	}
+}
+
+// TestEpisodeLoadsOldStateWithoutNextTry checks that an episodes.json written before
+// next_try existed still loads, and that its pending episode is due at once and gets
+// summarised on the next tick.
+func TestEpisodeLoadsOldStateWithoutNextTry(t *testing.T) {
+	dir := t.TempDir()
+	st := openHistoryStore(t, t.TempDir())
+	stub, llm := newEpisodeLLMStub(t, http.StatusOK, "Two facts were recorded.")
+
+	id1 := addRow(t, st, memory.L3Fact, "old fact one", episodeTestTime.Format(time.RFC3339))
+	id2 := addRow(t, st, memory.L3Fact, "old fact two", episodeTestTime.Add(time.Minute).Format(time.RFC3339))
+
+	old := `{"open":{},"pending":[{"user":"u","agent":"a",` +
+		`"start":"` + episodeTestTime.Format(time.RFC3339) + `",` +
+		`"last":"` + episodeTestTime.Add(time.Minute).Format(time.RFC3339) + `",` +
+		`"fact_ids":["` + id1 + `","` + id2 + `"],"tries":1}]}`
+	if err := os.WriteFile(filepath.Join(dir, episodesFile), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	e := NewEpisodes(dir, st, llm, 30*time.Minute)
+	if _, pending := e.Counts(); pending != 1 {
+		t.Fatalf("loaded pending = %d, want 1", pending)
+	}
+
+	e.tick(context.Background(), episodeTestTime.Add(time.Hour))
+	if n := stub.calls.Load(); n != 1 {
+		t.Fatalf("model calls = %d, want 1", n)
+	}
+	if rows, _ := st.List(memory.L4Summary, "u", "a", 10, 0, false); len(rows) != 1 {
+		t.Fatalf("L4 rows = %d, want 1", len(rows))
 	}
 }
 

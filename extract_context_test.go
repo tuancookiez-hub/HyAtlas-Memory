@@ -476,3 +476,37 @@ func TestExtractDropsEventDateOnPreference(t *testing.T) {
 		t.Fatalf("preference kept event_at: %+v", live)
 	}
 }
+
+// TestExtractContextHidesExperiences checks that a task experience, even the nearest
+// live row to the input, is never shown as a related fact, while an ordinary fact
+// near the input is still shown.
+func TestExtractContextHidesExperiences(t *testing.T) {
+	const input = "how to fix the build on windows"
+	const fact = "The build runs on a Windows host"
+	st := guardStore(t, vecEmbedder{
+		input: {1, 0, 0},
+		fact:  simTo(0.9),
+	})
+	expID := newID()
+	if err := st.Add(memory.L3Fact, expID, input, map[string]string{
+		"user_id": "u", "agent_id": "a", "source_layer_label": experienceLabel,
+		"ts": "2026-10-18T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	factID := addRow(t, st, memory.L3Fact, fact, "2026-10-18T00:00:00Z")
+
+	ec := st.extractContext(input, "u", "a", time.Now().UTC())
+	sawFact := false
+	for _, it := range ec.Related {
+		if it.ID == expID {
+			t.Errorf("experience %s shown as a related fact", expID)
+		}
+		if it.ID == factID {
+			sawFact = true
+		}
+	}
+	if !sawFact {
+		t.Errorf("ordinary related fact %s not shown: %+v", factID, ec.Related)
+	}
+}

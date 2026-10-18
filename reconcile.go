@@ -113,13 +113,26 @@ func (s *MemoryStore) reconcileCandidates(f DocIndex, users []string, agentID st
 }
 
 // reconcile compares the facts just stored by one write with the owner's similar
-// stored facts, in one LLM call, and applies the model's UPDATE and SUPERSEDE ops.
-// newFacts are the ids of the facts the write stored. It returns how many ops were
-// applied. The facts are already stored when this runs, so a failure is logged and
-// returned, and it never undoes the write. No candidates means no LLM call.
+// stored facts under userID alone. It is reconcileOwners with the write's own ID as
+// the only owner.
 func (s *MemoryStore) reconcile(ctx context.Context, llm *LLMClient, newFacts []string, userID, agentID string) (int, error) {
+	return s.reconcileOwners(ctx, llm, newFacts, []string{userID}, userID, agentID)
+}
+
+// reconcileOwners compares the facts just stored by one write with the similar stored
+// facts of users, in one LLM call, and applies the model's UPDATE and SUPERSEDE ops.
+// users are every user ID of the write's owner (the write's own ID plus its aliases),
+// so a fact is compared with the same person's facts under any of their IDs. When
+// users is empty it is treated as []string{userID}. userID stays the owner of a merged
+// UPDATE fact. newFacts are the ids of the facts the write stored. It returns how many
+// ops were applied. The facts are already stored when this runs, so a failure is
+// logged and returned, and it never undoes the write. No candidates means no LLM call.
+func (s *MemoryStore) reconcileOwners(ctx context.Context, llm *LLMClient, newFacts []string, users []string, userID, agentID string) (int, error) {
 	if len(newFacts) == 0 {
 		return 0, nil
+	}
+	if len(users) == 0 {
+		users = []string{userID}
 	}
 	news := s.GetMany(newFacts)
 	newSet := make(map[string]bool, len(news))
@@ -134,7 +147,7 @@ func (s *MemoryStore) reconcile(ctx context.Context, llm *LLMClient, newFacts []
 		if len(cands) >= reconcileTotal {
 			break
 		}
-		for _, c := range s.reconcileCandidates(f, []string{userID}, agentID) {
+		for _, c := range s.reconcileCandidates(f, users, agentID) {
 			if len(cands) >= reconcileTotal {
 				break
 			}
@@ -208,8 +221,11 @@ func parseReconcile(content string) ([]reconcileOp, error) {
 
 // applyReconcile applies ops that name only shown ids. An id the model invented is
 // dropped, and so is an op left with nothing to act on. An id is used by at most one
-// op, so a second op cannot retire a row the first one already retired. It returns
-// how many ops were applied.
+// op, so a second op cannot retire a row the first one already retired. A SUPERSEDE
+// is skipped when its new fact was already merged and retired by an earlier UPDATE,
+// so no op runs through a retired fact. After a SUPERSEDE, its new fact is marked used,
+// so a later UPDATE cannot retire the fact that now stands in for the targets. It
+// returns how many ops were applied.
 func (s *MemoryStore) applyReconcile(ops []reconcileOp, newSet, candSet map[string]bool, userID, agentID string) int {
 	used := map[string]bool{}
 	applied := 0
@@ -233,7 +249,7 @@ func (s *MemoryStore) applyReconcile(ops []reconcileOp, newSet, candSet map[stri
 				applied++
 			}
 		case "SUPERSEDE":
-			if len(targets) == 0 {
+			if len(targets) == 0 || used[fact] {
 				continue
 			}
 			reason := strings.TrimSpace(op.Reason)
@@ -246,6 +262,7 @@ func (s *MemoryStore) applyReconcile(ops []reconcileOp, newSet, candSet map[stri
 				log.Printf("reconcile: supersede %v by %s: %v", targets, fact, err)
 				continue
 			}
+			used[fact] = true
 			for _, t := range targets {
 				used[t] = true
 			}

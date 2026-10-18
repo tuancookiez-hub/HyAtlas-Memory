@@ -161,3 +161,36 @@ func TestExtractPromptsRequestExperiences(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteExperiencesDedupeIgnoresNearerFacts checks that an old experience is still
+// found as the repeat's dedupe target when ten ordinary facts sit nearer to the repeat.
+func TestWriteExperiencesDedupeIgnoresNearerFacts(t *testing.T) {
+	st := guardStore(t, vecEmbedder{
+		expTextA: {1, 0, 0},
+		expTextB: simTo(0.95),
+	})
+	first := st.writeExperiences([]Experience{{Task: "fix build", Solution: "set CGO flag",
+		Environment: "Windows host", Confidence: "medium"}}, "u", "a", "src1", "2026-10-18T00:00:00Z")
+	if len(first) != 1 {
+		t.Fatalf("first write: %d ids, want 1", len(first))
+	}
+	// Twelve ordinary facts with the repeat's exact text score 1.0 against it.
+	for i := 0; i < 12; i++ {
+		addRow(t, st, memory.L3Fact, expTextB, "2026-10-18T00:30:00Z")
+	}
+	second := st.writeExperiences([]Experience{{Task: "fix the build", Solution: "set the CGO flag",
+		Environment: "Windows host", Confidence: "high"}}, "u", "a", "src2", "2026-10-18T01:00:00Z")
+	if len(second) != 1 {
+		t.Fatalf("second write: %d ids, want 1", len(second))
+	}
+	old := st.GetMany(first)
+	if len(old) != 1 || !isSuperseded(old[0]) {
+		t.Fatalf("earlier experience not superseded despite nearer facts")
+	}
+	if how := old[0].Meta[metaSupersededHow]; how != howUpdated {
+		t.Errorf("superseded_how = %q, want %q", how, howUpdated)
+	}
+	if by := old[0].Meta["superseded_by"]; by != second[0] {
+		t.Errorf("superseded_by = %q, want %q", by, second[0])
+	}
+}

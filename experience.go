@@ -48,6 +48,15 @@ func normalizeConfidence(c string) string {
 // repeat confirms or refines the lesson instead of duplicating it. It returns the
 // ids it wrote, which the episode grouping treats like fact ids.
 func (s *MemoryStore) writeExperiences(exs []Experience, userID, agentID, sourceID, ts string) []string {
+	// The dedupe filter is built once per call: only experiences of this owner are
+	// searched, so ordinary facts nearer than an old experience cannot hide it.
+	where := map[string]string{"source_layer_label": experienceLabel}
+	if userID != "" {
+		where["user_id"] = userID
+	}
+	if agentID != "" {
+		where["agent_id"] = agentID
+	}
 	var ids []string
 	for _, e := range exs {
 		e.Task = strings.TrimSpace(e.Task)
@@ -60,13 +69,22 @@ func (s *MemoryStore) writeExperiences(exs []Experience, userID, agentID, source
 
 		// The nearest live experience of this owner that is the same lesson. It is
 		// found before the new row is written, so the new row cannot match itself.
-		// A failed search only skips the dedupe; the write still happens.
+		// A failed embed or search only skips the dedupe; the write still happens.
 		var old []string
-		near, err := s.search(text, experienceDedupeLimit, memory.L3Fact, userID, agentID)
+		qv, err := s.embed.Embed(s.ctx, text)
 		if err != nil {
-			log.Printf("experience: dedupe search: %v", err)
+			log.Printf("experience: dedupe embed: %v", err)
+		}
+		var near []SearchHit
+		if err == nil {
+			near, err = s.searchWhere(qv, experienceDedupeLimit, memory.L3Fact, where)
+			if err != nil {
+				log.Printf("experience: dedupe search: %v", err)
+			}
 		}
 		for _, h := range near {
+			// Only an experience can be the same lesson; the where filter already
+			// restricts the search, and isExperience keeps the check explicit.
 			if isExperience(h) && float64(h.Score) >= defaultDedupeScore && sameNumbers(h.Content, text) {
 				old = append(old, h.ID)
 				break
