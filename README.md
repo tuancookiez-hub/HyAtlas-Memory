@@ -968,6 +968,23 @@ the background, so loading never waits), as well as when a session begins. A Her
 gateway that starts at logon therefore brings the server up after a reboot without
 anything else to set up.
 
+**Starting HyAtlas on its own at logon (recommended).** A server started by Hermes is a
+child of the Hermes process, so whatever stops Hermes (a crash, an update, an antivirus
+action on the Hermes process tree) stops HyAtlas too. Starting it yourself at logon keeps
+the two independent. HyAtlas never creates a scheduled task, service or startup entry on its
+own; you choose one:
+
+- **Windows:** press Win+R, open `shell:startup`, and create a shortcut whose target is
+  `powershell.exe -NoProfile -WindowStyle Hidden -File "C:\path	o\hyatlas-go.ps1" start`.
+- **Linux:** a systemd user unit (`~/.config/systemd/user/hyatlas.service`) with
+  `ExecStart=/path/to/hyatlas-go` and your `HYATLAS_*` settings as `Environment=` lines, then
+  `systemctl --user enable --now hyatlas`. `systemctl --user stop` sends SIGTERM, which
+  stops it cleanly.
+- **macOS:** a LaunchAgent plist in `~/Library/LaunchAgents` that runs `hyatlas-go` with
+  `RunAtLoad`, loaded with `launchctl load`.
+
+Leave `auto_start` off when you do this; the plugin then only connects to the running server.
+
 If `server_host` is a DNS name, the server refuses it with 403 unless the server's
 `HYATLAS_ALLOWED_HOSTS` lists that name. See *Who may talk to it* above.
 

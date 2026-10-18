@@ -2,9 +2,9 @@
 
 The PNGs are rendered from these HTML files with headless Chrome at 2x:
 
-- `hero.html` → `assets/hyatlas-v5.0.0-hero.png` (README top) and, downscaled to exactly
-  1200x600, `docs/images/banner.png` (the Hermes catalog `image`, which must be 1200x600).
-- `banner.html` → `docs/images/modes.png` (the three modes).
+- `hero.html` → `assets/hyatlas-v5.0.0-hero.png` (README top).
+- `banner.html` → `docs/images/modes.png` (the three modes) and, downscaled to exactly 1200x600,
+  `docs/images/banner.png` (the Hermes catalog `image`, which must be 1200x600).
 - `how.html` → `docs/images/how-it-works.png`; `new.html` → `docs/images/whats-new-5.png`.
 
 ```
