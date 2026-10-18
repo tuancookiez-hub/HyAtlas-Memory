@@ -540,7 +540,7 @@ If `HYATLAS_MODEL_DIR` is set, that directory is the only one searched. A plain 
 - Model: `https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model.onnx` (saved as `bge-small-en-v1.5.onnx`) and `.../resolve/main/vocab.txt`. The release workflow and the installer use these URLs.
 - onnxruntime 1.28.1: the release archives that `.github/workflows/release.yml` downloads, `onnxruntime-<platform>-1.28.1` from [microsoft/onnxruntime releases](https://github.com/microsoft/onnxruntime/releases). Take the `lib/` file for your platform (`onnxruntime.dll`, `libonnxruntime.so` or `libonnxruntime.dylib`).
 
-**To regenerate the ONNX from the HuggingFace model**, see `export_bge_onnx.py`.
+**To regenerate the ONNX from the HuggingFace model**, see `scripts/export_bge_onnx.py`.
 
 ### Version pins (critical)
 

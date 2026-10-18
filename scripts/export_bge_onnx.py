@@ -8,7 +8,7 @@ or the embed_server subprocess) loads it at runtime.
 
 Usage:
     D:/HyAtlas/.hyatlas/venv/Scripts/python.exe -m venv-not-needed
-    python export_bge_onnx.py
+    python scripts/export_bge_onnx.py
 
 Firewall note (Windows): the venv python cannot reach huggingface.co (WinError
 10013 from the per-app outbound allowlist). This script relies on the model
