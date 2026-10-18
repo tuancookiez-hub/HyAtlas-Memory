@@ -602,7 +602,7 @@ if you depend on that. Every route is behind the Host/Origin guard described abo
 
 **Dashboard adapter endpoints.** The web dashboard at `/dashboard/` reads these,
 which return v3.5-shaped data built from the v4 store:
-`/api/status`, `/api/info`, `/api/memories`, `/api/layer-counts`, `/api/storage`,
+`/api/info`, `/api/memories`, `/api/layer-counts`, `/api/storage`,
 `/api/metrics`, `/api/graph-counts`, `/api/layer-health`, `/api/l6-schemas`,
 `/api/l5/graph`, and the three stubs above. `/api/graph-counts` reports
 `l5_knowledge` and `relation_count` as totals over all owners.
