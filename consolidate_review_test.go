@@ -42,11 +42,11 @@ func TestAllCallsFailingIsNotChargedToClusters(t *testing.T) {
 	}
 }
 
-// A cluster left alone after maxWindowFails is due again once failCooldown has
+// A cluster left alone after maxClusterFails is due again once failCooldown has
 // passed, even though its members never changed.
 func TestSkippedClusterIsRetriedAfterCooldown(t *testing.T) {
 	cs := &clusterState{ID: "c1", FactIDs: []string{"a", "b"}}
-	cs.Fails, cs.FailFP = maxWindowFails, cs.fp()
+	cs.Fails, cs.FailFP = maxClusterFails, cs.fp()
 	cs.FailedAt = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
 	if cs.due() {
 		t.Error("a cluster that just used up its failures is due; want it left alone")

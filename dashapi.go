@@ -2,8 +2,7 @@ package main
 
 // Dashboard-facing API endpoints (v3.5 parity for the copied dashboard UI).
 // All values are REAL data from the store — no fabricated payloads.
-// Endpoints the dashboard needs:
-//   GET /api/status            — infra health (vdb/embed/llm) + counts
+// Endpoints the dashboard needs (its health check uses /api/v1/status):
 //   GET /api/info              — static build info
 //   GET /api/memories          — page of memories (content/layer/memory_id/gmt_created/…)
 //   GET /api/layer-counts      — display_counts/graph_counts/vdb_counts/total
@@ -18,12 +17,10 @@ package main
 //   GET /api/coding-memories   — coding-layer items (always empty, honest)
 
 import (
-	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -60,31 +57,9 @@ func gmtCreated(ts string) int64 {
 	return t.Unix()
 }
 
-// writeJSON is an alias for jsonResponse with GET-friendly status.
-func writeJSON(w http.ResponseWriter, code int, v any) { jsonResponse(w, code, v) }
-
-func (s *Server) handleDashStatus(w http.ResponseWriter, r *http.Request) {
-	write := "ok"
-	if errStr := s.extractErr(); errStr != "" {
-		write = "degraded: " + errStr
-	}
-	writeJSON(w, 200, map[string]any{
-		"status": "ok",
-		"vdb":    "ok",
-		"embed":  "ok",
-		// Same gate as /api/v1/status, so the dashboard cannot show a healthy LLM
-		// in lite (which never calls one) or in a mode with no credential.
-		"llm":      s.llmState(),
-		"mode":     string(s.mode.OrDefault()),
-		"layers":   s.store.LayerCounts(),
-		"total":    s.store.TotalMemories(),
-		"pipeline": write,
-	})
-}
-
 func (s *Server) handleDashInfo(w http.ResponseWriter, r *http.Request) {
 	writes, searches := s.store.Usage()
-	writeJSON(w, 200, map[string]any{
+	jsonResponse(w, 200, map[string]any{
 		"name":           "HyAtlas (Go)",
 		"version":        Version,
 		"mode":           string(s.mode.OrDefault()),
@@ -115,7 +90,7 @@ func (s *Server) handleDashMemories(w http.ResponseWriter, r *http.Request) {
 			"extracted":   it.Extracted,
 		})
 	}
-	writeJSON(w, 200, map[string]any{
+	jsonResponse(w, 200, map[string]any{
 		"total":    s.store.TotalMemories(),
 		"memories": map[string]any{"profile": []any{}, "proactive": []any{}, "normal": out},
 	})
@@ -128,7 +103,7 @@ func (s *Server) handleDashLayerCounts(w http.ResponseWriter, r *http.Request) {
 	counts := s.store.LayerCounts()
 	total := s.store.TotalMemories()
 	writes, searches := s.store.Usage()
-	writeJSON(w, 200, map[string]any{
+	jsonResponse(w, 200, map[string]any{
 		"display_counts": counts,
 		"vdb_counts":     counts,
 		"graph_counts": map[string]int{
@@ -163,12 +138,12 @@ func (s *Server) handleDashStorage(w http.ResponseWriter, r *http.Request) {
 	if files == nil {
 		files = []fileInfo{}
 	}
-	writeJSON(w, 200, map[string]any{"files": files})
+	jsonResponse(w, 200, map[string]any{"files": files})
 }
 
 // handleDashMetrics serves the v3.5 metrics shape (uptime + totals).
 func (s *Server) handleDashMetrics(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{
+	jsonResponse(w, 200, map[string]any{
 		"uptime_seconds": int64(time.Since(s.start).Seconds()),
 		"total":          s.store.TotalMemories(),
 		"layers":         s.store.LayerCounts(),
@@ -176,10 +151,11 @@ func (s *Server) handleDashMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDashGraphCounts(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{
+	counts := s.store.LayerCounts()
+	jsonResponse(w, 200, map[string]any{
 		"l5_knowledge":   s.store.Graph().NodeCount(),
-		"l6_schema":      s.store.LayerCounts()["l6_schema"],
-		"l7_intention":   s.store.LayerCounts()["l7_intention"],
+		"l6_schema":      counts["l6_schema"],
+		"l7_intention":   counts["l7_intention"],
 		"relation_count": s.store.Graph().EdgeCount(),
 	})
 }
@@ -195,7 +171,7 @@ func (s *Server) handleDashLayerHealth(w http.ResponseWriter, r *http.Request) {
 		}
 		layers[string(l)] = map[string]any{"count": counts[string(l)], "status": status}
 	}
-	writeJSON(w, 200, map[string]any{"layers": layers})
+	jsonResponse(w, 200, map[string]any{"layers": layers})
 }
 
 // handleDashL6Schemas lists L6 schema items.
@@ -209,7 +185,7 @@ func (s *Server) handleDashL6Schemas(w http.ResponseWriter, r *http.Request) {
 			"memory_id": it.ID, "content": it.Content, "layer": it.Layer,
 		})
 	}
-	writeJSON(w, 200, map[string]any{"schemas": out, "total": len(out)})
+	jsonResponse(w, 200, map[string]any{"schemas": out, "total": len(out)})
 }
 
 // handleDashL5Graph serves graph nodes/relations. Filters by layer when given
@@ -223,7 +199,7 @@ func (s *Server) handleDashL5Graph(w http.ResponseWriter, r *http.Request) {
 
 	if layer == "" || layer == "l5_knowledge" {
 		nodes, rels := s.store.Graph().SnapshotScoped(graphScope(uid, aid), n)
-		writeJSON(w, 200, map[string]any{"nodes": nodes, "relations": rels, "total": len(nodes)})
+		jsonResponse(w, 200, map[string]any{"nodes": nodes, "relations": rels, "total": len(nodes)})
 		return
 	}
 	// L6/L7 views render their layer items as pseudo-nodes (real content, real layer)
@@ -241,12 +217,12 @@ func (s *Server) handleDashL5Graph(w http.ResponseWriter, r *http.Request) {
 	if !wantRels {
 		rels = nil
 	}
-	writeJSON(w, 200, map[string]any{"nodes": nodes, "relations": rels, "total": len(nodes)})
+	jsonResponse(w, 200, map[string]any{"nodes": nodes, "relations": rels, "total": len(nodes)})
 }
 
 // handleDashQuality — honest: quality scoring is a v3.5 feature not yet ported.
 func (s *Server) handleDashQuality(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{
+	jsonResponse(w, 200, map[string]any{
 		"available": false,
 		"reason":    "quality scoring is not available in this version",
 	})
@@ -254,13 +230,11 @@ func (s *Server) handleDashQuality(w http.ResponseWriter, r *http.Request) {
 
 // handleDashCoding — there is no coding layer; honest zeros.
 func (s *Server) handleDashCodingCount(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"count": 0})
+	jsonResponse(w, 200, map[string]any{"count": 0})
 }
 
 func (s *Server) handleDashCodingMemories(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"memories": []any{}, "total": 0})
+	jsonResponse(w, 200, map[string]any{"memories": []any{}, "total": 0})
 }
 
 // marshalDebug is used by tests/debugging only.
-var _ = json.Marshal
-var _ = strconv.Itoa

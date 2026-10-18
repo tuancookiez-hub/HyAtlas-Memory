@@ -221,10 +221,9 @@ func catchupTries(d DocIndex) int {
 // qualify but have used up their tries; they are left out before the cut so they
 // cannot fill the batch and starve newer rows.
 func (s *MemoryStore) catchupRows(max int, maxAge time.Duration, now time.Time) (rows []DocIndex, exhausted int) {
-	_, total := s.List(memory.L2Raw, "", "", 1, 0, false)
-	// List is newest first, so walking it backwards gives the oldest first order and
-	// the walk can stop as soon as max rows are found.
-	all, _ := s.List(memory.L2Raw, "", "", total, 0, false)
+	// Newest first, so walking it backwards gives the oldest first order and the
+	// walk can stop as soon as max rows are found.
+	all := s.liveNewestFirst(memory.L2Raw)
 	for i := len(all) - 1; i >= 0; i-- {
 		d := all[i]
 		if !awaitsExtraction(d) {

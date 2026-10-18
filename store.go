@@ -134,11 +134,13 @@ type MemoryStore struct {
 	// has moved on (which makes t.TempDir() cleanup fail with "directory not
 	// empty"). countsMu serializes the file write itself: concurrent callers
 	// share one fixed .tmp path, so unserialized writes can clobber each other.
-	pending   sync.WaitGroup
-	countsMu  sync.Mutex
-	closeMu   sync.Mutex // guards the closed flag against pending.Add
-	closeOnce sync.Once
-	closed    bool
+	pending  sync.WaitGroup
+	countsMu sync.Mutex
+	// usageQueued is set while a persistUsageAsync write is queued and not yet started.
+	usageQueued atomic.Bool
+	closeMu     sync.Mutex // guards the closed flag against pending.Add
+	closeOnce   sync.Once
+	closed      bool
 }
 
 // NewMemoryStore opens (or creates) the persistent layer DB + graph + doc index.
@@ -508,9 +510,6 @@ func (s *MemoryStore) liveDocs(layer memory.Layer, users []string, agentID strin
 		if d.Layer != string(layer) || isSuperseded(d) {
 			continue
 		}
-		if _, dead := s.superseded[d.ID]; dead {
-			continue
-		}
 		if len(users) > 0 && !slices.Contains(users, d.UserID) {
 			continue
 		}
@@ -612,6 +611,22 @@ type SearchHit struct {
 // head cannot empty a page — that is the include_raw=false contract.
 func (s *MemoryStore) List(layer memory.Layer, userID, agentID string, limit, offset int, excludeRaw bool) ([]DocIndex, int) {
 	return s.list(layer, ownerList(userID), agentID, limit, offset, excludeRaw, false)
+}
+
+// liveNewestFirst returns every live row of layer, newest first, in List's order, with
+// one pass over the index. Rows share their Meta with the index, as List's do, so
+// callers must not change it.
+func (s *MemoryStore) liveNewestFirst(layer memory.Layer) []DocIndex {
+	s.mu.RLock()
+	var out []DocIndex
+	for _, d := range s.index {
+		if d.Layer == string(layer) && !isSuperseded(d) {
+			out = append(out, d)
+		}
+	}
+	s.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool { return newerFirst(out[i], out[j]) })
+	return out
 }
 
 // ListAll is List including superseded docs, for the history view
@@ -771,6 +786,9 @@ func (s *MemoryStore) deleteRows(ids []string, layer memory.Layer, userID, agent
 	}
 	return deleted, successors, firstErr
 }
+
+// embedDim is the length of every stored vector (BGE-small).
+const embedDim = 384
 
 // LayerCounts returns the number of live docs per layer (exact). L5 is the
 // exception: knowledge lives in the graph store (entities are the durable
@@ -1097,10 +1115,11 @@ func (s *MemoryStore) loadUsage() {
 	s.searches.Store(c.Searches)
 }
 
-// persistUsageAsync writes the counters without blocking the request path.
-// One pending write at a time; the latest call's snapshot wins.
+// persistUsageAsync writes the counters without blocking the request path. At most
+// one write is queued at a time: a call while one is queued returns at once, since
+// the queued write reads the counters when it runs and so includes this call's count.
 func (s *MemoryStore) persistUsageAsync() {
-	if s.countsPath == "" {
+	if s.countsPath == "" || !s.usageQueued.CompareAndSwap(false, true) {
 		return
 	}
 	// Hold closeMu across the closed-check and Add so a concurrent Close cannot
@@ -1115,6 +1134,9 @@ func (s *MemoryStore) persistUsageAsync() {
 	s.closeMu.Unlock()
 	go func() {
 		defer s.pending.Done()
+		// Cleared before the write reads the counters, so a call that lands during
+		// the write queues another one and its count is not lost.
+		s.usageQueued.Store(false)
 		s.persistUsage()
 	}()
 }
@@ -1363,21 +1385,6 @@ const indexFlushEvery = 1 * time.Second
 // s.mu; the flusher or Flush does the write.
 func (s *MemoryStore) markDirtyLocked() { s.dirty.Store(true) }
 
-// persistIndex marks the index dirty under the write lock. It no longer writes the
-// file: the flusher does, at most once per indexFlushEvery.
-func (s *MemoryStore) persistIndex() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.persistIndexLocked()
-}
-
-// persistIndexLocked marks the index dirty, assuming the caller already holds s.mu.
-// It keeps the old name so callers in other files need no change, and it never fails.
-func (s *MemoryStore) persistIndexLocked() error {
-	s.markDirtyLocked()
-	return nil
-}
-
 // flushLoop writes the index at most once per indexFlushEvery while it is dirty, and
 // exits when stopFlush closes. A write error is logged and leaves the index dirty, so
 // the next tick retries.
@@ -1444,7 +1451,7 @@ func (s *MemoryStore) rebuildIndex() error {
 			continue
 		}
 		// zero vector queries return all docs (score ~0) in arbitrary order.
-		res, err := col.QueryEmbedding(s.ctx, make([]float32, dimFor(l)), n, nil, nil)
+		res, err := col.QueryEmbedding(s.ctx, make([]float32, embedDim), n, nil, nil)
 		if err != nil {
 			// if zero-vector fails, fall back to a neutral query
 			res, err = col.Query(s.ctx, "memory", n, nil, nil)
@@ -1459,8 +1466,6 @@ func (s *MemoryStore) rebuildIndex() error {
 	s.dirty.Store(true)
 	return nil
 }
-
-func dimFor(l memory.Layer) int { return 384 }
 
 // updateMeta sets the metadata keys of patch on the live row id, and deletes a key
 // whose value is empty. The row's content and vector are kept: the chromem row is

@@ -158,9 +158,7 @@ func (s *MemoryStore) rewriteContent(layer memory.Layer, updates map[string]stri
 		n++
 	}
 	s.mu.Lock()
-	if err := s.persistIndexLocked(); err != nil && firstErr == nil {
-		firstErr = err
-	}
+	s.markDirtyLocked()
 	s.mu.Unlock()
 	return n, firstErr
 }

@@ -74,7 +74,7 @@ func TestChangingOwnerRunsOnlyItsDirtyCluster(t *testing.T) {
 	}
 }
 
-// A cluster that fails every pass is left alone after maxWindowFails passes, so it
+// A cluster that fails every pass is left alone after maxClusterFails passes, so it
 // stops spending calls, and the owner's other clusters are still consolidated.
 func TestPoisonedClusterIsLeftAfterRepeatedFailures(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
@@ -116,8 +116,8 @@ func TestPoisonedClusterIsLeftAfterRepeatedFailures(t *testing.T) {
 			poisoned++
 		}
 	}
-	if poisoned != maxWindowFails {
-		t.Errorf("poisoned cluster was sent %d times, want exactly %d", poisoned, maxWindowFails)
+	if poisoned != maxClusterFails {
+		t.Errorf("poisoned cluster was sent %d times, want exactly %d", poisoned, maxClusterFails)
 	}
 	// Pass 1 sends all three clusters, passes 2 and 3 only the failing one, and
 	// nothing is sent after that.
@@ -139,9 +139,9 @@ func TestPoisonedClusterIsLeftAfterRepeatedFailures(t *testing.T) {
 // again as soon as its facts change.
 func TestFailedClusterIsDueAgainWhenMembershipChanges(t *testing.T) {
 	cs := &clusterState{ID: "c1", FactIDs: []string{"a", "b"}}
-	cs.Fails, cs.FailFP = maxWindowFails, cs.fp()
+	cs.Fails, cs.FailFP = maxClusterFails, cs.fp()
 	if cs.due() {
-		t.Fatal("a cluster that failed maxWindowFails times on its current members is due")
+		t.Fatal("a cluster that failed maxClusterFails times on its current members is due")
 	}
 	cs.FactIDs = append(cs.FactIDs, "c")
 	if !cs.due() {

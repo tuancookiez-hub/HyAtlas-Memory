@@ -314,7 +314,7 @@ func TestParseBacklogReplyDedupAndTolerance(t *testing.T) {
 	if err != nil || len(ans.outdated) != 1 || len(ans.pages) != 0 {
 		t.Errorf("ans=%+v err=%v", ans, err)
 	}
-	if got := dedupFacts(append(cluster, cluster[0])); len(got) != 2 {
+	if got := dedupDocs(append(cluster, cluster[0])); len(got) != 2 {
 		t.Errorf("dedupFacts = %d", len(got))
 	}
 }

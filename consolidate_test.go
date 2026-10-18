@@ -607,15 +607,15 @@ func TestStatusReportsExtractSync(t *testing.T) {
 // rather than silently disabling the slow path on a typo.
 func TestParseDuration(t *testing.T) {
 	t.Setenv("HYATLAS_TEST_DUR", "90s")
-	if got := parseDuration("HYATLAS_TEST_DUR", time.Hour); got != 90*time.Second {
+	if got := envDuration("HYATLAS_TEST_DUR", time.Hour); got != 90*time.Second {
 		t.Errorf("parseDuration = %v, want 90s", got)
 	}
 	t.Setenv("HYATLAS_TEST_DUR", "nonsense")
-	if got := parseDuration("HYATLAS_TEST_DUR", time.Hour); got != time.Hour {
+	if got := envDuration("HYATLAS_TEST_DUR", time.Hour); got != time.Hour {
 		t.Errorf("a bad value must fall back to the default, got %v", got)
 	}
 	t.Setenv("HYATLAS_TEST_DUR", "")
-	if got := parseDuration("HYATLAS_TEST_DUR", 42*time.Minute); got != 42*time.Minute {
+	if got := envDuration("HYATLAS_TEST_DUR", 42*time.Minute); got != 42*time.Minute {
 		t.Errorf("unset must use the default, got %v", got)
 	}
 }
@@ -1200,7 +1200,7 @@ func TestCheckConsolidateEveryRejectsDisabledSlowPath(t *testing.T) {
 	}
 	// The env spelling "0" must parse to the zero duration the check rejects.
 	t.Setenv("HYATLAS_CONSOLIDATE_EVERY", "0")
-	if d := parseDuration("HYATLAS_CONSOLIDATE_EVERY", time.Hour); d != 0 {
+	if d := envDuration("HYATLAS_CONSOLIDATE_EVERY", time.Hour); d != 0 {
 		t.Errorf("HYATLAS_CONSOLIDATE_EVERY=0 parsed to %v, want 0", d)
 	}
 }

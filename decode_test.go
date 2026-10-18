@@ -115,8 +115,8 @@ func TestParseDurationUsesEnvDurationRules(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Setenv(key, c.val)
-		if got := parseDuration(key, def); got != c.want {
-			t.Errorf("parseDuration(%q) = %v, want %v", c.val, got, c.want)
+		if got := envDuration(key, def); got != c.want {
+			t.Errorf("envDuration(%q) = %v, want %v", c.val, got, c.want)
 		}
 	}
 }

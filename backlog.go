@@ -386,13 +386,13 @@ func (b *BacklogJob) planWork(ctx context.Context, work []ownerWork) error {
 		seenPair := map[string]bool{}
 		pageAt := map[string]int{} // normalized page name -> index in po.Pages
 		for _, cluster := range ow.clusters {
-			cluster = dedupFacts(cluster)
+			cluster = dedupDocs(cluster)
 			out, err := b.askCluster(ctx, cluster)
 			if err != nil {
 				msg := fmt.Sprintf("%s: %v", ow.key, err)
 				log.Printf("backlog: %s", msg)
 				plan.Failed = append(plan.Failed, BacklogFailed{User: ow.key.user, Agent: ow.key.agent,
-					FactIDs: backlogFactIDs(cluster), Error: err.Error()})
+					FactIDs: idsOf(cluster), Error: err.Error()})
 				b.update(func(s *BacklogStatus) { s.Errors = append(s.Errors, msg); s.ClustersDone++ })
 				continue
 			}
@@ -441,29 +441,6 @@ func (b *BacklogJob) planWork(ctx context.Context, work []ownerWork) error {
 			"facts_to_supersede": outdated, "clusters_failed": len(plan.Failed), "sample_outdated": sample}
 	})
 	return nil
-}
-
-// backlogFactIDs lists the ids of a cluster, in order, for the failed-cluster record.
-func backlogFactIDs(fs []DocIndex) []string {
-	ids := make([]string, 0, len(fs))
-	for _, f := range fs {
-		ids = append(ids, f.ID)
-	}
-	return ids
-}
-
-// dedupFacts drops repeated ids from a cluster. Trailing time-ordered windows can
-// overlap by a few facts, so the same fact may be listed twice.
-func dedupFacts(fs []DocIndex) []DocIndex {
-	seen := make(map[string]bool, len(fs))
-	out := make([]DocIndex, 0, len(fs))
-	for _, f := range fs {
-		if !seen[f.ID] {
-			seen[f.ID] = true
-			out = append(out, f)
-		}
-	}
-	return out
 }
 
 // mergePageUpdate folds a later cluster's proposal for the same page into the

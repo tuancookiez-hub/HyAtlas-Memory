@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -312,7 +313,7 @@ func (s *MemoryStore) applyIntentions(ex *Extraction, ec ExtractContext, introID
 	}
 	var done []string
 	for _, id := range shown(ex.IntentionsDone, ec.hasIntention) {
-		if !containsID(replaced, id) {
+		if !slices.Contains(replaced, id) {
 			done = append(done, id)
 		}
 	}

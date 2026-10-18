@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -395,7 +396,7 @@ func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext,
 		}
 		var updated []string
 		for _, id := range shown(f.Updates, ec.hasRelated) {
-			if !containsID(replaced, id) {
+			if !slices.Contains(replaced, id) {
 				updated = append(updated, id)
 			}
 		}
@@ -1089,10 +1090,9 @@ func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 // older unextracted ones, and the newest rows must not be re-picked while an old
 // backlog starves.
 func (s *Server) unextractedRaw(max int) []DocIndex {
-	_, total := s.store.List(memory.L2Raw, "", "", 1, 0, false)
-	// List is newest first, ties by larger id first, so walking it backwards gives
-	// the oldest first order and the walk can stop as soon as max rows are found.
-	all, _ := s.store.List(memory.L2Raw, "", "", total, 0, false)
+	// Newest first, ties by larger id first, so walking it backwards gives the
+	// oldest first order and the walk can stop as soon as max rows are found.
+	all := s.store.liveNewestFirst(memory.L2Raw)
 	out := make([]DocIndex, 0, min(max, len(all)))
 	for i := len(all) - 1; i >= 0 && len(out) < max; i-- {
 		if !all[i].Extracted {
@@ -1522,7 +1522,7 @@ func resolveRuntime() runtimeCfg {
 		Mode:         mode,
 		Sync:         resolveSync(),
 		Consolidate:  resolveConsolidate(mode),
-		Retention:    parseDuration("HYATLAS_RAW_RETENTION", 0),
+		Retention:    envDuration("HYATLAS_RAW_RETENTION", 0),
 		Batch:        envInt("HYATLAS_CONSOLIDATE_BATCH", defaultBatch),
 		Graph:        !envOff("HYATLAS_CONSOLIDATE_GRAPH"),
 		Admin:        envOn("HYATLAS_ADMIN"),
@@ -1559,7 +1559,7 @@ func resolveMode() Mode {
 // zero or negative interval: that silently turns ultra into pro, because the
 // slow path never ticks. Pro and lite have no slow path, so there it is ignored.
 func resolveConsolidate(m Mode) time.Duration {
-	d := parseDuration("HYATLAS_CONSOLIDATE_EVERY", defaultConsolidate)
+	d := envDuration("HYATLAS_CONSOLIDATE_EVERY", defaultConsolidate)
 	if err := checkConsolidateEvery(m, d); err != nil {
 		log.Fatal(err)
 	}
@@ -1786,7 +1786,7 @@ func main() {
 	srv.dedupeScore = rt.DedupeScore
 	srv.admin = rt.Admin
 	srv.recency = !envOff("HYATLAS_RECENCY")
-	srv.intentionTTL = parseDuration("HYATLAS_INTENTION_TTL", defaultIntentionTTL)
+	srv.intentionTTL = envDuration("HYATLAS_INTENTION_TTL", defaultIntentionTTL)
 	srv.mmrLambda = parseMMRLambda()
 	// The Now page needs an LLM; lite never calls one, so it gets none and only
 	// serves pages already stored.
@@ -1905,7 +1905,6 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/v1/forget", s.handleForget)
 	// Dashboard UI (embedded single-file frontend)
 	// --- v3.5 dashboard adapter endpoints (real data, v3.5 shapes) ---
-	mux.HandleFunc("/api/status", s.handleDashStatus)
 	mux.HandleFunc("/api/info", s.handleDashInfo)
 	mux.HandleFunc("/api/memories", s.handleDashMemories)
 	mux.HandleFunc("/api/layer-counts", s.handleDashLayerCounts)

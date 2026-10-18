@@ -308,42 +308,9 @@ func TestRequestBodyIsBounded(t *testing.T) {
 	}
 }
 
-// The dashboard status must report the configured mode and the same LLM state
-// as /api/v1/status, not a hardcoded "ok".
-func TestDashStatusReportsModeAndLLMState(t *testing.T) {
-	cases := []struct {
-		mode    Mode
-		withKey bool
-		wantLLM string
-	}{
-		{ModeLite, true, "unused"},
-		{ModeUltra, false, "unconfigured"},
-		{ModePro, true, "ok"},
-	}
-	for _, c := range cases {
-		srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
-		srv.mode = c.mode
-		if c.withKey {
-			srv.llm = NewLLMClient("http://127.0.0.1:1/v1", "k", "m")
-		}
-		w := httptest.NewRecorder()
-		srv.handleDashStatus(w, httptest.NewRequest("GET", "/api/status", nil))
-		var st map[string]any
-		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
-			t.Fatal(err)
-		}
-		if st["mode"] != string(c.mode) {
-			t.Errorf("%s: dash mode = %v", c.mode, st["mode"])
-		}
-		if st["llm"] != c.wantLLM {
-			t.Errorf("%s: dash llm = %v, want %q", c.mode, st["llm"], c.wantLLM)
-		}
-	}
-}
-
-// The dashboard status reads the extraction error that background goroutines
+// The status endpoint reads the extraction error that background goroutines
 // write. Run with -race: this must not read the field unsynchronised.
-func TestDashStatusConcurrentWithExtractErr(t *testing.T) {
+func TestStatusConcurrentWithExtractErr(t *testing.T) {
 	srv := newTestServer(t, "test", "test")
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -356,7 +323,7 @@ func TestDashStatusConcurrentWithExtractErr(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			w := httptest.NewRecorder()
-			srv.handleDashStatus(w, httptest.NewRequest("GET", "/api/status", nil))
+			srv.handleStatus(w, httptest.NewRequest("GET", "/api/v1/status", nil))
 		}()
 	}
 	wg.Wait()

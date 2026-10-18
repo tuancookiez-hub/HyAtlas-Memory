@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -230,7 +231,7 @@ type clusterState struct {
 	Fails   int      `json:"fails,omitempty"`
 	FailFP  string   `json:"fail_fp,omitempty"`
 	// FailedAt is when the last counted failure happened (RFC 3339). A cluster left
-	// alone after maxWindowFails is tried again once failCooldown has passed.
+	// alone after maxClusterFails is tried again once failCooldown has passed.
 	FailedAt string `json:"failed_at,omitempty"`
 }
 
@@ -239,7 +240,7 @@ func (cs *clusterState) fp() string { return idsFingerprint(cs.FactIDs) }
 
 // due reports whether the cluster needs a call: it holds at least two facts (one
 // fact has nothing to be reconciled against), its membership differs from the last
-// successful call, and it has not failed maxWindowFails times on this membership
+// successful call, and it has not failed maxClusterFails times on this membership
 // within the last failCooldown.
 func (cs *clusterState) due() bool {
 	if len(cs.FactIDs) < 2 {
@@ -249,7 +250,7 @@ func (cs *clusterState) due() bool {
 	if fp == cs.DoneFP {
 		return false
 	}
-	if cs.Fails >= maxWindowFails && cs.FailFP == fp {
+	if cs.Fails >= maxClusterFails && cs.FailFP == fp {
 		// Left alone, but not forever: a quiet cluster's membership may never change,
 		// and the failures may have been the model's bad day rather than the cluster.
 		at, err := time.Parse(time.RFC3339, cs.FailedAt)
@@ -258,12 +259,12 @@ func (cs *clusterState) due() bool {
 	return true
 }
 
-// maxWindowFails is how many consecutive failed calls on one unchanged cluster are
+// maxClusterFails is how many consecutive failed calls on one unchanged cluster are
 // tolerated before it is left alone (until its membership changes, or failCooldown
 // passes), so one bad cluster cannot re-spend an LLM call on every pass.
-const maxWindowFails = 3
+const maxClusterFails = 3
 
-// failCooldown is how long a cluster left alone after maxWindowFails waits before
+// failCooldown is how long a cluster left alone after maxClusterFails waits before
 // it is tried again with the same members.
 const failCooldown = 24 * time.Hour
 
@@ -349,15 +350,12 @@ func NewConsolidator(store *MemoryStore, llm *LLMClient, every, retention time.D
 	if batch <= 0 {
 		batch = defaultBatch
 	}
-	catchup := parseDuration("HYATLAS_CONSOLIDATE_CATCHUP", defaultCatchup)
+	catchup := envDuration("HYATLAS_CONSOLIDATE_CATCHUP", defaultCatchup)
 	if catchup <= 0 {
 		log.Printf("HYATLAS_CONSOLIDATE_CATCHUP must be positive; using %s", defaultCatchup)
 		catchup = defaultCatchup
 	}
-	recluster := parseDuration("HYATLAS_CONSOLIDATE_RECLUSTER", 0)
-	if recluster < 0 {
-		recluster = 0
-	}
+	recluster := envDuration("HYATLAS_CONSOLIDATE_RECLUSTER", 0)
 	parallel := envInt("HYATLAS_CONSOLIDATE_PARALLEL", defaultParallel)
 	if parallel > maxParallel {
 		parallel = maxParallel
@@ -706,7 +704,7 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 // more calls failed and none succeeded. Then the model or provider was down (an
 // outage, an expired key, a WAF block), not the clusters; with catch-up passes every
 // few minutes, counting those would let one bad hour use up every cluster's
-// maxWindowFails and leave the backlog untouched. A pass with a single call cannot
+// maxClusterFails and leave the backlog untouched. A pass with a single call cannot
 // tell the two apart, so a lone failure is charged; failCooldown bounds the cost if
 // it was an outage after all.
 func (c *Consolidator) countFailures(jobs []*clusterJob, rep *Report) {
@@ -739,7 +737,7 @@ func (c *Consolidator) countFailures(jobs []*clusterJob, rep *Report) {
 			cs.Fails, cs.FailFP = 1, j.fp
 		}
 		cs.FailedAt = now
-		if cs.Fails >= maxWindowFails {
+		if cs.Fails >= maxClusterFails {
 			rep.Errors = append(rep.Errors, fmt.Sprintf(
 				"%s: cluster %s failed %d passes in a row; skipped until its facts change or %s passes",
 				j.owner, cs.ID, cs.Fails, failCooldown))
@@ -883,7 +881,7 @@ func (c *Consolidator) liveMembers(ids []string) []DocIndex {
 // live plus the facts the call wrote, and DoneFP follows. A fact that arrived
 // during the call is in neither, so it is assigned on the next sync and the
 // cluster is due again. On failure Fails counts up on the same membership; at
-// maxWindowFails the cluster is left until its membership changes. A call the
+// maxClusterFails the cluster is left until its membership changes. A call the
 // deadline cut off after earlier calls had spent the pass is not the cluster's
 // fault, so it counts as nothing and the cluster stays pending.
 func (c *Consolidator) runCluster(ctx context.Context, j *clusterJob, rep *Report, release func()) {
@@ -946,13 +944,14 @@ func (r *Report) absorb(s *Report) {
 	r.Errors = append(r.Errors, s.Errors...)
 }
 
-// consolidateScope is one LLM pass over a window of a single owner's facts. It
+// consolidateScope is one LLM pass over one cluster of a single owner's facts. It
 // applies the merges, drops, L5 edges, schemas and arc the model returned. facts
-// is that window, and everything written carries the owner's scope.
+// is that cluster, and everything written carries the owner's scope.
 //
 // Only IDs in facts are acted on. An ID that belongs to another owner, or one the
 // model invented, fails the live-set guard and changes nothing. It reports whether
-// the owner's watermark may advance, and returns the IDs of the facts it wrote.
+// the cluster's call succeeded (so its DoneFP may be set), and returns the IDs of
+// the facts it wrote.
 //
 // Failures are fatal or soft. Fatal ones (the LLM call or its reply, a merge's
 // replacement write, and supersedes of merged or dropped facts) make the owner
@@ -980,12 +979,12 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		cons.Knowledge, cons.Arc = nil, nil
 	}
 
-	live := liveIDs(facts)
+	live := idSetOf(facts)
 	// batch is the immutable membership of what the LLM was shown. Evidence is
 	// resolved against this rather than `live`, because merges delete IDs from
 	// `live` — two facts merged into one would otherwise stop corroborating the
 	// edge that cited them, silently dropping it.
-	batch := liveIDs(facts)
+	batch := idSetOf(facts)
 	byID := byIDOf(facts)
 	now := time.Now().UTC().Format(time.RFC3339)
 	var created []string
@@ -1162,7 +1161,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		rep.Schemas++
 		var retire []string
 		for _, old := range sc.Supersedes {
-			if existing[old] && old != id && !containsID(retire, old) {
+			if existing[old] && old != id && !slices.Contains(retire, old) {
 				retire = append(retire, old)
 			}
 		}
@@ -1386,7 +1385,7 @@ func (c *Consolidator) schemaKnown(owner scopeKey, pattern string, replaces []st
 		return false, v
 	}
 	for _, h := range hits {
-		if float64(h.Score) >= schemaDupScore && !containsID(replaces, h.ID) {
+		if float64(h.Score) >= schemaDupScore && !slices.Contains(replaces, h.ID) {
 			return true, v
 		}
 	}
@@ -1447,9 +1446,7 @@ func (c *Consolidator) liveOf(layer memory.Layer, owner scopeKey) []DocIndex {
 
 // listAllLive returns every live doc in a layer, not one page of it.
 func (c *Consolidator) listAllLive(layer memory.Layer) []DocIndex {
-	_, total := c.store.List(layer, "", "", 1, 0, false)
-	docs, _ := c.store.List(layer, "", "", total, 0, false)
-	return docs
+	return c.store.liveNewestFirst(layer)
 }
 
 func (c *Consolidator) finish(rep *Report, start time.Time) *Report {
@@ -1546,14 +1543,10 @@ func (c *Consolidator) decayRaw() (pruned, protected int) {
 		}
 	}
 
-	// List's limit is a page size, not "all": 0 returns an empty slice rather
-	// than every row. Read the total first, then fetch that many, so the decay
-	// pass actually sees the history it is supposed to age out.
-	_, total := c.store.List(memory.L2Raw, "", "", 1, 0, false)
-	if total == 0 {
+	raw := c.listAllLive(memory.L2Raw)
+	if len(raw) == 0 {
 		return 0, 0
 	}
-	raw, _ := c.store.List(memory.L2Raw, "", "", total, 0, false)
 	old := make([]string, 0, 64)
 	for _, d := range raw {
 		ts, err := time.Parse(time.RFC3339, d.Ts)
@@ -1675,12 +1668,6 @@ func parseConsolidation(content string) (*Consolidation, error) {
 	return &cons, nil
 }
 
-// groupByOwner splits facts by owner. The owners come back in a fixed sorted
-// order, so the pass order is reproducible before the cursor rotates it.
-func groupByOwner(facts []DocIndex) (map[scopeKey][]DocIndex, []scopeKey) {
-	return groupByOwnerWith(facts, func(user string) string { return user })
-}
-
 // groupByOwnerWith is groupByOwner with each user ID mapped through user first, so
 // alias IDs of one person can be grouped as one owner.
 func groupByOwnerWith(facts []DocIndex, user func(string) string) (map[scopeKey][]DocIndex, []scopeKey) {
@@ -1702,17 +1689,9 @@ func groupByOwnerWith(facts []DocIndex, user func(string) string) (map[scopeKey]
 	return byOwner, owners
 }
 
-// factsFingerprint identifies an owner's live facts by the IDs they hold. See
-// idsFingerprint.
-func factsFingerprint(facts []DocIndex) string {
-	return idsFingerprint(idsOf(facts))
-}
-
 // idsFingerprint is a hash of a set of fact IDs, taken over the sorted IDs. Any
-// add, remove or swap changes it, so a delete and an add in the same second
-// cannot collide the way a count and a newest timestamp could. A watermark written
-// before this format is a count@timestamp string, which never matches, so its
-// owner runs once.
+// add, remove or swap changes it, so a cluster's DoneFP no longer matches once its
+// membership changes.
 func idsFingerprint(ids []string) string {
 	s := append([]string(nil), ids...)
 	sort.Strings(s)
@@ -1743,7 +1722,7 @@ func idSetOf(facts []DocIndex) map[string]bool {
 }
 
 // sortNewestFirst orders an owner's facts by timestamp, newest first, then by ID,
-// so a window is the same set on every pass.
+// so clustering sees them in the same order on every pass.
 func sortNewestFirst(facts []DocIndex) {
 	sort.Slice(facts, func(i, j int) bool { return newerFirst(facts[i], facts[j]) })
 }
@@ -1755,28 +1734,11 @@ func normalizeText(s string) string {
 	return strings.Trim(s, " .,;:!?\"'`*-()[]")
 }
 
-func containsID(ids []string, id string) bool {
-	for _, v := range ids {
-		if v == id {
-			return true
-		}
-	}
-	return false
-}
-
 // byIDOf indexes the batch so evidence lookups do not rescan it.
 func byIDOf(facts []DocIndex) map[string]DocIndex {
 	m := make(map[string]DocIndex, len(facts))
 	for _, f := range facts {
 		m[f.ID] = f
-	}
-	return m
-}
-
-func liveIDs(facts []DocIndex) map[string]bool {
-	m := make(map[string]bool, len(facts))
-	for _, f := range facts {
-		m[f.ID] = true
 	}
 	return m
 }
@@ -1808,11 +1770,4 @@ func distinctSources(facts []DocIndex) []string {
 		}
 	}
 	return out
-}
-
-// parseDuration reads an env var as a duration with envDuration's rules: unset or
-// blank gives def, a bare number counts as seconds, the off words give zero, and a
-// typo or negative value gives def. A typo must not silently disable the slow path.
-func parseDuration(key string, def time.Duration) time.Duration {
-	return envDuration(key, def)
 }

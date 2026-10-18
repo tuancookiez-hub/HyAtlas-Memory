@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"time"
 
@@ -98,22 +99,11 @@ func normalize(v []float32) []float32 {
 	if n == 0 {
 		return v
 	}
-	r := float32(1 / sqrtf(float64(n)))
+	r := float32(1 / math.Sqrt(float64(n)))
 	for i := range v {
 		v[i] *= r
 	}
 	return v
-}
-
-func sqrtf(x float64) float64 {
-	if x <= 0 {
-		return 0
-	}
-	g := x
-	for i := 0; i < 24; i++ {
-		g = (g + x/g) / 2
-	}
-	return g
 }
 
 // BGEGoEmbedder wraps the in-Go BGE model (bgeemb.BGE) as a chromem Embedder.

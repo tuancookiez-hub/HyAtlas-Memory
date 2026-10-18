@@ -278,7 +278,7 @@ func TestCursorResumesAndRotatesOwners(t *testing.T) {
 }
 
 // An owner the deadline cuts off after earlier owners spent the pass is not
-// blamed for it: its cluster is not counted toward maxWindowFails, so repeated
+// blamed for it: its cluster is not counted toward maxClusterFails, so repeated
 // late cuts cannot get a healthy window skipped, and the next pass starts with it.
 func TestLateDeadlineCutDoesNotCountAsWindowFailure(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
@@ -303,8 +303,8 @@ func TestLateDeadlineCutDoesNotCountAsWindowFailure(t *testing.T) {
 	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
 	c.parallel = 1 // the test pins which call is cut, so calls run one at a time
 
-	// Cut bob late more times than maxWindowFails would tolerate.
-	for pass := 1; pass <= maxWindowFails+1; pass++ {
+	// Cut bob late more times than maxClusterFails would tolerate.
+	for pass := 1; pass <= maxClusterFails+1; pass++ {
 		// alice leads and has changed, so her call spends time before bob's.
 		seedSourced(t, srv.store, "alice", "x1", fmt.Sprintf("alice-new-%d", pass), fmt.Sprintf("alice new %d", pass))
 		c.cursor = 0

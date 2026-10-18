@@ -257,7 +257,7 @@ class HyatlasProcess:
             found = shutil.which(name)
             if found:
                 return found
-        # 2. Alongside the plugin (cargo-dist / release layouts)
+        # 2. Alongside the plugin (a bin/ folder next to it)
         here = Path(__file__).resolve().parent
         for name in ("hyatlas-go", "hyatlas-go.exe"):
             candidate = here / "bin" / name
@@ -320,13 +320,13 @@ class HyatlasProcess:
         # The extraction mode is a privacy boundary, so only a value start() has
         # already validated and normalised is forwarded. Empty means "let the
         # server decide", so nothing is set and the server keeps its own default.
-        mode = getattr(self, "_mode", "") or settings.mode(self._config)
+        mode = self._mode or settings.mode(self._config)
         if mode:
             env.setdefault("HYATLAS_MODE", mode)
         # A server this plugin spawns serves Hermes turns, so by default it never
         # makes a turn wait on the LLM: pro still extracts every write, just
         # behind the response. An explicit setting or exported variable wins.
-        sync = getattr(self, "_sync", "") or settings.sync(self._config) or "off"
+        sync = self._sync or settings.sync(self._config) or "off"
         env.setdefault("HYATLAS_SYNC_EXTRACT", sync)
 
         # Endpoint and model are non-secret, so they arrive through the settings

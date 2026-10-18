@@ -104,9 +104,7 @@ func (s *MemoryStore) rewriteSuperseded(edits []historyEdit) (int, error) {
 	}
 	if n > 0 {
 		s.mu.Lock()
-		if err := s.persistIndexLocked(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+		s.markDirtyLocked()
 		s.mu.Unlock()
 	}
 	return n, firstErr

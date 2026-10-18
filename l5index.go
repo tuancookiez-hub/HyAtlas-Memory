@@ -142,9 +142,7 @@ func (s *MemoryStore) indexL5(edges []l5Edge) (int, error) {
 	}
 	if added > 0 {
 		s.mu.Lock()
-		if err := s.persistIndexLocked(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+		s.markDirtyLocked()
 		s.mu.Unlock()
 	}
 	return added, firstErr

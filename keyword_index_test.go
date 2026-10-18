@@ -4,6 +4,7 @@ import (
 	"math"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"testing"
 
@@ -125,7 +126,7 @@ func compareKeywordRanks(t *testing.T, s *MemoryStore, label string) {
 			if isSuperseded(d) || d.Layer == string(memory.L2Raw) {
 				continue
 			}
-			if len(owners) > 0 && !containsID(owners, d.UserID) {
+			if len(owners) > 0 && !slices.Contains(owners, d.UserID) {
 				continue
 			}
 			docs = append(docs, d)

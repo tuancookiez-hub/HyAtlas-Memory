@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -216,7 +217,7 @@ func (s *Store) AddEdgeWithSources(userID, agentID, fromLabel, rel, toLabel stri
 		}
 		added := false
 		for _, src := range srcs {
-			if !containsString(e.Sources, src) {
+			if !slices.Contains(e.Sources, src) {
 				e.Sources = append(e.Sources, src)
 				added = true
 			}
@@ -290,12 +291,6 @@ type Neighbor struct {
 	Label    string `json:"label"`
 	Relation string `json:"relation"`
 	Incoming bool   `json:"incoming"` // true if edge points TO this node
-}
-
-// Neighbors returns nodes connected to the given node (by label or id) across
-// every owner, both directions, with the relation labeled.
-func (s *Store) Neighbors(label string) []Neighbor {
-	return s.NeighborsScoped(Scope{}, label)
 }
 
 // NeighborsScoped is Neighbors restricted to the owner named by sc: only nodes
@@ -493,20 +488,11 @@ func fnv(s string) string {
 func cleanSources(primary string, srcs []string) []string {
 	var out []string
 	for _, s := range append([]string{primary}, srcs...) {
-		if s != "" && !containsString(out, s) {
+		if s != "" && !slices.Contains(out, s) {
 			out = append(out, s)
 		}
 	}
 	return out
-}
-
-func containsString(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 // cloneEdge copies an edge so a snapshot does not share its Sources backing
