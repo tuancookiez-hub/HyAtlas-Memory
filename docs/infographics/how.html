@@ -1,0 +1,58 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="base.css">
+<style>
+body { height: 612px; padding: 30px 34px; }
+h2 { font-size: 40px; font-weight: 700; }
+.sub { margin-top: 8px; }
+.row { display: flex; gap: 18px; margin-top: 22px; }
+.col { flex: 1; padding: 16px 18px 14px; }
+.col h3 { font-size: 23px; margin: 6px 0 10px; }
+.step { display: flex; gap: 10px; align-items: flex-start; margin: 9px 0; }
+.dot { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--c); color: var(--c); font: 600 11.5px "Segoe UI", Arial, sans-serif; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+.step .t { font-size: 14.5px; line-height: 1.38; color: #ddd6ca; }
+.step b { color: #f1ebe0; font-weight: 700; }
+.hermes { margin-top: 18px; display: flex; gap: 18px; }
+.hbox { flex: 1; padding: 12px 18px; display: flex; align-items: center; gap: 16px; }
+.hbox .t { font-size: 14.5px; line-height: 1.4; color: #ddd6ca; }
+.foot { margin-top: 18px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #2f2d33; padding-top: 14px; }
+.foot .t { font-size: 15px; color: #cfc8bb; }
+.arrow { color: #6f6a77; font: 22px "Segoe UI", Arial, sans-serif; align-self: center; }
+</style></head>
+<body>
+<div class="mono">HyAtlas Memory 5.0 · how it works</div>
+<h2>One turn in, the right memories out.</h2>
+<div class="hermes">
+  <div class="card blue hbox"><span class="pill">Hermes</span><div class="t"><b style="color:#f1ebe0">sync_turn</b> sends the user and assistant text (no tool output, 12k cap). <b style="color:#f1ebe0">prefetch</b> asks for recall with the session id. Memory-tool <b style="color:#f1ebe0">add / replace / remove</b> are mirrored.</div></div>
+</div>
+<div class="row">
+  <div class="card amber col">
+    <div class="kicker">Write path · one model call</div>
+    <h3>Remember</h3>
+    <div class="step"><span class="dot">1</span><div class="t"><b>Raw turn stored</b> with a local BGE embedding (L2). Lite stops here.</div></div>
+    <div class="step"><span class="dot">2</span><div class="t"><b>Extraction</b> sees related facts, open intentions and entity pages, so it updates instead of duplicating.</div></div>
+    <div class="step"><span class="dot">3</span><div class="t"><b>Facts, preferences, intentions, experiences, pages</b> written; contradicted facts retired, never erased.</div></div>
+    <div class="step"><span class="dot">4</span><div class="t"><b>Optional reconcile</b> (local models): update, replace, link, keep event series.</div></div>
+  </div>
+  <div class="card purple col">
+    <div class="kicker">Background · reversible</div>
+    <h3>Reflect</h3>
+    <div class="step"><span class="dot">1</span><div class="t"><b>Episode summaries</b> after a 30-minute pause; retried with back-off through outages.</div></div>
+    <div class="step"><span class="dot">2</span><div class="t"><b>Now page</b>: a short working-memory note per person, refreshed after bursts.</div></div>
+    <div class="step"><span class="dot">3</span><div class="t"><b>Catch-up</b> extracts turns written while the model was unreachable.</div></div>
+    <div class="step"><span class="dot">4</span><div class="t"><b>Ultra slow path</b>: topic-grouped merges, L5 relations, L6 patterns. Daily snapshots.</div></div>
+  </div>
+  <div class="card green col">
+    <div class="kicker">Recall · one embedding</div>
+    <h3>Remind</h3>
+    <div class="step"><span class="dot">1</span><div class="t"><b>Vector + sentence clauses + keyword</b> search, fused; identifiers lean on keywords.</div></div>
+    <div class="step"><span class="dot">2</span><div class="t"><b>Context</b>: dates in the query, named entities, knowledge-graph and linked facts.</div></div>
+    <div class="step"><span class="dot">3</span><div class="t"><b>Signals</b>: recency, what replies actually used, this session's intentions first.</div></div>
+    <div class="step"><span class="dot">4</span><div class="t"><b>Channels</b>: now, pages, profile, intentions, experiences, facts, with history.</div></div>
+  </div>
+</div>
+<div class="foot">
+  <div class="t">Everything runs in one Go binary on your machine. Only calls to the model <i>you</i> configure leave it, and none in Lite.</div>
+  <span class="mono">8 layers · 0 telemetry</span>
+</div>
+</body></html>
+
