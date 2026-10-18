@@ -1,4 +1,4 @@
-![HyAtlas Memory 5.0: memory you can take back. Three modes across an eight-layer memory](assets/hyatlas-v5.0.0-banner.png)
+![HyAtlas Memory 5.0: memory you can take back](assets/hyatlas-v5.0.0-hero.png)
 
 # HyAtlas Memory: memory you can take back
 
@@ -16,6 +16,8 @@ HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It r
 - **Credentials.** HyAtlas uses only the extraction key you give it (`llm_key`, or `HYATLAS_LLM_KEY`); it never reads another application's credentials or takes Hermes's sign-in token. The last Python release was [v3.5.0](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.5.0) (Zvec/Kuzu); it is no longer maintained. [CHANGELOG.md](CHANGELOG.md) has the full history.
 
 ![What's new in HyAtlas 5.0](docs/images/whats-new-5.png)
+
+![Three modes across an eight-layer memory: Lite 1/8, Pro 6/8, Ultra 8/8](docs/images/modes.png)
 
 ![How HyAtlas works: remember, reflect, remind](docs/images/how-it-works.png)
 

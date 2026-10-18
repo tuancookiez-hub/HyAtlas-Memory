@@ -168,13 +168,13 @@ func (s *MemoryStore) rewriteRow(e historyEdit) (*DocIndex, bool, error) {
 	return &cur, true, nil
 }
 
-// Restore makes superseded rows live again: it removes invalid_at, superseded_by
-// and drop_reason and records restored_at. It undoes a supersede the model got
+// Restore makes superseded rows live again: it removes invalid_at, superseded_by,
+// superseded_how and drop_reason and records restored_at. It undoes a supersede the model got
 // wrong, such as a fact merged into unrelated text. A row that is live or missing
 // is skipped. It returns how many rows were restored.
 func (s *MemoryStore) Restore(ids []string) (int, error) {
 	set := map[string]string{"restored_at": time.Now().UTC().Format(time.RFC3339)}
-	del := []string{metaInvalidAt, metaSupersededBy, metaDropReason}
+	del := []string{metaInvalidAt, metaSupersededBy, metaDropReason, metaSupersededHow}
 	edits := make([]historyEdit, len(ids))
 	for i, id := range ids {
 		edits[i] = historyEdit{id: id, set: set, del: del}

@@ -164,7 +164,7 @@ func TestRestoreMakesRowLive(t *testing.T) {
 		t.Fatalf("Restore = %d, %v; want 1 row", n, err)
 	}
 	m := metaOf(t, st, a)
-	if m["invalid_at"] != "" || m["superseded_by"] != "" || m["restored_at"] == "" {
+	if m["invalid_at"] != "" || m["superseded_by"] != "" || m[metaSupersededHow] != "" || m["restored_at"] == "" {
 		t.Fatalf("restored row meta = %v", m)
 	}
 	if live, _ := st.List("l3_fact", "", "", 10, 0, false); len(live) != 2 {
