@@ -1,11 +1,11 @@
-"""Smoke tests for the HyAtlas v4 plugin.
+"""Smoke tests for the HyAtlas plugin.
 
 Run these with:
     cd ~/.hermes/plugins && python hyatlas/tests/test_smoke.py
-or directly from the v4 repo root:
+or directly from the repo root:
     python plugins/hyatlas/tests/test_smoke.py
 
-These tests verify the plugin's HTTP wire contract against a live v4
+These tests verify the plugin's HTTP wire contract against a live HyAtlas
 server on 127.0.0.1:19528. They do NOT spin up the server; assume
 the user has one running (``hermes hyatlas start`` or directly
 ``hyatlas-go``).
@@ -102,14 +102,14 @@ def _check_provider_metadata() -> tuple[str, str]:
 
 
 def _check_live_server_round_trip() -> tuple[str, str]:
-    """The plugin's client must talk to a live v4 server and round-trip add+search."""
+    """The plugin's client must talk to a live HyAtlas server and round-trip add+search."""
     try:
         mod = _load_plugin_module()
         provider = mod.HyatlasMemoryProvider()
         host = provider._config.get("server_host", "127.0.0.1")
         port = provider._config.get("server_port", 19528)
         if not provider.is_available():
-            return SKIP, f"no live v4 server on {host}:{port}"
+            return SKIP, f"no live HyAtlas server on {host}:{port}"
         client = provider._ensure_client()
         marker = f"smoke-test-{int(time.time())}"
         user_id = "smoke_test_user"
@@ -128,7 +128,14 @@ def _check_live_server_round_trip() -> tuple[str, str]:
             limit=3,
         )
         total = sum(len(v) for v in search_resp.get("memories", {}).values())
-        client.delete_all(user_id=user_id, agent_id="smoke")
+        # Clean up by id: 5.0 refuses a bulk delete unless the server runs with
+        # HYATLAS_ADMIN, but deleting one memory by id is always allowed.
+        leftovers = client.list_memories(user_id=user_id, agent_id="smoke", include_raw=True, limit=200)
+        ids = {m["memory_id"] for m in leftovers.get("memories", []) if m.get("memory_id")}
+        if add_resp.get("memory_id"):
+            ids.add(add_resp["memory_id"])
+        for memory_id in ids:
+            client.delete_memory(memory_id)
         if total == 0:
             return FAIL, f"search returned 0 hits for marker '{marker}'"
         return PASS, f"add+search round-trip OK ({total} hits)"

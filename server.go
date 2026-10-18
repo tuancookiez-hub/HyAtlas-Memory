@@ -1882,6 +1882,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/v1/admin/backlog", s.handleBacklog)
 	mux.HandleFunc("/api/v1/admin/restore", s.handleRestore)
 	mux.HandleFunc("/api/v1/llm/key", s.handleLLMKey)
+	mux.HandleFunc("/api/v1/llm/test", s.handleLLMTest)
 	mux.HandleFunc("/api/v1/now", s.handleNow)
 	mux.HandleFunc("/api/v1/flush", s.handleFlush)
 	mux.HandleFunc("/api/v1/feedback", s.handleFeedback)

@@ -65,6 +65,7 @@ class HyatlasClient:
 
     def _request(
         self, method: str, path: str, body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
     ) -> Any:
         url = f"{self.base_url}{path}"
         data = None
@@ -74,7 +75,7 @@ class HyatlasClient:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
-            with self._opener.open(req, timeout=self.timeout) as resp:
+            with self._opener.open(req, timeout=timeout or self.timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
             raw = e.read()
@@ -153,6 +154,22 @@ class HyatlasClient:
         text built here.
         """
         return self._post("/api/v1/llm/key", {"key": key})
+
+    def llm_test(self) -> Dict[str, Any]:
+        """Ask the server to make one tiny call with its model (POST /api/v1/llm/test).
+
+        Returns ``ok``, ``model``, ``base_host``, ``latency_ms`` and a short ``error``.
+        The server allows one call per 10 seconds (HTTP 429 otherwise) and answers only
+        this machine. The wait is longer than the usual timeout because the server gives
+        the model up to 20 seconds.
+        """
+        return self._request("POST", "/api/v1/llm/test", {}, timeout=max(self.timeout, 30.0))
+
+    def delete_memory(self, memory_id: str) -> Dict[str, Any]:
+        """Delete one memory by id. Deleting by id needs no admin switch on the server."""
+        if not str(memory_id or "").strip():
+            raise ValueError("delete_memory needs a memory id")
+        return self._post("/api/v1/delete_all", {"id": memory_id})
 
     def add(
         self,

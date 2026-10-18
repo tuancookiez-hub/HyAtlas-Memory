@@ -1,4 +1,4 @@
-"""Tool schemas for the HyAtlas v4 plugin.
+"""Tool schemas for the HyAtlas plugin.
 
 These get registered as agent-callable tools via ``ctx.register_tool``
 in the plugin's ``register()`` function. Each tool has a JSON Schema
@@ -13,7 +13,7 @@ from typing import Any, Dict
 HYATLAS_STATUS_SCHEMA: Dict[str, Any] = {
     "name": "hyatlas_status",
     "description": (
-        "Get the health and layer-counts of the HyAtlas v4 memory server. "
+        "Get the health and layer-counts of the HyAtlas memory server. "
         "Returns: vdb, embed, llm, write_pipeline status; per-layer counts; "
         "graph nodes/edges. Use this to confirm the memory system is healthy "
         "before recalling or writing."
@@ -29,7 +29,7 @@ HYATLAS_STATUS_SCHEMA: Dict[str, Any] = {
 HYATLAS_SEARCH_SCHEMA: Dict[str, Any] = {
     "name": "hyatlas_search",
     "description": (
-        "Semantic search the HyAtlas v4 memory store for memories relevant "
+        "Semantic search the HyAtlas memory store for memories relevant "
         "to the query. Returns the channels pages, profile, proactive, "
         "experiences and normal, each hit with score, layer, content, timestamp "
         "and, when known, its event date and the older versions it replaced. "
@@ -73,7 +73,7 @@ HYATLAS_SEARCH_SCHEMA: Dict[str, Any] = {
 HYATLAS_RECENT_SCHEMA: Dict[str, Any] = {
     "name": "hyatlas_recent",
     "description": (
-        "List the most recent HyAtlas v4 memories, optionally filtered by "
+        "List the most recent HyAtlas memories, optionally filtered by "
         "layer. Use this to see what was just saved or to browse the latest "
         "activity without a semantic query."
     ),
@@ -108,7 +108,7 @@ HYATLAS_RECENT_SCHEMA: Dict[str, Any] = {
 HYATLAS_ADD_SCHEMA: Dict[str, Any] = {
     "name": "hyatlas_add",
     "description": (
-        "Save a memory directly to HyAtlas v4. Use this to record durable "
+        "Save a memory directly to HyAtlas. Use this to record durable "
         "facts the agent wants remembered. The text is stored raw (L2), and in "
         "pro and ultra mode the server's LLM extracts facts with dates, "
         "preferences, intentions, entity pages and task experiences from it; "

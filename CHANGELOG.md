@@ -9,6 +9,16 @@ and stricter key handling.
 
 ### Added
 
+- **`hermes hyatlas doctor`.** One command that says whether memory works and how to fix
+  it. It checks the provider and plugin version, that the server answers, that server and
+  plugin versions match, the mode, the AI key, that the model answers, a write-search-delete
+  round trip and the extraction backlog. Each line is `✓`, `!` or `✗`, every `!` and `✗` has
+  a `Fix:` line, and the exit code is 1 when anything failed. The key is never printed. The
+  setup text and the first-connect log line point at it.
+- **`POST /api/v1/llm/test`.** Makes one tiny call with the configured model and returns
+  `ok`, `model`, `base_host`, `latency_ms` and a short `error` with no key or URL. This
+  machine only, POST only, at most one call per 10 seconds (429 with `retry_after`). Lite
+  makes no call; no key reports `awaiting_key`.
 - **Forget.** `POST /api/v1/forget` retires the owner's memory-tool raw rows with a given
   text, and every live row derived from them, as `forgotten`. It also clears them from
   entity pages, graph edges and the Now page. It is reversible through

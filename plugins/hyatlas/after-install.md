@@ -8,6 +8,9 @@ hermes plugins enable hyatlas
 hermes memory setup                # choose "hyatlas", then answer its prompts (see below)
 ```
 
+Then run `hermes hyatlas doctor` to check everything works. It tells you what is wrong
+and how to fix it.
+
 `hermes plugins install` takes a catalog name, a Git URL, or `owner/repo` with the
 plugin's subdirectory. The subdirectory is required, because the repository root
 is not the plugin. Equivalent forms: `tuancookiez-hub/HyAtlas-Memory#plugins/hyatlas`
@@ -40,7 +43,7 @@ A plain local path does not work. Hermes reads it as `owner/repo` and tries GitH
    `$HERMES_HOME/hyatlas.json`, and the key to `.env`.
 
 It does not start the server and does not call the LLM. Start a new session to
-activate.
+activate, then run `hermes hyatlas doctor` to check everything works.
 
 **Without an LLM endpoint** the server still runs, with extraction off. Writes
 store the raw trace and local embeddings, `hermes hyatlas status` reports `llm`
@@ -84,7 +87,8 @@ Portal API key, or the key of any OpenAI-compatible provider, works. The plugin 
 reads Hermes's own login or credential files. Until a key is set, `status` shows
 `llm: "awaiting_key"`.
 
-Then check it:
+Then check it. `hermes hyatlas doctor` does all of the following in one command; the
+steps below are the same checks by hand:
 
 ```bash
 # 1. The provider is selected

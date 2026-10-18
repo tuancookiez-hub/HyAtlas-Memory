@@ -787,9 +787,16 @@ extra words, similarity 0.80 and up, same numbers) are not indexed again.
 endpoint, kept in memory only and never logged or echoed. It wins over
 `HYATLAS_LLM_KEY` and `HYATLAS_LLM_KEY_FILE`; `{"key": ""}` clears it. It is for a
 launcher or tool you run on the same machine, and any caller that is not a loopback
-address is refused (403). The Hermes plugin does not use it. A restarted server has
+address is refused (403). The Hermes plugin uses it to hand its own key to a local server that is waiting
+for one. A restarted server has
 no key until it is handed over again (or `HYATLAS_LLM_KEY` is set) and reports
 `llm: "awaiting_key"` meanwhile. A key with spaces or line breaks is refused (400).
+
+`POST /api/v1/llm/test` makes one tiny call with the configured model and returns
+`{"ok", "model", "base_host", "latency_ms", "error"}`. The error is short and holds no key
+or URL. Loopback callers only (403 otherwise), at most one call per 10 seconds (429 with
+`retry_after`). Lite makes no call, and a server waiting for its key answers
+`awaiting_key`. `hermes hyatlas doctor` uses it.
 
 ### Forget (Hermes memory replace and remove)
 
@@ -922,7 +929,12 @@ include the plugin's subdirectory, so Hermes scans only `plugins/hyatlas`:
 hermes plugins install tuancookiez-hub/HyAtlas-Memory/plugins/hyatlas
 hermes plugins enable hyatlas
 hermes memory setup        # then choose "hyatlas"
+hermes hyatlas doctor      # then check that everything works
 ```
+
+Then run `hermes hyatlas doctor` to check everything works. It checks the server, the
+mode, the key, the model and a write-search-delete round trip, and prints a `Fix:` line
+for anything that is wrong.
 
 The bare name `hermes plugins install hyatlas` works once the plugin is in the
 Hermes catalog. Equivalent spellings, all resolving to the same clone plus

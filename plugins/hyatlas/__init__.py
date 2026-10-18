@@ -255,6 +255,11 @@ class HyatlasMemoryProvider(MemoryProvider):
                 status.get("llm"),
                 status.get("layers", {}),
             )
+            if status.get("llm") in ("unconfigured", "awaiting_key"):
+                logger.warning(
+                    "hyatlas: the AI side is not ready (llm=%s). Run `hermes hyatlas doctor` "
+                    "to see what to fix.", status.get("llm"),
+                )
         except HyatlasUnreachable as e:
             logger.warning("hyatlas unreachable at initialize: %s", e)
         self._hand_over_key_async(force=True)
@@ -934,7 +939,7 @@ def register(ctx: Any) -> None:
         ctx.register_command(
             "hyatlas",
             _slash_hyatlas,
-            description="HyAtlas memory server — status, search, add, recent, start, stop",
+            description="HyAtlas memory server — status, search, add, recent, start, stop (hermes hyatlas doctor checks setup)",
             args_hint="[status|search <q>|add <text>|recent|start|stop]",
         )
     except Exception as e:

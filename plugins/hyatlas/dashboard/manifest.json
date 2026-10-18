@@ -1,7 +1,7 @@
 {
   "name": "hyatlas",
   "label": "HyAtlas Memory",
-  "description": "HyAtlas v4 memory server status, memories, search, and add",
+  "description": "HyAtlas memory server status, memories, search, and add",
   "icon": "Database",
   "version": "5.0.0",
   "api": "plugin_api.py"

@@ -104,7 +104,8 @@ def test_no_user_facing_v4():
             if pattern.search(str(f[field])):
                 offenders.append(f"SCHEMA {f['key']}.{field}")
     for name in ("plugin.yaml", "README.md", "after-install.md", "cli.py", "client.py",
-                 "__init__.py", "settings.py"):
+                 "__init__.py", "settings.py", "schemas.py", "process.py", "doctor.py",
+                 "dashboard/plugin_api.py", "dashboard/manifest.json"):
         for n, line in enumerate((Path(_PKG) / name).read_text(encoding="utf-8").splitlines(), 1):
             if pattern.search(line.replace("hyatlas-v4", "")):
                 offenders.append(f"{name}:{n}")

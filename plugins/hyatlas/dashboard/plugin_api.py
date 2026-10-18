@@ -1,8 +1,8 @@
-"""Backend API for the HyAtlas v4 desktop pane.
+"""Backend API for the HyAtlas desktop pane.
 
 Thin proxy: the desktop renderer cannot reach arbitrary localhost ports,
 so the pane calls this namespace (`/api/plugins/hyatlas/...`) and this
-module forwards to the HyAtlas v4 Go server at 127.0.0.1:19528.
+module forwards to the HyAtlas server at 127.0.0.1:19528.
 
 Follows the Turbofit dashboard-plugin pattern (FastAPI APIRouter mounted
 by the desktop/dashboard backend under the plugin's scoped namespace).
@@ -95,7 +95,7 @@ def _forward(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
     except (urllib.error.URLError, OSError) as exc:
         raise HTTPException(
             status_code=503,
-            detail=f"HyAtlas v4 unreachable at {BASE}: {exc}",
+            detail=f"HyAtlas server unreachable at {BASE}: {exc}",
         ) from None
     if not raw:
         return {}
@@ -107,7 +107,7 @@ def _forward(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
 
 @router.get("/status")
 def status() -> Any:
-    """Health + layer counts + graph sizes from the v4 server."""
+    """Health + layer counts + graph sizes from the HyAtlas server."""
     return _forward("GET", "/api/v1/status")
 
 
@@ -120,7 +120,7 @@ def healthz() -> Any:
 def memories(limit: int = 30, layer: str = "", include_raw: bool = False) -> Any:
     """Recent memories (list endpoint), optionally filtered by layer.
 
-    user_id is optional: when omitted the v4 list endpoint returns rows
+    user_id is optional: when omitted the list endpoint returns rows
     across every user scope, which is what an at-a-glance pane wants.
     """
     body: dict[str, Any] = {

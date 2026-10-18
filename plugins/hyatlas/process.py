@@ -1,4 +1,4 @@
-"""Subprocess lifecycle for the HyAtlas v4 Go binary.
+"""Subprocess lifecycle for the HyAtlas server binary.
 
 The Go binary (``hyatlas-go`` / ``hyatlas-go.exe``) is the actual memory
 server. The plugin can optionally start it as a child process when
@@ -227,7 +227,7 @@ def _release_start_lock(fd: int) -> None:
 
 
 class HyatlasProcess:
-    """Lifecycle manager for the v4 Go binary subprocess."""
+    """Lifecycle manager for the HyAtlas server binary subprocess."""
 
     def __init__(self, config: Dict[str, Any]) -> None:
         self._config = config
@@ -251,7 +251,7 @@ class HyatlasProcess:
 
     @staticmethod
     def _discover_binary() -> Optional[str]:
-        """Find the v4 Go binary in PATH, alongside this plugin, or in well-known paths."""
+        """Find the HyAtlas server binary in PATH, alongside this plugin, or in well-known paths."""
         # 1. PATH
         for name in ("hyatlas-go", "hyatlas-go.exe"):
             found = shutil.which(name)
@@ -347,7 +347,7 @@ class HyatlasProcess:
         return env
 
     def start(self, lock_wait: float = DEFAULT_LOCK_WAIT) -> None:
-        """Spawn the v4 Go binary as a detached subprocess.
+        """Spawn the HyAtlas server binary as a detached subprocess.
 
         Raises ValueError if a configured extraction mode or sync setting is not
         one the server accepts. The server treats that as fatal, so starting anyway would

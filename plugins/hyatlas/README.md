@@ -51,7 +51,7 @@ with a graph view, and a web dashboard panel. The server is a separate binary,
   never go through a proxy.
 - **Desktop pane.** Overview (health and layer counts), Graph, Memories, Search,
   Add. Its design is in [`desktop/SPEC.md`](desktop/SPEC.md).
-- **CLI and slash command.** `hermes hyatlas status|search|add|recent|start|stop`
+- **CLI and slash command.** `hermes hyatlas status|doctor|search|add|recent|start|stop`
   and `/hyatlas status|search <q>|add <text>|recent|start|stop`. The `hermes
   hyatlas` command appears only while `memory.provider` is `hyatlas`.
 - **Recent memories.** `recent` (and the `hyatlas_recent` tool) includes raw (L2)
@@ -146,6 +146,15 @@ localhost to a server on this machine that is waiting for a key (`llm:
 step. The hand-over is checked when Hermes loads the plugin and when a session
 begins, then at most every 10 minutes, and only for a loopback `server_host`. The
 plugin shares only this key, never a Hermes sign-in or provider token, and never logs it.
+
+**Then run `hermes hyatlas doctor` to check everything works.** `hermes memory setup` cannot
+test anything after it finishes, so the doctor does: it checks that the server answers,
+that its version matches the plugin, which mode it runs, that the AI key arrived, that the
+model answers (one tiny call), that a test memory can be written, found and deleted, and
+whether turns are waiting for extraction. Each line is marked `✓`, `!` (worth a look) or
+`✗` (broken), and every `!` and `✗` has a `Fix:` line. The exit code is 1 when anything
+failed. It never prints the key, and its test memory is written under its own user id
+(`hyatlas-doctor`), so it does not mix with your recall.
 
 ### Without a terminal
 

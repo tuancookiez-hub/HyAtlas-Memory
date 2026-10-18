@@ -1,4 +1,4 @@
-"""``hermes hyatlas`` subcommand — health, search, add, recent, start, stop.
+"""``hermes hyatlas`` subcommand — health, doctor, search, add, recent, start, stop.
 
 Hermes wires this file in as the active memory provider's CLI (see
 ``plugins.memory.discover_plugin_cli_commands``): it imports this module under
@@ -59,6 +59,10 @@ def register_cli(plugin_parser: argparse.ArgumentParser) -> None:
 
     p_status = sub.add_parser("status", help="Show server health + layer counts")
     p_status.set_defaults(func=_cmd_status)
+
+    p_doctor = sub.add_parser(
+        "doctor", help="Check that memory works (server, mode, key, model, round trip) and how to fix it")
+    p_doctor.set_defaults(func=_cmd_doctor)
 
     p_search = sub.add_parser("search", help="Semantic search the memory store")
     p_search.add_argument("query", help="Search query string")
@@ -165,6 +169,17 @@ def _cmd_status(args: argparse.Namespace) -> int:
         return 0
     except (HyatlasClientError, HyatlasUnreachable) as e:
         _print({"error": str(e)})
+        return 1
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    """Run the doctor's checks against the configured server and print the report."""
+    from . import doctor as doctor_mod
+    try:
+        provider = _provider()
+        return doctor_mod.run_doctor(provider._ensure_client(), provider._config)
+    except Exception as e:  # noqa: BLE001 - the doctor must end with a message, not a traceback
+        print(f"The doctor could not run: {type(e).__name__}: {e}")
         return 1
 
 
