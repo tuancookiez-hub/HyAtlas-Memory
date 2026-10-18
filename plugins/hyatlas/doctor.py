@@ -14,6 +14,7 @@ This module imports nothing from Hermes, so it runs (and is tested) without it.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import secrets
@@ -23,6 +24,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import settings
 from .client import PLUGIN_VERSION, HyatlasClientError, HyatlasUnreachable
+
+logger = logging.getLogger(__name__)
 
 # Severity of one finished check.
 OK = "ok"
@@ -213,18 +216,34 @@ def run_doctor(
     # 5. Key.
     key_ok = False
     llm = str(status.get("llm") or "")
+    # Hermes loads the plugin only when a conversation runs, so right after a restart
+    # nothing has handed the key over yet. The doctor sees the same key and the same
+    # local server, so it hands the key over itself (loopback only) and looks again.
+    handed = False
+    if uses_llm and llm == "awaiting_key" and loopback and env_key:
+        try:
+            client.set_llm_key(env_key)
+            status = client.status() or status
+            llm = str(status.get("llm") or "")
+            handed = llm == "ok"
+        except HyatlasClientError as e:
+            logger.debug("doctor key hand-over failed: %s", type(e).__name__)
     if uses_llm:
         if llm == "ok":
             key_ok = True
-            rep.check(OK, "AI key", "the server has a key for the AI endpoint")
+            if handed:
+                rep.check(OK, "AI key", "the server was waiting for its key; the doctor handed it over")
+            else:
+                rep.check(OK, "AI key", "the server has a key for the AI endpoint")
         elif llm == "awaiting_key":
             if not loopback:
                 fix = "Set HYATLAS_LLM_KEY where the server runs, then restart it."
             elif auto_start:
                 fix = "Run `hermes memory setup` and enter the API key."
             elif env_key:
-                fix = ("The plugin hands HYATLAS_LLM_KEY to a local server automatically. Restart "
-                       "Hermes, or run `hermes hyatlas doctor` again in a minute.")
+                fix = ("The doctor handed HYATLAS_LLM_KEY to the server, but it is still waiting. "
+                       "Restart the server (`hermes hyatlas stop`, then `hermes hyatlas start`) and "
+                       "run `hermes hyatlas doctor` again.")
             else:
                 fix = ("The plugin hands HYATLAS_LLM_KEY to a local server automatically, but this "
                        "command sees no key. Run `hermes memory setup` and enter the API key, then "

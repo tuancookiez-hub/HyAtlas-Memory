@@ -54,12 +54,20 @@ class FakeClient:
         self.added = []
         self.deleted = []
         self.llm_calls = 0
+        self.accept_key = over.get("accept_key", False)
+        self.keys_set = []
 
     def is_reachable(self):
         return self.reachable
 
     def status(self):
         return self.status_body
+
+    def set_llm_key(self, key):
+        self.keys_set.append(key)
+        if self.accept_key:
+            self.status_body["llm"] = "ok"
+        return {"ok": True}
 
     def llm_test(self):
         self.llm_calls += 1
@@ -161,7 +169,7 @@ def test_lite_needs_no_key_and_makes_no_model_call(monkeypatch):
 
 @pytest.mark.parametrize("cfg,env,phrase", [
     ({"auto_start": True}, _SECRET, "`hermes memory setup` and enter the API key"),
-    ({"auto_start": False}, _SECRET, "hands HYATLAS_LLM_KEY to a local server automatically"),
+    ({"auto_start": False}, _SECRET, "handed HYATLAS_LLM_KEY to the server, but it is still waiting"),
     ({"auto_start": False}, None, "sees no key"),
     ({"server_host": "10.0.0.5"}, _SECRET, "where the server runs"),
 ])
@@ -265,3 +273,17 @@ def test_real_client_helpers():
     c = client_mod.HyatlasClient("http://127.0.0.1:1")
     with pytest.raises(ValueError):
         c.delete_memory("")
+
+def test_doctor_hands_the_key_to_a_waiting_local_server(monkeypatch):
+    fake = FakeClient(status={"llm": "awaiting_key"}, accept_key=True)
+    code, out = run(fake, cfg={"auto_start": False}, env_key=_SECRET, monkeypatch=monkeypatch)
+    assert fake.keys_set == [_SECRET]
+    assert "✓ AI key" in out and "handed it over" in out, out
+    assert fake.llm_calls == 1, "the model is checked once the key arrived"
+    assert _SECRET not in out
+
+
+def test_doctor_never_hands_the_key_to_a_remote_server(monkeypatch):
+    fake = FakeClient(status={"llm": "awaiting_key"}, accept_key=True)
+    code, out = run(fake, cfg={"server_host": "10.0.0.5"}, env_key=_SECRET, monkeypatch=monkeypatch)
+    assert fake.keys_set == [] and code == 1
