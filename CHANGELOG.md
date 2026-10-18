@@ -1,5 +1,60 @@
 # Changelog
 
+## [5.0.0] — unreleased (local)
+
+A stable floor: a review of the whole system and a clean-up of the 4.8 and 4.9 code. No
+new memory features; the same layers, modes and API, faster and harder to lose data from.
+
+### Fixed
+
+- **Turns are no longer left unextracted.** A write made while the server waits for its
+  key, or whose extraction failed (outage, rate limit), stayed raw-only until someone
+  called `/api/v1/reprocess`. A catch-up pass now extracts them: when a key arrives and
+  every `HYATLAS_CATCHUP_EVERY` (default 10m; `off` disables), up to 20 rows a run,
+  oldest first, stopping at the first error. A raw row that already has facts is marked
+  extracted instead of being sent again. `/api/v1/status` reports `unextracted`.
+- **A numeric confidence no longer loses the whole turn.** An experience with
+  `"confidence": 0.9` failed the decode of the entire extraction. Experiences now decode
+  tolerantly.
+- **The format-error retry runs only after a parse error.** An HTTP error or timeout was
+  retried with a "your reply was not JSON" prompt, doubling calls during an outage.
+- **The Now page catches up after a burst.** It refreshed on the first write of a
+  15-minute window and ignored the rest; a trailing refresh now follows.
+- **Raw decay keeps what it must** (`HYATLAS_RAW_RETENTION`, opt-in): it never deletes a
+  row that is not extracted yet, and it protects the sources of live rows of every layer.
+- **The plugin never sends loopback traffic through a proxy.** With `HTTP_PROXY` set,
+  memory writes, searches and the `share_llm_key` hand-over went to the proxy. The plugin
+  client and the dashboard bridge now ignore proxy settings for the local server.
+
+### Changed
+
+- **Bulk delete needs `HYATLAS_ADMIN=on`.** `/api/v1/delete_all` by layer, user, agent or
+  all is refused (403) without it; deleting one memory by id is unchanged. Everything
+  else in HyAtlas retires data reversibly, and this was the one irreversible path.
+- **Clean shutdown.** Ctrl-C or SIGTERM stops the server after in-flight requests and
+  writes buffered state. `POST /api/v1/flush` writes it on demand; the Windows launcher
+  and the plugin call it before a hard kill.
+- **Settings.** `HYATLAS_EPISODE_GAP`, `HYATLAS_NOW_EVERY` and the snapshot interval share
+  one parser: a bare number means seconds, and `0`, `off`, `false` or `no` turn the
+  feature off. The plugin's `auto_start` and `share_llm_key` environment switches accept
+  `on`. Near-duplicate demotion looks at the first 2×limit hits.
+
+### Performance
+
+- The doc index is written in the background at most once a second, compact, outside the
+  write lock, instead of in full on every write while searches waited.
+- A search embeds the query once instead of three times, and keyword search reads an
+  inverted index instead of re-tokenising every stored memory per query.
+- A write embeds each text once (facts were embedded up to three times).
+- History on read, entity names and usage counts no longer scan or rewrite whole files
+  per request.
+
+### Internal
+
+- One lenient decoder for model replies, one rerank helper, the search handler split into
+  named steps, shared helpers for time parsing, owner filters and live rows, and dead
+  extraction fields removed.
+
 ## [4.9.1] — 2026-10-18
 
 Fixes from a review of the 4.8 and 4.9 code. Server only: the Hermes plugin is unchanged.
