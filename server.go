@@ -1665,17 +1665,19 @@ func main() {
 	// Started last, once every part extraction touches (Now pages, episodes) is wired.
 	// pro and ultra extract, so a write that missed its extraction (no key yet, or a
 	// failed call) is retried in the background. Lite makes no LLM call at all.
-	if rt.Mode.UsesLLM() {
-		srv.catchup = NewCatchup(srv, envDuration(catchupEveryKey, catchupEveryDefault))
-		go srv.catchup.Run(ctx)
-	}
-	hs := &http.Server{Addr: net.JoinHostPort(rt.Host, port), Handler: srv.routes(), ReadHeaderTimeout: readHeaderTimeout}
 	// Ctrl-C or a service stop ends the server cleanly, writing what is still
 	// buffered (the doc index and usage counts). A hard kill skips this, which is
 	// why the Windows launcher calls /api/v1/flush before it stops the process.
 	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
+	if rt.Mode.UsesLLM() {
+		srv.catchup = NewCatchup(srv, envDuration(catchupEveryKey, catchupEveryDefault))
+		go srv.catchup.Run(sigCtx)
+	}
+	hs := &http.Server{Addr: net.JoinHostPort(rt.Host, port), Handler: srv.routes(), ReadHeaderTimeout: readHeaderTimeout}
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		<-sigCtx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -1684,6 +1686,9 @@ func main() {
 	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+	// ListenAndServe returns as soon as Shutdown starts; wait for in-flight requests
+	// to finish before the final flush, so a write still running is not lost.
+	<-drained
 	srv.flush()
 	store.Close()
 	log.Print("stopped")
