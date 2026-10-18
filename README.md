@@ -1,6 +1,6 @@
-![HyAtlas Memory — three extraction modes across an eight-layer memory](https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/assets/hyatlas-v4.3.0-banner.png)
+![HyAtlas Memory 5.0: memory you can take back. Three modes across an eight-layer memory](assets/hyatlas-v5.0.0-banner.png)
 
-# HyAtlas Memory — Pure-Go Memory Core
+# HyAtlas Memory: memory you can take back
 
 > **One binary. Eight layers. Three extraction modes.** One Go binary (the embedded release build is about 160 MB because it carries the BGE model), no Python at runtime, in-process BGE embeddings. Release binaries: **Linux amd64 · macOS arm64 · Windows amd64**. Other platforms build from source.
 
@@ -12,7 +12,12 @@ HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It r
 - **Writing.** Each conversation turn goes through one LLM call that extracts dated facts, updates or replaces older ones, open intentions with due dates, entity pages and reusable task experiences.
 - **Remembering in the background.** Summaries are written per episode of work. A background pass merges and retires stale facts (with a reason, reversible), and builds a knowledge graph and patterns that record the facts behind them.
 - **Recall.** Search understands dates ("last week") and the entities you name, finds long facts by any of their sentences, and shows what a fact replaced.
-- **Credentials.** No HyAtlas program ever opens another application's credentials: Hermes hands its key over through localhost. The last Python release was [v3.5.0](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.5.0) (Zvec/Kuzu); it is no longer maintained. [CHANGELOG.md](CHANGELOG.md) has the full history.
+- **Reversible by design.** Replaced, merged, dropped and forgotten memories are retired with a reason, not erased, and can be restored; a note you replace or remove with Hermes's memory tool is forgotten here too. Rows are deleted only when you ask: a delete by id, a bulk delete with `HYATLAS_ADMIN=on`, or opt-in raw retention.
+- **Credentials.** HyAtlas uses only the extraction key you give it (`llm_key`, or `HYATLAS_LLM_KEY`); it never reads another application's credentials or takes Hermes's sign-in token. The last Python release was [v3.5.0](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.5.0) (Zvec/Kuzu); it is no longer maintained. [CHANGELOG.md](CHANGELOG.md) has the full history.
+
+![What's new in HyAtlas 5.0](docs/images/whats-new-5.png)
+
+![How HyAtlas works: remember, reflect, remind](docs/images/how-it-works.png)
 
 ---
 
