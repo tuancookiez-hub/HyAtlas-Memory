@@ -537,40 +537,28 @@ class HyatlasMemoryProvider(MemoryProvider):
     def get_config_schema(self) -> List[Dict[str, Any]]:
         """Settings this provider exposes, derived from :mod:`settings`.
 
-        Not a literal here: the manifest declares the same fourteen settings for the
-        Desktop settings form, and the two drifted until the provider offered
-        only five — so four settings existed in ``plugin.yaml`` but were
-        invisible to ``hermes memory setup``. A test pins the two together.
+        Only the five onboarding questions, derived from the schema. The manifest declares
+        every setting for the Desktop settings form, and the advanced ones are
+        read and written with ``hermes hyatlas settings``. A test pins the manifest
+        to :mod:`settings`.
         """
         return list(settings.config_schema())
 
 
     def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
-        """Persist non-secret config to ``$HERMES_HOME/hyatlas.json``.
+        """Merge the answered values into ``$HERMES_HOME/hyatlas.json``.
 
-        Only relevant keys are written. Legacy v3.5 fields (llm,
-        vector_store, api_keys, etc.) are NOT written here — those
-        belong to the v3.5 Python server's config, not the Go
-        client. The binary itself reads LLM env vars
-        (HYATLAS_LLM_BASE, etc.) directly, so no LLM creds belong
-        in this JSON.
+        The wizard answers only the five onboarding keys, so everything else already
+        in the file (a custom port, a data folder) is kept. The auto_start answer is
+        stored as a bool. ``llm_key`` is declared secret, so the wizard routes it to
+        .env and never puts it here; it is stripped anyway, as defence in depth
+        against a future caller or a form that does not honour the secret flag.
         """
-        path = Path(hermes_home) / "hyatlas.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        merged = {**self._config, **values}
-        # llm_key is declared secret, so the setup wizard routes it to .env and
-        # never puts it here. Strip it anyway: a defence-in-depth guard against a
-        # future caller, a hand-edited config.yaml, or a Desktop form that does
-        # not honour the secret flag, writing a credential into hyatlas.json.
-        for k in ("request_timeout", "llm_key"):
-            merged.pop(k, None)
+        updates = dict(values)
+        if "auto_start" in updates:
+            updates["auto_start"] = settings.truthy(updates["auto_start"])
         try:
-            import stat
-            path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
-            try:
-                path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-            except (OSError, AttributeError):
-                pass  # Windows
+            settings.save_profile(updates, hermes_home)
         except OSError as e:
             logger.warning("save_config failed: %s", e)
 

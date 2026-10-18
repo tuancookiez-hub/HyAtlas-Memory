@@ -105,29 +105,37 @@ memory:
 
 ### Setup
 
-`hermes memory setup` picks the provider, then prompts for each of the plugin's 14
-settings in turn (Enter keeps the default). The five that matter come first. It prompts only on a real terminal. Without
+`hermes memory setup` picks the provider, then asks five questions (Enter keeps the
+default). It prompts only on a real terminal. Without
 one it only selects the provider, and the values are then set as described under
 *Without a terminal* below. On a terminal, it writes `memory.provider` to
-`config.yaml`, the non-secret settings to `hyatlas.json` (except `request_timeout`,
-which it does not write there), and the key to `.env`. It does not start the server.
+`config.yaml`, the answers to `hyatlas.json` (added to what is already there, so
+running setup again keeps your advanced settings), and the key to `.env`. It does not
+start the server.
 The questions, in order:
 
 1. **How much should HyAtlas think?** A menu: `ultra` (recommended), `pro` or `lite`.
-   Enter takes `ultra`. All modes keep your memories and embeddings on this machine;
+   Enter takes `ultra`. Your memories and embeddings stay on this machine in every mode;
    only `pro` and `ultra` send memory text to the AI endpoint in question 2.
 2. **AI endpoint.** Any OpenAI-compatible API. Enter takes the Nous Portal
-   (`https://inference-api.nousresearch.com/v1`). Ignored in `lite`.
-3. **API key for that endpoint.** Entered masked and stored in Hermes's `.env` as
+   (`https://inference-api.nousresearch.com/v1`). Not used in `lite`.
+3. **API key for that endpoint.** Entered masked and saved in Hermes's `.env` as
    `HYATLAS_LLM_KEY`. Enter skips it, which is right for `lite`.
 4. **Model.** Enter takes a free Nous Portal model (`meituan/longcat-2.5-preview:free`).
-   Ignored in `lite`.
-5. **Should Hermes start the HyAtlas server for you?** Enter means no. Answer yes
+   Not used in `lite`.
+5. **Auto-start the HyAtlas server with Hermes? (y/N)** Enter means no. Answer `y`
    unless you start the server yourself, for example with the launcher or a service.
 
-The questions after those five are marked "Advanced:" (wait for extraction, server
-host and port, user and agent IDs, binary path, launcher script, data directory,
-request timeout). Enter keeps each default, so you can press Enter through them.
+That's it. Run `hermes hyatlas doctor` to check everything works. Advanced settings: `hermes hyatlas settings` or Desktop → Settings → Plugins → hyatlas.
+
+Everything else is an advanced setting (wait for extraction, server address and port,
+user and agent IDs, binary path, launcher script, data folder, request timeout). It is
+not asked during setup. `hermes hyatlas settings` lists every setting with its value and
+where the value comes from (default, `hyatlas.json`, `config.yaml` or env), with a
+one-line explanation for each advanced one. `hermes hyatlas settings set KEY VALUE`
+changes one after checking it; for example `hermes hyatlas settings set server_port
+19600`. It refuses `llm_key`, which belongs to `hermes memory setup`. The same settings
+are in Desktop → Settings → Plugins → hyatlas.
 
 `lite` needs no endpoint, model or key: the server makes no LLM call at all. The
 wizard's default endpoint and model are the Nous Portal and a free model, written to
@@ -191,7 +199,7 @@ writes to `.env`. The plugin does not use a key found in `hyatlas.json` or
 | `server_port` | `HYATLAS_SERVER_PORT` | `19528` | Server port |
 | `user_id` | `HYATLAS_USER_ID` | `default` | Default user scope for memories |
 | `agent_id` | `HYATLAS_AGENT_ID` | `default` | Default agent scope (overridden per session) |
-| `auto_start` | `HYATLAS_AUTO_START` | `false` | Start the server binary when it is unreachable |
+| `auto_start` | `HYATLAS_AUTO_START` | `false` (the wizard asks y/N) | Start the server binary when it is unreachable |
 | `binary_path` | `HYATLAS_BINARY_PATH` | *(discover)* | Path to `hyatlas-go` |
 | `launcher_path` | `HYATLAS_LAUNCHER_PATH` | *(none)* | Windows only: a `hyatlas-go.ps1` that `hermes hyatlas start\|stop` runs instead of the binary |
 | `request_timeout` | `HYATLAS_REQUEST_TIMEOUT` | `15.0` | HTTP timeout for server calls, in seconds |
@@ -202,7 +210,7 @@ writes to `.env`. The plugin does not use a key found in `hyatlas.json` or
 | `mode` | `HYATLAS_MODE` | `ultra` | `ultra` \| `pro` \| `lite`. The wizard stores the whole menu line; only the first word counts. |
 | `sync` | `HYATLAS_SYNC_EXTRACT` | `default` (off for a spawned server) | Whether a write waits for extraction: `default` \| `on` \| `off` |
 
-All fourteen are editable in **Desktop → Settings → Plugins → hyatlas**, in
+All fourteen are listed by `hermes hyatlas settings` and editable in **Desktop → Settings → Plugins → hyatlas**, in
 `plugins.entries.hyatlas.settings` in `config.yaml`, or through the environment
 variables above (an environment variable wins). Empty or unset values mean the
 default. `llm_base`, `llm_model` and `mode` are forwarded to a server the plugin

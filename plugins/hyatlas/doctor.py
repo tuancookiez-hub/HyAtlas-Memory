@@ -120,12 +120,12 @@ def _explain_model_error(error: str, mode_base: str) -> str:
         return "The endpoint is rate limiting you. Wait a minute and run `hermes hyatlas doctor` again."
     if "404" in e or "model" in e or "not found" in e or "400" in e:
         return ("The model id is probably wrong. Find valid ids in your provider's model list, then "
-                "run `hermes memory setup` and enter the model again (setting `llm_model`).")
+                "run `hermes hyatlas settings set llm_model <model id>`.")
     if "deadline" in e or "timeout" in e or "timed out" in e:
         return "The endpoint did not answer in time. Check your connection and the endpoint, then run the doctor again."
     if "no such host" in e or "refused" in e or "dial" in e or "lookup" in e:
         return (f"The endpoint ({mode_base or 'the AI endpoint'}) cannot be reached. Check the address "
-                "with `hermes memory setup` (setting `llm_base`).")
+                "with `hermes hyatlas settings set llm_base <address>`.")
     return "Check the endpoint, key and model with `hermes memory setup`, then run the doctor again."
 
 
@@ -169,8 +169,8 @@ def run_doctor(
                    f"fails read {log}.")
         else:
             fix = ("auto_start is off, so start the server yourself: `hermes hyatlas start` "
-                   "(or run `hyatlas-go`). To have Hermes start it for you, run `hermes memory "
-                   "setup` and answer yes to auto-start.")
+                   "(or run `hyatlas-go`). To have Hermes start it for you, run `hermes hyatlas "
+                   "settings set auto_start y`.")
         rep.check(FAIL, "Server", f"nothing answers at {origin}", fix)
         rep.line("")
         rep.line("  The other checks need the server, so they were skipped.")

@@ -53,83 +53,103 @@ MODE_CHOICES = (
 DEFAULT_LLM_BASE = "https://inference-api.nousresearch.com/v1"
 DEFAULT_LLM_MODEL = "meituan/longcat-2.5-preview:free"
 
-# The order below IS the order of the setup wizard's questions, which asks every
-# field once. The five that matter come first; the rest are marked "Advanced:" and
-# have defaults, so Enter keeps them. Keep each description short: it is the
-# prompt text. Long explanations belong in the README, not in a prompt.
-SCHEMA: Tuple[Dict[str, Any], ...] = (
+# The setup wizard asks every field of ONBOARDING once, in this order, and nothing
+# else: five plain questions a new user can answer. Keep each description short:
+# it is the prompt text. Long explanations belong in the README, not in a prompt.
+ONBOARDING: Tuple[Dict[str, Any], ...] = (
     {
         "key": "mode", "type": "str", "default": MODE_CHOICES[0],
         "label": "Mode", "choices": list(MODE_CHOICES),
-        "description": "How much should HyAtlas think? (all modes keep your "
-                       "memories and embeddings on this machine)",
+        "description": "How much should HyAtlas think? (your memories always stay on "
+                       "this machine)",
     },
     {
         "key": "llm_base", "type": "str", "default": DEFAULT_LLM_BASE,
         "label": "AI endpoint",
-        "description": "AI endpoint (any OpenAI-compatible API; Enter for the "
-                       "Nous Portal; ignored in lite)",
+        "description": "AI endpoint (Enter = Nous Portal; not used in lite)",
     },
     {
         "key": "llm_key", "type": "str", "default": "", "secret": True,
         "env_var": "HYATLAS_LLM_KEY",
         "label": "AI API key",
-        "description": "API key for that endpoint (stored in Hermes's .env; Enter "
-                       "to skip in lite)",
+        "description": "API key for that endpoint (saved in Hermes's .env; Enter to "
+                       "skip in lite)",
     },
     {
         "key": "llm_model", "type": "str", "default": DEFAULT_LLM_MODEL,
         "label": "AI model",
-        "description": "Model (Enter for a free Nous Portal model; ignored in lite)",
+        "description": "Model (Enter = a free Nous Portal model; not used in lite)",
     },
     {
-        "key": "auto_start", "type": "bool", "default": False,
+        # A plain text answer, not a menu or a toggle: a y/N prompt is how every
+        # other memory provider asks this. Every reader goes through truthy().
+        "key": "auto_start", "type": "str", "default": "n",
         "label": "Auto-start server",
-        "description": "Should Hermes start the HyAtlas server for you? (No if you "
-                       "start it yourself, e.g. with the launcher or a service)",
+        "description": "Auto-start the HyAtlas server with Hermes? (y/N)",
     },
+)
+
+# Everything the wizard does not ask. These stay in plugin.yaml, so the Desktop
+# settings form shows them, and are read and written with
+# ``hermes hyatlas settings``. ``help`` is the one-line plain explanation that
+# command prints; it is not part of the wizard or the manifest.
+ADVANCED: Tuple[Dict[str, Any], ...] = (
     {
         "key": "sync", "type": "str", "default": "default",
-        "label": "Block on extraction", "choices": ["default", "on", "off"],
+        "label": "Advanced: block on extraction", "choices": ["default", "on", "off"],
         "description": "Advanced: wait for extraction before a reply finishes?",
+        "help": "whether a reply waits for memory extraction; leave it on default",
     },
     {
         "key": "server_host", "type": "str", "default": "127.0.0.1",
-        "label": "Server host", "description": "Advanced: server host",
+        "label": "Advanced: server address",
+        "description": "Advanced: where the HyAtlas server runs",
+        "help": "where the HyAtlas server runs; keep 127.0.0.1 unless it is on another machine",
     },
     {
         "key": "server_port", "type": "int", "default": 19528,
-        "label": "Server port", "description": "Advanced: server port",
+        "label": "Advanced: server port", "description": "Advanced: server port",
+        "help": "the port the HyAtlas server listens on; change it only if 19528 is taken",
     },
     {
         "key": "user_id", "type": "str", "default": "default",
-        "label": "User ID", "description": "Advanced: user_id that scopes memories",
+        "label": "Advanced: user ID", "description": "Advanced: whose memories these are",
+        "help": "the name your memories are filed under; use one per person",
     },
     {
         "key": "agent_id", "type": "str", "default": "default",
-        "label": "Agent ID", "description": "Advanced: default agent_id",
+        "label": "Advanced: agent ID", "description": "Advanced: default agent name",
+        "help": "the default agent name memories are tagged with",
     },
     {
         "key": "binary_path", "type": "str", "default": "",
-        "label": "Binary path",
+        "label": "Advanced: binary path",
         "description": "Advanced: path to hyatlas-go (empty = find it on PATH)",
+        "help": "where the hyatlas-go program is; empty means look for it on PATH",
     },
     {
         "key": "launcher_path", "type": "str", "default": "",
-        "label": "Launcher script",
+        "label": "Advanced: launcher script",
         "description": "Advanced: Windows launcher script (empty = run the binary)",
+        "help": "a Windows launcher script to start the server with; empty runs the program directly",
     },
     {
         "key": "data_dir", "type": "str", "default": "",
-        "label": "Data directory",
+        "label": "Advanced: data folder",
         "description": "Advanced: server data folder (empty = the usual default)",
+        "help": "the folder where the server keeps its memories; empty uses the usual place",
     },
     {
         "key": "request_timeout", "type": "float", "default": 15.0,
-        "label": "Request timeout (s)",
+        "label": "Advanced: request timeout (s)",
         "description": "Advanced: seconds to wait for the server",
+        "help": "how many seconds to wait for the server before giving up",
     },
 )
+
+# Every setting, in wizard order and then the advanced ones. plugin.yaml declares
+# all of them; ``get_config_schema()`` offers only ONBOARDING.
+SCHEMA: Tuple[Dict[str, Any], ...] = ONBOARDING + ADVANCED
 
 # The server treats an unrecognised HYATLAS_MODE as fatal rather than falling
 # back, so an invalid value here would make a spawned server die on boot with a
@@ -166,7 +186,7 @@ _WIZARD_FIELDS = ("choices", "secret", "env_var", "url", "when", "default_from")
 
 
 def config_schema() -> Tuple[Dict[str, Any], ...]:
-    """The provider config schema, derived from :data:`SCHEMA`.
+    """The provider config schema, derived from :data:`ONBOARDING`.
 
     Shaped for ``MemoryProvider.get_config_schema()``: ``key``, ``description``,
     ``default``, plus the wizard-relevant fields. ``label`` and ``type`` belong to
@@ -174,7 +194,7 @@ def config_schema() -> Tuple[Dict[str, Any], ...]:
     they are dropped here rather than duplicated.
     """
     out = []
-    for f in SCHEMA:
+    for f in ONBOARDING:
         item: Dict[str, Any] = {
             "key": f["key"],
             "description": f["description"],
@@ -189,6 +209,9 @@ def config_schema() -> Tuple[Dict[str, Any], ...]:
 def truthy(v: Any) -> bool:
     """Interpret a config value as a boolean.
 
+    Accepts y/yes/true/on/1 in any case as True and n/no/false/off/0/"" as False;
+    anything else is False. The setup wizard stores the user's typed y/n answer.
+
     A bool field must not declare `choices`: the desktop bridge classifies any
     field with choices as a `select`, which coerces its value to a string, and
     then ``"false"`` is truthy in Python — so picking "false" in the settings
@@ -199,7 +222,7 @@ def truthy(v: Any) -> bool:
         return v
     if v is None:
         return False
-    return str(v).strip().lower() in ("1", "true", "yes", "on")
+    return str(v).strip().lower() in ("1", "true", "yes", "y", "on")
 
 
 # env var -> (settings key, cast)
@@ -281,7 +304,17 @@ def coerce(key: str, value: Any, cast: Any = None) -> Any:
 
 def load() -> Dict[str, Any]:
     """Resolve settings across all four layers."""
+    return load_with_sources()[0]
+
+
+def load_with_sources() -> Tuple[Dict[str, Any], Dict[str, str]]:
+    """Resolve settings across all four layers, and say where each value came from.
+
+    The second item maps every key to ``default``, ``hyatlas.json``, ``config.yaml``
+    or ``env`` (the layer whose value won), for ``hermes hyatlas settings``.
+    """
     cfg: Dict[str, Any] = dict(DEFAULTS)
+    src: Dict[str, str] = {k: "default" for k in KEYS}
 
     profile = home() / "hyatlas.json"
     if profile.exists():
@@ -293,6 +326,7 @@ def load() -> Dict[str, Any]:
                         got = coerce(k, raw[k], CASTS.get(k))
                         if got is not _SKIP:
                             cfg[k] = got
+                            src[k] = "hyatlas.json"
             else:
                 logger.debug("ignoring %s: not a mapping", profile)
         except (json.JSONDecodeError, OSError) as e:
@@ -321,6 +355,7 @@ def load() -> Dict[str, Any]:
                     got = coerce(k, source.get(k), CASTS.get(k))
                     if got is not _SKIP:
                         cfg[k] = got
+                        src[k] = "config.yaml"
     except Exception as e:  # noqa: BLE001 — a bad config read must not break plugin load
         logger.debug("ignoring config.yaml settings: %s", e)
 
@@ -333,12 +368,15 @@ def load() -> Dict[str, Any]:
             logger.debug("ignoring %s=%r: not a valid %s", env_key, v, key)
             continue
         cfg[key] = got
+        src[key] = "env"
 
     for legacy in LEGACY_ENV:
         if legacy in os.environ:
             logger.debug("ignoring legacy env %s — use HYATLAS_SERVER_* instead", legacy)
 
-    return cfg
+    # The wizard stores the typed y/N answer and the default is "n"; readers get a bool.
+    cfg["auto_start"] = truthy(cfg.get("auto_start"))
+    return cfg, src
 
 
 def normalize_mode(v: Any) -> str:
@@ -407,3 +445,69 @@ def is_loopback_host(host: str) -> bool:
         return ipaddress.ip_address(h).is_loopback
     except ValueError:
         return False
+
+
+# Settings ``hermes hyatlas settings set`` refuses: the key is a secret and lives in
+# Hermes's .env, never in hyatlas.json.
+SECRET_KEYS = ("llm_key",)
+
+
+def parse_value(key: str, raw: str) -> Any:
+    """Validate and cast one typed setting value; raise ValueError naming the problem.
+
+    Mode goes through :func:`normalize_mode` and must be a valid mode, sync must be
+    a value the server accepts, ints and floats are parsed, and the auto_start
+    answer is read with :func:`truthy`. Other text is kept as typed.
+    """
+    if key in SECRET_KEYS:
+        raise ValueError(f"{key} is a secret; use `hermes memory setup` to set it")
+    if key not in KEYS:
+        names = ", ".join(k for k in KEYS if k not in SECRET_KEYS)
+        raise ValueError(f"unknown setting {key!r}; the settings are {names}")
+    text = str(raw).strip()
+    if key == "mode":
+        return mode({"mode": text}) if text else ""
+    if key == "sync":
+        return sync({"sync": text}) or "default"
+    if key == "auto_start":
+        return truthy(text)
+    kind = next(f["type"] for f in SCHEMA if f["key"] == key)
+    if kind == "int":
+        try:
+            return int(text)
+        except ValueError:
+            raise ValueError(f"{key} must be a whole number, got {text!r}") from None
+    if kind == "float":
+        try:
+            return float(text)
+        except ValueError:
+            raise ValueError(f"{key} must be a number, got {text!r}") from None
+    return text
+
+
+def save_profile(updates: Dict[str, Any], hermes_home: "str | Path | None" = None) -> Path:
+    """Merge ``updates`` into ``hyatlas.json`` and return its path.
+
+    Keys already in the file stay, so running setup again never wipes an advanced
+    value. A secret is never written. An unreadable or non-mapping file is replaced.
+    Raises OSError when the file cannot be written.
+    """
+    path = (Path(hermes_home) if hermes_home else home()) / "hyatlas.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    current: Dict[str, Any] = {}
+    if path.exists():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                current = raw
+        except (json.JSONDecodeError, OSError):
+            pass
+    merged = {**current, **updates}
+    for secret in SECRET_KEYS:
+        merged.pop(secret, None)
+    path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except (OSError, AttributeError):
+        pass  # Windows
+    return path

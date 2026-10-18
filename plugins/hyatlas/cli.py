@@ -1,4 +1,4 @@
-"""``hermes hyatlas`` subcommand — health, doctor, search, add, recent, start, stop.
+"""``hermes hyatlas`` subcommand — health, doctor, settings, search, add, recent, start, stop.
 
 Hermes wires this file in as the active memory provider's CLI (see
 ``plugins.memory.discover_plugin_cli_commands``): it imports this module under
@@ -14,12 +14,14 @@ import argparse
 import importlib.util
 import json
 import logging
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 
+from . import settings
 from .client import HyatlasClient, HyatlasClientError, HyatlasUnreachable
 
 logger = logging.getLogger(__name__)
@@ -63,6 +65,15 @@ def register_cli(plugin_parser: argparse.ArgumentParser) -> None:
     p_doctor = sub.add_parser(
         "doctor", help="Check that memory works (server, mode, key, model, round trip) and how to fix it")
     p_doctor.set_defaults(func=_cmd_doctor)
+
+    p_settings = sub.add_parser(
+        "settings", help="Show every setting and where it comes from; `settings set KEY VALUE` changes one")
+    p_settings.set_defaults(func=_cmd_settings)
+    settings_sub = p_settings.add_subparsers(dest="settings_cmd")
+    p_set = settings_sub.add_parser("set", help="Write one non-secret setting to hyatlas.json")
+    p_set.add_argument("key", help="Setting name, for example server_port")
+    p_set.add_argument("value", help="New value")
+    p_set.set_defaults(func=_cmd_settings_set)
 
     p_search = sub.add_parser("search", help="Semantic search the memory store")
     p_search.add_argument("query", help="Search query string")
@@ -181,6 +192,60 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     except Exception as e:  # noqa: BLE001 - the doctor must end with a message, not a traceback
         print(f"The doctor could not run: {type(e).__name__}: {e}")
         return 1
+
+
+def _key_is_set() -> bool:
+    """True when an extraction key is available to the plugin; the key itself is never read out."""
+    if os.environ.get("HYATLAS_LLM_KEY", "").strip():
+        return True
+    key_file = os.environ.get("HYATLAS_LLM_KEY_FILE", "").strip()
+    return bool(key_file) and Path(key_file).is_file()
+
+
+def _cmd_settings(args: argparse.Namespace) -> int:
+    """Print every setting with its value and source, grouped Basics and Advanced."""
+    cfg, src = settings.load_with_sources()
+    print("Basics")
+    for f in settings.ONBOARDING:
+        key = f["key"]
+        if key == "llm_key":
+            value, where = ("set" if _key_is_set() else "unset"), "env"
+        else:
+            value, where = settings.normalize_mode(cfg[key]) if key == "mode" else cfg[key], src[key]
+            if key == "auto_start":
+                value = "yes" if value else "no"
+        print(f"  {key:<16}{str(value) or '(empty)':<48}[{where}]")
+    print("")
+    print("Advanced (change one with `hermes hyatlas settings set KEY VALUE`)")
+    for f in settings.ADVANCED:
+        key = f["key"]
+        value = cfg[key]
+        print(f"  {key:<16}{str(value) if value != '' else '(empty)':<48}[{src[key]}]")
+        print(f"  {'':<16}{f['help']}")
+    print("")
+    print("The API key is set with `hermes memory setup`. It is saved in Hermes's .env, not here.")
+    return 0
+
+
+def _cmd_settings_set(args: argparse.Namespace) -> int:
+    """Validate one setting and write it to hyatlas.json."""
+    try:
+        value = settings.parse_value(args.key, args.value)
+    except ValueError as e:
+        print(f"Not changed: {e}")
+        return 1
+    try:
+        path = settings.save_profile({args.key: value})
+    except OSError as e:
+        print(f"Could not write hyatlas.json: {e}")
+        return 1
+    print(f"{args.key} = {value} (saved in {path})")
+    _, src = settings.load_with_sources()
+    if src.get(args.key) in ("config.yaml", "env"):
+        print(f"Note: {args.key} is also set in {src[args.key]}, which wins over hyatlas.json, "
+              "so this change has no effect until that one is removed.")
+    print("Restart Hermes (and the server, if it is running) for the change to apply.")
+    return 0
 
 
 def _cmd_search(args: argparse.Namespace) -> int:

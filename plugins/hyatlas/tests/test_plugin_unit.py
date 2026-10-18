@@ -1324,12 +1324,13 @@ def test_provider_schema_matches_manifest_schema():
     declared = manifest.get("config_schema") or {}
     provider = {f["key"]: f for f in mod.HyatlasMemoryProvider().get_config_schema()}
 
-    assert set(declared) == set(provider), (
-        f"manifest/provider settings diverged: "
-        f"manifest-only={sorted(set(declared) - set(provider))} "
-        f"provider-only={sorted(set(provider) - set(declared))}"
-    )
-    for key, field in declared.items():
+    # The provider offers only the onboarding questions; the manifest declares every
+    # setting, so the Desktop form still shows the advanced ones.
+    assert set(provider) <= set(declared), (
+        f"provider-only settings: {sorted(set(provider) - set(declared))}")
+    assert set(declared) == set(_load_sibling("settings").KEYS)
+    for key in provider:
+        field = declared[key]
         assert field.get("default") == provider[key]["default"], (
             f"{key}: default {field.get('default')!r} in manifest vs "
             f"{provider[key]['default']!r} in provider"
@@ -1341,7 +1342,7 @@ def test_settings_schema_is_the_single_source():
     settings = _load_sibling("settings")
     assert settings.KEYS == tuple(f["key"] for f in settings.SCHEMA)
     assert settings.DEFAULTS == {f["key"]: f["default"] for f in settings.SCHEMA}
-    assert [f["key"] for f in settings.config_schema()] == list(settings.KEYS)
+    assert [f["key"] for f in settings.config_schema()] == [f["key"] for f in settings.ONBOARDING]
     # labels/types are manifest-only; leaking them confuses the setup form
     assert not any("label" in f or "type" in f for f in settings.config_schema())
 
@@ -1472,14 +1473,13 @@ def test_sync_setting_rejects_unknown_value():
 
 
 def test_sync_declared_in_both_schemas():
-    """Manifest and provider schema must both expose sync."""
+    """The manifest exposes sync (an advanced setting); the setup wizard does not ask it."""
     yaml = pytest.importorskip("yaml")
     declared = yaml.safe_load((Path(_PKG) / "plugin.yaml").read_text(encoding="utf-8"))["config_schema"]
     assert "sync" in declared
     assert declared["sync"]["choices"] == ["default", "on", "off"]
     provider = {f["key"]: f for f in mod.HyatlasMemoryProvider().get_config_schema()}
-    assert "sync" in provider
-    assert provider["sync"]["choices"] == ["default", "on", "off"]
+    assert "sync" not in provider
 
 
 def test_spawner_forwards_validated_sync_only():
@@ -1874,9 +1874,9 @@ def test_bool_field_declares_no_choices():
 def test_truthy_handles_strings_from_a_select():
     """Any bool read from config must treat the string "false" as false."""
     settings = _load_sibling("settings")
-    for v in (True, "true", "True", "TRUE", "1", "yes", "on"):
+    for v in (True, "true", "True", "TRUE", "1", "yes", "y", "Y", "on"):
         assert settings.truthy(v) is True, v
-    for v in (False, "false", "False", "FALSE", "0", "no", "off", "", None, [], "banana"):
+    for v in (False, "false", "False", "FALSE", "0", "no", "off", "", "n", "N", None, [], "banana"):
         assert settings.truthy(v) is False, v
 
 

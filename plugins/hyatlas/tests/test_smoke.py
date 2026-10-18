@@ -94,7 +94,7 @@ def _check_provider_metadata() -> tuple[str, str]:
         if missing:
             return FAIL, f"missing tools: {missing}"
         cfg_keys = {f["key"] for f in provider.get_config_schema()}
-        if not {"server_host", "server_port", "user_id", "agent_id"} <= cfg_keys:
+        if cfg_keys != {"mode", "llm_base", "llm_key", "llm_model", "auto_start"}:
             return FAIL, f"config schema missing keys: {cfg_keys}"
         return PASS, f"name={provider.name}, tools={len(tools)}, cfg_keys={len(cfg_keys)}"
     except Exception as e:

@@ -31,19 +31,18 @@ A plain local path does not work. Hermes reads it as `owner/repo` and tries GitH
 
 1. Shows the memory providers and "Built-in only". Pick `hyatlas`. The plugin
    declares no dependencies beyond Hermes core, so nothing is installed.
-2. On a real terminal, prompts for each of the plugin's 14 settings, in this order.
-   Enter keeps the default. Without a terminal it asks nothing (see *Without a
-   terminal* below). The first five matter: how much HyAtlas should think (a menu:
-   `ultra`, `pro`, `lite`), the AI endpoint (Enter = the Nous Portal), the API key
-   (masked, written to Hermes' `.env` as `HYATLAS_LLM_KEY`; Enter skips it), the
-   model (Enter = a free Nous Portal model), and whether Hermes should start the
-   server for you. The rest are marked "Advanced:" and Enter keeps their defaults.
-   A server you start yourself receives the key from the plugin over localhost.
-3. Writes `memory.provider: hyatlas` to `config.yaml`, the non-secret settings to
-   `$HERMES_HOME/hyatlas.json`, and the key to `.env`.
+2. On a real terminal, asks five questions. Enter keeps the default. Without a
+   terminal it asks nothing (see *Without a terminal* below). They are: how much
+   HyAtlas should think (a menu: `ultra`, `pro`, `lite`), the AI endpoint (Enter =
+   the Nous Portal), the API key (masked, written to Hermes' `.env` as
+   `HYATLAS_LLM_KEY`; Enter skips it), the model (Enter = a free Nous Portal model),
+   and whether to auto-start the server with Hermes (y/N). A server you start
+   yourself receives the key from the plugin over localhost.
+3. Writes `memory.provider: hyatlas` to `config.yaml`, the answers to
+   `$HERMES_HOME/hyatlas.json` (added to what is already there), and the key to `.env`.
 
 It does not start the server and does not call the LLM. Start a new session to
-activate, then run `hermes hyatlas doctor` to check everything works.
+activate. That's it. Run `hermes hyatlas doctor` to check everything works. Advanced settings: `hermes hyatlas settings` or Desktop → Settings → Plugins → hyatlas.
 
 **Without an LLM endpoint** the server still runs, with extraction off. Writes
 store the raw trace and local embeddings, `hermes hyatlas status` reports `llm`
