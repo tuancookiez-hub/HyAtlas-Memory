@@ -1,42 +1,46 @@
 #!/usr/bin/env python
-"""Export BGE-small-en-v1.5 to ONNX so the v4 Go server can embed locally.
+"""Export BGE-small-en-v1.5 to ONNX so the HyAtlas Go server can embed locally.
 
-The Go binary does NOT bundle the model (133MB .data is gitignored). Run this
-once on the dev machine (needs the HyAtlas venv + transformers) to regenerate
-models/bge-small-en-v1.5.onnx(.data). The Go server's embed path (LocalEmbedder
-or the embed_server subprocess) loads it at runtime.
+Release binaries embed the model, so most users never need this. A plain source build
+reads models/bge-small-en-v1.5.onnx(.data) at runtime; run this once (needs torch and
+transformers) to regenerate it from the Hugging Face model.
 
-Usage:
-    D:/HyAtlas/.hyatlas/venv/Scripts/python.exe -m venv-not-needed
+Usage (from the repo root):
     python scripts/export_bge_onnx.py
+    python scripts/export_bge_onnx.py --model-dir PATH_TO_LOCAL_SNAPSHOT
 
-Firewall note (Windows): the venv python cannot reach huggingface.co (WinError
-10013 from the per-app outbound allowlist). This script relies on the model
-being cached locally. If you wipe the HF cache, re-download via a browser or
-bundle the export alongside the repo.
+By default the model is loaded from the Hugging Face cache by name (offline, so it must
+already be cached; set HF_HUB_OFFLINE=0 to allow a download). The ONNX files are written
+to <repo>/models/.
 """
+import argparse
 import os
 
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-os.environ["OMP_NUM_THREADS"] = "4"
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "4")
 
 from pathlib import Path
 
 import torch
 from transformers import AutoModel, AutoTokenizer
 
-MODEL_DIR = Path(
-    r"C:/Users/tuanc/.cache/huggingface/hub/"
-    r"models--BAAI--bge-small-en-v1.5/snapshots/"
-    r"5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
-)
-OUT = Path(r"F:/HyAtlas-Memory-Go/models/bge-small-en-v1.5.onnx")
+MODEL_ID = "BAAI/bge-small-en-v1.5"
+OUT = Path(__file__).resolve().parent.parent / "models" / "bge-small-en-v1.5.onnx"
+
+
+def _model_source() -> str:
+    """The local snapshot given with --model-dir, else the model id (resolved from the cache)."""
+    ap = argparse.ArgumentParser(description="Export BGE-small-en-v1.5 to ONNX.")
+    ap.add_argument("--model-dir", help="a local snapshot directory of the model")
+    args = ap.parse_args()
+    return args.model_dir or MODEL_ID
 
 
 def main() -> None:
-    tok = AutoTokenizer.from_pretrained(str(MODEL_DIR))
-    model = AutoModel.from_pretrained(str(MODEL_DIR))
+    src = _model_source()
+    tok = AutoTokenizer.from_pretrained(src)
+    model = AutoModel.from_pretrained(src)
     model.eval()
     dummy = tok(
         ["redis cluster timeout"],
