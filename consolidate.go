@@ -295,6 +295,10 @@ type Consolidator struct {
 	// HYATLAS_CONSOLIDATE_GRAPH is off, which leaves ultra with six layers.
 	graph bool
 
+	// wg tracks the Run loop started by Start, so a shutdown can wait for a pass that
+	// is still writing (see Wait).
+	wg sync.WaitGroup
+
 	// gate makes a pass single-flight. The ticker and a manual POST /digest can
 	// both ask for one, and two passes over the same batch would duplicate the
 	// LLM spend and race each other's merges and edge writes.
@@ -441,6 +445,29 @@ func (c *Consolidator) Stats() (runs int, last *Report, at time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.ran, c.last, c.lastAt
+}
+
+// Start runs the loop in a goroutine that Wait can wait for. It does nothing on a nil
+// Consolidator.
+func (c *Consolidator) Start(ctx context.Context) {
+	if c == nil {
+		return
+	}
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.Run(ctx)
+	}()
+}
+
+// Wait blocks until the loop started by Start has stopped or timeout passes, and
+// reports whether it stopped. A shutdown cancels the loop's context first, which also
+// ends the pass in progress. A nil Consolidator, or one never started, returns true.
+func (c *Consolidator) Wait(timeout time.Duration) bool {
+	if c == nil {
+		return true
+	}
+	return waitTimed(&c.wg, timeout)
 }
 
 // Run drives the passes until ctx is cancelled. Called as a goroutine only in

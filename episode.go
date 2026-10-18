@@ -110,6 +110,9 @@ type Episodes struct {
 	gap     time.Duration
 	open    map[string]*episode // one open episode per owner key
 	pending []*episode          // ended episodes waiting for a summary
+	// wg tracks the Run loop started by Start, so a shutdown can wait for a summary
+	// that is being written (see Wait).
+	wg sync.WaitGroup
 }
 
 // resolveEpisodeGap reads HYATLAS_EPISODE_GAP and returns the gap between writes
@@ -215,6 +218,28 @@ func (e *Episodes) closeLocked(key string, ep *episode) {
 	delete(e.open, key)
 	e.pending = append(e.pending, ep)
 	log.Printf("episodes: closed %s (%d facts)", key, len(ep.FactIDs))
+}
+
+// Start runs the loop in a goroutine that Wait can wait for. It does nothing on a nil
+// Episodes.
+func (e *Episodes) Start(ctx context.Context) {
+	if e == nil {
+		return
+	}
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		e.Run(ctx)
+	}()
+}
+
+// Wait blocks until the loop started by Start has stopped or timeout passes, and
+// reports whether it stopped. A nil Episodes returns true.
+func (e *Episodes) Wait(timeout time.Duration) bool {
+	if e == nil {
+		return true
+	}
+	return waitTimed(&e.wg, timeout)
 }
 
 // Run closes ended episodes and summarises them until ctx is done. It runs one

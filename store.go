@@ -85,6 +85,14 @@ type MemoryStore struct {
 	// putLocked, forgetIndexLocked and rebuildSupersededLocked.
 	labelRows map[memory.Layer]map[string]int
 	mirrors   map[mirrorKey][]string
+	// wantExtract counts the live raw rows that were written to be extracted and have
+	// not been yet (see awaitsExtraction), so /api/v1/status reads one number instead
+	// of scanning the index. It follows the same hooks as labelRows.
+	wantExtract int
+	// keywordRaw is whether raw (L2) rows are kept in the keyword index. Only a server
+	// that does not extract needs them there (see SetKeywordRaw); otherwise a keyword
+	// search that asks for raw rows ranks them on the fly.
+	keywordRaw bool
 	// supMu serializes Supersede passes. It is separate from mu so Adds and
 	// Searches do not wait on the chromem rewrites a pass makes.
 	supMu sync.Mutex
@@ -1175,6 +1183,9 @@ type mirrorKey struct {
 // caller holds s.mu for writing.
 func (s *MemoryStore) trackLiveLocked(d DocIndex) {
 	l := memory.Layer(d.Layer)
+	if awaitsExtraction(d) {
+		s.wantExtract++
+	}
 	if label := d.Meta[metaSourceLabel]; label != "" {
 		if s.labelRows[l] == nil {
 			s.labelRows[l] = map[string]int{}
@@ -1191,6 +1202,9 @@ func (s *MemoryStore) trackLiveLocked(d DocIndex) {
 // for writing.
 func (s *MemoryStore) untrackLiveLocked(d DocIndex) {
 	l := memory.Layer(d.Layer)
+	if awaitsExtraction(d) {
+		s.wantExtract--
+	}
 	if label := d.Meta[metaSourceLabel]; label != "" {
 		if s.labelRows[l][label]--; s.labelRows[l][label] <= 0 {
 			delete(s.labelRows[l], label)
@@ -1225,15 +1239,48 @@ func (s *MemoryStore) forgetLocked(id string) {
 	s.kw.remove(id)
 }
 
-// syncKeywordLocked makes the keyword index agree with d: a live row is indexed (raw
-// rows too, so lite mode can find an identifier; hybrid search leaves them out unless
-// the mode needs them), and a superseded row is not. The caller holds s.mu for writing.
+// syncKeywordLocked makes the keyword index agree with d: a live row is indexed and a
+// superseded row is not. A raw row is indexed only when keywordRaw is set, which is
+// only so for a server that does not extract (lite mode finds an identifier in raw
+// rows, and nothing else uses them there). The caller holds s.mu for writing.
 func (s *MemoryStore) syncKeywordLocked(d DocIndex) {
-	if isSuperseded(d) {
+	if isSuperseded(d) || (d.Layer == string(memory.L2Raw) && !s.keywordRaw) {
 		s.kw.remove(d.ID)
 		return
 	}
 	s.kw.put(d.ID, d.Content)
+}
+
+// SetKeywordRaw sets whether raw rows are kept in the keyword index and brings the
+// index in line. It is called once at start, before the server answers, with true
+// for a mode that does not use the LLM. Turning it off drops the raw rows again.
+func (s *MemoryStore) SetKeywordRaw(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.keywordRaw == on {
+		return
+	}
+	s.keywordRaw = on
+	for _, d := range s.index {
+		if d.Layer == string(memory.L2Raw) {
+			s.syncKeywordLocked(d)
+		}
+	}
+}
+
+// awaitsExtraction reports whether d is a raw row that was written to be extracted
+// (it carries extract_wanted) and has not been extracted yet. Rows written before
+// 5.0 or in lite mode carry no marker and are never counted or caught up.
+func awaitsExtraction(d DocIndex) bool {
+	return d.Layer == string(memory.L2Raw) && !d.Extracted && d.Meta[metaExtractWanted] == "true"
+}
+
+// awaitingExtraction is how many live raw rows are waiting for extraction. It reads
+// a counter kept by the index hooks, so it costs nothing however large the index is.
+func (s *MemoryStore) awaitingExtraction() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.wantExtract
 }
 
 // forgetIndexLocked is forgetLocked without the keyword index, for putLocked, which
@@ -1272,6 +1319,7 @@ func (s *MemoryStore) rebuildSupersededLocked() {
 	s.replacedBy = map[string][]string{}
 	s.labelRows = map[memory.Layer]map[string]int{}
 	s.mirrors = map[mirrorKey][]string{}
+	s.wantExtract = 0
 	s.kw = newKwIndex()
 	for id, d := range s.index {
 		s.syncKeywordLocked(d)

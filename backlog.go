@@ -105,7 +105,11 @@ type BacklogJob struct {
 	llm     *LLMClient
 	admin   func() bool
 
-	wg sync.WaitGroup // lets tests wait for the background goroutine
+	wg sync.WaitGroup // lets tests and Wait wait for the background goroutine
+
+	// base is the context the job runs on; SetContext sets it, and it is Background
+	// until then. The server passes its signal context, so a shutdown cancels a dry run.
+	base context.Context
 
 	mu     sync.Mutex
 	status BacklogStatus
@@ -116,6 +120,27 @@ type BacklogJob struct {
 func NewBacklogJob(dataDir string, store *MemoryStore, cons *Consolidator, llm *LLMClient, admin func() bool) *BacklogJob {
 	return &BacklogJob{dataDir: dataDir, store: store, cons: cons, llm: llm, admin: admin,
 		status: BacklogStatus{State: "idle"}}
+}
+
+// SetContext makes ctx the context later jobs run on. Call it before the server
+// serves; it is not safe against a job that is starting.
+func (b *BacklogJob) SetContext(ctx context.Context) { b.base = ctx }
+
+// Wait blocks until a job in progress has finished or timeout passes, and reports
+// whether it finished. A nil BacklogJob returns true.
+func (b *BacklogJob) Wait(timeout time.Duration) bool {
+	if b == nil {
+		return true
+	}
+	return waitTimed(&b.wg, timeout)
+}
+
+// jobContext is the context a job runs on.
+func (b *BacklogJob) jobContext() context.Context {
+	if b.base != nil {
+		return b.base
+	}
+	return context.Background()
 }
 
 func (b *BacklogJob) planPath() string { return filepath.Join(b.dataDir, backlogPlanFile) }
@@ -230,9 +255,9 @@ func (b *BacklogJob) start(dry, onlyFailed bool) (int, error) {
 		var err error
 		switch {
 		case dry && onlyFailed:
-			err = b.runRetry(context.Background(), failed)
+			err = b.runRetry(b.jobContext(), failed)
 		case dry:
-			err = b.runDry(context.Background())
+			err = b.runDry(b.jobContext())
 		default:
 			err = b.runApply(plan)
 		}

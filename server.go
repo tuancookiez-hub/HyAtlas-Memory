@@ -139,18 +139,55 @@ const shutdownExtractWait = 10 * time.Second
 // after the HTTP server has drained, so a write whose extraction was still running
 // is not cut off mid-way.
 func (s *Server) waitExtractions(timeout time.Duration) int {
+	if waitTimed(&s.bg, timeout) {
+		return 0
+	}
+	return int(s.bgRunning.Load())
+}
+
+// waitTimed waits for wg and reports whether it finished within timeout. On a timeout
+// the waiting goroutine is left to end whenever the work does. It is the one wait every
+// background writer uses at shutdown: extractions, the catch-up loop, consolidation,
+// episodes, the Now pages and the backlog job.
+func waitTimed(wg *sync.WaitGroup, timeout time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
-		s.bg.Wait()
+		wg.Wait()
 		close(done)
 	}()
 	t := time.NewTimer(timeout)
 	defer t.Stop()
 	select {
 	case <-done:
-		return 0
+		return true
 	case <-t.C:
-		return int(s.bgRunning.Load())
+		return false
+	}
+}
+
+// waitBackground waits, up to timeout for each, for every background writer to stop:
+// first the extractions and catch-up passes, then the consolidation, episode and
+// backlog work they may have fed, and last the Now pages, which extraction asks to
+// refresh. The caller has already cancelled their context and drained the HTTP
+// server, so nothing starts new work. Whatever is still running after its wait is
+// named in the log, because the store is closed right after.
+func (s *Server) waitBackground(timeout time.Duration) {
+	if left := s.waitExtractions(timeout); left > 0 {
+		log.Printf("shutdown: %d extraction(s) still running after %s; the catch-up pass finishes them on the next start", left, timeout)
+	}
+	writers := []struct {
+		name string
+		wait func(time.Duration) bool
+	}{
+		{"consolidation", s.cons.Wait},
+		{"episodes", s.episodes.Wait},
+		{"backlog", s.backlog.Wait},
+		{"now pages", s.now.Shutdown},
+	}
+	for _, w := range writers {
+		if !w.wait(timeout) {
+			log.Printf("shutdown: %s still running after %s", w.name, timeout)
+		}
 	}
 }
 
@@ -459,6 +496,13 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	meta["layer"] = string(memory.L2Raw)
 	meta["ts"] = time.Now().UTC().Format(time.RFC3339)
+	// A row written by a mode that extracts is meant to be extracted, whatever the
+	// outcome of this write's own attempt; the catch-up loop only takes such rows.
+	if s.mode.UsesLLM() {
+		meta[metaExtractWanted] = "true"
+	} else {
+		delete(meta, metaExtractWanted)
+	}
 
 	err := s.store.Add(memory.L2Raw, id, text, meta)
 	resp := map[string]any{"success": err == nil, "memory_id": id}
@@ -529,6 +573,15 @@ func (s *Server) extract(text, userID, agentID, id string) error {
 	if err != nil {
 		s.setExtractErr(err.Error())
 		return err
+	}
+	// The model call can take minutes; forget may have retired the raw row meanwhile.
+	// Its facts must not come back from a row the user removed.
+	if id != "" {
+		if cur := s.store.GetMany([]string{id}); len(cur) == 0 || isSuperseded(cur[0]) {
+			log.Printf("extract: raw memory %s was forgotten during extraction; nothing promoted", id)
+			_ = s.store.SetExtracted(id, true)
+			return nil
+		}
 	}
 	factIDs := promoteExtractionCtx(s.store, ex, ec, userID, agentID, id, s.dedupeScore)
 	// Task experiences: reusable "what solved it, where" lessons, stored as L3 facts
@@ -1531,7 +1584,7 @@ func (s *Server) attachSlowPath(ctx context.Context, rt runtimeCfg) bool {
 	}
 	s.cons = NewConsolidator(s.store, s.llm, rt.Consolidate, rt.Retention, rt.Batch)
 	s.cons.graph = rt.Graph
-	go s.cons.Run(ctx)
+	s.cons.Start(ctx)
 	return true
 }
 
@@ -1613,6 +1666,13 @@ func main() {
 	embedModel := rt.EmbedModel
 
 	ctx := context.Background()
+	// Ctrl-C or a service stop ends the server cleanly, writing what is still
+	// buffered (the doc index and usage counts). A hard kill skips this, which is
+	// why the Windows launcher calls /api/v1/flush before it stops the process.
+	// Every background writer runs on this context, so it stops with the signal and
+	// is waited for before the store closes (see waitBackground).
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 	var embedder Embedder
 	switch {
 	case strings.EqualFold(embedBase, "bge"):
@@ -1660,6 +1720,9 @@ func main() {
 		log.Fatal("store: ", err)
 	}
 	store.l5Dedupe = rt.DedupeScore
+	// Lite mode keeps raw rows in the keyword index, because raw rows are all it stores;
+	// a mode that extracts searches the facts and leaves them out.
+	store.SetKeywordRaw(!rt.Mode.UsesLLM())
 	// Graph edges written before 4.5.0 have no L5 search documents. Index any that
 	// are missing, in the background so the server answers at once.
 	go func() {
@@ -1697,7 +1760,7 @@ func main() {
 	// groups one person's IDs as one owner through them, so they must be set before
 	// its loop starts.
 	store.SetAliases(aliasMap(rt.UserAliases))
-	srv.attachSlowPath(ctx, rt)
+	srv.attachSlowPath(sigCtx, rt)
 
 	if w := startupWarning(rt, llm); w != "" {
 		log.Print(w)
@@ -1719,9 +1782,7 @@ func main() {
 	// Facts stored before clause indexing get their clauses in the background.
 	go store.backfillClauses()
 	srv.episodes = NewEpisodes(dir, store, nowLLM, resolveEpisodeGap())
-	if srv.episodes != nil {
-		go srv.episodes.Run(ctx)
-	}
+	srv.episodes.Start(sigCtx)
 	if !envOff("HYATLAS_USAGE_LEARNING") {
 		srv.usage = NewUsageStats(dir)
 	}
@@ -1732,6 +1793,7 @@ func main() {
 		backlogCons = NewConsolidator(store, llm, rt.Consolidate, rt.Retention, rt.Batch)
 	}
 	srv.backlog = NewBacklogJob(dir, store, backlogCons, nowLLM, func() bool { return srv.admin })
+	srv.backlog.SetContext(sigCtx)
 	snap := resolveSnapshot(dir)
 	log.Print(snapshotLine(snap))
 	go runSnapshots(ctx, store, dir, snap)
@@ -1741,14 +1803,9 @@ func main() {
 	// Started last, once every part extraction touches (Now pages, episodes) is wired.
 	// pro and ultra extract, so a write that missed its extraction (no key yet, or a
 	// failed call) is retried in the background. Lite makes no LLM call at all.
-	// Ctrl-C or a service stop ends the server cleanly, writing what is still
-	// buffered (the doc index and usage counts). A hard kill skips this, which is
-	// why the Windows launcher calls /api/v1/flush before it stops the process.
-	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stopSignals()
 	if rt.Mode.UsesLLM() {
 		srv.catchup = NewCatchup(srv, envDuration(catchupEveryKey, catchupEveryDefault))
-		go srv.catchup.Run(sigCtx)
+		srv.catchup.Start(sigCtx)
 	}
 	hs := &http.Server{Addr: net.JoinHostPort(rt.Host, port), Handler: srv.routes(), ReadHeaderTimeout: readHeaderTimeout}
 	drained := make(chan struct{})
@@ -1765,14 +1822,11 @@ func main() {
 	// ListenAndServe returns as soon as Shutdown starts; wait for in-flight requests
 	// to finish before the final flush, so a write still running is not lost.
 	<-drained
-	// Background extractions started by writes just served are given a moment to
-	// finish, so their facts are stored before the final flush. The catch-up loop
-	// stopped with the signal and picks up whatever is left on the next start.
-	if left := srv.waitExtractions(shutdownExtractWait); left > 0 {
-		log.Printf("shutdown: %d extraction(s) still running after %s; the catch-up pass finishes them on the next start", left, shutdownExtractWait)
-	}
-	// The catch-up loop stopped with the signal; let a pass already running finish.
-	srv.catchup.Wait(shutdownExtractWait)
+	// Every background writer was told to stop with the signal; give each a moment to
+	// finish, so nothing writes after the final flush. Extractions started by writes
+	// just served and a catch-up pass in progress are waited for too; whatever is left
+	// is picked up by the catch-up pass on the next start.
+	srv.waitBackground(shutdownExtractWait)
 	srv.flush()
 	store.Close()
 	log.Print("stopped")

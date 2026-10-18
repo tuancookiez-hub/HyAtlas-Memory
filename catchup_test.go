@@ -45,11 +45,13 @@ func newCatchupServer(t *testing.T) (*Server, *catchupLLM) {
 	return srv, stub
 }
 
-// catchupRaw stores an unextracted raw row written age ago.
+// catchupRaw stores an unextracted raw row written age ago, marked as meant to be
+// extracted like a row written in pro or ultra mode.
 func catchupRaw(t *testing.T, s *MemoryStore, id, text string, age time.Duration) {
 	t.Helper()
 	if err := s.Add(memory.L2Raw, id, text, map[string]string{
 		"user_id": "u", "agent_id": "a", "ts": time.Now().Add(-age).UTC().Format(time.RFC3339),
+		metaExtractWanted: "true",
 	}); err != nil {
 		t.Fatal(err)
 	}

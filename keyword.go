@@ -207,7 +207,8 @@ type kwDoc struct {
 
 // kwIndex is an inverted keyword index: for every term, the documents that contain it,
 // and for every document its term counts and length. The store keeps one over its live
-// rows, raw ones included, updated as rows are written, replaced and deleted, so a search reads
+// rows, raw ones only when it is told to (see SetKeywordRaw), updated as rows are
+// written, replaced and deleted, so a search reads
 // the posting lists of its query terms instead of tokenising and stemming every row.
 // It is not safe for concurrent use; the store guards it with its own lock.
 type kwIndex struct {
@@ -435,6 +436,9 @@ func (s *MemoryStore) keywordSearch(query string, qv []float32, limit int, layer
 	var ranked []keywordScore
 	s.mu.RLock()
 	var ids []string
+	// Raw rows the store keeps out of its keyword index (keywordRaw false) are ranked
+	// on the fly below, as before the index existed.
+	var rawDocs []DocIndex
 	for _, d := range s.index {
 		if isSuperseded(d) {
 			continue
@@ -455,9 +459,24 @@ func (s *MemoryStore) keywordSearch(query string, qv []float32, limit int, layer
 		if agentID != "" && d.AgentID != agentID && !(len(owners) > 0 && ownerless) {
 			continue
 		}
+		if d.Layer == string(memory.L2Raw) && !s.keywordRaw {
+			rawDocs = append(rawDocs, d)
+			continue
+		}
 		ids = append(ids, d.ID)
 	}
 	matches := s.kw.rank(q, ids)
+	if len(rawDocs) > 0 {
+		for _, r := range bm25Rank(q, rawDocs) {
+			matches = append(matches, kwMatch{ID: r.Doc.ID, Score: r.Score, Matched: r.Matched})
+		}
+		sort.Slice(matches, func(i, j int) bool {
+			if matches[i].Score != matches[j].Score {
+				return matches[i].Score > matches[j].Score
+			}
+			return matches[i].ID < matches[j].ID
+		})
+	}
 	if len(matches) > limit {
 		matches = matches[:limit]
 	}

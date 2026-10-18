@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -549,11 +550,17 @@ func decodeLenient(content string, v any) error {
 	return fmt.Errorf("%w (raw %.80s)", err, content)
 }
 
-// parseExtraction tolerantly extracts the JSON object from the LLM reply.
+// errParse marks an extraction whose chat call succeeded but whose reply held no
+// usable JSON. Callers test for it with errors.Is to tell a row the model cannot
+// handle (try the next row) from an endpoint that is down (stop).
+var errParse = errors.New("extraction parse")
+
+// parseExtraction tolerantly extracts the JSON object from the LLM reply. A reply
+// that cannot be decoded returns an error that wraps errParse.
 func parseExtraction(content string) (*Extraction, error) {
 	var ex Extraction
 	if err := decodeLenient(content, &ex); err != nil {
-		return nil, fmt.Errorf("extraction parse: %w", err)
+		return nil, fmt.Errorf("%w: %v", errParse, err)
 	}
 	// normalize fields
 	if ex.Facts == nil {

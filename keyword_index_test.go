@@ -169,7 +169,9 @@ func TestKeywordIndexMatchesLegacyScoring(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// A raw row is in the keyword index too (lite mode searches it); the comparison below leaves it out of the ids it ranks.
+	// A lite-mode store keeps raw rows in the keyword index (SetKeywordRaw) and searches
+	// them; the comparison below leaves the row out of the ids it ranks.
+	s.SetKeywordRaw(true)
 	if err := s.Add(memory.L2Raw, "raw1", "HYATLAS_SYNC_EXTRACT raw transcript sync review", map[string]string{"user_id": "alice", "agent_id": "a1"}); err != nil {
 		t.Fatal(err)
 	}

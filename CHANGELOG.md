@@ -46,8 +46,16 @@ and stricter key handling.
   key, or whose extraction failed (outage, rate limit), stayed raw-only until someone
   called `/api/v1/reprocess`. A catch-up pass now extracts them: when a key arrives and
   every `HYATLAS_CATCHUP_EVERY` (default 10m; `off` disables), up to 20 rows a run,
-  oldest first, stopping at the first error. A raw row that already has facts is marked
-  extracted instead of being sent again. `/api/v1/status` reports `unextracted`.
+  oldest first, stopping at the first model error. A reply that cannot be parsed counts a
+  try on that row and the run goes on; after 3 tries the row is left alone (`/api/v1/reprocess`
+  can still extract it). Only rows written in `pro` or `ultra` (marked `extract_wanted`) and
+  younger than `HYATLAS_CATCHUP_MAX_AGE` (default 168h, 7 days; `off` for no limit) are caught up, so
+  switching from `lite` does not re-extract old history. A raw row that already has facts is
+  marked extracted instead of being sent again. `/api/v1/status` reports `unextracted`.
+- **Forgetting beats a slow extraction, and shutdown waits for every writer.** An
+  extraction whose raw row was forgotten while the model answered stores nothing. A clean
+  stop cancels and waits for consolidation, episodes, Now pages and the backlog job, as it
+  did for extractions, before the final flush.
 - **A numeric confidence no longer loses the whole turn.** An experience with
   `"confidence": 0.9` failed the decode of the entire extraction. Experiences now decode
   tolerantly.

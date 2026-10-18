@@ -53,6 +53,13 @@ type NowPages struct {
 	pending map[string]bool
 	// timers holds the one trailing refresh timer per owner, if any.
 	timers map[string]*time.Timer
+	// wg tracks the refresh goroutines, so a shutdown can wait for them. stopped is set
+	// by Shutdown under mu, after which no refresh starts; base is the context every
+	// refresh runs on, cancelled by Shutdown.
+	wg      sync.WaitGroup
+	stopped bool
+	base    context.Context
+	cancel  context.CancelFunc
 }
 
 // nowPagesFile is the name of the persisted page map inside the data directory.
@@ -63,7 +70,10 @@ const nowPagesFile = "now.json"
 // cannot be read or parsed is logged and treated as empty, so a damaged page never
 // stops the server from starting; the next refresh writes a fresh one.
 func NewNowPages(dataDir string, store *MemoryStore, llm *LLMClient, every time.Duration) *NowPages {
+	base, cancel := context.WithCancel(context.Background())
 	n := &NowPages{
+		base:     base,
+		cancel:   cancel,
 		pages:    map[string]NowPage{},
 		path:     filepath.Join(dataDir, nowPagesFile),
 		store:    store,
@@ -139,9 +149,36 @@ func (n *NowPages) Touch(user, agent string) {
 // startLocked starts one refresh of the owner in a goroutine. It clears the pending
 // mark, because the refresh reads the store from now on. The caller must hold n.mu.
 func (n *NowPages) startLocked(key, user, agent string) {
+	if n.stopped {
+		return
+	}
 	n.inflight[key] = true
 	delete(n.pending, key)
-	go n.run(key, user, agent)
+	n.wg.Add(1)
+	go func() {
+		defer n.wg.Done()
+		n.run(key, user, agent)
+	}()
+}
+
+// Shutdown stops the page refreshes: no new one starts, trailing timers are dropped and
+// the running ones are cancelled. It then waits up to timeout for them to return and
+// reports whether they did. A nil NowPages returns true.
+func (n *NowPages) Shutdown(timeout time.Duration) bool {
+	if n == nil {
+		return true
+	}
+	n.mu.Lock()
+	n.stopped = true
+	for key, t := range n.timers {
+		t.Stop()
+		delete(n.timers, key)
+	}
+	n.mu.Unlock()
+	if n.cancel != nil {
+		n.cancel()
+	}
+	return waitTimed(&n.wg, timeout)
 }
 
 // armLocked schedules the owner's trailing refresh for at. It does nothing when a
@@ -174,7 +211,11 @@ func (n *NowPages) fire(key, user, agent string) {
 // that arrived while it ran leaves the owner pending, so a trailing refresh is armed
 // for one window after this one.
 func (n *NowPages) run(key, user, agent string) {
-	ctx, cancel := context.WithTimeout(context.Background(), nowRefreshLimit)
+	base := n.base
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(base, nowRefreshLimit)
 	defer cancel()
 	err := n.refresh(ctx, user, agent)
 	if err != nil {
