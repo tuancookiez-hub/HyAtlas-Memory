@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# HyAtlas-Memory v4 — one-line installer for Linux / macOS / Windows (Git Bash / MSYS).
+# HyAtlas-Memory — one-line installer for Linux / macOS / Windows (Git Bash / MSYS).
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/scripts/install.sh | bash
@@ -26,7 +26,7 @@
 #      environment are saved to $HERMES_HOME/.env (default ~/.hermes/.env, 0600).
 #
 # Environment variables (all optional):
-#   HYATLAS_VERSION   — release tag to install (default: v4.9.0). A source build
+#   HYATLAS_VERSION   — release tag to install (default: v5.0.0). A source build
 #                       clones this tag. If the tag is missing, the default branch
 #                       is built with a loud warning, unless HYATLAS_VERSION is set
 #                       explicitly; then the install fails instead.
@@ -54,7 +54,7 @@
 set -euo pipefail
 
 REPO="tuancookiez-hub/HyAtlas-Memory"
-VERSION="${HYATLAS_VERSION:-v4.9.0}"
+VERSION="${HYATLAS_VERSION:-v5.0.0}"
 INSTALL_DIR="${HYATLAS_INSTALL_DIR:-}"
 MODEL_DIR="${HYATLAS_MODEL_DIR:-}"
 NO_MODEL="${HYATLAS_NO_MODEL:-0}"
@@ -595,7 +595,7 @@ verify_install() {
 print_next_steps() {
     cat <<EOF
 
-$(printf '\033[0;32m' )HyAtlas-Memory v4: next steps$(printf '\033[0m')
+$(printf '\033[0;32m' )HyAtlas-Memory: next steps$(printf '\033[0m')
 
   Binary:  $INSTALL_DIR/$BINARY_NAME
   Model:   $MODEL_DIR
@@ -638,6 +638,8 @@ $(printf '\033[0;32m' )HyAtlas-Memory v4: next steps$(printf '\033[0m')
 
   Or just run \`hermes memory setup\` and pick hyatlas; \`hermes plugins install\`
   plus that command is the whole path.
+
+  Then check everything works: \`hermes hyatlas doctor\`.
 
   Docs: https://github.com/$REPO#readme
 EOF
@@ -878,7 +880,7 @@ final_summary() {
         return "$MODEL_STATUS"
     fi
     case "$VERIFY_STATUS" in
-        ok)      ok "HyAtlas-Memory v4 installed and verified." ;;
+        ok)      ok "HyAtlas-Memory installed and verified." ;;
         binary)  warn "Installed; the binary is verified. Embeddings need the model: follow the steps above." ;;
         skipped) warn "Installed. Verification skipped (HYATLAS_NO_MODEL=1): skipped, not verified." ;;
         failed)  warn "Installed, but NOT verified: the server did not start. Fix the error above, then re-run this installer."
@@ -889,7 +891,7 @@ final_summary() {
 }
 
 main() {
-    info "HyAtlas-Memory v4 installer"
+    info "HyAtlas-Memory installer"
     detect_platform
     set_default_install_dir
     set_model_dir

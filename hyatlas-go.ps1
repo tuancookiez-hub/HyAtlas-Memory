@@ -11,7 +11,7 @@ $log    = Join-Path $data "hyatlas-v4.log"
 function Start-V4 {
     try {
         $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/healthz" -TimeoutSec 2 -UseBasicParsing
-        if ($r.StatusCode -eq 200) { Write-Host "HyAtlas v4 already running on $port."; return }
+        if ($r.StatusCode -eq 200) { Write-Host "HyAtlas already running on $port."; return }
     } catch { }
 
     if (-not (Test-Path $goExe)) {
@@ -56,10 +56,10 @@ function Start-V4 {
         Start-Sleep -Milliseconds 500
         try {
             $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/healthz" -TimeoutSec 1 -UseBasicParsing
-            if ($r.StatusCode -eq 200) { Write-Host "HyAtlas v4 started on $port."; return }
+            if ($r.StatusCode -eq 200) { Write-Host "HyAtlas started on $port."; return }
         } catch { }
     }
-    Write-Error "HyAtlas v4 did not respond on $port after 10s. Check $log"
+    Write-Error "HyAtlas did not respond on $port after 10s. Check $log"
     exit 1
 }
 
@@ -70,15 +70,15 @@ function Stop-V4 {
         Write-Host "Stopped hyatlas-go.exe (pid $($_.Id))"
         Stop-Process -Id $_.Id -Force
     }
-    Write-Host "HyAtlas v4 stopped."
+    Write-Host "HyAtlas stopped."
 }
 
 function Status-V4 {
-    Write-Host "v4: 127.0.0.1:$port" -ForegroundColor Cyan
+    Write-Host "HyAtlas: 127.0.0.1:$port" -ForegroundColor Cyan
     try {
         $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/healthz" -TimeoutSec 4 -UseBasicParsing
         Write-Host $r.Content -ForegroundColor Green
-    } catch { Write-Host "[v4 offline]" -ForegroundColor Red }
+    } catch { Write-Host "[HyAtlas offline]" -ForegroundColor Red }
     Write-Host ""
     try {
         $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/v1/status" -TimeoutSec 4 -UseBasicParsing
