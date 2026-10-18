@@ -25,8 +25,17 @@ const episodesFile = "episodes.json"
 const defaultEpisodeGap = 30 * time.Minute
 
 // episodeMaxTries is how many failed summary attempts an episode gets before it is
-// dropped, so one broken model does not keep an episode pending forever.
-const episodeMaxTries = 3
+// dropped. With the backoff from episodeRetryDelay, six tries span about two and a
+// half hours, which covers a typical model outage or rate-limit window.
+const episodeMaxTries = 6
+
+// episodeRetryBase is the wait after the first failed summary attempt. Each later
+// failure doubles it, so the waits run 5, 10, 20, 40 and 80 minutes.
+const episodeRetryBase = 5 * time.Minute
+
+// episodeRetryMax caps the wait between summary attempts, so a long outage is
+// retried at least every two hours until the episode is dropped.
+const episodeRetryMax = 2 * time.Hour
 
 // episodeMaxFacts is how many of the newest facts are sent to the model for one
 // episode. A very long episode is summarised from its recent end.
@@ -49,7 +58,28 @@ type episode struct {
 	Start   string   `json:"start"` // RFC3339 UTC, first write
 	Last    string   `json:"last"`  // RFC3339 UTC, latest write
 	FactIDs []string `json:"fact_ids"`
-	Tries   int      `json:"tries,omitempty"` // failed summary attempts
+	Tries   int      `json:"tries,omitempty"`    // failed summary attempts
+	NextTry string   `json:"next_try,omitempty"` // RFC3339 UTC, earliest retry; empty means due now
+}
+
+// episodeRetryDelay returns how long to wait after the n-th failed summary attempt.
+// It is episodeRetryBase doubled for each failure after the first, capped at
+// episodeRetryMax. A tries value below 1 is treated as 1.
+func episodeRetryDelay(tries int) time.Duration {
+	if tries < 1 {
+		tries = 1
+	}
+	d := episodeRetryBase
+	for i := 1; i < tries; i++ {
+		if d >= episodeRetryMax {
+			return episodeRetryMax
+		}
+		d *= 2
+	}
+	if d > episodeRetryMax {
+		d = episodeRetryMax
+	}
+	return d
 }
 
 // key is the owner key that keys an open episode: the user and agent joined by a bar.
@@ -208,9 +238,11 @@ func (e *Episodes) Run(ctx context.Context) {
 }
 
 // tick does one pass. It first moves every open episode whose last write is older
-// than the gap to pending. Then it summarises each pending episode in turn. The
-// lock is not held during a model call, so Note keeps working while a summary is
-// in flight. Anything that changed is persisted at the end.
+// than the gap to pending. Then it summarises each pending episode that is due, that
+// is, has no NextTry or whose NextTry is not after now. Episodes still in their
+// retry wait are left alone and make no model call. The lock is not held during a
+// model call, so Note keeps working while a summary is in flight. Anything that
+// changed is persisted at the end.
 func (e *Episodes) tick(ctx context.Context, now time.Time) {
 	if e == nil {
 		return
@@ -225,14 +257,19 @@ func (e *Episodes) tick(ctx context.Context, now time.Time) {
 			log.Printf("episodes: closed %s (%d facts)", key, len(ep.FactIDs))
 		}
 	}
-	batch := append([]*episode(nil), e.pending...)
+	var batch []*episode
+	for _, ep := range e.pending {
+		if ep.NextTry == "" || !episodeTime(ep.NextTry).After(now) {
+			batch = append(batch, ep)
+		}
+	}
 	e.mu.Unlock()
 
 	for _, ep := range batch {
 		if ctx.Err() != nil {
 			break
 		}
-		e.process(ctx, ep)
+		e.process(ctx, ep, now)
 		changed = true
 	}
 
@@ -243,10 +280,12 @@ func (e *Episodes) tick(ctx context.Context, now time.Time) {
 	}
 }
 
-// process summarises one pending episode. It skips the model when fewer than two
-// facts are still live, because a summary of one fact only restates it. A failed
-// attempt counts as a try, and the episode is dropped after episodeMaxTries.
-func (e *Episodes) process(ctx context.Context, ep *episode) {
+// process summarises one pending episode, with now as the clock for the retry wait.
+// It skips the model when fewer than two facts are still live, because a summary of
+// one fact only restates it. A failed attempt counts as a try and sets NextTry to
+// the end of the backoff from episodeRetryDelay. The episode is dropped once it
+// reaches episodeMaxTries.
+func (e *Episodes) process(ctx context.Context, ep *episode, now time.Time) {
 	key := ep.key()
 	facts := e.liveFacts(ep)
 	if len(facts) < 2 {
@@ -266,13 +305,19 @@ func (e *Episodes) process(ctx context.Context, ep *episode) {
 		e.mu.Lock()
 		ep.Tries++
 		tries := ep.Tries
+		next := ""
 		if tries >= episodeMaxTries {
 			e.removePendingLocked(ep)
+		} else {
+			ep.NextTry = now.Add(episodeRetryDelay(tries)).UTC().Format(time.RFC3339)
+			next = ep.NextTry
 		}
 		e.mu.Unlock()
 		log.Printf("episodes: summary of %s failed (try %d): %v", key, tries, err)
 		if tries >= episodeMaxTries {
 			log.Printf("episodes: dropped %s after %d tries", key, tries)
+		} else {
+			log.Printf("episodes: next try for %s at %s", key, next)
 		}
 		return
 	}
