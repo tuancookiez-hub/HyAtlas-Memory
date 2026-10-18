@@ -403,7 +403,7 @@ Notes:
 | `HYATLAS_SNAPSHOT_EVERY` | `24h` | How often the server zips its data directory (first one a minute after start). `0` or `off` turns snapshots off |
 | `HYATLAS_SNAPSHOT_KEEP` | `7` | How many snapshots to keep; older ones are deleted |
 | `HYATLAS_SNAPSHOT_DIR` | `<data>-snapshots` | Where snapshots go: a folder next to the data directory by default; do not point it inside the data directory |
-| `HYATLAS_RECONCILE` | `off` | `on`: after extraction, one more LLM call compares the new facts with similar stored ones (cosine 0.70 or more) and updates or replaces them. Doubles the LLM calls per write: meant for a local model, not a hosted free tier |
+| `HYATLAS_RECONCILE` | `off` | `on`: after extraction, one more LLM call compares the new facts with similar stored ones (cosine 0.70 or more) and merges repeats (UPDATE, which keeps a recurring event as a series), retires facts that are no longer true (SUPERSEDE), or links related facts without retiring them (LINK). Doubles the LLM calls per write: meant for a local model, not a hosted free tier |
 | `HYATLAS_EPISODE_GAP` | `30m` | pro and ultra: a gap between an owner's writes longer than this ends an episode of work, which then gets one L4 summary. `0` or `off` writes no episode summaries |
 | `HYATLAS_NOW_EVERY` | `15m` | How often an owner's Now page may be rebuilt after writes (pro and ultra only). `0` or `off` rebuilds after every write |
 | `HYATLAS_USAGE_LEARNING` | on | `off` stops search learning from which recalled memories replies actually used |
