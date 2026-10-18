@@ -35,8 +35,8 @@ from typing import Any, Dict, List, Optional
 
 from agent.memory_provider import MemoryProvider
 
-from .client import HyatlasClient, HyatlasClientError, HyatlasUnreachable
-from .formatting import format_hit_line, iso_date  # noqa: E402
+from .client import PLUGIN_VERSION, HyatlasClient, HyatlasClientError, HyatlasUnreachable
+from .formatting import format_hit_line  # noqa: E402
 from .keyshare import KeySharer  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -97,11 +97,6 @@ def _is_compaction(text: str) -> bool:
     return "CONTEXT COMPACTION" in head or "Conversation Summary" in head
 
 
-def _iso_date(unix_seconds: Any) -> str:
-    """YYYY-MM-DD (UTC) for a search hit's gmt_created, or "" when it has none."""
-    return iso_date(unix_seconds)
-
-
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -157,7 +152,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         # The query each recall was made with, keyed like _recalled: feedback leaves
         # its words out, because a reply naturally repeats the question.
         self._recalled_query: Dict[str, str] = {}
-        self._version = "4.9.0"
+        self._version = PLUGIN_VERSION
         # Message count already synced per session, so _build_turn_text sends
         # only what the server has not seen. Bounded: a long-lived gateway
         # touches far more sessions than it can hold, and the cost of evicting
@@ -251,8 +246,7 @@ class HyatlasMemoryProvider(MemoryProvider):
 
         # Hand Hermes's key to the server when enabled, so the server never has to
         # read Hermes's credential file (see keyshare.py).
-        if settings.truthy(self._config.get("share_llm_key")):
-            _start_key_sharer(f"http://{self._origin()}", float(self._config.get("request_timeout", 15.0)))
+        self._maybe_start_key_sharer()
 
         # Auto-start the server if configured
         if settings.truthy(self._config.get("auto_start")) and not self._client.is_reachable():
@@ -564,6 +558,15 @@ class HyatlasMemoryProvider(MemoryProvider):
             )
         return self._client
 
+    def _maybe_start_key_sharer(self) -> None:
+        """Start the Nous key-sharing loop when share_llm_key is enabled.
+
+        Called from both initialize() and register(), so the gate and the
+        origin and timeout arguments are written once.
+        """
+        if settings.truthy(self._config.get("share_llm_key")):
+            _start_key_sharer(f"http://{self._origin()}", float(self._config.get("request_timeout", 15.0)))
+
     def _resolve_user_id(self, kwargs: Dict[str, Any]) -> str:
         return (
             os.environ.get("HYATLAS_USER_ID", "").strip()
@@ -862,11 +865,7 @@ def register(ctx: Any) -> None:
     # conversation: consolidation and episode summaries run in the background and
     # need it before anyone chats. Registration must never fail because of this.
     try:
-        if settings.truthy(provider._config.get("share_llm_key")):
-            _start_key_sharer(
-                f"http://{provider._origin()}",
-                float(provider._config.get("request_timeout", 15.0)),
-            )
+        provider._maybe_start_key_sharer()
     except Exception as e:
         logger.debug("hyatlas key sharing at load not started: %s", e)
     # Also register a slash command for diagnostics

@@ -197,16 +197,32 @@ def config_schema() -> Tuple[Dict[str, Any], ...]:
         out.append(item)
     return tuple(out)
 
+def truthy(v: Any) -> bool:
+    """Interpret a config value as a boolean.
+
+    A bool field must not declare `choices`: the desktop bridge classifies any
+    field with choices as a `select`, which coerces its value to a string, and
+    then ``"false"`` is truthy in Python — so picking "false" in the settings
+    panel turned auto-start ON. Coercing here also covers a hyatlas.json written
+    before that was fixed.
+    """
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
 # env var -> (settings key, cast)
 ENV: Tuple[Tuple[str, str, Any], ...] = (
     ("HYATLAS_SERVER_HOST", "server_host", str),
     ("HYATLAS_SERVER_PORT", "server_port", int),
     ("HYATLAS_USER_ID", "user_id", str),
     ("HYATLAS_AGENT_ID", "agent_id", str),
-    ("HYATLAS_AUTO_START", "auto_start", lambda v: v.lower() in ("1", "true", "yes")),
+    ("HYATLAS_AUTO_START", "auto_start", truthy),
     ("HYATLAS_BINARY_PATH", "binary_path", str),
     ("HYATLAS_LAUNCHER_PATH", "launcher_path", str),
-    ("HYATLAS_SHARE_LLM_KEY", "share_llm_key", lambda v: v.lower() in ("1", "true", "yes")),
+    ("HYATLAS_SHARE_LLM_KEY", "share_llm_key", truthy),
     ("HYATLAS_REQUEST_TIMEOUT", "request_timeout", float),
     ("HYATLAS_GO_DATA", "data_dir", str),
     ("HYATLAS_MODE", "mode", lambda v: v.lower()),
@@ -352,22 +368,6 @@ def mode(cfg: Dict[str, Any] | None = None) -> str:
             f"(or leave it empty for the server default)"
         )
     return v
-
-
-def truthy(v: Any) -> bool:
-    """Interpret a config value as a boolean.
-
-    A bool field must not declare `choices`: the desktop bridge classifies any
-    field with choices as a `select`, which coerces its value to a string, and
-    then ``"false"`` is truthy in Python — so picking "false" in the settings
-    panel turned auto-start ON. Coercing here also covers a hyatlas.json written
-    before that was fixed.
-    """
-    if isinstance(v, bool):
-        return v
-    if v is None:
-        return False
-    return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
 def sync(cfg: Dict[str, Any] | None = None) -> str:

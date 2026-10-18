@@ -12,9 +12,32 @@ import logging
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _read_plugin_version() -> str:
+    """Return the version from the ``version:`` line of plugin.yaml beside this package.
+
+    The file is parsed as plain text so the client needs no YAML dependency. The
+    result is "unknown" when the file or the line is missing, so a damaged install
+    still imports.
+    """
+    try:
+        text = (Path(__file__).resolve().parent / "plugin.yaml").read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return "unknown"
+    for line in text.splitlines():
+        if line.startswith("version:"):
+            value = line.split(":", 1)[1].strip().strip("\"'")
+            return value or "unknown"
+    return "unknown"
+
+
+# The plugin version, read once at import so the provider and the User-Agent agree.
+PLUGIN_VERSION = _read_plugin_version()
 
 
 class HyatlasClientError(Exception):
@@ -32,7 +55,9 @@ class HyatlasClient:
                  timeout: float = 15.0) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        self._opener = urllib.request.build_opener()
+        # An empty ProxyHandler stops urllib from sending loopback calls through
+        # HTTP_PROXY or HTTPS_PROXY, which Python does not exempt for 127.0.0.1.
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     # ------------------------------------------------------------------
     # Low-level HTTP
@@ -43,7 +68,7 @@ class HyatlasClient:
     ) -> Any:
         url = f"{self.base_url}{path}"
         data = None
-        headers = {"Accept": "application/json", "User-Agent": "hermes-hyatlas/4.0"}
+        headers = {"Accept": "application/json", "User-Agent": "hermes-hyatlas/" + PLUGIN_VERSION}
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
