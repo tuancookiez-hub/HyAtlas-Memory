@@ -28,16 +28,25 @@ func entityTokenSet(text string) map[string]bool {
 // A name with no searchable word matches nothing, so an empty or stopword-only name
 // never boosts a hit.
 func nameMatches(set map[string]bool, name string) bool {
-	found := false
+	var toks []string
 	for _, w := range nameTokens(name) {
-		for _, t := range keywordTokens(w) {
-			found = true
-			if !set[t] {
-				return false
-			}
+		toks = append(toks, keywordTokens(w)...)
+	}
+	return tokensMatch(set, toks)
+}
+
+// tokensMatch reports whether toks is not empty and every token is in the set. It is
+// nameMatches for a name whose tokens are already known.
+func tokensMatch(set map[string]bool, toks []string) bool {
+	if len(toks) == 0 {
+		return false
+	}
+	for _, t := range toks {
+		if !set[t] {
+			return false
 		}
 	}
-	return found
+	return true
 }
 
 // queryEntities returns the names, aliases included, of the entity pages owned by
@@ -56,15 +65,12 @@ func (s *MemoryStore) queryEntities(query string, users []string, agentID string
 	seen := map[string]bool{}
 	var out []string
 	for _, u := range users {
-		for _, pg := range s.pages.List(u, agentID) {
-			for _, name := range append([]string{pg.Name}, pg.Aliases...) {
-				key := normalizeName(name)
-				if key == "" || seen[key] || !nameMatches(qset, name) {
-					continue
-				}
-				seen[key] = true
-				out = append(out, name)
+		for _, en := range s.pages.entityNames(u, agentID) {
+			if en.Key == "" || seen[en.Key] || !tokensMatch(qset, en.Tokens) {
+				continue
 			}
+			seen[en.Key] = true
+			out = append(out, en.Name)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return len(out[i]) > len(out[j]) })
@@ -84,24 +90,13 @@ func rerankEntities(hits []SearchHit, names []string) []SearchHit {
 	if len(names) == 0 || len(hits) == 0 {
 		return hits
 	}
-	weights := make([]float64, len(hits))
-	order := make([]int, len(hits))
-	for i, h := range hits {
-		w := 1.0 / float64(rrfK+i+1)
+	return rerankByFactor(hits, func(_ int, h SearchHit) float64 {
 		set := entityTokenSet(h.Content)
 		for _, n := range names {
 			if nameMatches(set, n) {
-				w *= entityBoost
-				break
+				return entityBoost
 			}
 		}
-		weights[i] = w
-		order[i] = i
-	}
-	sort.SliceStable(order, func(a, b int) bool { return weights[order[a]] > weights[order[b]] })
-	out := make([]SearchHit, len(hits))
-	for k, i := range order {
-		out[k] = hits[i]
-	}
-	return out
+		return 1
+	})
 }

@@ -214,10 +214,8 @@ func rerankRecencyUsed(hits []SearchHit, now time.Time, lastUsed func(id string)
 	if len(hits) == 0 {
 		return hits
 	}
-	weights := make([]float64, len(hits))
-	order := make([]int, len(hits))
-	for i, h := range hits {
-		w := 1.0 / float64(rrfK+i+1)
+	return rerankByFactor(hits, func(_ int, h SearchHit) float64 {
+		f := 1.0
 		if half := recencyHalfLife(h); half > 0 {
 			if c := gmtCreated(h.Meta["ts"]); c > 0 {
 				ref := time.Unix(c, 0)
@@ -228,11 +226,23 @@ func rerankRecencyUsed(hits []SearchHit, now time.Time, lastUsed func(id string)
 				}
 				if ref.Before(now) {
 					age := now.Sub(ref).Hours() / half.Hours()
-					w *= recencyFloor + (1-recencyFloor)*math.Pow(0.5, age)
+					f = recencyFloor + (1-recencyFloor)*math.Pow(0.5, age)
 				}
 			}
 		}
-		weights[i] = w
+		return f
+	})
+}
+
+// rerankByFactor reorders hits by their position weight, 1/(rrfK+i+1), times
+// factor(i, h), best first, with a stable sort so equal weights keep their order. It
+// returns a new slice; the input and every Score are left as they were. A factor of 1
+// leaves a hit at its place in the weight order, so it is the "no change" value.
+func rerankByFactor(hits []SearchHit, factor func(i int, h SearchHit) float64) []SearchHit {
+	weights := make([]float64, len(hits))
+	order := make([]int, len(hits))
+	for i, h := range hits {
+		weights[i] = (1.0 / float64(rrfK+i+1)) * factor(i, h)
 		order[i] = i
 	}
 	sort.SliceStable(order, func(a, b int) bool {

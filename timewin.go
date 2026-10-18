@@ -268,26 +268,14 @@ func (w timeWindow) overlaps(from, to time.Time) bool {
 // weight 1/(rrfK+i+1), multiplied by windowMiss when it falls outside w. The sort
 // is stable, and the returned hits keep their Scores, so only the order changes.
 func rerankWindow(hits []SearchHit, w timeWindow) []SearchHit {
-	order := make([]int, len(hits))
-	weight := make([]float64, len(hits))
 	loc := w.From.Location()
-	for i, h := range hits {
-		order[i] = i
-		wt := 1 / float64(rrfK+i+1)
+	return rerankByFactor(hits, func(_ int, h SearchHit) float64 {
 		from, to, ok := hitTimeRange(h.Meta, loc)
 		if !ok || !w.overlaps(from, to) {
-			wt *= windowMiss
+			return windowMiss
 		}
-		weight[i] = wt
-	}
-	sort.SliceStable(order, func(a, b int) bool {
-		return weight[order[a]] > weight[order[b]]
+		return 1
 	})
-	out := make([]SearchHit, len(hits))
-	for i, j := range order {
-		out[i] = hits[j]
-	}
-	return out
 }
 
 // windowCandidates returns the live L3 facts whose time span overlaps w, scored

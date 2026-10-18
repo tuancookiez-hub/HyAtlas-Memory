@@ -299,20 +299,7 @@ func rerankUsage(hits []SearchHit, u *UsageStats) []SearchHit {
 	if u == nil || len(hits) == 0 {
 		return hits
 	}
-	type scored struct {
-		hit   SearchHit
-		score float64
-	}
-	items := make([]scored, len(hits))
-	for i, h := range hits {
-		items[i] = scored{hit: h, score: (1.0 / float64(rrfK+i+1)) * u.Factor(h.ID)}
-	}
-	sort.SliceStable(items, func(a, b int) bool { return items[a].score > items[b].score })
-	out := make([]SearchHit, len(items))
-	for i, it := range items {
-		out[i] = it.hit
-	}
-	return out
+	return rerankByFactor(hits, func(_ int, h SearchHit) float64 { return u.Factor(h.ID) })
 }
 
 // usedInReply reports whether reply evidently drew on memory text. Words of the

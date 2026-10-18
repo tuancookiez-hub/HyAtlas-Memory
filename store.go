@@ -287,17 +287,30 @@ func (s *MemoryStore) Search(query string, limit int, layer memory.Layer, userID
 // any owner, as the graph endpoints already do, so single-user data from older
 // releases stays reachable.
 func (s *MemoryStore) SearchOwners(query string, limit int, layer memory.Layer, userIDs []string, agentID string) ([]SearchHit, error) {
-	if len(userIDs) == 0 {
-		return s.Search(query, limit, layer, "", agentID)
-	}
-	if limit <= 0 {
-		limit = 5
-	}
 	// Embed once for every ID and layer; chromem's Query would embed the query
 	// again for each of them.
 	qv, err := s.embed.Embed(s.ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't create embedding of query: %w", err)
+	}
+	return s.SearchOwnersVec(qv, limit, layer, userIDs, agentID)
+}
+
+// SearchOwnersVec is SearchOwners with the query already embedded, so a caller that
+// shares one query vector across the vector, keyword, clause and time-window searches
+// embeds only once. It counts as one search.
+func (s *MemoryStore) SearchOwnersVec(qv []float32, limit int, layer memory.Layer, userIDs []string, agentID string) ([]SearchHit, error) {
+	if len(userIDs) == 0 {
+		hits, err := s.searchVec(qv, limit, layer, "", agentID)
+		if err != nil {
+			return nil, err
+		}
+		s.searches.Add(1)
+		s.persistUsageAsync()
+		return hits, nil
+	}
+	if limit <= 0 {
+		limit = 5
 	}
 	var merged []SearchHit
 	for _, id := range userIDs {

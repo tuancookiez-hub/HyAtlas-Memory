@@ -101,6 +101,79 @@ type PageStore struct {
 	applyMu sync.Mutex
 	mu      sync.RWMutex
 	pages   map[string]*Page
+
+	// nameCache holds each owner's entity names with their search tokens, built on
+	// first use (see entityNames). A change to any page of an owner, made under mu,
+	// drops that owner's entry. cacheMu guards the map; it is always taken after mu.
+	cacheMu   sync.Mutex
+	nameCache map[string][]entityName
+}
+
+// entityName is one name or alias of a page with its normalised key and the stemmed
+// search terms of its words, so a search matches it without tokenising it again.
+type entityName struct {
+	Name   string
+	Key    string
+	Tokens []string
+}
+
+// nameCacheKey is the cache key of an owner.
+func nameCacheKey(user, agent string) string { return user + "\x00" + agent }
+
+// invalidateNamesLocked drops the cached entity names of an owner. The caller holds
+// mu for writing, so no reader can store a stale list afterwards.
+func (p *PageStore) invalidateNamesLocked(user, agent string) {
+	p.cacheMu.Lock()
+	delete(p.nameCache, nameCacheKey(user, agent))
+	p.cacheMu.Unlock()
+}
+
+// entityNames returns the names and aliases of the owner's pages, with their tokens,
+// in the order List gives the pages (newest first, name before aliases). The list is
+// built on first use and kept until a page of the owner changes. The caller must not
+// modify it.
+func (p *PageStore) entityNames(user, agent string) []entityName {
+	key := nameCacheKey(user, agent)
+	p.cacheMu.Lock()
+	if names, ok := p.nameCache[key]; ok {
+		p.cacheMu.Unlock()
+		return names
+	}
+	p.cacheMu.Unlock()
+
+	// Built under the read lock, so an update (which holds mu for writing) cannot
+	// invalidate between the read of the pages and the store of the result.
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	var pgs []*Page
+	for _, pg := range p.pages {
+		if pg.UserID == user && pg.AgentID == agent {
+			pgs = append(pgs, pg)
+		}
+	}
+	sort.Slice(pgs, func(i, j int) bool {
+		if pgs[i].Updated != pgs[j].Updated {
+			return pgs[i].Updated > pgs[j].Updated
+		}
+		return pgs[i].ID < pgs[j].ID
+	})
+	names := []entityName{}
+	for _, pg := range pgs {
+		for _, name := range append([]string{pg.Name}, pg.Aliases...) {
+			en := entityName{Name: name, Key: normalizeName(name)}
+			for _, w := range nameTokens(name) {
+				en.Tokens = append(en.Tokens, keywordTokens(w)...)
+			}
+			names = append(names, en)
+		}
+	}
+	p.cacheMu.Lock()
+	if p.nameCache == nil {
+		p.nameCache = map[string][]entityName{}
+	}
+	p.nameCache[key] = names
+	p.cacheMu.Unlock()
+	return names
 }
 
 // NewPageStore opens <dataDir>/pages.json, loading it when present.
@@ -293,6 +366,7 @@ func (p *PageStore) applyOne(user, agent, sourceID string, up PageUpdate, shown 
 		return false, false, nil
 	}
 	pg.Updated = now
+	p.invalidateNamesLocked(user, agent)
 	snap := clonePage(*pg)
 	perr := p.persistLocked()
 	p.mu.Unlock()

@@ -296,6 +296,19 @@ func cosineSim(a, b []float32) float64 {
 // query, so it reads like a vector hit; it is 0 when that cannot be computed. It does
 // not count toward the search counter, because the caller's search already does.
 func (s *MemoryStore) KeywordSearch(query string, limit int, layer memory.Layer, userIDs []string, agentID string) ([]SearchHit, error) {
+	if len(keywordTokens(query)) == 0 {
+		return nil, nil
+	}
+	qv, err := s.embed.Embed(s.ctx, query)
+	if err != nil {
+		qv = nil
+	}
+	return s.KeywordSearchVec(query, qv, limit, layer, userIDs, agentID)
+}
+
+// KeywordSearchVec is KeywordSearch with the query already embedded, so a caller that
+// holds the query vector does not embed it again. A nil qv gives every hit a score of 0.
+func (s *MemoryStore) KeywordSearchVec(query string, qv []float32, limit int, layer memory.Layer, userIDs []string, agentID string) ([]SearchHit, error) {
 	if limit <= 0 {
 		limit = 5
 	}
@@ -340,11 +353,6 @@ func (s *MemoryStore) KeywordSearch(query string, limit int, layer memory.Layer,
 	ranked := bm25Rank(q, docs)
 	if len(ranked) > limit {
 		ranked = ranked[:limit]
-	}
-
-	qv, err := s.embed.Embed(s.ctx, query)
-	if err != nil {
-		qv = nil
 	}
 
 	hits := make([]SearchHit, 0, len(ranked))
