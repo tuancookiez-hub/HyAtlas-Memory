@@ -499,7 +499,7 @@ func (b *BacklogJob) askCluster(ctx context.Context, cluster []DocIndex) (cluste
 	var sb strings.Builder
 	sb.WriteString("Facts:\n")
 	for _, f := range cluster {
-		fmt.Fprintf(&sb, "- id=%s | date=%s | %s\n", f.ID, factDate(f.Ts), truncate(f.Content, 400))
+		fmt.Fprintf(&sb, "- id=%s | date=%s | %s\n", f.ID, factDate(f.Ts), utf8Trunc(f.Content, 400))
 	}
 	cctx, cancel := context.WithTimeout(ctx, backlogCallTimeout)
 	defer cancel()
@@ -547,8 +547,8 @@ func parseBacklogReply(content string, cluster []DocIndex) (clusterAnswer, error
 			}
 			seen[o.ID] = true
 			ans.outdated = append(ans.outdated, BacklogOutdated{ID: o.ID, By: o.By,
-				Reason: truncate(strings.TrimSpace(o.Reason), 200),
-				Text:   truncate(old.Content, 400), ByText: truncate(newer.Content, 400)})
+				Reason: utf8Trunc(strings.TrimSpace(o.Reason), 200),
+				Text:   utf8Trunc(old.Content, 400), ByText: utf8Trunc(newer.Content, 400)})
 		}
 	}
 
@@ -567,6 +567,22 @@ func parseBacklogReply(content string, cluster []DocIndex) (clusterAnswer, error
 		}
 	}
 	return ans, nil
+}
+
+// replacesChain reports whether following replacedBy from id reaches target, that
+// is, whether target already (directly or through others) replaces id.
+func replacesChain(replacedBy map[string]string, id, target string) bool {
+	for steps := 0; steps <= len(replacedBy); steps++ {
+		next, ok := replacedBy[id]
+		if !ok {
+			return false
+		}
+		if next == target {
+			return true
+		}
+		id = next
+	}
+	return false
 }
 
 // runApply carries out the saved plan without any LLM call. Every planned
@@ -591,9 +607,10 @@ func (b *BacklogJob) runApply(plan *backlogPlan) error {
 		}
 		replacedBy := map[string]string{}
 		for _, o := range po.Outdated {
-			// Liveness was judged up front, so two facts that name each other (same-day
-			// dates pass the date check) would both be superseded and neither survive.
-			if o.ID == o.By || !liveOwned(o.ID) || !liveOwned(o.By) || replacedBy[o.By] == o.ID {
+			// Liveness was judged up front, so facts that name each other in a loop
+			// (same-day dates pass the date check) would all be superseded and none
+			// survive. The step that would close a loop is skipped.
+			if o.ID == o.By || !liveOwned(o.ID) || !liveOwned(o.By) || replacesChain(replacedBy, o.By, o.ID) {
 				skipped++
 				continue
 			}

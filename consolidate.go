@@ -1039,7 +1039,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		dropped[d.ID] = true
 		drops = append(drops, d.ID)
 		// An empty supersededBy means dropped rather than replaced.
-		if _, e := c.store.retire([]string{d.ID}, Retire{How: howDropped, Reason: truncate(reason, 200)}); e != nil && dropErr == nil {
+		if _, e := c.store.retire([]string{d.ID}, Retire{How: howDropped, Reason: utf8Trunc(reason, 200)}); e != nil && dropErr == nil {
 			dropErr = e
 		}
 	}
@@ -1592,7 +1592,7 @@ func (c *Consolidator) ask(ctx context.Context, facts, schemas []DocIndex) (*Con
 		}
 		// date lets the model tell which of two contradicting facts is newer; the
 		// rule below says to keep the newer one, and without a date it had to guess.
-		fmt.Fprintf(&b, "- id=%s | turn=%s | date=%s | %s\n", f.ID, turn, factDate(f.Ts), truncate(f.Content, 400))
+		fmt.Fprintf(&b, "- id=%s | turn=%s | date=%s | %s\n", f.ID, turn, factDate(f.Ts), utf8Trunc(f.Content, 400))
 	}
 	var existing strings.Builder
 	if len(schemas) > 0 {
@@ -1601,7 +1601,7 @@ func (c *Consolidator) ask(ctx context.Context, facts, schemas []DocIndex) (*Con
 			if i >= maxPromptSchemas {
 				break
 			}
-			fmt.Fprintf(&existing, "- schema_id=%s | %s\n", sc.ID, truncate(sc.Content, 200))
+			fmt.Fprintf(&existing, "- schema_id=%s | %s\n", sc.ID, utf8Trunc(sc.Content, 200))
 		}
 	}
 	// The graph keys are asked for only when the graph is on, so a pass without it
@@ -1808,13 +1808,6 @@ func distinctSources(facts []DocIndex) []string {
 		}
 	}
 	return out
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }
 
 // parseDuration reads an env var as a duration with envDuration's rules: unset or

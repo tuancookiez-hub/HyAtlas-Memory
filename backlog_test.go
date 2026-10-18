@@ -444,3 +444,21 @@ func TestBacklogOnlyFailedDropsSupersededFacts(t *testing.T) {
 		t.Errorf("retry requests = %d, want one about v2 and v3 only", len(bodies))
 	}
 }
+
+// TestReplacesChainStopsLoops checks the apply guard: a step that would close a loop
+// of replacements (two or more facts naming each other) is detected.
+func TestReplacesChainStopsLoops(t *testing.T) {
+	rb := map[string]string{"a": "b", "b": "c"}
+	if !replacesChain(rb, "a", "c") { // c -> a would close a -> b -> c -> a
+		t.Error("three-fact loop not detected")
+	}
+	if !replacesChain(map[string]string{"a": "b"}, "a", "b") { // b -> a
+		t.Error("two-fact loop not detected")
+	}
+	if replacesChain(rb, "c", "a") || replacesChain(rb, "b", "x") {
+		t.Error("loop reported where there is none")
+	}
+	if replacesChain(map[string]string{"a": "b", "b": "a"}, "a", "z") {
+		t.Error("existing loop in the map made the walk report a match")
+	}
+}

@@ -251,3 +251,21 @@ func docIDs(docs []DocIndex) []string {
 	}
 	return out
 }
+
+// TestSetExtractedReachesChromem checks the extracted flag is written to the chromem
+// row, so an index rebuilt from chromem does not extract the row again.
+func TestSetExtractedReachesChromem(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	st := guardStore(t, vecEmbedder{"raw words": {1, 0, 0}})
+	id := addRow(t, st, memory.L2Raw, "raw words", now)
+	if err := st.SetExtracted(id, true); err != nil {
+		t.Fatal(err)
+	}
+	if !st.GetMany([]string{id})[0].Extracted {
+		t.Error("index row not marked extracted")
+	}
+	doc, err := st.cols[memory.L2Raw].GetByID(st.ctx, id)
+	if err != nil || doc.Metadata["extracted"] != "true" {
+		t.Errorf("chromem row not marked extracted: %+v, %v", doc.Metadata, err)
+	}
+}

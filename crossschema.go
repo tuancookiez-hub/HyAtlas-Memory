@@ -176,7 +176,7 @@ func (c *Consolidator) crossCandidates(owner scopeKey) ([]DocIndex, bool) {
 func (c *Consolidator) crossSchemaOwner(ctx context.Context, owner scopeKey, schemas []DocIndex) (int, error) {
 	var b strings.Builder
 	for _, d := range schemas {
-		fmt.Fprintf(&b, "- %s | %s\n", d.ID, truncate(oneLine(d.Content), 300))
+		fmt.Fprintf(&b, "- %s | %s\n", d.ID, utf8Trunc(oneLine(d.Content), 300))
 	}
 	system := fmt.Sprintf(`You look for patterns that cross topics. Below are one person's stored schemas (schema_id | pattern), each found inside a single topic. Return at most %d NEW patterns that hold across two or more of them, from different topics, and are not just one of them reworded. Each pattern is one full sentence that says what it is and when it applies.
 

@@ -21,15 +21,14 @@ package bgeemb
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	ort "github.com/yalue/onnxruntime_go"
 )
@@ -49,10 +48,10 @@ const (
 type BGE struct {
 	sess       *ort.DynamicSession[int64, float32]
 	vocab      map[string]int64
+	maxTok     int // rune length of the longest vocab entry
 	mu         sync.Mutex
 	path       string // dir holding the model/vocab/dll
 	tokenTypes bool   // graph declares token_type_ids as an input
-	embedFuncr func(ctx context.Context, text string) ([]float32, error)
 }
 
 // inputNames returns the session's input tensors in the order Run expects them.
@@ -149,6 +148,7 @@ func New(baseDir string) (*BGE, error) {
 
 	b.sess = sess
 	b.vocab = vocab
+	b.maxTok = longestToken(vocab)
 	return b, nil
 }
 
@@ -182,7 +182,7 @@ func (b *BGE) Destroy() {
 
 // Embed returns a normalized 384-dim vector for a single string (mean pooling + L2).
 func (b *BGE) Embed(ctx context.Context, text string) ([]float32, error) {
-	ids, mask := tokenize(b.vocab, text, MaxSeqLen)
+	ids, mask := tokenize(b.vocab, b.maxTok, text, MaxSeqLen)
 	return b.runMeanPool(ids, mask)
 }
 
@@ -190,22 +190,27 @@ func (b *BGE) Embed(ctx context.Context, text string) ([]float32, error) {
 func (b *BGE) runMeanPool(ids, mask []int64) ([]float32, error) {
 	seq := len(ids)
 	shape := ort.NewShape(1, int64(seq))
+	// Every tensor holds native memory that Go's garbage collector never frees, so
+	// each one is destroyed when this call returns.
 	inT, err := ort.NewTensor(shape, ids)
 	if err != nil {
 		return nil, err
 	}
+	defer inT.Destroy()
 	msk := make([]int64, seq)
 	copy(msk, mask)
 	maskT, err := ort.NewTensor(shape, msk)
 	if err != nil {
 		return nil, err
 	}
+	defer maskT.Destroy()
 	// output: [1, seq, 384]
 	flat := make([]float32, 1*seq*HiddenSize)
 	outT, err := ort.NewTensor(ort.NewShape(1, int64(seq), HiddenSize), flat)
 	if err != nil {
 		return nil, err
 	}
+	defer outT.Destroy()
 
 	b.mu.Lock()
 	inputs := []*ort.Tensor[int64]{inT, maskT}
@@ -219,6 +224,7 @@ func (b *BGE) runMeanPool(ids, mask []int64) ([]float32, error) {
 			b.mu.Unlock()
 			return nil, ttErr
 		}
+		defer ttT.Destroy()
 		inputs = append(inputs, ttT)
 	}
 	runErr := b.sess.Run(inputs, []*ort.Tensor[float32]{outT})
@@ -277,8 +283,23 @@ func loadVocab(path string) (map[string]int64, error) {
 	return vocab, nil
 }
 
+// longestToken returns the rune length of the longest vocab entry. No longer
+// substring can match, so wordpiece never needs to try one.
+func longestToken(vocab map[string]int64) int {
+	n := 0
+	for w := range vocab {
+		if l := utf8.RuneCountInString(w); l > n {
+			n = l
+		}
+	}
+	return n
+}
+
 // tokenize does BERT-style lowercase WordPiece to input_ids + attention_mask.
-func tokenize(vocab map[string]int64, text string, maxLen int) ([]int64, []int64) {
+// maxTok is the vocab's longest entry (see longestToken). Words stop being split
+// once the sequence is full, since the rest would be truncated anyway, so a long
+// pasted text costs no more than a short one.
+func tokenize(vocab map[string]int64, maxTok int, text string, maxLen int) ([]int64, []int64) {
 	text = strings.ToLower(strings.TrimSpace(text))
 	words := strings.Fields(text)
 	if len(words) == 0 {
@@ -286,13 +307,11 @@ func tokenize(vocab map[string]int64, text string, maxLen int) ([]int64, []int64
 	}
 	ids := []int64{CLSID}
 	for _, w := range words {
-		for _, piece := range wordpiece(vocab, w, 200) {
-			ids = append(ids, piece)
+		room := maxLen - 1 - len(ids)
+		if room <= 0 {
+			break
 		}
-	}
-	// truncate to leave room for [SEP]
-	if len(ids) >= maxLen-1 {
-		ids = ids[:maxLen-1]
+		ids = append(ids, wordpiece(vocab, maxTok, w, room)...)
 	}
 	ids = append(ids, SEPID)
 	seq := len(ids)
@@ -300,37 +319,36 @@ func tokenize(vocab map[string]int64, text string, maxLen int) ([]int64, []int64
 	for i := range mask {
 		mask[i] = 1
 	}
-	// pad to a fixed block (BGE uses 128 or the seq itself; we use the sequence length
-	// directly, no padding beyond, since onnxruntime dynamic axes handle variable length)
+	// No padding: onnxruntime's dynamic axes take the sequence at its own length.
 	return ids, mask
 }
 
-// wordpiece greedily splits a word into subword pieces using the vocab.
-func wordpiece(vocab map[string]int64, word string, maxPieces int) []int64 {
+// wordpiece greedily splits an already lowercased word into subword pieces using
+// the vocab, returning at most maxPieces of them. It only tries substrings up to
+// maxTok runes long (none longer is in the vocab), so a long token such as a hash
+// costs time in proportion to its length rather than its length squared.
+func wordpiece(vocab map[string]int64, maxTok int, word string, maxPieces int) []int64 {
 	if id, ok := vocab[word]; ok {
 		return []int64{id}
 	}
 	candidates := []rune(word)
 	idx := 0
-	allPieces := make([]int64, 0, len(candidates))
-	// basic greedy: try longest substring that is in vocab
-	for idx < len(candidates) {
-		// find the longest token starting at idx
+	allPieces := make([]int64, 0, min(len(candidates), maxPieces))
+	// basic greedy: try the longest substring that is in the vocab
+	for idx < len(candidates) && len(allPieces) < maxPieces {
 		best := -1
-		for end := len(candidates); end > idx; end-- {
-			sub := strings.ToLower(string(candidates[idx:end]))
-			if _, ok := vocab[sub]; ok {
+		for end := min(len(candidates), idx+maxTok); end > idx; end-- {
+			if _, ok := vocab[string(candidates[idx:end])]; ok {
 				best = end
 				break
 			}
 		}
 		if best == -1 {
-			// try ## continuation
 			allPieces = append(allPieces, UNKID)
 			idx++
 			continue
 		}
-		sub := strings.ToLower(string(candidates[idx:best]))
+		sub := string(candidates[idx:best])
 		if idx != 0 {
 			sub = "##" + sub
 		}
@@ -341,24 +359,5 @@ func wordpiece(vocab map[string]int64, word string, maxPieces int) []int64 {
 		}
 		idx = best
 	}
-	if len(allPieces) > maxPieces {
-		allPieces = allPieces[:maxPieces]
-	}
 	return allPieces
 }
-
-// EmbedBatch embeds multiple strings (convenience wrapper).
-func (b *BGE) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	out := make([][]float32, len(texts))
-	for i, t := range texts {
-		v, err := b.Embed(ctx, t)
-		if err != nil {
-			return nil, err
-		}
-		out[i] = v
-	}
-	return out, nil
-}
-
-var _ = sort.Strings
-var _ = json.Marshal

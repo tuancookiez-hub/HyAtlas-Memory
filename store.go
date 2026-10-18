@@ -718,8 +718,13 @@ func (s *MemoryStore) Delete(ids []string, layer memory.Layer, userID, agentID s
 }
 
 // deleteRows is Delete without the history repair. It also returns what each
-// deleted row had been superseded by.
+// deleted row had been superseded by. It takes rowMu first, like every other chromem
+// row write, so a metadata rewrite in flight cannot re-create a row it removes. A
+// row whose chromem delete fails stays in the index and the error is returned, so
+// the index never loses a row that a rebuild from chromem would bring back.
 func (s *MemoryStore) deleteRows(ids []string, layer memory.Layer, userID, agentID string) (int, map[string]string, error) {
+	s.rowMu.Lock()
+	defer s.rowMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	targets := map[string]bool{}
@@ -745,12 +750,18 @@ func (s *MemoryStore) deleteRows(ids []string, layer memory.Layer, userID, agent
 	}
 	deleted := 0
 	successors := make(map[string]string, len(targets))
+	var firstErr error
 	for id := range targets {
 		d := s.index[id]
-		successors[id] = retirementOf(d).By
 		if col, ok := s.cols[memory.Layer(d.Layer)]; ok {
-			_ = col.Delete(s.ctx, nil, nil, id)
+			if err := col.Delete(s.ctx, nil, nil, id); err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("delete %s: %w", id, err)
+				}
+				continue
+			}
 		}
+		successors[id] = retirementOf(d).By
 		s.dropClauses(id)
 		s.forgetLocked(id)
 		deleted++
@@ -758,7 +769,7 @@ func (s *MemoryStore) deleteRows(ids []string, layer memory.Layer, userID, agent
 	if deleted > 0 {
 		s.markDirtyLocked()
 	}
-	return deleted, successors, nil
+	return deleted, successors, firstErr
 }
 
 // LayerCounts returns the number of live docs per layer (exact). L5 is the
@@ -1001,8 +1012,18 @@ func (s *MemoryStore) MirrorsOf(layer memory.Layer, sourceID, content string) []
 	return ids
 }
 
-// SetExtracted marks a doc as extracted (used after successful promotion).
+// SetExtracted marks a doc as extracted (used after successful promotion). The flag
+// is written to the chromem row too, so a rebuild of the index keeps it and the row
+// is not extracted again. A superseded row's history is not rewritten, so for one the
+// flag is set in the index only.
 func (s *MemoryStore) SetExtracted(id string, v bool) error {
+	flag := ""
+	if v {
+		flag = "true"
+	}
+	if err := s.updateMeta(id, map[string]string{"extracted": flag}); err == nil {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if d, ok := s.index[id]; ok {

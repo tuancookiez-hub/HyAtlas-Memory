@@ -274,7 +274,7 @@ func (c *Consolidator) buildClusters(facts []DocIndex, old *ownerClusters) *owne
 	for i, w := range windows {
 		cs := &clusterState{ID: oc.newClusterID(), Topic: kinds[i], FactIDs: idsOf(dedupDocs(w))}
 		if p := prior[cs.fp()]; p != nil {
-			cs.DoneFP, cs.Fails, cs.FailFP = p.DoneFP, p.Fails, p.FailFP
+			cs.DoneFP, cs.Fails, cs.FailFP, cs.FailedAt = p.DoneFP, p.Fails, p.FailFP, p.FailedAt
 		}
 		oc.Clusters = append(oc.Clusters, cs)
 	}
