@@ -20,6 +20,8 @@ type searchRequest struct {
 	AgentID  string   `json:"agent_id"`  // what the Hermes plugin sends
 	MinScore *float64 `json:"min_score"` // optional: overrides HYATLAS_MIN_SCORE
 	Reader   string   `json:"reader"`    // optional: see parseReader; empty is hybrid
+	// SessionID is the caller's current session; its intentions rank above others.
+	SessionID string `json:"session_id"`
 }
 
 // searchError is a failed search step with the HTTP status to answer with.
@@ -93,6 +95,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	run.boostByContext()
 	run.rankSignals()
+	run.admitLinkedFacts()
 	run.applyLayerQuotas()
 	jsonResponse(w, 200, run.render())
 }
@@ -246,6 +249,13 @@ func (r *searchRun) rankSignals() {
 	if s.usage != nil {
 		res = rerankUsage(res, s.usage)
 	}
+	// The current session's intentions come first: what the user is doing now outranks
+	// a plan from another session. Without a session id nothing changes.
+	if sid := r.req.SessionID; sid != "" {
+		res = rerankByFactor(res, func(_ int, h SearchHit) float64 {
+			return sessionFactor(h, sid)
+		})
+	}
 	// Two near-identical lines waste a slot; the lower one moves to the end, where
 	// the limit usually cuts it. Only the first 2*limit hits are compared, because a
 	// duplicate further down cannot reach the result; the rest keep their order after.
@@ -255,6 +265,33 @@ func (r *searchRun) rankSignals() {
 		res = s.store.demoteNearDuplicates(res, nearDupScore)
 	}
 	r.hits = res
+}
+
+// Factors for an intention of the current session and of another session.
+const (
+	sameSessionFactor  = 1.08
+	otherSessionFactor = 0.95
+)
+
+// sessionFactor is the rank factor of hit h for a search from session sid: an L7
+// intention written in sid gets sameSessionFactor, one from another session gets
+// otherSessionFactor, and every other hit (or an intention with no session) gets 1.
+func sessionFactor(h SearchHit, sid string) float64 {
+	if h.Layer != memory.L7Intention || h.Meta["session_id"] == "" {
+		return 1
+	}
+	if h.Meta["session_id"] == sid {
+		return sameSessionFactor
+	}
+	return otherSessionFactor
+}
+
+// admitLinkedFacts brings in facts that the top hits link to (see admitLinked). It
+// only applies when the search covers L3 facts.
+func (r *searchRun) admitLinkedFacts() {
+	if r.factsWanted {
+		r.hits = admitLinked(r.srv.store, r.hits, r.users, r.agentID, r.limit)
+	}
 }
 
 // applyLayerQuotas caps the L5 and L8 layers, makes room for the schemas behind the
@@ -314,7 +351,8 @@ func channelOf(h SearchHit) string {
 }
 
 // render builds the response: the hits sorted into their channels (all five always
-// present, empty when nothing fits) and the owner's Now page when there is one.
+// present, empty when nothing fits), the owner's Now page when there is one, and
+// "order", the channel order the plugin should show them in.
 func (r *searchRun) render() map[string]any {
 	s := r.srv
 	ids := make([]string, len(r.hits))
@@ -333,7 +371,8 @@ func (r *searchRun) render() map[string]any {
 			UserID: h.Meta["user_id"], AgentID: h.Meta["agent_id"],
 			EventDate: normalizeEventDate(h.Meta[metaEventAt]), History: history[h.ID]})
 	}
-	out := map[string]any{"memories": channels}
+	order := append([]string{"now"}, searchChannels...)
+	out := map[string]any{"memories": channels, "order": order}
 	if np, ok := s.nowFor(r.users, r.agentID); ok {
 		out["now"] = np
 	}

@@ -194,6 +194,7 @@ class HyatlasClient:
         agent_id: str = "",
         layer: str = "",
         limit: int = 10,
+        session_id: str = "",
     ) -> Dict[str, Any]:
         body: Dict[str, Any] = {
             "query": query,
@@ -203,6 +204,9 @@ class HyatlasClient:
         }
         if layer:
             body["layer"] = layer
+        if session_id:
+            # The server ranks this session's intentions above other sessions'.
+            body["session_id"] = session_id
         return self._post("/api/v1/search", body)
 
     def feedback(

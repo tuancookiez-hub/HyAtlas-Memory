@@ -36,7 +36,7 @@ from typing import Any, Dict, List, Optional
 from agent.memory_provider import MemoryProvider
 
 from .client import PLUGIN_VERSION, HyatlasClient, HyatlasClientError, HyatlasUnreachable
-from .formatting import format_hit_line  # noqa: E402
+from .formatting import channel_order, format_hit_line  # noqa: E402
 from .keyshare import KeySharer  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -140,6 +140,9 @@ class HyatlasMemoryProvider(MemoryProvider):
         self._config = _load_config()
         self._client: Optional[HyatlasClient] = None
         self._user_id: str = ""
+        # The session the provider was initialised for; searches send it so the
+        # server can rank this session's intentions first.
+        self._session_id: str = ""
         self._agent_id: str = ""
         self._prefetch_lock = threading.Lock()
         # Last recall per session, the fallback when a live search fails. Keyed by
@@ -235,6 +238,7 @@ class HyatlasMemoryProvider(MemoryProvider):
     def initialize(self, session_id: str, **kwargs: Any) -> None:
         """Connect, resolve identity, optionally auto-start the server."""
         self._client = self._ensure_client()
+        self._session_id = session_id or ""
         self._user_id = self._resolve_user_id(kwargs)
         self._agent_id = self._resolve_agent_id(kwargs)
 
@@ -305,6 +309,7 @@ class HyatlasMemoryProvider(MemoryProvider):
                     agent_id=args.get("agent_id", self._agent_id) or self._agent_id,
                     layer=args.get("layer", "") or "",
                     limit=int(args.get("limit", 10)),
+                    session_id=self._session_id,
                 )
                 return json.dumps(results)
             if tool_name == "hyatlas_recent":
@@ -373,6 +378,7 @@ class HyatlasMemoryProvider(MemoryProvider):
                     user_id=self._user_id,
                     agent_id=self._agent_id,
                     limit=5,
+                    session_id=session_id or self._session_id,
                 )
                 formatted = self._format_prefetch(results, query)
                 self._store_prefetch(session_id, formatted)
@@ -395,6 +401,7 @@ class HyatlasMemoryProvider(MemoryProvider):
                     user_id=self._user_id,
                     agent_id=self._agent_id,
                     limit=5,
+                    session_id=session_id or self._session_id,
                 )
                 formatted = self._format_prefetch(results, query)
                 self._store_prefetch(session_id, formatted)
@@ -727,7 +734,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         now_text = str(now.get("text") or "").strip()
         memories = results.get("memories") or {}
         channels = []
-        for channel_name in ("pages", "profile", "proactive", "experiences", "normal"):
+        for channel_name in channel_order(memories, results.get("order")):
             items = memories.get(channel_name, [])
             if not items:
                 continue

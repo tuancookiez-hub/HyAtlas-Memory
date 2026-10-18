@@ -6,7 +6,7 @@ Kept free of Hermes imports so the rules can be tested without the host installe
 from __future__ import annotations
 
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 # A stored event date is YYYY-MM-DD or YYYY-MM. Anything else is dropped, so a
 # stray word in the field never reaches the prompt as if it were a date.
@@ -80,3 +80,27 @@ def format_hit_line(m: Dict[str, Any], limit: int) -> str:
         lines.append(line)
 
     return "\n".join(lines)
+
+
+# The channel order used when the server sends none (older servers).
+DEFAULT_CHANNEL_ORDER = ("pages", "profile", "proactive", "experiences", "normal")
+
+
+def channel_order(memories: Dict[str, Any], order: Any = None) -> List[str]:
+    """Return the channel names to show, in the order the server sent them.
+
+    The server's "order" list leads; "now" is dropped because it is not a memory
+    channel. A channel present in the response but missing from the list follows,
+    after the listed ones, so a new server channel needs no plugin change. When
+    the server sent no usable order the built-in order is used, then any other
+    channel after it.
+    """
+    names: List[str] = []
+    if isinstance(order, (list, tuple)):
+        names = [n for n in order if isinstance(n, str) and n != "now"]
+    if not names:
+        names = list(DEFAULT_CHANNEL_ORDER)
+    for n in memories:
+        if n not in names:
+            names.append(n)
+    return names
