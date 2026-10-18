@@ -47,7 +47,8 @@ func (s *MemoryStore) historyOf(ids []string, perHit int) map[string][]HistoryEn
 	for by := range want {
 		for _, id := range s.replacedBy[by] {
 			d, ok := s.index[id]
-			if !ok || d.Meta[metaSupersededHow] != howReplaced || d.Meta["superseded_by"] != by {
+			ret := retirementOf(d)
+			if !ok || ret.How != howReplaced || ret.By != by {
 				continue
 			}
 			date := normalizeEventDate(d.Meta[metaEventAt])
@@ -60,7 +61,7 @@ func (s *MemoryStore) historyOf(ids []string, perHit int) map[string][]HistoryEn
 				entry: HistoryEntry{
 					Content: utf8Trunc(oneLine(d.Content), historyContentMax),
 					Date:    date,
-					How:     d.Meta[metaSupersededHow],
+					How:     ret.How,
 				},
 			})
 		}

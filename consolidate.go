@@ -986,7 +986,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		dropped[d.ID] = true
 		drops = append(drops, d.ID)
 		// An empty supersededBy means dropped rather than replaced.
-		if _, e := c.store.supersedeWith([]string{d.ID}, "", map[string]string{"drop_reason": truncate(reason, 200)}); e != nil && dropErr == nil {
+		if _, e := c.store.retire([]string{d.ID}, Retire{How: howDropped, Reason: truncate(reason, 200)}); e != nil && dropErr == nil {
 			dropErr = e
 		}
 	}
@@ -1114,7 +1114,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 			}
 		}
 		if len(retire) > 0 {
-			if _, err := c.store.Supersede(retire, id); err != nil {
+			if _, err := c.store.retire(retire, Retire{By: id, How: howUpdated}); err != nil {
 				soft("schema supersede: " + err.Error())
 			}
 		}
@@ -1139,7 +1139,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		} else {
 			rep.Arc = true
 			if len(prevArcs) > 0 {
-				if _, err := c.store.Supersede(prevArcs, arcID); err != nil {
+				if _, err := c.store.retire(prevArcs, Retire{By: arcID, How: howUpdated}); err != nil {
 					soft("arc supersede: " + err.Error())
 				}
 			}
@@ -1195,7 +1195,7 @@ func (c *Consolidator) applyMerge(owner scopeKey, text string, vec []float32, la
 	for i, d := range absorbed {
 		ids[i] = d.ID
 	}
-	_, supErr := c.store.supersedeWith(ids, mergedID, map[string]string{metaSupersededHow: howMerged})
+	_, supErr := c.store.retire(ids, Retire{By: mergedID, How: howMerged})
 
 	// Count what the store marked, not what was asked for.
 	marked := c.supersededOf(ids)
@@ -1204,7 +1204,7 @@ func (c *Consolidator) applyMerge(owner scopeKey, text string, vec []float32, la
 	}
 	rep.Absorbed += len(marked)
 	if len(marked) == 0 {
-		_, retractErr := c.store.supersedeWith([]string{mergedID}, "", map[string]string{"drop_reason": reasonMergeRetracted})
+		_, retractErr := c.store.retire([]string{mergedID}, Retire{How: howDropped, Reason: reasonMergeRetracted})
 		msg := fmt.Sprintf("merge supersede: 0 of %d absorbed facts marked; replacement retracted", len(ids))
 		if retractErr != nil {
 			msg += ": retract: " + retractErr.Error()
@@ -1360,7 +1360,11 @@ func (c *Consolidator) retireMirrors(docs []DocIndex, by string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	_, err := c.store.Supersede(ids, by)
+	how := howMerged
+	if by == "" {
+		how = howDropped
+	}
+	_, err := c.store.retire(ids, Retire{By: by, How: how})
 	return err
 }
 

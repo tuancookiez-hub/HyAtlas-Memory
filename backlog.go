@@ -574,7 +574,7 @@ func (b *BacklogJob) runApply(plan *backlogPlan) error {
 			}
 			replacedBy[o.ID] = o.By
 			// The plan names facts a newer one contradicts, so they are replaced.
-			n, err := b.store.supersedeWith([]string{o.ID}, o.By, map[string]string{metaSupersededHow: howReplaced})
+			n, err := b.store.retire([]string{o.ID}, Retire{By: o.By, How: howReplaced})
 			if err != nil {
 				errs = append(errs, fmt.Sprintf("supersede %s: %v", o.ID, err))
 			}

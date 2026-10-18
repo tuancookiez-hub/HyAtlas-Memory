@@ -27,6 +27,8 @@ const (
 	howUpdated  = "updated"  // extended by a newer fact that keeps everything it said
 	howRestated = "restated" // a near-duplicate folded into a newer phrasing
 	howMerged   = "merged"   // absorbed by a consolidation merge
+	howDropped  = "dropped"  // dropped with no replacement
+	howDone     = "done"     // an intention that was done or abandoned
 )
 
 // normalizeEventDate returns s as YYYY-MM-DD or YYYY-MM when it is a valid date in

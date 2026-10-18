@@ -320,7 +320,7 @@ func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext,
 			if len(ids) == 0 {
 				continue
 			}
-			n, err := store.supersedeWith(ids, factID, map[string]string{metaSupersededHow: how})
+			n, err := store.retire(ids, Retire{By: factID, How: how})
 			if err != nil {
 				log.Printf("extract: supersede (%s) %s: %v", how, ids[0], err)
 			} else if how != howRestated {
@@ -733,11 +733,15 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		// A superseded row says what replaced it, so history can be followed.
 		if isSuperseded(it) {
-			m["invalid_at"] = it.Meta["invalid_at"]
-			m["superseded_by"] = it.Meta["superseded_by"]
-			// Why consolidation dropped it, when it was a drop rather than a merge.
-			if r := it.Meta["drop_reason"]; r != "" {
-				m["drop_reason"] = r
+			r := retirementOf(it)
+			m["invalid_at"] = it.Meta[metaInvalidAt]
+			m["superseded_by"] = r.By
+			// How it was retired, and why when it was a drop rather than a merge.
+			if r.How != "" {
+				m["superseded_how"] = r.How
+			}
+			if r.Reason != "" {
+				m["drop_reason"] = r.Reason
 			}
 		}
 		out = append(out, m)

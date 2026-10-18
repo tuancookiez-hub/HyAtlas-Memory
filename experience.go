@@ -108,7 +108,7 @@ func (s *MemoryStore) writeExperiences(exs []Experience, userID, agentID, source
 		}
 		ids = append(ids, id)
 		if len(old) > 0 {
-			if _, err := s.supersedeWith(old, id, map[string]string{metaSupersededHow: howUpdated}); err != nil {
+			if _, err := s.retire(old, Retire{By: id, How: howUpdated}); err != nil {
 				log.Printf("experience: supersede %s: %v", old[0], err)
 			}
 		}

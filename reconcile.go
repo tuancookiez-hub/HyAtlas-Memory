@@ -240,9 +240,7 @@ func (s *MemoryStore) applyReconcile(ops []reconcileOp, newSet, candSet map[stri
 			if reason == "" {
 				reason = reasonNotRecorded
 			}
-			if _, err := s.supersedeWith(targets, fact, map[string]string{
-				metaSupersededHow: howReplaced, "drop_reason": reason,
-			}); err != nil {
+			if _, err := s.retire(targets, Retire{By: fact, How: howReplaced, Reason: reason}); err != nil {
 				log.Printf("reconcile: supersede %v by %s: %v", targets, fact, err)
 				continue
 			}
@@ -291,9 +289,7 @@ func (s *MemoryStore) applyUpdate(fact string, targets []string, text, userID, a
 		log.Printf("reconcile: add merged fact: %v", err)
 		return false
 	}
-	if _, err := s.supersedeWith(involved, mergedID, map[string]string{
-		metaSupersededHow: howUpdated,
-	}); err != nil {
+	if _, err := s.retire(involved, Retire{By: mergedID, How: howUpdated}); err != nil {
 		log.Printf("reconcile: supersede %v by %s: %v", involved, mergedID, err)
 		return false
 	}

@@ -52,20 +52,21 @@ func (s *MemoryStore) relinkHistory(successors map[string]string) (int, error) {
 	var edits []historyEdit
 	for id := range s.superseded {
 		d := s.index[id]
-		by := d.Meta["superseded_by"]
+		ret := retirementOf(d)
+		by := ret.By
 		switch {
 		case by != "":
 			if _, ok := s.index[by]; ok {
 				continue
 			}
 			if next := resolve(successors[by]); next != "" {
-				edits = append(edits, historyEdit{id: id, set: map[string]string{"superseded_by": next}})
+				edits = append(edits, historyEdit{id: id, set: map[string]string{metaSupersededBy: next}})
 			} else {
 				edits = append(edits, historyEdit{id: id, set: map[string]string{
-					"superseded_by": "", "drop_reason": reasonReplacementDeleted}})
+					metaSupersededBy: "", metaDropReason: reasonReplacementDeleted}})
 			}
-		case d.Meta["drop_reason"] == "":
-			edits = append(edits, historyEdit{id: id, set: map[string]string{"drop_reason": reasonNotRecorded}})
+		case ret.Reason == "":
+			edits = append(edits, historyEdit{id: id, set: map[string]string{metaDropReason: reasonNotRecorded}})
 		}
 	}
 	s.mu.RUnlock()
@@ -173,7 +174,7 @@ func (s *MemoryStore) rewriteRow(e historyEdit) (*DocIndex, bool, error) {
 // is skipped. It returns how many rows were restored.
 func (s *MemoryStore) Restore(ids []string) (int, error) {
 	set := map[string]string{"restored_at": time.Now().UTC().Format(time.RFC3339)}
-	del := []string{"invalid_at", "superseded_by", "drop_reason"}
+	del := []string{metaInvalidAt, metaSupersededBy, metaDropReason}
 	edits := make([]historyEdit, len(ids))
 	for i, id := range ids {
 		edits[i] = historyEdit{id: id, set: set, del: del}

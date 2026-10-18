@@ -267,7 +267,7 @@ func newerFirst(a, b DocIndex) bool {
 
 // isSuperseded reports whether the slow path replaced or dropped a doc. Such a
 // doc keeps its row for provenance but is invisible to every live read.
-func isSuperseded(d DocIndex) bool { return d.Meta["invalid_at"] != "" }
+func isSuperseded(d DocIndex) bool { return d.Meta[metaInvalidAt] != "" }
 
 // Search does vector search, scoped to user/agent when provided. Superseded
 // docs are never returned.
@@ -571,7 +571,7 @@ func (s *MemoryStore) deleteRows(ids []string, layer memory.Layer, userID, agent
 	successors := make(map[string]string, len(targets))
 	for id := range targets {
 		d := s.index[id]
-		successors[id] = d.Meta["superseded_by"]
+		successors[id] = retirementOf(d).By
 		if col, ok := s.cols[memory.Layer(d.Layer)]; ok {
 			_ = col.Delete(s.ctx, nil, nil, id)
 		}
@@ -632,7 +632,56 @@ func (s *MemoryStore) TotalMemories() int {
 // a same-id Add in the meantime is left as the newer write made it: a stale
 // snapshot is never written back, and a vanished row is skipped without error.
 func (s *MemoryStore) Supersede(ids []string, by string) (int, error) {
-	return s.supersedeWith(ids, by, nil)
+	return s.retire(ids, Retire{By: by})
+}
+
+// Keys of the metadata that records how a row was retired.
+const (
+	// metaSupersededBy names the row that replaced a superseded row, or is empty for a drop.
+	metaSupersededBy = "superseded_by"
+	// metaDropReason says why a row was dropped rather than replaced.
+	metaDropReason = "drop_reason"
+	// metaInvalidAt is the time a row stopped being live.
+	metaInvalidAt = "invalid_at"
+)
+
+// Retire describes how one batch of rows leaves the live set: by which row, in what
+// way, and for what reason.
+type Retire struct {
+	// By is the id of the row that replaces them, or "" for a drop.
+	By string
+	// How is one of the how* values. When empty, retire uses howReplaced if By is
+	// set and howDropped otherwise.
+	How string
+	// Reason says why the rows were dropped. When empty and How is howDropped,
+	// retire records reasonNotRecorded.
+	Reason string
+}
+
+// retirementOf reads the retirement record from d's metadata. Fields a row does not
+// carry are empty.
+func retirementOf(d DocIndex) Retire {
+	return Retire{
+		By:     d.Meta[metaSupersededBy],
+		How:    d.Meta[metaSupersededHow],
+		Reason: d.Meta[metaDropReason],
+	}
+}
+
+// retire marks the live rows named by ids as superseded, as Supersede does, and
+// records r on each of them. See Supersede for how a pass runs.
+func (s *MemoryStore) retire(ids []string, r Retire) (int, error) {
+	if r.How == "" {
+		r.How = howReplaced
+		if r.By == "" {
+			r.How = howDropped
+		}
+	}
+	extra := map[string]string{metaSupersededHow: r.How}
+	if r.Reason != "" {
+		extra[metaDropReason] = r.Reason
+	}
+	return s.supersedeWith(ids, r.By, extra)
 }
 
 // supersedeWith is Supersede that also records extra metadata on each marked row,
@@ -687,14 +736,14 @@ func (s *MemoryStore) supersedeWith(ids []string, by string, extra map[string]st
 		for k, v := range d.Meta {
 			meta[k] = v
 		}
-		meta["invalid_at"] = now
-		meta["superseded_by"] = by
+		meta[metaInvalidAt] = now
+		meta[metaSupersededBy] = by
 		for k, v := range extra {
 			meta[k] = v
 		}
 		// A drop always says why, so history never shows an unexplained gap.
-		if by == "" && meta["drop_reason"] == "" {
-			meta["drop_reason"] = reasonNotRecorded
+		if by == "" && meta[metaDropReason] == "" {
+			meta[metaDropReason] = reasonNotRecorded
 		}
 		meta["layer"] = d.Layer
 		if getErr != nil {
@@ -956,7 +1005,7 @@ func (s *MemoryStore) noteReplacedLocked(d DocIndex) {
 	if d.Meta[metaSupersededHow] != howReplaced {
 		return
 	}
-	if by := d.Meta["superseded_by"]; by != "" {
+	if by := retirementOf(d).By; by != "" {
 		s.replacedBy[by] = append(s.replacedBy[by], d.ID)
 	}
 }
@@ -990,7 +1039,7 @@ func (s *MemoryStore) forgetIndexLocked(id string) {
 			delete(s.hidden, l)
 		}
 		if d, ok := s.index[id]; ok && d.Meta[metaSupersededHow] == howReplaced {
-			by := d.Meta["superseded_by"]
+			by := retirementOf(d).By
 			if ids := slices.DeleteFunc(s.replacedBy[by], func(x string) bool { return x == id }); len(ids) == 0 {
 				delete(s.replacedBy, by)
 			} else {

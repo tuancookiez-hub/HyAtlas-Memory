@@ -540,7 +540,7 @@ func (p *PageStore) reindex(pg Page) error {
 	// Supersede only a previous, different version. When the text is unchanged the
 	// id is the same, and superseding it would retire the document just written.
 	if pg.DocID != "" && pg.DocID != docID {
-		if _, err := p.store.Supersede([]string{pg.DocID}, docID); err != nil {
+		if _, err := p.store.retire([]string{pg.DocID}, Retire{By: docID, How: howUpdated}); err != nil {
 			log.Printf("pages: supersede old version of %s: %v", pg.ID, err)
 		}
 	}

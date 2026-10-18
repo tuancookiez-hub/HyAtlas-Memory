@@ -297,7 +297,7 @@ func (s *MemoryStore) applyIntentions(ex *Extraction, ec ExtractContext, introID
 	var replaced []string
 	if introID != "" && ex.Intention != nil {
 		replaced = shown(ex.Intention.Replaces, ec.hasIntention)
-		s.supersedeLogged("intention replaced", replaced, introID)
+		s.supersedeLogged("intention replaced", replaced, introID, howReplaced)
 	}
 	var done []string
 	for _, id := range shown(ex.IntentionsDone, ec.hasIntention) {
@@ -305,15 +305,15 @@ func (s *MemoryStore) applyIntentions(ex *Extraction, ec ExtractContext, introID
 			done = append(done, id)
 		}
 	}
-	s.supersedeLogged("intention done", done, sourceID)
+	s.supersedeLogged("intention done", done, sourceID, howDone)
 }
 
-// supersedeLogged supersedes ids by by and logs one line for the batch.
-func (s *MemoryStore) supersedeLogged(what string, ids []string, by string) {
+// supersedeLogged retires ids by by in the given how and logs one line for the batch.
+func (s *MemoryStore) supersedeLogged(what string, ids []string, by, how string) {
 	if len(ids) == 0 {
 		return
 	}
-	n, err := s.Supersede(ids, by)
+	n, err := s.retire(ids, Retire{By: by, How: how})
 	if err != nil {
 		log.Printf("extract: %s: supersede %v: %v", what, ids, err)
 		return
