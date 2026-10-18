@@ -1,6 +1,17 @@
 # HyAtlas v4 — NOW
 
-**v4.9.0** | 2026-10-18 | Release: tuancookiez-hub/HyAtlas-Memory
+**5.0.0 assembled locally, not released** | last release v4.9.0 (2026-10-18) | Release: tuancookiez-hub/HyAtlas-Memory
+
+## 5.0.0 (assembled locally, not released, not tagged, not pushed)
+A stable floor: the whole 4.8 and 4.9 code reviewed and tidied, then the gaps closed.
+Catch-up extraction for turns that were never extracted, admin-only bulk delete, clean
+shutdown with `/api/v1/flush`, a reversible forget mirrored from Hermes's memory tool
+replace and remove, reconcile links and recurring-event series, the current session's
+intentions first, a server-sent channel order, identifier search in lite, one alias rule
+in the store, a plain-text-only key file, and `share_llm_key` only to a local server.
+The `Version` constant, the plugin version and the changelog say 5.0.0; the install.sh
+default `HYATLAS_VERSION` stays at the last tag until 5.0.0 is cut. Next: the user's go
+for the push, the tag and the catalog re-pin.
 
 ## Running
 - Release: **v4.9.0** (2026-10-18), 3 release binaries. `Version` in server.go, `plugins/hyatlas/plugin.yaml`, the provider, the dashboard manifest and the install.sh default `HYATLAS_VERSION` all agree.

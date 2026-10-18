@@ -94,7 +94,9 @@ Hermes for its current key and hands it to the server over localhost, renewing i
 before the one-hour token expires. The server keeps it in memory only. Until the
 first Hermes chat after a restart, `status` shows `llm: "awaiting_key"`. Do not point
 `HYATLAS_LLM_KEY_FILE` at Hermes' `auth.json`: antivirus software treats a program
-reading another application's credentials as credential theft.
+reading another application's credentials as credential theft, so the server now
+refuses a JSON key file. The key is sent only to a HyAtlas server on this machine
+(`127.0.0.1`, `::1` or `localhost`).
 
 Then check it:
 
@@ -228,6 +230,29 @@ hermes plugins update hyatlas    # then restart the gateway
 
 This updates the plugin only. The `hyatlas-go` binary is separate: update it with
 the server's installer or by replacing the binary with a newer release.
+
+### Upgrading to 5.0
+
+- **A replace or remove through Hermes's `memory` tool now forgets the old entry.** The
+  server retires the raw rows and what was derived from them, and the admin restore
+  can bring them back. Before, only `add` was mirrored.
+- **Bulk delete needs `HYATLAS_ADMIN=on`.** `delete_all` by layer, user, agent or all
+  is refused (403) without it. Deleting one memory by id is unchanged.
+- **Searches carry the session id**, so the current session's intentions rank first,
+  and the recall block follows the channel order the server sends.
+- **The plugin never sends local calls through a proxy.**
+- **`share_llm_key` sends only to a local server.** With a remote `server_host` the
+  key is not sent.
+- **`HYATLAS_LLM_KEY_FILE` takes a plain-text token only.** A JSON file (such as
+  `auth.json`) gives no key; the server logs a warning and uses `HYATLAS_LLM_KEY`.
+- **Durations read one way**: `15m`, a bare number as seconds, and `0`, `off`, `false`
+  or `no` to turn off. `HYATLAS_CONSOLIDATE_EVERY=off` now fails at start in ultra, as
+  `0` always did; `HYATLAS_INTENTION_TTL=off` means no limit on intentions.
+- **Turns missed by extraction are caught up** (`HYATLAS_CATCHUP_EVERY`, 10 minutes),
+  and `/api/v1/status` shows `unextracted`, the number still waiting.
+- **Lists for a `user_id` include that person's aliases** (`HYATLAS_USER_ALIASES`), and
+  episodes and the Now page are kept under the first ID of the alias group. A Now page
+  stored before aliases were set up is still found.
 
 ### Upgrading to 4.8 or later
 

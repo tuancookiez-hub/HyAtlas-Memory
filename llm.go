@@ -41,6 +41,9 @@ type LLMClient struct {
 	// without ever reading another application's credential file, which security
 	// software rightly treats as a credential-theft pattern.
 	pushed atomic.Pointer[string]
+
+	// keyFileWarned makes the "key file looks like JSON" warning appear once.
+	keyFileWarned atomic.Bool
 }
 
 // SetPushedKey replaces the in-memory key handed over at runtime. An empty key
@@ -127,9 +130,10 @@ func (l *LLMClient) Configured() bool {
 }
 
 // resolveKey returns the bearer key to use for this request. When KeyFile is
-// set it is read live, so a rotating credential — e.g. the 1-hour JWT Hermes
-// keeps fresh in auth.json — never goes stale the way a startup-frozen env
-// value does. Any read/parse failure falls back to the static APIKey.
+// set it is read live, so a rotating token that something of your own rewrites
+// never goes stale the way a startup-frozen env value does. The file must hold a
+// bare token as plain text; a file that looks like JSON is refused. Any read or
+// parse failure falls back to the static APIKey.
 func (l *LLMClient) resolveKey() string {
 	if k := l.pushed.Load(); k != nil && *k != "" {
 		return *k
@@ -144,30 +148,21 @@ func (l *LLMClient) resolveKey() string {
 	if k := extractKey(b); k != "" {
 		return k
 	}
+	if strings.HasPrefix(strings.TrimSpace(string(b)), "{") && l.keyFileWarned.CompareAndSwap(false, true) {
+		log.Printf("HYATLAS_LLM_KEY_FILE looks like JSON, which is refused: it must hold a plain-text token (falling back to HYATLAS_LLM_KEY)")
+	}
 	return l.APIKey
 }
 
-// extractKey reads a bearer key from either a JSON auth file (Hermes auth.json
-// shape: providers.nous.agent_key, falling back to access_token) or a
-// plain-text file whose trimmed contents are the key.
+// extractKey reads a bearer key from a plain-text file whose trimmed contents are
+// the token. Content that starts with "{" is JSON, such as another program's
+// credential file, and yields no key, so the server never parses such files.
 func extractKey(b []byte) string {
-	var auth struct {
-		Providers map[string]struct {
-			AgentKey    string `json:"agent_key"`
-			AccessToken string `json:"access_token"`
-		} `json:"providers"`
+	s := strings.TrimSpace(string(b))
+	if s == "" || strings.HasPrefix(s, "{") {
+		return ""
 	}
-	if err := json.Unmarshal(b, &auth); err == nil {
-		if n := auth.Providers["nous"]; n.AgentKey != "" {
-			return n.AgentKey
-		} else if n := auth.Providers["nous"]; n.AccessToken != "" {
-			return n.AccessToken
-		}
-	}
-	if s := strings.TrimSpace(string(b)); s != "" && !strings.HasPrefix(s, "{") {
-		return s
-	}
-	return ""
+	return s
 }
 
 // Extraction is the structured result of one System1 pass over a single input.

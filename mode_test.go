@@ -460,10 +460,10 @@ func TestStartupWarningFiresOnlyWhenUnconfigured(t *testing.T) {
 	base := runtimeCfg{LLMBase: "http://api/v1", LLMModel: "m"}
 
 	// resolveKey() reads the file live, so the fixtures have to be real.
-	// extractKey accepts either the Hermes auth.json shape or a bare token
-	// file; use the real one so the fixture proves the live-read path.
-	keyFile := filepath.Join(t.TempDir(), "auth.json")
-	authShape := `{"providers":{"nous":{"access_token":"***"}}}`
+	// extractKey accepts only a bare token file; use a real one so the fixture
+	// proves the live-read path.
+	keyFile := filepath.Join(t.TempDir(), "key.txt")
+	authShape := `tok-from-file`
 	if err := os.WriteFile(keyFile, []byte(authShape), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -71,7 +71,9 @@ def _start_key_sharer(base_url: str, timeout: float) -> None:
         if _KEY_SHARER is not None:
             return
         client = HyatlasClient(base_url=base_url, timeout=timeout)
-        _KEY_SHARER = KeySharer(status=client.status, push=client.push_llm_key)
+        _KEY_SHARER = KeySharer(
+            server_url=base_url, status=client.status, push=client.push_llm_key
+        )
         _KEY_SHARER.start()
 
 

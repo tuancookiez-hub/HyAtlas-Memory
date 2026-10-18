@@ -12,9 +12,10 @@ Hermes's bundled plugins use, which also renews the token), and hands it to the
 server with ``POST /api/v1/llm/key``. The server keeps it in memory only. Nothing
 outside Hermes ever opens ``auth.json``.
 
-The key is only sent when the server's LLM endpoint is on the same host as the
-endpoint Hermes resolved, so a Nous key never reaches another provider. It is never
-logged. This module imports nothing from Hermes at load time, so it can be tested
+The key is only sent to a HyAtlas server on this machine (host 127.0.0.1, ::1 or
+localhost), and only when that server's LLM endpoint is on the same host as the
+endpoint Hermes resolved, so a Nous key never leaves the machine or reaches another
+provider. It is never logged. This module imports nothing from Hermes at load time, so it can be tested
 on its own.
 """
 
@@ -48,6 +49,19 @@ def resolve_hermes_key(provider: str = "nous") -> Dict[str, str]:
     return {"api_key": str(rt.get("api_key") or ""), "base_url": str(rt.get("base_url") or "")}
 
 
+# Hosts that mean "this machine". The key is never pushed to any other server.
+LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+
+def is_loopback(url: str) -> bool:
+    """Whether url names a server on this machine: 127.0.0.1, ::1 or localhost."""
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return host in LOOPBACK_HOSTS
+
+
 def same_host(a: str, b: str) -> bool:
     """Whether two URLs name the same host, ignoring case. Empty never matches."""
     ha = (urlparse(a).hostname or "").lower()
@@ -58,18 +72,21 @@ def same_host(a: str, b: str) -> bool:
 class KeySharer:
     """Keeps the server supplied with Hermes's current key.
 
-    status() returns the server's /api/v1/status dict; push(key) posts the key;
-    resolve() returns {"api_key", "base_url"} from Hermes. All three are injected so
-    the logic can be tested without Hermes or a server.
+    server_url is the HyAtlas server's base URL; the key is only ever pushed when its
+    host is loopback. status() returns the server's /api/v1/status dict; push(key)
+    posts the key; resolve() returns {"api_key", "base_url"} from Hermes. The three
+    callables are injected so the logic can be tested without Hermes or a server.
     """
 
     def __init__(
         self,
+        server_url: str,
         status: Callable[[], Dict[str, Any]],
         push: Callable[[str], Any],
         resolve: Callable[[], Dict[str, str]] = resolve_hermes_key,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        self._server_url = server_url
         self._status = status
         self._push = push
         self._resolve = resolve
@@ -83,9 +100,16 @@ class KeySharer:
         """Run one check and push when needed. Returns whether a key was sent.
 
         A key is sent when the server is waiting for one, when Hermes's key has
-        changed since the last push, or when REFRESH_INTERVAL has passed. Any error
-        is logged without the key and leaves the next check to try again.
+        changed since the last push, or when REFRESH_INTERVAL has passed. Nothing is
+        ever sent unless the server URL is loopback. Any error is logged without the
+        key and leaves the next check to try again.
         """
+        if not is_loopback(self._server_url):
+            logger.warning(
+                "hyatlas key share: not sent, the HyAtlas server (%s) is not on this machine",
+                urlparse(self._server_url).hostname or "unset",
+            )
+            return False
         try:
             st = self._status() or {}
         except Exception as e:  # server down: nothing to hand over to

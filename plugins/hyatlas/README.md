@@ -41,7 +41,15 @@ with a graph view, and a web dashboard panel. The server is a separate binary,
   `ultra`). A `replace` or `remove` forgets the entry it replaces or removes, using
   the old text Hermes sends as `previous_content`. The server marks those raw rows,
   and what was derived from them, as forgotten, which keeps them restorable. A
-  `replace` then adds the new content as an `add` does.
+  `replace` then adds the new content as an `add` does. A `remove` that comes with no
+  old text does nothing.
+- **Session-aware recall.** Searches carry the session id Hermes gave the provider, so
+  the server ranks that session's open intentions above other sessions'. The recall
+  block lists the channels in the order the server sends (`order`), and in the plugin's
+  own order for an older server.
+- **Local calls skip proxies.** The plugin ignores `HTTP_PROXY` and `HTTPS_PROXY` for
+  its calls to the HyAtlas server, so memory writes, searches and the key hand-over
+  never go through a proxy.
 - **Desktop pane.** Overview (health and layer counts), Graph, Memories, Search,
   Add. Its design is in [`desktop/SPEC.md`](desktop/SPEC.md).
 - **CLI and slash command.** `hermes hyatlas status|search|add|recent|start|stop`
@@ -162,7 +170,7 @@ writes to `.env`. The plugin does not use a key found in `hyatlas.json` or
 | `auto_start` | `HYATLAS_AUTO_START` | `false` | Start the server binary when it is unreachable |
 | `binary_path` | `HYATLAS_BINARY_PATH` | *(discover)* | Path to `hyatlas-go` |
 | `launcher_path` | `HYATLAS_LAUNCHER_PATH` | *(none)* | Windows only: a `hyatlas-go.ps1` that `hermes hyatlas start\|stop` runs instead of the binary |
-| `share_llm_key` | `HYATLAS_SHARE_LLM_KEY` | `false` | Hand Hermes's current Nous Portal key to the server over localhost, kept in its memory only, so no program but Hermes reads Hermes's credentials. Sent only when the server's endpoint is the Nous Portal (see Credentials) |
+| `share_llm_key` | `HYATLAS_SHARE_LLM_KEY` | `false` | Hand Hermes's current Nous Portal key to the server over localhost, kept in its memory only, so no program but Hermes reads Hermes's credentials. Sent only to a HyAtlas server on this machine (`127.0.0.1`, `::1` or `localhost`), and only when its endpoint is the Nous Portal (see Credentials) |
 | `request_timeout` | `HYATLAS_REQUEST_TIMEOUT` | `15.0` | HTTP timeout for server calls, in seconds |
 | `data_dir` | `HYATLAS_GO_DATA` | *(conventional)* | Server data directory. Also used by `hermes backup` |
 | `llm_base` | `HYATLAS_LLM_BASE` | *(none)* | Base URL of an OpenAI-compatible extraction endpoint |
@@ -380,8 +388,9 @@ The plugin runs no shell. It starts child processes in these cases only:
   The repository's `hyatlas-go.ps1` reads no credentials. On `start` it also runs `hyatlas-go.local.ps1` from its own folder, if
   that file exists: a git-ignored file for your own `HYATLAS_*` settings (model,
   batch size, owner aliases); see `hyatlas-go.local.ps1.example`.
-- **Windows, stop and liveness checks.** The plugin runs `taskkill` to stop the
-  pidfile's process, and `tasklist` to confirm the pid is a `hyatlas-go`.
+- **Windows, stop and liveness checks.** Before it stops the process the plugin asks the
+  server to write its buffered state (`POST /api/v1/flush`, best effort). It runs
+  `taskkill` to stop the pidfile's process, and `tasklist` to confirm the pid is a `hyatlas-go`.
 - **macOS, liveness check.** The plugin runs `ps` to confirm the pid is a `hyatlas-go`.
   On Linux it reads `/proc` instead.
 
@@ -426,7 +435,9 @@ starts it.
   tools' keys (for example `OPENAI_API_KEY`). A `HYATLAS_LLM_KEY` exported in your
   environment does reach it.
 - **`share_llm_key`** (off by default) hands Hermes's own Nous Portal key to the
-  server. When it is on, the plugin asks Hermes for the current key through
+  server, and only to a server on this machine: if `server_host` is not `127.0.0.1`,
+  `::1` or `localhost`, the plugin logs a warning (never the key) and sends nothing.
+  When it is on, the plugin asks Hermes for the current key through
   Hermes's resolver (`hermes_cli.runtime_provider.resolve_runtime_provider`, the
   call Hermes's bundled plugins use; it also renews the one-hour token) and posts
   it to the server's `POST /api/v1/llm/key` over localhost. It checks once a minute
@@ -440,8 +451,9 @@ starts it.
   the bearer token from that file on every call. The plugin has no setting for it,
   but it passes the variable through. Point it only at a key file of your own:
   pointing it at another program's credential file (such as Hermes' `auth.json`)
-  is the pattern antivirus software flags as credential theft. Use
-  `share_llm_key` for a Hermes login instead.
+  is the pattern antivirus software flags as credential theft, so the server accepts
+  only a plain-text token file there and refuses a JSON one. Use `share_llm_key` for a
+  Hermes login instead.
 - The plugin does not read another tool's login, token store or browser profile.
 
 ### Listening address

@@ -77,7 +77,8 @@ SCHEMA: Tuple[Dict[str, Any], ...] = (
         "description": "Hand Hermes's current Nous Portal key to the HyAtlas server "
                        "over localhost, where it is kept in memory only, so neither "
                        "the server nor its launcher reads Hermes's credential file. "
-                       "Sent only when the server's LLM endpoint is the Nous Portal.",
+                       "Sent only to a HyAtlas server on this machine, and only when "
+                       "its LLM endpoint is the Nous Portal.",
     },
     {
         "key": "request_timeout", "type": "float", "default": 15.0,

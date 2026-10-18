@@ -2,8 +2,36 @@
 
 ## [5.0.0] — unreleased (local)
 
-A stable floor: a review of the whole system and a clean-up of the 4.8 and 4.9 code. No
-new memory features; the same layers, modes and API, faster and harder to lose data from.
+A stable floor: a review of the whole system and a clean-up of the 4.8 and 4.9 code. The
+same eight layers and three modes, faster and harder to lose data from, with the gaps the
+review found closed: forgetting, links between facts, session-aware recall, one alias rule,
+and stricter key handling.
+
+### Added
+
+- **Forget.** `POST /api/v1/forget` retires the owner's memory-tool raw rows with a given
+  text, and every live row derived from them, as `forgotten`. It is reversible through
+  `/api/v1/admin/restore`, so it needs no admin switch. The Hermes plugin sends it when
+  Hermes's `memory` tool replaces or removes an entry (the old text arrives as
+  `previous_content`); a replace then adds the new content as an add does. A remove with
+  no old text does nothing.
+- **Links and recurring events** (with `HYATLAS_RECONCILE=on`). Reconcile can LINK a new
+  fact to stored ones as `related`, `contrasts` or `same_series` without retiring either,
+  keeping the newest 8 links a fact. An UPDATE that merges a recurring event also keeps its
+  count and its newest 20 dates on the merged fact. Search adds up to 2 facts that the top
+  hits link to and the query missed, inside the result limit, after the query's own best
+  hits.
+- **The current session's intentions first.** Search takes `session_id`; an L7 intention
+  from that session ranks above one from another session. The Hermes plugin sends it.
+- **Channel order from the server.** The search response carries `order`, and the plugin
+  shows the channels in it, falling back to its own order for an older server.
+- **Identifiers in lite.** Keyword search in `lite` covers the raw rows, so a query for an
+  identifier (`19528`) finds the turn that mentions it. `pro` and `ultra` still leave raw
+  rows out of an all-layer search.
+- **`POST /api/v1/flush`.** Writes the buffered doc index and usage counts now.
+- **How a row was retired.** `/api/v1/list` with `include_superseded` returns
+  `superseded_how` (`replaced`, `updated`, `merged`, `restated`, `dropped`, `done` or
+  `forgotten`) beside `superseded_by` and `drop_reason`.
 
 ### Fixed
 
@@ -33,11 +61,41 @@ new memory features; the same layers, modes and API, faster and harder to lose d
   else in HyAtlas retires data reversibly, and this was the one irreversible path.
 - **Clean shutdown.** Ctrl-C or SIGTERM stops the server after in-flight requests and
   writes buffered state. `POST /api/v1/flush` writes it on demand; the Windows launcher
-  and the plugin call it before a hard kill.
-- **Settings.** `HYATLAS_EPISODE_GAP`, `HYATLAS_NOW_EVERY` and the snapshot interval share
-  one parser: a bare number means seconds, and `0`, `off`, `false` or `no` turn the
-  feature off. The plugin's `auto_start` and `share_llm_key` environment switches accept
-  `on`. Near-duplicate demotion looks at the first 2×limit hits.
+  and the plugin call it before a hard kill. The server also waits up to 10 seconds for
+  the background extractions that writes just served; the catch-up pass finishes any
+  that are left on the next start, and never extracts a row a write is still working on.
+- **Settings.** Every duration setting (the consolidation intervals, `HYATLAS_RAW_RETENTION`,
+  `HYATLAS_CATCHUP_EVERY`, `HYATLAS_EPISODE_GAP`, `HYATLAS_NOW_EVERY`,
+  `HYATLAS_INTENTION_TTL` and the snapshot interval) shares one parser: a bare number means
+  seconds, and `0`, `off`, `false` or `no` turn the feature off. So
+  `HYATLAS_CONSOLIDATE_EVERY=off` now fails at start in ultra, as `0` always did, and
+  `HYATLAS_INTENTION_TTL=off` means no limit on intentions. The plugin's `auto_start` and
+  `share_llm_key` environment switches accept `on`. Near-duplicate demotion looks at the
+  first 2×limit hits.
+- **One alias rule.** `HYATLAS_USER_ALIASES` is held by the store, and everything asks it:
+  `/api/v1/list` with a `user_id` includes that person's other IDs, write-time
+  de-duplication, the related facts, entity pages and open intentions shown to extraction,
+  consolidation and forget cover them, and episodes and Now pages are keyed by the
+  person's first ID (a Now page stored under another ID is still found).
+- **Experiences stay out of the candidate lists.** Task experiences are left out of the
+  related facts shown to extraction and of reconcile's candidates by the search itself,
+  so they no longer use up slots; a repeat of the lesson still updates one.
+- **Key handling.** `HYATLAS_LLM_KEY_FILE` takes a plain-text token only. A file whose
+  content starts with `{` (JSON, such as another program's credential file) gives no key,
+  logs one warning without its content, and `HYATLAS_LLM_KEY` is used instead. The plugin's
+  `share_llm_key` hands the key only to a HyAtlas server on `127.0.0.1`, `::1` or
+  `localhost`, and logs a warning (never the key) when the server is elsewhere.
+- **Every retirement records how.** One record (by whom, how, why) is written at every
+  place a row is retired.
+
+### Upgrading from 4.9
+
+- A JSON `HYATLAS_LLM_KEY_FILE` stops working: switch to a plain-text token file, or use
+  `HYATLAS_LLM_KEY`, or the plugin's `share_llm_key` for a Hermes login.
+- Scripts that call `delete_all` by layer, user, agent or all need `HYATLAS_ADMIN=on`.
+- `HYATLAS_CONSOLIDATE_EVERY=off` (or `false`, `no`) stops an ultra server at start;
+  use `HYATLAS_MODE=pro` to run without the slow path.
+- A bare number in any duration setting is read as seconds.
 
 ### Performance
 

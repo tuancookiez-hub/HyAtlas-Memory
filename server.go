@@ -1598,8 +1598,8 @@ func main() {
 	// HYATLAS_LLM_BASE, HYATLAS_LLM_MODEL and HYATLAS_LLM_KEY are all set.
 	llmBase := rt.LLMBase
 	llmKey := os.Getenv("HYATLAS_LLM_KEY")
-	// Optional: read the key live from a file each call, for rotating
-	// credentials (e.g. Hermes keeps a fresh 1-hour JWT in auth.json).
+	// Optional: read the key live from a plain-text token file each call, for a
+	// rotating key that something of your own rewrites. A JSON file is refused.
 	// When set, this wins over the frozen HYATLAS_LLM_KEY value.
 	llmKeyFile := os.Getenv("HYATLAS_LLM_KEY_FILE")
 	llmModel := rt.LLMModel
