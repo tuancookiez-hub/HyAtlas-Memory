@@ -313,12 +313,6 @@ type Consolidator struct {
 	// calls for one owner cannot both write the same schema or leave two live arcs.
 	writeMu sync.Mutex
 
-	// aliases maps a user ID to every ID of the same person (HYATLAS_USER_ALIASES),
-	// as the server's search does. A person's facts are consolidated as one owner,
-	// so a contradiction between facts written under two of their IDs meets in one
-	// call. Set once with SetAliases before the first pass; nil means no aliases.
-	aliases map[string][]string
-
 	// durations holds the most recent successful call times (guarded by stateMu),
 	// so callBudget can tell how long a call really takes on this model.
 	durations []time.Duration
@@ -364,22 +358,33 @@ func NewConsolidator(store *MemoryStore, llm *LLMClient, every, retention time.D
 	return c
 }
 
-// SetAliases gives the consolidator the server's alias groups (see aliases). Call
-// it before Run starts.
-func (c *Consolidator) SetAliases(m map[string][]string) { c.aliases = m }
-
-// groupOf is every user ID of the person behind user, user first when there are no
-// aliases.
-func (c *Consolidator) groupOf(user string) []string {
-	if g := c.aliases[user]; len(g) > 0 {
-		return g
+// SetAliases gives the store the server's alias groups, which the consolidator reads
+// through it (see MemoryStore.SetAliases). A person's facts are consolidated as one
+// owner, so a contradiction between facts written under two of their IDs meets in one
+// call. Call it before Run starts; it does nothing without a store.
+func (c *Consolidator) SetAliases(m map[string][]string) {
+	if c.store != nil {
+		c.store.SetAliases(m)
 	}
-	return []string{user}
+}
+
+// groupOf is every user ID of the person behind user, user first; just user when
+// there are no aliases.
+func (c *Consolidator) groupOf(user string) []string {
+	if c.store == nil {
+		return []string{user}
+	}
+	return c.store.owners(user)
 }
 
 // canonical is the ID a person's facts are consolidated under: the first ID of
 // their alias group, the same for every ID in it.
-func (c *Consolidator) canonical(user string) string { return c.groupOf(user)[0] }
+func (c *Consolidator) canonical(user string) string {
+	if c.store == nil {
+		return user
+	}
+	return c.store.canonicalOwner(user)
+}
 
 // groupOwners groups facts by owner like groupByOwner, with each user ID replaced
 // by its canonical alias, so one person's IDs form one owner.

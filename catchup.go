@@ -54,7 +54,7 @@ type CatchupResult struct {
 	Marked int
 	// Failed is how many rows hit a model error; the run stops at the first.
 	Failed int
-	// Skipped is how many rows were too new to touch yet.
+	// Skipped is how many rows were too new to touch yet or are being extracted.
 	Skipped int
 }
 
@@ -122,6 +122,13 @@ func (c *Catchup) Once(ctx context.Context) (res CatchupResult, ran bool) {
 			break
 		}
 		if at := docTime(it.Ts); !at.IsZero() && now.Sub(at) < catchupMinAge {
+			res.Skipped++
+			continue
+		}
+		// A write's own extraction may still be running, however old the row is (a
+		// slow provider can take longer than catchupMinAge); a second one would store
+		// its facts twice.
+		if s.extractionRunning(it.ID) {
 			res.Skipped++
 			continue
 		}

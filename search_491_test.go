@@ -47,12 +47,12 @@ func TestExtractReconcilePassesAliases(t *testing.T) {
 	t.Cleanup(mock.Close)
 
 	srv := &Server{
-		store:        st,
-		llm:          NewLLMClient(mock.URL, "k", "m"),
-		mode:         ModePro,
-		dedupeScore:  defaultDedupeScore,
-		ownerAliases: aliasMap(parseUserAliases("u,u2")),
+		store:       st,
+		llm:         NewLLMClient(mock.URL, "k", "m"),
+		mode:        ModePro,
+		dedupeScore: defaultDedupeScore,
 	}
+	st.SetAliases(aliasMap(parseUserAliases("u,u2")))
 	if err := srv.extract("new fact", "u", "a", rawID); err != nil {
 		t.Fatal(err)
 	}

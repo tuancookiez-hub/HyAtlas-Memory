@@ -193,7 +193,8 @@ Return ONLY valid JSON, no prose, no markdown fences.`
 }
 
 // extractContext gathers what the store already holds that bears on text for
-// this owner: the nearest live L3 facts and the newest open L7 intentions. A
+// this owner (every alias ID of the person): the nearest live L3 facts, the entity
+// pages and the newest open L7 intentions. A
 // failed lookup is logged and skipped; extraction then runs without that part,
 // exactly as it did before there was any context.
 func (s *MemoryStore) extractContext(text, userID, agentID string, now time.Time) ExtractContext {
@@ -212,7 +213,7 @@ func (s *MemoryStore) extractContext(text, userID, agentID string, now time.Time
 	// fill extractRelatedMax.
 	var near []SearchHit
 	if err == nil {
-		near, err = s.searchWhereOpts(qv, extractRelatedMax, memory.L3Fact, ownerWhere(userID, agentID),
+		near, err = s.searchOwnersWhere(qv, extractRelatedMax, memory.L3Fact, s.owners(userID), agentID,
 			searchOpts{excludeLabel: experienceLabel})
 		if err != nil {
 			log.Printf("extract context: related facts: %v", err)
@@ -231,12 +232,24 @@ func (s *MemoryStore) extractContext(text, userID, agentID string, now time.Time
 	// The owner's nearest entity pages, so the model updates a page rather than
 	// creating a second one for the same thing. Skipped when there is no page store.
 	if s.pages != nil && strings.TrimSpace(text) != "" {
-		ec.Pages = s.pages.RelatedVec(qv, userID, agentID, extractPagesMax)
+		// Every ID of the owner has pages of its own; the owner's own ID comes first.
+		seen := map[string]bool{}
+		for _, u := range s.owners(userID) {
+			for _, pg := range s.pages.RelatedVec(qv, u, agentID, extractPagesMax) {
+				if len(ec.Pages) == extractPagesMax {
+					break
+				}
+				if !seen[pg.ID] {
+					seen[pg.ID] = true
+					ec.Pages = append(ec.Pages, pg)
+				}
+			}
+		}
 	}
 
 	// List is newest first, so the first extractIntentionMax rows are the newest
 	// and the walk can stop at the first one that is out of the window.
-	items, _ := s.List(memory.L7Intention, userID, agentID, extractIntentionMax, 0, false)
+	items, _ := s.ListOwners(memory.L7Intention, s.ownersOrAll(userID), agentID, extractIntentionMax, 0, false, false)
 	for _, d := range items {
 		ts, err := time.Parse(time.RFC3339, d.Ts)
 		if err != nil || now.Sub(ts) > extractIntentionWindow {

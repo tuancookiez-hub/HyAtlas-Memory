@@ -96,7 +96,7 @@ func TestSearchStillHonoursUserIDsArray(t *testing.T) {
 func TestSearchExpandsUserAliases(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
 	seedOwnerFacts(t, srv, "alice", "alice-discord", "bob")
-	srv.ownerAliases = aliasMap(parseUserAliases("alice,alice-discord"))
+	srv.store.SetAliases(aliasMap(parseUserAliases("alice,alice-discord")))
 	code, ids := searchOwnerUserIDs(t, srv,
 		`{"query":"likes tea","user_id":"alice","agent_id":"a1","limit":10}`)
 	if code != http.StatusOK {
@@ -117,7 +117,7 @@ func TestSearchExpandsUserAliases(t *testing.T) {
 func TestSearchOwnersCountsOneSearch(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
 	seedOwnerFacts(t, srv, "alice", "alice-discord", "bob")
-	srv.ownerAliases = aliasMap(parseUserAliases("alice,alice-discord"))
+	srv.store.SetAliases(aliasMap(parseUserAliases("alice,alice-discord")))
 	before := srv.store.searches.Load()
 	code, _ := searchOwnerUserIDs(t, srv,
 		`{"query":"likes tea","user_id":"alice","agent_id":"a1","limit":10}`)

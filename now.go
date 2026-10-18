@@ -98,6 +98,15 @@ func nowOwnerKey(user, agent string) string {
 	return user + "\x1f" + agent
 }
 
+// canon is the user ID a page is keyed under: the person's canonical alias, or user
+// itself when there are no aliases or no store.
+func (n *NowPages) canon(user string) string {
+	if n.store == nil {
+		return user
+	}
+	return n.store.canonicalOwner(user)
+}
+
 // Touch asks for a refresh of the owner's page. It never blocks. The first write
 // starts a refresh in a goroutine at once. A write during the window after a refresh,
 // or while one is in flight, is not dropped: the owner is marked pending, and when the
@@ -107,6 +116,7 @@ func (n *NowPages) Touch(user, agent string) {
 	if !n.llm.Configured() {
 		return
 	}
+	user = n.canon(user)
 	key := nowOwnerKey(user, agent)
 
 	n.mu.Lock()
@@ -181,12 +191,25 @@ func (n *NowPages) run(key, user, agent string) {
 	}
 }
 
-// Get returns the owner's stored page, if one exists.
+// Get returns the owner's stored page, if one exists. Pages are keyed by the person's
+// canonical alias; a page stored before aliases were set up sits under the ID it was
+// written with, so when the canonical key has none, the ID asked for and then the
+// person's other IDs are tried.
 func (n *NowPages) Get(user, agent string) (NowPage, bool) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	p, ok := n.pages[nowOwnerKey(user, agent)]
-	return p, ok
+	if p, ok := n.pages[nowOwnerKey(n.canon(user), agent)]; ok {
+		return p, true
+	}
+	if n.store == nil {
+		return NowPage{}, false
+	}
+	for _, id := range n.store.owners(user) {
+		if p, ok := n.pages[nowOwnerKey(id, agent)]; ok {
+			return p, true
+		}
+	}
+	return NowPage{}, false
 }
 
 // HandleNow serves GET /api/v1/now?user_id=&agent_id= -> {"now": NowPage} or {"now": null}.
@@ -213,6 +236,7 @@ func resolveNowEvery() time.Duration {
 // An empty LLM reply also keeps the old page, since a blank page would erase it.
 func (n *NowPages) refresh(ctx context.Context, user, agent string) error {
 	start := time.Now()
+	user = n.canon(user)
 	key := nowOwnerKey(user, agent)
 	now := time.Now()
 
@@ -225,7 +249,8 @@ func (n *NowPages) refresh(ctx context.Context, user, agent string) error {
 	// many bytes.
 	recent := func(layer memory.Layer, limit int, win time.Duration, trunc int) []string {
 		var out []string
-		rows, _ := n.store.List(layer, user, agent, limit, 0, false)
+		// The page is the person's, so rows of every alias ID feed it.
+		rows, _ := n.store.ListOwners(layer, n.store.ownersOrAll(user), agent, limit, 0, false, false)
 		for _, d := range rows {
 			ts, err := time.Parse(time.RFC3339, d.Ts)
 			if err != nil || now.Sub(ts) > win {

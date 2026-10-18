@@ -172,6 +172,10 @@ func (e *Episodes) Note(user, agent string, factIDs []string, at time.Time) {
 	}
 	at = at.UTC()
 	stamp := at.Format(time.RFC3339)
+	// One person's alias IDs share one episode, keyed by the canonical ID.
+	if e.store != nil {
+		user = e.store.canonicalOwner(user)
+	}
 	key := episodeKey(user, agent)
 
 	e.mu.Lock()

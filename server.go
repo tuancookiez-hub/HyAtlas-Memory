@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -44,9 +45,6 @@ type Server struct {
 	// allowedHosts are the extra hostnames (HYATLAS_ALLOWED_HOSTS) a request may
 	// name in Host or Origin, beyond localhost and IP literals (see guardLocal).
 	allowedHosts []string
-	// ownerAliases maps a user ID to every ID of the same person
-	// (HYATLAS_USER_ALIASES), so search covers all of them.
-	ownerAliases map[string][]string
 	// minScore and dedupeScore are HYATLAS_MIN_SCORE and HYATLAS_DEDUPE_SCORE. The
 	// zero value turns each off, which is what tests built without main get.
 	minScore    float64
@@ -78,6 +76,82 @@ type Server struct {
 	// background contexts while /api/v1/status reads it on request.
 	mu             sync.RWMutex
 	lastExtractErr string
+
+	// extracting counts, per raw memory id, the extractions running or about to run
+	// (guarded by extractMu), so the catch-up pass never extracts a row a write is
+	// still working on. bg tracks the background extractions and bgRunning counts them,
+	// so a shutdown can wait for them (see waitExtractions).
+	extractMu  sync.Mutex
+	extracting map[string]int
+	bg         sync.WaitGroup
+	bgRunning  atomic.Int64
+}
+
+// beginExtract marks the raw memory id as being extracted. Marks nest: each call
+// needs its own endExtract.
+func (s *Server) beginExtract(id string) {
+	s.extractMu.Lock()
+	defer s.extractMu.Unlock()
+	if s.extracting == nil {
+		s.extracting = map[string]int{}
+	}
+	s.extracting[id]++
+}
+
+// endExtract undoes one beginExtract of id.
+func (s *Server) endExtract(id string) {
+	s.extractMu.Lock()
+	defer s.extractMu.Unlock()
+	if s.extracting[id] <= 1 {
+		delete(s.extracting, id)
+		return
+	}
+	s.extracting[id]--
+}
+
+// extractionRunning reports whether an extraction of the raw memory id is running.
+func (s *Server) extractionRunning(id string) bool {
+	s.extractMu.Lock()
+	defer s.extractMu.Unlock()
+	return s.extracting[id] > 0
+}
+
+// goExtract runs extract in the background. The row is marked as in flight before
+// the goroutine starts, so the catch-up pass cannot slip in between, and the run is
+// counted so waitExtractions can wait for it.
+func (s *Server) goExtract(text, userID, agentID, id string) {
+	s.beginExtract(id)
+	s.bg.Add(1)
+	s.bgRunning.Add(1)
+	go func() {
+		defer s.bgRunning.Add(-1)
+		defer s.bg.Done()
+		defer s.endExtract(id)
+		_ = s.extract(text, userID, agentID, id)
+	}()
+}
+
+// shutdownExtractWait is how long a clean shutdown waits for background extractions.
+const shutdownExtractWait = 10 * time.Second
+
+// waitExtractions waits up to timeout for the background extractions to finish and
+// returns how many are still running (0 when all finished). A shutdown calls it
+// after the HTTP server has drained, so a write whose extraction was still running
+// is not cut off mid-way.
+func (s *Server) waitExtractions(timeout time.Duration) int {
+	done := make(chan struct{})
+	go func() {
+		s.bg.Wait()
+		close(done)
+	}()
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-done:
+		return 0
+	case <-t.C:
+		return int(s.bgRunning.Load())
+	}
 }
 
 func (s *Server) setExtractErr(err string) {
@@ -261,7 +335,7 @@ func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext,
 			qv = nil
 		}
 		if dedupe > 0 && qv != nil {
-			near, err := store.searchWhere(qv, 1, memory.L3Fact, ownerWhere(userID, agentID))
+			near, err := store.searchOwnersWhere(qv, 1, memory.L3Fact, store.owners(userID), agentID, searchOpts{})
 			if err == nil && len(near) > 0 && float64(near[0].Score) >= dedupe && sameNumbers(near[0].Content, f.Data) {
 				old := near[0]
 				stale[howRestated] = append([]string{old.ID}, store.MirrorsOf(memory.L1Profile, old.Meta["source_id"], old.Content)...)
@@ -425,7 +499,7 @@ func (s *Server) extractForMode(text, userID, agentID, id string) string {
 	// so the write never waits. Either can be overridden with
 	// HYATLAS_SYNC_EXTRACT.
 	if !s.sync.Blocks(s.mode) {
-		go s.extract(text, userID, agentID, id)
+		s.goExtract(text, userID, agentID, id)
 		return "pending"
 	}
 	// Blocking: the response tells the truth about this write instead of
@@ -439,6 +513,8 @@ func (s *Server) extractForMode(text, userID, agentID, id string) string {
 // extract runs one LLM extraction and promotes the result. Shared by the
 // synchronous and background paths so the two cannot drift.
 func (s *Server) extract(text, userID, agentID, id string) error {
+	s.beginExtract(id)
+	defer s.endExtract(id)
 	ctx, cancel := context.WithTimeout(context.Background(), extractTimeout)
 	defer cancel()
 	if s.llm == nil {
@@ -705,11 +781,13 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 			includeSuperseded = includeSuperseded || body.IncludeSuperseded
 		}
 	}
-	list := s.store.List
-	if includeSuperseded {
-		list = s.store.ListAll
+	// A user ID lists the rows of every ID of the same person (HYATLAS_USER_ALIASES).
+	var users []string
+	if userID != "" {
+		users = s.store.owners(userID)
 	}
-	items, total := list(memory.Layer(layer), userID, agentID, limit, offset, includeRaw == "false" && layer == "")
+	items, total := s.store.ListOwners(memory.Layer(layer), users, agentID, limit, offset,
+		includeRaw == "false" && layer == "", includeSuperseded)
 
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {
@@ -1448,7 +1526,6 @@ func (s *Server) attachSlowPath(ctx context.Context, rt runtimeCfg) bool {
 	}
 	s.cons = NewConsolidator(s.store, s.llm, rt.Consolidate, rt.Retention, rt.Batch)
 	s.cons.graph = rt.Graph
-	s.cons.SetAliases(s.ownerAliases)
 	go s.cons.Run(ctx)
 	return true
 }
@@ -1611,9 +1688,10 @@ func main() {
 	srv := &Server{store: store, llm: llm, llmModel: llmModel, llmBase: llmBase,
 		mode: rt.Mode, sync: rt.Sync, start: time.Now(), dataDir: dir}
 
-	// Before attachSlowPath: the consolidator groups one person's IDs as one owner,
-	// so it needs the alias groups before its loop starts.
-	srv.ownerAliases = aliasMap(rt.UserAliases)
+	// Before attachSlowPath: the store owns the alias groups, and the consolidator
+	// groups one person's IDs as one owner through them, so they must be set before
+	// its loop starts.
+	store.SetAliases(aliasMap(rt.UserAliases))
 	srv.attachSlowPath(ctx, rt)
 
 	if w := startupWarning(rt, llm); w != "" {
@@ -1647,7 +1725,6 @@ func main() {
 	backlogCons := srv.cons
 	if backlogCons == nil {
 		backlogCons = NewConsolidator(store, llm, rt.Consolidate, rt.Retention, rt.Batch)
-		backlogCons.SetAliases(srv.ownerAliases)
 	}
 	srv.backlog = NewBacklogJob(dir, store, backlogCons, nowLLM, func() bool { return srv.admin })
 	snap := resolveSnapshot(dir)
@@ -1683,6 +1760,12 @@ func main() {
 	// ListenAndServe returns as soon as Shutdown starts; wait for in-flight requests
 	// to finish before the final flush, so a write still running is not lost.
 	<-drained
+	// Background extractions started by writes just served are given a moment to
+	// finish, so their facts are stored before the final flush. The catch-up loop
+	// stopped with the signal and picks up whatever is left on the next start.
+	if left := srv.waitExtractions(shutdownExtractWait); left > 0 {
+		log.Printf("shutdown: %d extraction(s) still running after %s; the catch-up pass finishes them on the next start", left, shutdownExtractWait)
+	}
 	srv.flush()
 	store.Close()
 	log.Print("stopped")
@@ -1915,9 +1998,8 @@ func (s *Server) expandOwners(ids []string) []string {
 		out = append(out, id)
 	}
 	for _, id := range ids {
-		add(id)
-		for _, alias := range s.ownerAliases[id] {
-			add(alias)
+		for _, owner := range s.store.owners(id) {
+			add(owner)
 		}
 	}
 	return out

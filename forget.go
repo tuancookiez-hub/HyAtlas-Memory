@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/tuancookiez-hub/hyatlas-v4/memory"
@@ -72,12 +73,14 @@ func (s *Server) handleForget(w http.ResponseWriter, r *http.Request) {
 }
 
 // forgetTargets finds the live raw rows that forget should retire and the live
-// rows derived from them. A raw row qualifies when it belongs to exactly userID and
-// agentID, carries the memory-tool write origin, and its content equals text after
+// rows derived from them. A raw row qualifies when it belongs to userID (or one of its
+// aliases) and exactly agentID, carries the memory-tool write origin, and its content equals text after
 // both are trimmed of surrounding space. A derived row is any live non-raw row whose
 // sources include a qualifying raw row's id. Both lists are read under one lock, so
 // a row written in between is never half-matched.
 func (s *MemoryStore) forgetTargets(text, userID, agentID string) (raw []string, derived []string) {
+	// A row written under any alias of the owner qualifies.
+	users := s.owners(userID)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rawSet := make(map[string]bool)
@@ -85,7 +88,7 @@ func (s *MemoryStore) forgetTargets(text, userID, agentID string) (raw []string,
 		if d.Layer != string(memory.L2Raw) || isSuperseded(d) {
 			continue
 		}
-		if d.UserID != userID || d.AgentID != agentID {
+		if !slices.Contains(users, d.UserID) || d.AgentID != agentID {
 			continue
 		}
 		if d.Meta["write_origin"] != memoryToolOrigin {

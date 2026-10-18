@@ -55,6 +55,12 @@ type MemoryStore struct {
 	// It is not a memory.Layer, so counts, lists and normal search never see it.
 	clauses *chromem.Collection
 
+	// aliases maps a user ID to every ID of the same person (HYATLAS_USER_ALIASES),
+	// the whole group, itself included. It is set once at start with SetAliases and
+	// guarded by aliasMu, not mu, so reading it never waits on the index lock.
+	aliasMu sync.RWMutex
+	aliases map[string][]string
+
 	mu    sync.RWMutex
 	index map[string]DocIndex
 	// replacedBy maps a successor id to the ids of the rows it replaced, for rows whose
@@ -371,6 +377,91 @@ func (s *MemoryStore) searchVec(qv []float32, limit int, layer memory.Layer, use
 	return s.searchWhere(qv, limit, layer, ownerWhere(userID, agentID))
 }
 
+// SetAliases gives the store the alias groups of HYATLAS_USER_ALIASES: each user ID
+// maps to the whole group of IDs of its person, itself included, in the order the
+// group was written (see aliasMap). Call it once at start, before the first write; nil
+// means no aliases.
+func (s *MemoryStore) SetAliases(groups map[string][]string) {
+	s.aliasMu.Lock()
+	s.aliases = groups
+	s.aliasMu.Unlock()
+}
+
+// owners is every user ID of the person behind user: user first, then its aliases in
+// group order. Without aliases (or for an empty user) it is just [user].
+func (s *MemoryStore) owners(user string) []string {
+	out := []string{user}
+	if s == nil || user == "" {
+		return out
+	}
+	s.aliasMu.RLock()
+	group := s.aliases[user]
+	s.aliasMu.RUnlock()
+	for _, id := range group {
+		if !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// ownersOrAll is owners(user) for a list filter: every owner (nil) when user is empty.
+func (s *MemoryStore) ownersOrAll(user string) []string {
+	if user == "" {
+		return nil
+	}
+	return s.owners(user)
+}
+
+// canonicalOwner is the ID a person's data is keyed under: the first ID of their alias
+// group, the same for every ID in it. A user with no aliases is their own canonical ID.
+func (s *MemoryStore) canonicalOwner(user string) string {
+	if s == nil {
+		return user
+	}
+	s.aliasMu.RLock()
+	defer s.aliasMu.RUnlock()
+	if g := s.aliases[user]; len(g) > 0 {
+		return g[0]
+	}
+	return user
+}
+
+// searchOwnersWhere runs the layer search for each of users (the agent filter applies
+// to all) and merges the hits best first, one per row, keeping at most limit. With one
+// user it is exactly searchWhereOpts. It does not count as a search.
+func (s *MemoryStore) searchOwnersWhere(qv []float32, limit int, layer memory.Layer, users []string, agentID string, opts searchOpts) ([]SearchHit, error) {
+	if len(users) <= 1 {
+		u := ""
+		if len(users) == 1 {
+			u = users[0]
+		}
+		return s.searchWhereOpts(qv, limit, layer, ownerWhere(u, agentID), opts)
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	var merged []SearchHit
+	seen := map[string]bool{}
+	for _, u := range users {
+		hits, err := s.searchWhereOpts(qv, limit, layer, ownerWhere(u, agentID), opts)
+		if err != nil {
+			return nil, err
+		}
+		for _, h := range hits {
+			if !seen[h.ID] {
+				seen[h.ID] = true
+				merged = append(merged, h)
+			}
+		}
+	}
+	sort.SliceStable(merged, func(i, j int) bool { return merged[i].Score > merged[j].Score })
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	return merged, nil
+}
+
 // ownerWhere builds the metadata filter for an owner: a key for each non-empty
 // value, and nil when both are empty.
 func ownerWhere(userID, agentID string) map[string]string {
@@ -512,13 +603,28 @@ type SearchHit struct {
 // excludeRaw drops l2_raw rows BEFORE pagination (and from total), so a raw-heavy
 // head cannot empty a page — that is the include_raw=false contract.
 func (s *MemoryStore) List(layer memory.Layer, userID, agentID string, limit, offset int, excludeRaw bool) ([]DocIndex, int) {
-	return s.list(layer, userID, agentID, limit, offset, excludeRaw, false)
+	return s.list(layer, ownerList(userID), agentID, limit, offset, excludeRaw, false)
 }
 
 // ListAll is List including superseded docs, for the history view
 // (/api/v1/list with include_superseded).
 func (s *MemoryStore) ListAll(layer memory.Layer, userID, agentID string, limit, offset int, excludeRaw bool) ([]DocIndex, int) {
-	return s.list(layer, userID, agentID, limit, offset, excludeRaw, true)
+	return s.list(layer, ownerList(userID), agentID, limit, offset, excludeRaw, true)
+}
+
+// ListOwners is List (or ListAll with includeSuperseded) for a person known by
+// several user IDs: a row of any of users matches. An empty users list matches every
+// owner. Callers pass owners(userID) to cover a user's aliases.
+func (s *MemoryStore) ListOwners(layer memory.Layer, users []string, agentID string, limit, offset int, excludeRaw, includeSuperseded bool) ([]DocIndex, int) {
+	return s.list(layer, users, agentID, limit, offset, excludeRaw, includeSuperseded)
+}
+
+// ownerList is the one-element owner list of userID, or nil (every owner) for "".
+func ownerList(userID string) []string {
+	if userID == "" {
+		return nil
+	}
+	return []string{userID}
 }
 
 // listTopKRatio is how many times larger the match set must be than offset+limit for
@@ -528,7 +634,7 @@ const listTopKRatio = 8
 // list returns one page of the matching rows, newest first, and the total number of
 // matches. A small page of a large match set is selected with a bounded top-k pass,
 // which gives the same order as a full sort without sorting every match.
-func (s *MemoryStore) list(layer memory.Layer, userID, agentID string, limit, offset int, excludeRaw, includeSuperseded bool) ([]DocIndex, int) {
+func (s *MemoryStore) list(layer memory.Layer, users []string, agentID string, limit, offset int, excludeRaw, includeSuperseded bool) ([]DocIndex, int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var all []DocIndex
@@ -542,7 +648,7 @@ func (s *MemoryStore) list(layer memory.Layer, userID, agentID string, limit, of
 		if !includeSuperseded && isSuperseded(d) {
 			continue
 		}
-		if userID != "" && d.UserID != userID {
+		if len(users) > 0 && !slices.Contains(users, d.UserID) {
 			continue
 		}
 		if agentID != "" && d.AgentID != agentID {
