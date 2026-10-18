@@ -975,7 +975,7 @@ the two independent. HyAtlas never creates a scheduled task, service or startup 
 own; you choose one:
 
 - **Windows:** press Win+R, open `shell:startup`, and create a shortcut whose target is
-  `powershell.exe -NoProfile -WindowStyle Hidden -File "C:\path	o\hyatlas-go.ps1" start`.
+  `powershell.exe -NoProfile -WindowStyle Hidden -File "C:\path\to\hyatlas-go.ps1" start`.
 - **Linux:** a systemd user unit (`~/.config/systemd/user/hyatlas.service`) with
   `ExecStart=/path/to/hyatlas-go` and your `HYATLAS_*` settings as `Environment=` lines, then
   `systemctl --user enable --now hyatlas`. `systemctl --user stop` sends SIGTERM, which
