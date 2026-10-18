@@ -199,11 +199,20 @@ Return ONLY valid JSON, no prose, no markdown fences.`
 func (s *MemoryStore) extractContext(text, userID, agentID string, now time.Time) ExtractContext {
 	var ec ExtractContext
 
-	near, err := s.search(text, extractRelatedMax, memory.L3Fact, userID, agentID)
+	// Experiences take some of the nearest L3 slots, so twice as many rows are read
+	// and the walk stops once the ordinary facts fill extractRelatedMax.
+	near, err := s.search(text, extractRelatedMax*2, memory.L3Fact, userID, agentID)
 	if err != nil {
 		log.Printf("extract context: related facts: %v", err)
 	}
 	for _, h := range near {
+		if len(ec.Related) == extractRelatedMax {
+			break
+		}
+		// An experience is updated only by its own repeat (experience.go), never by an extracted fact.
+		if isExperience(h) {
+			continue
+		}
 		if float64(h.Score) < extractRelatedMin {
 			continue
 		}
