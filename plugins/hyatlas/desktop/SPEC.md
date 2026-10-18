@@ -22,7 +22,7 @@ The starmap is the reference — same architecture, same techniques, different d
 4. **Constellation-style scrubber** — a starfield along the timeline bottom that brightens as the scrubber passes, not a boring `<input type="range">`.
 5. **Cinematic 15s sweep** — when the user hits play, the whole map reveals itself with smooth ease in/out. The reveal ratio drives fade buckets for nodes/links/rings.
 
-We use the same five techniques over HyAtlas data. The visual language is identical (so it feels native to the desktop app), but the data model is HyAtlas's 7-layer + L5 graph instead of memory+skill.
+We use the same five techniques over HyAtlas data. The visual language is identical (so it feels native to the desktop app), but the data model is HyAtlas's 8-layer model + L5 graph instead of memory+skill.
 
 ---
 

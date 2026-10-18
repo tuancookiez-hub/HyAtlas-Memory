@@ -1,17 +1,27 @@
 # HyAtlas v4 — NOW
 
-**v4.5.1** | 2026-10-11 | Release: tuancookiez-hub/HyAtlas-Memory
+**v4.9.0** | 2026-10-18 | Release: tuancookiez-hub/HyAtlas-Memory
 
 ## Running
-- Release: **v4.5.1** (2026-10-11), tag on merge commit 568576e, 3 release binaries. `Version` in server.go, `plugins/hyatlas/plugin.yaml`, the provider, the dashboard manifest and the install.sh default `HYATLAS_VERSION=v4.5.1` all agree.
-- Install folder `F:\HyAtlas-Memory-Go` is a checkout of `main`, started with `hyatlas-go.ps1 start`. Personal settings (model, batch, owner aliases) live in the git-ignored `hyatlas-go.local.ps1`.
-- Plugin: `hyatlas` @ `C:\Users\tuanc\AppData\Local\hermes\plugins\hyatlas\` + Hermes Desktop pane. The catalog entry `plugin-catalog/hyatlas.yaml` (NousResearch/hermes-agent) pins 4.5.0; 4.5.1 changed no plugin code, so there was no catalog bump.
-- Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`)
+- Release: **v4.9.0** (2026-10-18), 3 release binaries. `Version` in server.go, `plugins/hyatlas/plugin.yaml`, the provider, the dashboard manifest and the install.sh default `HYATLAS_VERSION` all agree.
+- Install folder `F:\HyAtlas-Memory-Go` is a checkout of `main`, started by the user with `hyatlas-go.ps1 start` (agents do not start or stop it). Personal settings (model, fallback, batch, owner aliases) live in the git-ignored `hyatlas-go.local.ps1`: longcat-2.5-preview with laguna-xs-2.1 as fallback.
+- The store was started fresh on 2026-10-18; the previous store is archived beside it as `data-archive-20261018`.
+- Plugin: `hyatlas` @ `%HERMES_HOME%\plugins\hyatlas\` with `share_llm_key` on, so Hermes hands its Nous key to the server over localhost. The catalog entry (NousResearch/hermes-agent) pins 4.7.3.
+- Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`).
 
-## 4.8.0 (branch feat/4.8.0-precision)
+## 4.9.0 (released 2026-10-18)
+Task experiences, schemas with evidence, long facts found by their sentences,
+entity boost and graph-assisted recall, query-kind weighting, slots for schemas and
+intentions, and an opt-in second reconcile call for local models.
+
+## 4.8.1 (released 2026-10-18)
+The key hand-over starts when Hermes loads the plugin.
+
+## 4.8.0 (released 2026-10-18)
 Event dates and time-aware search, updates with counts, intention due dates,
 episode summaries instead of one per write, history on read, near-duplicate
-demotion, idle-time recency, keyword stemming. Still one LLM call per write.
+demotion, idle-time recency, keyword stemming, and the localhost key hand-over that
+replaced reading `auth.json` (after a Bitdefender quarantine on 2026-10-17).
 
 ## 4.7.3 (released 2026-10-13)
 Consolidation quality: off-topic merge guard (0.65), schemas chosen by relevance

@@ -1,6 +1,6 @@
 # hyatlas — HyAtlas v4 memory provider for Hermes Agent
 
-Persistent 7-layer memory for Hermes, backed by **HyAtlas v4**: a pure-Go,
+Persistent 8-layer memory for Hermes, backed by **HyAtlas v4**: a pure-Go,
 single-binary memory server (Apache-2.0) that runs on your machine. It has an
 embedded vector store (chromem-go), in-process BGE-small embeddings (onnxruntime-go,
 no Python, no GPU), LLM fact extraction with a selectable mode (`lite`, `pro`,
@@ -16,15 +16,24 @@ with a graph view, and a web dashboard panel. The server is a separate binary,
 
 - **Cross-session memory.** Each completed turn is saved to the server, which
   keeps the raw text (L2) and, in `pro` and `ultra`, extracts profile, fact,
-  summary and intention layers (L1, L3, L4, L7), plus knowledge and schema layers
-  (L5, L6) in `ultra` (see the mode table below).
+  intention and entity-page layers (L1, L3, L7, L8), dates facts and intentions,
+  records task experiences, and writes one summary (L4) per episode of work. In
+  `ultra` it also builds knowledge and schema layers (L5, L6) (see the mode table
+  below).
+- **What the agent sees.** The recall block lists the Now page first, then entity
+  pages, profile and schemas, open intentions, task experiences and other facts.
+  Each line carries its date, "happened YYYY-MM-DD" when the fact has an event date,
+  and a "was: …" line when it replaced an older fact.
 - **Recall.** Before each turn, Hermes calls the provider's `prefetch` with the
   user's message. The plugin searches the server with that message and returns the
   matches for the turn. If the search fails, it returns the last recall for the same
   session. After each turn, `queue_prefetch` runs a background search and stores the
   result as that session's fallback.
-- **Agent tools.** `hyatlas_status`, `hyatlas_search` (three channels: profile,
-  proactive, normal), `hyatlas_recent`, `hyatlas_add`.
+- **Agent tools.** `hyatlas_status`, `hyatlas_search` (channels: pages, profile,
+  proactive, experiences, normal), `hyatlas_recent`, `hyatlas_add`.
+- **No credential files.** With `share_llm_key` on, the plugin hands Hermes's own
+  Nous key to the server over localhost; nothing but Hermes opens Hermes's
+  credentials (see Credentials).
 - **Built-in `memory` tool.** An `add` through Hermes' `memory` tool is sent to
   the server as a plain add and stored as a raw memory (L2), tagged with its
   target in the metadata. It is not written to L1 Profile directly. L1 fills
@@ -208,9 +217,11 @@ documentation, in the repository README and `.env.example`, describes them.
 
 | `HYATLAS_MODE` | LLM calls | Reasoning scope | Layers filled | Periodic consolidation |
 |---|---|---|---|---|
-| `lite` | none | none | **1 / 7**: L2 raw | no |
-| `pro` | one per write | within that one turn | **5 / 7**: L1, L2, L3, L4, L7 | no |
-| `ultra` *(default)* | one per write, plus a periodic batch | across memories and time | **7 / 7** at steady state (6 / 7 with `HYATLAS_CONSOLIDATE_GRAPH=off`) | **yes**, every 6 hours |
+| `lite` | none | none | **1 / 8**: L2 raw | no |
+| `pro` | one per write, plus one per episode summary | within that one turn | **6 / 8**: L1, L2, L3, L4, L7, L8 | no |
+| `ultra` *(default)* | one per write, plus one per episode, plus a periodic batch | across memories and time | **8 / 8** at steady state (7 / 8 with `HYATLAS_CONSOLIDATE_GRAPH=off`) | **yes**, every 6 hours |
+
+`HYATLAS_RECONCILE=on` adds one more call per write (meant for a local model).
 
 L5 (knowledge) and L6 (schema) come only from the consolidation pass, because a
 relation needs corroboration from more than one turn and a schema is a pattern

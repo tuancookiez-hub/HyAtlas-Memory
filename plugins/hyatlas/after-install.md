@@ -82,6 +82,20 @@ The LLM key is set only through the environment: export `HYATLAS_LLM_KEY`, or ke
 the value that `hermes memory setup` wrote to `.env`. The plugin does not use a key
 found in `hyatlas.json` or `config.yaml`.
 
+**Using your Hermes Nous login instead.** If Hermes is signed in to the Nous Portal
+and the server's endpoint is the Nous Portal, turn on `share_llm_key`:
+
+```json
+{ "share_llm_key": true }
+```
+
+in `$HERMES_HOME/hyatlas.json` (or `HYATLAS_SHARE_LLM_KEY=true`). The plugin then asks
+Hermes for its current key and hands it to the server over localhost, renewing it
+before the one-hour token expires. The server keeps it in memory only. Until the
+first Hermes chat after a restart, `status` shows `llm: "awaiting_key"`. Do not point
+`HYATLAS_LLM_KEY_FILE` at Hermes' `auth.json`: antivirus software treats a program
+reading another application's credentials as credential theft.
+
 Then check it:
 
 ```bash
@@ -214,6 +228,18 @@ hermes plugins update hyatlas    # then restart the gateway
 
 This updates the plugin only. The `hyatlas-go` binary is separate: update it with
 the server's installer or by replacing the binary with a newer release.
+
+### Upgrading to 4.8 or later
+
+- **The sample launcher no longer reads Hermes' `auth.json`.** If you used it with a
+  Nous login, turn on `share_llm_key` (above); otherwise extraction waits with
+  `llm: "awaiting_key"`.
+- **Per-write summaries stop.** L4 now holds one summary per episode of work
+  (`HYATLAS_EPISODE_GAP`, 30 minutes). Older per-write summaries stay as they are.
+- **Usage learning moves to `usage_learning.json`.** An old `usage.json` with usage
+  entries is read once.
+- **Search results gain fields and a channel**: `event_date`, `history`, and the
+  `experiences` channel. Older plugins ignore them; update the plugin to show them.
 
 ### Upgrading a store written before 4.5.0
 

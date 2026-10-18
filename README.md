@@ -1,12 +1,18 @@
-![HyAtlas Memory — three-gear extraction across a seven-layer memory](https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/assets/hyatlas-v4.3.0-banner.png)
+![HyAtlas Memory — three extraction modes across an eight-layer memory](https://raw.githubusercontent.com/tuancookiez-hub/HyAtlas-Memory/main/assets/hyatlas-v4.3.0-banner.png)
 
 # HyAtlas Memory — Pure-Go Memory Core
 
 > **One binary. Eight layers. Three extraction modes.** One Go binary (the embedded release build is about 160 MB because it carries the BGE model), no Python at runtime, in-process BGE embeddings. Release binaries: **Linux amd64 · macOS arm64 · Windows amd64**. Other platforms build from source.
 
-HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It replaces the Python floor (venv, zvec, Kuzu, FastAPI, HTTP embed subprocess) with a single binary: an embedded Chromem vector store, in-process BGE-small embeddings via onnxruntime-go, and LLM fact extraction, where `HYATLAS_MODE` sets how much the server reasons and `HYATLAS_SYNC_EXTRACT` sets whether a write waits for extraction. The 8-layer memory model (Profile · Raw · Fact · Summary · Knowledge · Schema · Intention · Entity) is implemented, including L4 Summary extraction, which was dormant in v3.5.
+HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It replaces the Python floor (venv, zvec, Kuzu, FastAPI, HTTP embed subprocess) with a single binary: an embedded Chromem vector store, in-process BGE-small embeddings via onnxruntime-go, and LLM fact extraction, where `HYATLAS_MODE` sets how much the server reasons and `HYATLAS_SYNC_EXTRACT` sets whether a write waits for extraction. The 8-layer memory model (Profile · Raw · Fact · Summary · Knowledge · Schema · Intention · Entity) is implemented in full.
 
-**Current release:** [v4.5.1](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v4.5.1). The last Python release was [v3.5.0](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.5.0) (Zvec/Kuzu); it is no longer maintained. [CHANGELOG.md](CHANGELOG.md) has the full history.
+**Current release:** [v4.9.0](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v4.9.0).
+
+**What it does, in short:**
+- **Writing.** Each conversation turn goes through one LLM call that extracts dated facts, updates or replaces older ones, open intentions with due dates, entity pages and reusable task experiences.
+- **Remembering in the background.** Summaries are written per episode of work. A background pass merges and retires stale facts (with a reason, reversible), and builds a knowledge graph and patterns that record the facts behind them.
+- **Recall.** Search understands dates ("last week") and the entities you name, finds long facts by any of their sentences, and shows what a fact replaced.
+- **Credentials.** No HyAtlas program ever opens another application's credentials: Hermes hands its key over through localhost. The last Python release was [v3.5.0](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v3.5.0) (Zvec/Kuzu); it is no longer maintained. [CHANGELOG.md](CHANGELOG.md) has the full history.
 
 ---
 
@@ -519,6 +525,9 @@ If `HYATLAS_MODEL_DIR` is set, that directory is the only one searched. A plain 
 - **L4 Summary enabled** — was dormant in v3.5
 - **L5 bitemporal graph (v4.1.0+)** — every L5 relation carries its source L2 memory IDs plus a bitemporal timestamp; the `/api/v1/graph-as-of?ts=<unix>` endpoint lets you rewind the graph to any past moment.
 - **Mind Palace (v4.1.0+)** — a temporal visualization of the L5 knowledge graph in the Hermes Desktop `hyatlas` pane. Its design is in [`plugins/hyatlas/desktop/SPEC.md`](plugins/hyatlas/desktop/SPEC.md). The Desktop app itself is not part of this repository.
+- **Living memory (v4.6.0–v4.7.x)** — the Now page, L8 entity pages, usage learning, topic-clustered consolidation with drop reasons, guards and restore.
+- **Precision per fact (v4.8.0)** — event dates and date-aware search, updates with counts, intention due dates, episode summaries, history on read, near-duplicate demotion, idle-time recency, and the localhost key hand-over that replaced reading `auth.json`.
+- **Smarter recall (v4.9.0)** — task experiences, schemas with evidence, long facts found by their sentences, an entity boost and graph-assisted recall, query-kind weighting, and an opt-in second reconcile call for local models.
 
 ## API Reference
 
@@ -935,6 +944,9 @@ HyAtlas v4 is a **binary replacement** for the Python v3.5 floor. The memory dat
 ## Known gaps (honest)
 
 - The slow path runs on a timer, not at startup: a fresh ultra server shows 6/8 layers until the first pass (8/8 after a pass that finds relations and patterns) (up to `HYATLAS_CONSOLIDATE_EVERY` later). `POST /api/v1/digest` runs one on demand.
+- With `share_llm_key`, the key reaches the server only once Hermes loads the plugin, and Hermes loads memory plugins when an agent session runs (a chat), not when the gateway starts or for script-only cron jobs. Until the first chat the server reports `llm: "awaiting_key"`; nothing is lost, since there is nothing to extract before then.
+- How well extraction follows the rules (explicit subjects, which items are intentions, entity names) depends on the model. On free models, check a few days of real extractions after changing models.
+- `HYATLAS_RECONCILE` has been tested with a mock model only; it is meant for a local model and is off by default.
 - `/api/quality-metrics` returns `{available: false}` (v3.5-only feature; the dashboard adapter's quality endpoint, not a `/api/v1/` route)
 - Upscaling and codemode are not implemented (those were v3.5 features)
 - The coding layer is not in v4; the `/api/coding-*` endpoints return empty results
