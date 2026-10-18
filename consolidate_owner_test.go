@@ -451,12 +451,12 @@ func TestSchemaDedupeAndRefinement(t *testing.T) {
 // and the merged preference is mirrored under its new text.
 func TestMergedPreferenceReplacesItsL1Mirror(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
-	promoteExtraction(srv.store, &Extraction{
+	promoteExtractionCtx(srv.store, &Extraction{
 		Facts: []Fact{{Data: "prefers tabs", Layer: "user_preferences"}},
-	}, "alice", "a1", "raw-p1")
-	promoteExtraction(srv.store, &Extraction{
+	}, ExtractContext{}, "alice", "a1", "raw-p1", 0)
+	promoteExtractionCtx(srv.store, &Extraction{
 		Facts: []Fact{{Data: "prefers tabs in go", Layer: "user_preferences"}},
-	}, "alice", "a1", "raw-p2")
+	}, ExtractContext{}, "alice", "a1", "raw-p2", 0)
 
 	facts := liveRows(t, srv.store, memory.L3Fact, "alice", "a1")
 	if len(facts) != 2 {

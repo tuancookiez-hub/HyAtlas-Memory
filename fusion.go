@@ -36,21 +36,17 @@ func parseReader(v string) searchReader {
 	return readHybrid
 }
 
-// fuseHits merges a vector ranking and a keyword ranking with reciprocal rank fusion,
-// then drops repeated text and keeps the best limit (see refineHits).
+// fuseHitsWeighted merges a vector ranking and a keyword ranking with reciprocal rank
+// fusion, then drops repeated text and keeps the best limit (see refineHits). The
+// weights set each ranking's contribution, so a query's intent (see classifyQuery)
+// can lean on keyword search for identifiers or on meaning for "how" and "why"
+// questions. Equal weights of 1 give the plain fusion.
 //
 // The score floor applies to vector hits only. A keyword hit already had to contain
 // most of the query's terms (keywordRequired), and the identifiers keyword search is
 // for, such as HYATLAS_SYNC_EXTRACT or a port number, are exactly what an embedding
 // scores low. Each hit keeps its cosine Score; only the order comes from the fusion.
 // Both inputs must be sorted best first.
-func fuseHits(vec, kw []SearchHit, minScore float64, limit int) []SearchHit {
-	return fuseHitsWeighted(vec, kw, minScore, limit, 1, 1)
-}
-
-// fuseHitsWeighted is fuseHits with a weight on each ranking's contribution, so a
-// query's intent (see classifyQuery) can lean on keyword search for identifiers or
-// on meaning for "how" and "why" questions.
 func fuseHitsWeighted(vec, kw []SearchHit, minScore float64, limit int, wVec, wKw float64) []SearchHit {
 	type fused struct {
 		hit  SearchHit
@@ -192,20 +188,17 @@ func recencyHalfLife(h SearchHit) time.Duration {
 // decide the results.
 const recencyFloor = 0.92
 
-// rerankRecency reorders hits so newer memories win close calls. Each hit keeps its
+// rerankRecencyUsed reorders hits so newer memories win close calls. Each hit keeps its
 // reciprocal-rank weight from its incoming position and is scaled by a recency factor
 // between recencyFloor and 1.0, so age only decides between hits that are already
 // close in rank. The half-lives follow how fast each kind of memory goes stale. Hits
 // with no timestamp, a timestamp in the future, or a durable layer keep factor 1.0. The
 // input slice and the Score fields are not changed.
-func rerankRecency(hits []SearchHit, now time.Time) []SearchHit {
-	return rerankRecencyUsed(hits, now, nil)
-}
-
-// rerankRecencyUsed is rerankRecency with idle time counted. A memory that is still
-// being used is not old in the sense that matters, so its age is measured from the
-// later of its creation and the last time lastUsed reports it was used. A zero time,
-// a time after now, or a nil lastUsed falls back to the creation timestamp alone.
+//
+// A memory that is still being used is not old in the sense that matters, so its age
+// is measured from the later of its creation and the last time lastUsed reports it was
+// used. A zero time, a time after now, or a nil lastUsed falls back to the creation
+// timestamp alone. Callers with no usage data pass nil.
 //
 // Why: a fact written months ago that the agent relies on every week is current, but
 // a pure creation age sinks it below newer, unused noise. Measuring from the last use

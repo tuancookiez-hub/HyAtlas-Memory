@@ -212,7 +212,7 @@ func (s *Server) episodeCounts() *EpisodeCounts {
 	return &EpisodeCounts{Open: open, Pending: pending}
 }
 
-// promoteExtraction writes one System1 pass to the layers that pass owns:
+// promoteExtractionCtx writes one System1 pass to the layers that pass owns:
 // L3 facts (and the L1 profile mirror for preferences), L7 intention and entity
 // pages.
 //
@@ -228,26 +228,16 @@ func (s *Server) episodeCounts() *EpisodeCounts {
 // conversations that produced it, and so raw decay can protect the rows a live
 // claim still depends on.
 //
-// It never de-duplicates; the server path uses promoteExtractionDedupe.
-func promoteExtraction(store *MemoryStore, ex *Extraction, userID, agentID, sourceID string) {
-	promoteExtractionDedupe(store, ex, userID, agentID, sourceID, 0)
-}
-
-// promoteExtractionDedupe is promoteExtraction that also folds restatements. Before an
-// L3 fact is written, the owner's nearest live L3 fact is looked up; if it scores at
-// least dedupe, the new fact is written and the old one, with its L1 Profile mirrors,
-// is superseded by it. Newest wins, so an updated value replaces the stale one rather
-// than being dropped as a duplicate. dedupe <= 0 turns this off.
-func promoteExtractionDedupe(store *MemoryStore, ex *Extraction, userID, agentID, sourceID string, dedupe float64) {
-	promoteExtractionCtx(store, ex, ExtractContext{}, userID, agentID, sourceID, dedupe)
-}
-
-// promoteExtractionCtx is promoteExtractionDedupe that also applies what the model
-// said about the context it was shown (ec): facts that replace related facts, an
-// intention that replaces an open one, and open intentions that are done. Only ids
-// that are in ec are honoured, because the reply is model output and an id it
-// invents or garbles must never supersede a real row. With an empty ec it is
-// promoteExtractionDedupe exactly.
+// Before an L3 fact is written, the owner's nearest live L3 fact is looked up; if
+// it scores at least dedupe, the new fact is written and the old one, with its L1
+// Profile mirrors, is superseded by it. Newest wins, so an updated value replaces
+// the stale one rather than being dropped as a duplicate. dedupe <= 0 turns this off.
+//
+// ec is what the model was shown about the store (see ExtractContext): facts that
+// replace related facts, an intention that replaces an open one, and open
+// intentions that are done. Only ids that are in ec are honoured, because the reply
+// is model output and an id it invents or garbles must never supersede a real row.
+// An empty ec applies none of that.
 // It returns the ids of the L3 facts it wrote, which episodes group.
 func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext, userID, agentID, sourceID string, dedupe float64) []string {
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -415,7 +405,7 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 // extractForMode applies the configured mode to one stored raw memory and
 // reports what the caller should expect.
 //
-// One extraction call is System1: promoteExtraction writes L3 Fact, L4 Summary,
+// One extraction call is System1: promoteExtractionCtx writes L3 Fact, L4 Summary,
 // L7 Intention, and L1 Profile when a fact is a user preference, all from the L2
 // raw doc. L5 Knowledge and L6 Schema belong to System2 and are only ever written
 // by the consolidation pass, so a mode's layer count depends on whether that pass

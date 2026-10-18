@@ -93,7 +93,7 @@ func factIDs(prompt string) []string {
 }
 
 // seedSourced writes one L3 fact owned by user/agent and extracted from the L2
-// row source, the way promoteExtraction does.
+// row source, the way promoteExtractionCtx does.
 func seedSourced(t *testing.T, store *MemoryStore, user, agent, source, text string) string {
 	t.Helper()
 	id := newID()

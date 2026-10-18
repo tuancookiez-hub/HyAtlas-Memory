@@ -938,7 +938,7 @@ func TestSlowPathOwnsL5AndL6(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	promoteExtraction(srv.store, ex, "u", "a", "mem-src")
+	promoteExtractionCtx(srv.store, ex, ExtractContext{}, "u", "a", "mem-src", 0)
 
 	if _, edges := srv.store.Graph().Snapshot(0); len(edges) != 0 {
 		t.Errorf("per-turn pass wrote %d L5 edge(s); L5 belongs to the slow path", len(edges))

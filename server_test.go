@@ -88,7 +88,7 @@ func TestPromoteExtractionThreadsSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	sourceID := "mem-test-source-abc"
-	promoteExtraction(srv.store, ex, "default", "default", sourceID)
+	promoteExtractionCtx(srv.store, ex, ExtractContext{}, "default", "default", sourceID, 0)
 
 	// No L5 edge from the per-turn pass.
 	if _, rels := srv.store.Graph().Snapshot(50); len(rels) != 0 {
@@ -123,9 +123,9 @@ func TestPromoteExtractionThreadsSource(t *testing.T) {
 func TestPromoteExtractionMirrorsPreferencesToProfile(t *testing.T) {
 	srv := newTestServer(t, "test", "test")
 	sourceID := "mem-pref-source"
-	promoteExtraction(srv.store, &Extraction{
+	promoteExtractionCtx(srv.store, &Extraction{
 		Facts: []Fact{{Data: "prefers tabs over spaces", Layer: "user_preferences"}},
-	}, "default", "default", sourceID)
+	}, ExtractContext{}, "default", "default", sourceID, 0)
 
 	_, total := srv.store.List("l1_profile", "", "", 1, 0, false)
 	rows, _ := srv.store.List("l1_profile", "", "", total, 0, false)
@@ -145,7 +145,7 @@ func TestPromoteExtractionWritesIntentionNotSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	promoteExtraction(srv.store, ex, "default", "default", "mem-si-source")
+	promoteExtractionCtx(srv.store, ex, ExtractContext{}, "default", "default", "mem-si-source", 0)
 
 	if _, n := srv.store.List("l4_summary", "", "", 1, 0, false); n != 0 {
 		t.Errorf("L4 summary count = %d, want 0", n)

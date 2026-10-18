@@ -39,7 +39,7 @@ func TestCompleteRetriesOnProseReply(t *testing.T) {
 	defer srv.Close()
 
 	client := NewLLMClient(srv.URL, "test-key", "mock-model")
-	ex, err := client.Complete(context.Background(), "2 people i admire: my parents and my mentor.")
+	ex, err := client.CompleteWith(context.Background(), "2 people i admire: my parents and my mentor.", ExtractContext{})
 	if err != nil {
 		t.Fatalf("Complete after retry: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestCompleteFailsAfterRetry(t *testing.T) {
 	defer srv.Close()
 
 	client := NewLLMClient(srv.URL, "test-key", "mock-model")
-	if _, err := client.Complete(context.Background(), "input"); err == nil {
+	if _, err := client.CompleteWith(context.Background(), "input", ExtractContext{}); err == nil {
 		t.Fatal("want error after both attempts return prose, got nil")
 	}
 }
@@ -111,7 +111,7 @@ func TestCompleteFallsBackToReasoningContent(t *testing.T) {
 	defer srv.Close()
 
 	c := NewLLMClient(srv.URL, "k", "m")
-	ex, err := c.Complete(context.Background(), "some input")
+	ex, err := c.CompleteWith(context.Background(), "some input", ExtractContext{})
 	if err != nil {
 		t.Fatalf("Complete with reasoning-only content: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestCompleteNamesAnEmptyReply(t *testing.T) {
 	defer srv.Close()
 
 	c := NewLLMClient(srv.URL, "k", "m")
-	_, err := c.Complete(context.Background(), "some input")
+	_, err := c.CompleteWith(context.Background(), "some input", ExtractContext{})
 	if err == nil {
 		t.Fatal("expected an error for a fully empty reply")
 	}
@@ -151,7 +151,7 @@ func TestCompleteChatErrorIsNotRetried(t *testing.T) {
 	defer srv.Close()
 
 	client := NewLLMClient(srv.URL, "test-key", "mock-model")
-	if _, err := client.Complete(context.Background(), "input"); err == nil {
+	if _, err := client.CompleteWith(context.Background(), "input", ExtractContext{}); err == nil {
 		t.Fatal("want an error for an HTTP 500, got nil")
 	}
 	if got := calls.Load(); got != 1 {

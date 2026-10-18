@@ -95,7 +95,7 @@ func TestCompleteSendsLiveKeyOnTheWire(t *testing.T) {
 
 	c := NewLLMClient(srv.URL, "frozen", "mock-model")
 	c.KeyFile = kf
-	if _, err := c.Complete(t.Context(), "some input"); err != nil {
+	if _, err := c.CompleteWith(t.Context(), "some input", ExtractContext{}); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 	if got := sent.Load().(string); got != "Bearer wire-key-1" {
@@ -104,7 +104,7 @@ func TestCompleteSendsLiveKeyOnTheWire(t *testing.T) {
 
 	// Rotate the file; the next call must send the NEW key on the wire.
 	writeKeyFile(t, kf, `{"providers":{"nous":{"agent_key":"wire-key-2"}}}`)
-	if _, err := c.Complete(t.Context(), "another input"); err != nil {
+	if _, err := c.CompleteWith(t.Context(), "another input", ExtractContext{}); err != nil {
 		t.Fatalf("Complete after rotation: %v", err)
 	}
 	if got := sent.Load().(string); got != "Bearer wire-key-2" {

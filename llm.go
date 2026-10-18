@@ -197,8 +197,9 @@ type Experience struct {
 }
 
 // UnmarshalJSON decodes an experience tolerantly and never returns an error, so
-// one malformed lesson cannot discard the whole extraction. A string field takes
-// a JSON string and becomes empty for any other type. Confidence takes a string
+// one malformed lesson cannot discard the whole extraction. A text field takes a
+// JSON string and becomes empty for any other type, a number included, which is
+// why it uses stringOnly rather than looseString. Confidence takes a string
 // as it is, a number (0.75 or more is high, under 0.4 is low, otherwise medium)
 // or a bool (true is high, false is low). A value that is not an object yields
 // an empty Experience.
@@ -208,16 +209,36 @@ func (e *Experience) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &obj); err != nil {
 		return nil
 	}
-	e.Task = looseString(obj["task"])
-	e.Solution = looseString(obj["solution"])
-	e.Environment = looseString(obj["environment"])
+	e.Task = stringOnly(obj["task"])
+	e.Solution = stringOnly(obj["solution"])
+	e.Environment = stringOnly(obj["environment"])
 	e.Confidence = looseConfidence(obj["confidence"])
 	return nil
 }
 
-// looseString returns raw as a string, or "" when raw is missing, null or not a
-// JSON string.
+// looseString is the one tolerance rule for a text field the model sends. A JSON
+// string is used as it is, a number or bool is taken as its JSON spelling, and a
+// missing, null, object or array value gives "". It never fails, so a field of the
+// wrong type empties itself and the rest of the reply still decodes.
 func looseString(raw json.RawMessage) string {
+	t := bytes.TrimSpace(raw)
+	if len(t) == 0 {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(t, &s) == nil {
+		return s
+	}
+	if t[0] == '-' || (t[0] >= '0' && t[0] <= '9') || string(t) == "true" || string(t) == "false" {
+		return string(t)
+	}
+	return ""
+}
+
+// stringOnly returns raw as a string, or "" when raw is missing, null or not a JSON
+// string. Experience fields use it because a lesson with a number in a text field
+// keeps that field empty rather than reading the number as text.
+func stringOnly(raw json.RawMessage) string {
 	var s string
 	if json.Unmarshal(raw, &s) != nil {
 		return ""
@@ -316,38 +337,34 @@ type Intention struct {
 	Replaces idList
 }
 
-// UnmarshalJSON accepts both `"intention": "text"` and `"intention":{"goal":"..."}`.
+// UnmarshalJSON accepts `"intention": "text"` and `"intention":{"goal":"..."}`. Any
+// other value never fails the decode: a number or bool becomes the goal text, and
+// anything else leaves the goal empty, so the rest of the reply survives.
 func (i *Intention) UnmarshalJSON(b []byte) error {
-	var raw string
-	if err := json.Unmarshal(b, &raw); err == nil {
-		i.Goal = raw
-		return nil
-	}
+	*i = Intention{}
 	var obj struct {
-		Goal     string `json:"goal"`
-		Due      string `json:"due"`
-		Replaces idList `json:"replaces"`
+		Goal     json.RawMessage `json:"goal"`
+		Due      json.RawMessage `json:"due"`
+		Replaces idList          `json:"replaces"`
 	}
 	if err := json.Unmarshal(b, &obj); err != nil {
-		return err
+		// Not an object: the value itself is the goal text, when it is text.
+		i.Goal = looseString(b)
+		return nil
 	}
-	i.Goal = obj.Goal
-	i.Due = obj.Due
+	i.Goal = looseString(obj.Goal)
+	i.Due = looseString(obj.Due)
 	i.Replaces = obj.Replaces
 	return nil
 }
 
-// Complete runs one structured extraction producing all layers, with one
+// CompleteWith runs one structured extraction producing all layers, with one
 // reinforced retry: small models sometimes reply to the input conversationally
 // instead of extracting (their prose then fails JSON parsing), and a single
-// firm reminder recovers most of those.
-func (l *LLMClient) Complete(ctx context.Context, text string) (*Extraction, error) {
-	return l.CompleteWith(ctx, text, ExtractContext{})
-}
-
-// CompleteWith is Complete that also shows the model what the store already
-// holds about this input, so it can say which stored facts and open intentions
-// the input updates, finishes or abandons. An empty ec yields the plain prompt.
+// firm reminder recovers most of those. It also shows the model what the store
+// already holds about this input, so it can say which stored facts and open
+// intentions the input updates, finishes or abandons. An empty ec yields the
+// plain prompt.
 //
 // The reinforced retry runs only when the chat call succeeded and its reply did
 // not parse. A failed chat call (an HTTP error, a timeout, an empty reply) is

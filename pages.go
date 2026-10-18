@@ -619,8 +619,9 @@ func (l *pageUpdates) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// UnmarshalJSON reads each field loosely: a field of the wrong type is ignored
-// rather than failing the update, and "set" may be a list of {attr,value}.
+// UnmarshalJSON reads each field loosely: a field of the wrong type is read by
+// looseString (empty when it is not text or a scalar) rather than failing the
+// update, and "set" may be a list of {attr,value}.
 func (u *PageUpdate) UnmarshalJSON(b []byte) error {
 	*u = PageUpdate{}
 	var raw map[string]json.RawMessage
@@ -628,11 +629,7 @@ func (u *PageUpdate) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	str := func(key string) string {
-		var s string
-		if json.Unmarshal(raw[key], &s) != nil {
-			return ""
-		}
-		return s
+		return looseString(raw[key])
 	}
 	u.Page, u.Name, u.Kind, u.Event = str("page"), str("name"), str("kind"), str("event")
 	var sets []json.RawMessage
@@ -651,16 +648,17 @@ func (u *PageUpdate) UnmarshalJSON(b []byte) error {
 }
 
 // UnmarshalJSON accepts a value of any scalar type, since a model may send
-// 4.6 or true rather than a string.
+// 4.6 or true rather than a string. The attr is read by looseString, so a
+// wrong-typed attr empties itself instead of failing the set.
 func (s *PageSet) UnmarshalJSON(b []byte) error {
 	var obj struct {
-		Attr  string `json:"attr"`
-		Value any    `json:"value"`
+		Attr  json.RawMessage `json:"attr"`
+		Value any             `json:"value"`
 	}
 	if err := json.Unmarshal(b, &obj); err != nil {
 		return err
 	}
-	s.Attr = obj.Attr
+	s.Attr = looseString(obj.Attr)
 	switch v := obj.Value.(type) {
 	case string:
 		s.Value = v

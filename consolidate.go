@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -101,15 +100,22 @@ type Drop struct {
 }
 
 // UnmarshalJSON accepts a drop object or, from a model that ignores the format, a
-// bare id string, which carries no reason and so is not applied.
+// bare id, which carries no reason and so is not applied. It never fails: a field
+// of the wrong type is empty, and any other shape gives an empty Drop that the
+// consolidation pass skips, so the rest of the reply survives.
 func (d *Drop) UnmarshalJSON(b []byte) error {
-	var id string
-	if err := json.Unmarshal(b, &id); err == nil {
-		*d = Drop{ID: id}
+	*d = Drop{}
+	var obj struct {
+		ID     json.RawMessage `json:"id"`
+		Reason json.RawMessage `json:"reason"`
+	}
+	if err := json.Unmarshal(b, &obj); err != nil {
+		d.ID = looseString(b)
 		return nil
 	}
-	type plain Drop
-	return json.Unmarshal(b, (*plain)(d))
+	d.ID = looseString(obj.ID)
+	d.Reason = looseString(obj.Reason)
+	return nil
 }
 
 // CitedRelation is an L5 edge plus the fact IDs that evidence it. Unlike the
@@ -1341,7 +1347,7 @@ func (c *Consolidator) schemaKnown(owner scopeKey, pattern string, replaces []st
 }
 
 // retireMirrors supersedes the L1 Profile rows that mirror superseded
-// user_preferences facts. promoteExtraction writes such a fact to L1 with the
+// user_preferences facts. promoteExtractionCtx writes such a fact to L1 with the
 // same source_id and content, which is how the mirror is found.
 func (c *Consolidator) retireMirrors(docs []DocIndex, by string) error {
 	var ids []string
@@ -1761,20 +1767,9 @@ func truncate(s string, n int) string {
 	return s[:n] + "…"
 }
 
-// parseDuration reads an env var as a duration, returning def when unset or
-// invalid. A typo must not silently disable the slow path.
+// parseDuration reads an env var as a duration with envDuration's rules: unset or
+// blank gives def, a bare number counts as seconds, the off words give zero, and a
+// typo or negative value gives def. A typo must not silently disable the slow path.
 func parseDuration(key string, def time.Duration) time.Duration {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return def
-	}
-	if n, err := strconv.Atoi(v); err == nil {
-		return time.Duration(n) * time.Second
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		log.Printf("%s=%q is not a duration; using %s", key, v, def)
-		return def
-	}
-	return d
+	return envDuration(key, def)
 }
