@@ -1565,9 +1565,10 @@ func (c *Consolidator) decayRaw() (pruned, protected int) {
 	if len(old) == 0 {
 		return 0, protected
 	}
+	// A failed delete keeps its row for the next pass; the rows that did go count.
 	n, err := c.store.Delete(old, "", "", "")
 	if err != nil {
-		return 0, protected
+		log.Printf("raw decay: %v", err)
 	}
 	return n, protected
 }
