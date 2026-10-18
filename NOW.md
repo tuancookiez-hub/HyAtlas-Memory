@@ -1,4 +1,4 @@
-# HyAtlas v4 — NOW
+# HyAtlas — NOW
 
 **5.0.0 assembled locally, not released** | last release v4.9.0 (2026-10-18) | Release: tuancookiez-hub/HyAtlas-Memory
 
