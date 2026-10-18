@@ -27,7 +27,7 @@ import (
 // It is exposed on /api/v1/status and /api/info so every client (Desktop pane,
 // web dashboard, CLI) reports the real running version instead of hardcoding
 // a "v4" badge that silently goes stale on each release. Bump in one place.
-const Version = "4.9.0"
+const Version = "4.9.1"
 
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {
@@ -457,7 +457,8 @@ func (s *Server) extract(text, userID, agentID, id string) error {
 	if reconcileEnabled() && len(factIDs) > 0 {
 		// Its own deadline: the extraction call may have used most of ctx.
 		rctx, rcancel := context.WithTimeout(context.Background(), extractTimeout)
-		_, _ = s.store.reconcile(rctx, s.llm, factIDs, userID, agentID)
+		// Every ID of the same person (HYATLAS_USER_ALIASES), as consolidation does.
+		_, _ = s.store.reconcileOwners(rctx, s.llm, factIDs, s.expandOwners([]string{userID}), userID, agentID)
 		rcancel()
 	}
 	s.episodes.Note(userID, agentID, append(factIDs, expIDs...), time.Now())
@@ -652,7 +653,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if names := s.store.queryEntities(body.Query, users, agentID); len(names) > 0 {
 		res = rerankEntities(res, names)
 		if nb := s.store.graphNeighbourNames(names, users, agentID); len(nb) > 0 {
-			res = graphAdmit(vecAll, res, nb, minScore-0.10, graphRecallMax)
+			// Placed inside the limit, or the final cut would drop them. A keyword-only
+			// search admits no vector candidates.
+			cands := vecAll
+			if parseReader(body.Reader) == readKeyword {
+				cands = nil
+			}
+			res = graphAdmitWithin(cands, res, nb, minScore-0.10, graphRecallMax, limit)
 		}
 	}
 	// Time before the L5 cap, so the cap keeps the relations that rank best once

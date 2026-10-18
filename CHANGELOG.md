@@ -1,5 +1,33 @@
 # Changelog
 
+## [4.9.1] — 2026-10-18
+
+Fixes from a review of the 4.8 and 4.9 code. Server only: the Hermes plugin is unchanged.
+
+### Fixed
+
+- **Reconcile covers every ID of the same person.** With `HYATLAS_RECONCILE=on`, new facts
+  were compared only with facts stored under the write's own user ID, so a fact under an
+  alias (`HYATLAS_USER_ALIASES`) was never updated or replaced. Consolidation and search
+  already covered aliases; reconcile now does too.
+- **Reconcile never routes a fact through one it already retired.** When the model both
+  merged a new fact (UPDATE) and used it to replace others (SUPERSEDE), the replaced rows
+  pointed at a fact that was itself retired. Each new fact is now used by one operation.
+- **Extraction can no longer retire a task experience.** Experiences were shown to the
+  extraction model as related facts, so it could replace or extend one with an ordinary
+  fact, which dropped its label and its task, solution and environment. They are no
+  longer shown; a repeat of the lesson still updates it.
+- **A repeated experience is found even when ordinary facts are nearer.** The check for
+  an older copy of the same lesson looked at the ten nearest facts of any kind. It now
+  looks at experiences only. The 0.92 threshold is unchanged.
+- **Episode summaries survive an LLM outage.** A failed summary was retried on the next
+  tick and dropped after three tries, so a 10–15 minute outage or rate limit lost it. It
+  now waits 5, 10, 20, 40 and 80 minutes between tries (six tries, about 2.5 hours).
+- **Graph-assisted recall shows up in the results.** Facts admitted through a knowledge
+  graph link were added after every other hit and then cut by the result limit. They
+  now take at most a third of the visible places, at the end of them, so the query's own
+  best hits keep the top. A keyword-only search no longer admits vector candidates.
+
 ## [4.9.0] — 2026-10-18
 
 The rest of what was worth adopting from Hunyuan (Tencent Hy-Memory 2.0), as planned
