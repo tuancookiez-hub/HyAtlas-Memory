@@ -30,14 +30,12 @@ A plain local path does not work. Hermes reads it as `owner/repo` and tries GitH
    declares no dependencies beyond Hermes core, so nothing is installed.
 2. On a real terminal, prompts for each of the plugin's 14 settings, in this order.
    Enter keeps the default. Without a terminal it asks nothing (see *Without a
-   terminal* below). The settings are: server host, server port, user ID, agent ID,
-   auto-start, binary path, launcher script, request timeout, data directory, LLM
-   endpoint, LLM model, LLM API key, extraction mode, and block on extraction.
-   Extraction mode and block on extraction are menus (`lite` / `pro` / `ultra`,
-   and `on` / `off`). The first entry of each menu is blank, which means "the
-   server's default". The ones that matter for an LLM setup are the mode, the
-   endpoint, the model and the key. The key is entered masked and written to
-   Hermes' `.env` as `HYATLAS_LLM_KEY`. The launcher script is Windows only.
+   terminal* below). The first five matter: how much HyAtlas should think (a menu:
+   `ultra`, `pro`, `lite`), the AI endpoint (Enter = the Nous Portal), the API key
+   (masked, written to Hermes' `.env` as `HYATLAS_LLM_KEY`; Enter skips it), the
+   model (Enter = a free Nous Portal model), and whether Hermes should start the
+   server for you. The rest are marked "Advanced:" and Enter keeps their defaults.
+   A server you start yourself receives the key from the plugin over localhost.
 3. Writes `memory.provider: hyatlas` to `config.yaml`, the non-secret settings to
    `$HERMES_HOME/hyatlas.json`, and the key to `.env`.
 

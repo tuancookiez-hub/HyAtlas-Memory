@@ -19,9 +19,11 @@ Precedence, lowest to highest:
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
@@ -35,102 +37,97 @@ logger = logging.getLogger(__name__)
 #
 # ``plugin.yaml`` is static YAML the manifest parser reads, so it cannot be
 # generated from this — a test asserts the two agree instead.
+# The three mode menu items, in the order ``hermes memory setup`` shows them
+# (ultra first, so it is the default). The wizard stores the whole string; every
+# reader reduces it to its first word with :func:`normalize_mode`.
+MODE_CHOICES = (
+    "ultra — recommended: one AI call per turn, plus background consolidation, "
+    "a knowledge graph and patterns",
+    "pro — one AI call per conversation turn to extract facts; nothing runs in "
+    "the background",
+    "lite — no AI calls at all: everything stays on this machine (local BGE "
+    "embeddings, keyword + vector search)",
+)
+
+# The Nous Portal endpoint and a free model on it: what Enter gives in the wizard.
+DEFAULT_LLM_BASE = "https://inference-api.nousresearch.com/v1"
+DEFAULT_LLM_MODEL = "meituan/longcat-2.5-preview:free"
+
+# The order below IS the order of the setup wizard's questions, which asks every
+# field once. The five that matter come first; the rest are marked "Advanced:" and
+# have defaults, so Enter keeps them. Keep each description short: it is the
+# prompt text. Long explanations belong in the README, not in a prompt.
 SCHEMA: Tuple[Dict[str, Any], ...] = (
     {
-        "key": "server_host", "type": "str", "default": "127.0.0.1",
-        "label": "Server host", "description": "HyAtlas v4 server host",
+        "key": "mode", "type": "str", "default": MODE_CHOICES[0],
+        "label": "Mode", "choices": list(MODE_CHOICES),
+        "description": "How much should HyAtlas think? (all modes keep your "
+                       "memories and embeddings on this machine)",
     },
     {
-        "key": "server_port", "type": "int", "default": 19528,
-        "label": "Server port", "description": "HyAtlas v4 server port",
-    },
-    {
-        "key": "user_id", "type": "str", "default": "default",
-        "label": "User ID", "description": "Default user_id for memory scoping",
-    },
-    {
-        "key": "agent_id", "type": "str", "default": "default",
-        "label": "Agent ID",
-        "description": "Default agent_id (overridden by agent identity per session)",
-    },
-    {
-        "key": "auto_start", "type": "bool", "default": False,
-        "label": "Auto-start server",
-        "description": "Spawn the hyatlas-go binary when the server is unreachable",
-    },
-    {
-        "key": "binary_path", "type": "str", "default": "",
-        "label": "Binary path",
-        "description": "Path to hyatlas-go (empty = discover from PATH)",
-    },
-    {
-        "key": "launcher_path", "type": "str", "default": "",
-        "label": "Launcher script",
-        "description": "Windows only. Optional hyatlas-go.ps1 that `hermes hyatlas "
-                       "start|stop` runs instead of spawning the binary. Run as "
-                       "given, so only point it at a script you trust. Empty = "
-                       "spawn the binary directly.",
-    },
-    {
-        "key": "request_timeout", "type": "float", "default": 15.0,
-        "label": "Request timeout (s)",
-        "description": "HTTP timeout for server calls",
-    },
-    {
-        "key": "data_dir", "type": "str", "default": "",
-        "label": "Data directory",
-        "description": "Server data directory (vector store, graph). Passed to a "
-                       "spawned server as HYATLAS_GO_DATA and used by `hermes "
-                       "backup`. Empty = HYATLAS_GO_DATA, then the conventional "
-                       "defaults.",
-    },
-    {
-        "key": "llm_base", "type": "str", "default": "",
-        "label": "LLM endpoint",
-        "description": "Base URL of any OpenAI-compatible chat-completions API, "
-                       "used for fact extraction and (in ultra) consolidation. "
-                       "Forwarded to the server as HYATLAS_LLM_BASE. Not used in "
-                       "lite mode, which makes no LLM call. The server has no "
-                       "default endpoint: empty leaves extraction unconfigured "
-                       "(pro/ultra report llm=unconfigured).",
-    },
-    {
-        "key": "llm_model", "type": "str", "default": "",
-        "label": "LLM model",
-        "description": "Model id at that endpoint, e.g. a `:free` tier. Forwarded "
-                       "as HYATLAS_LLM_MODEL. The server has no default model: "
-                       "empty leaves extraction unconfigured.",
+        "key": "llm_base", "type": "str", "default": DEFAULT_LLM_BASE,
+        "label": "AI endpoint",
+        "description": "AI endpoint (any OpenAI-compatible API; Enter for the "
+                       "Nous Portal; ignored in lite)",
     },
     {
         "key": "llm_key", "type": "str", "default": "", "secret": True,
         "env_var": "HYATLAS_LLM_KEY",
-        "label": "LLM API key",
-        "description": "API key for the endpoint above. The setup wizard stores it "
-                       "in Hermes' .env (0600) as HYATLAS_LLM_KEY, never in "
-                       "hyatlas.json. The plugin never reads or logs it. Not "
-                       "needed in lite mode.",
+        "label": "AI API key",
+        "description": "API key for that endpoint (stored in Hermes's .env; Enter "
+                       "to skip in lite)",
     },
     {
-        "key": "mode", "type": "str", "default": "",
-        "label": "Extraction mode", "choices": ["", "lite", "pro", "ultra"],
-        "description": "Passed to a spawned server as HYATLAS_MODE. lite makes "
-                       "no LLM call, so no conversation text goes to an LLM; "
-                       "pro sends each write to the LLM endpoint and reasons "
-                       "within that turn; ultra also runs a periodic consolidation "
-                       "pass over stored facts. Empty = the server's own default "
-                       "(ultra). The server's /api/v1/status `mode` field is "
-                       "authoritative at runtime, since a manually started server "
-                       "may differ.",
+        "key": "llm_model", "type": "str", "default": DEFAULT_LLM_MODEL,
+        "label": "AI model",
+        "description": "Model (Enter for a free Nous Portal model; ignored in lite)",
     },
     {
-        "key": "sync", "type": "str", "default": "",
-        "label": "Block on extraction", "choices": ["", "on", "off"],
-        "description": "Passed to a spawned server as HYATLAS_SYNC_EXTRACT. on "
-                       "makes the write wait for extraction and report done or "
-                       "failed; off returns immediately and extracts behind it. "
-                       "Empty means off for a server this plugin spawns, so a "
-                       "Hermes turn never waits on the LLM. This is a latency "
-                       "choice and does not change what the mode can reason about.",
+        "key": "auto_start", "type": "bool", "default": False,
+        "label": "Auto-start server",
+        "description": "Should Hermes start the HyAtlas server for you? (No if you "
+                       "start it yourself, e.g. with the launcher or a service)",
+    },
+    {
+        "key": "sync", "type": "str", "default": "default",
+        "label": "Block on extraction", "choices": ["default", "on", "off"],
+        "description": "Advanced: wait for extraction before a reply finishes?",
+    },
+    {
+        "key": "server_host", "type": "str", "default": "127.0.0.1",
+        "label": "Server host", "description": "Advanced: server host",
+    },
+    {
+        "key": "server_port", "type": "int", "default": 19528,
+        "label": "Server port", "description": "Advanced: server port",
+    },
+    {
+        "key": "user_id", "type": "str", "default": "default",
+        "label": "User ID", "description": "Advanced: user_id that scopes memories",
+    },
+    {
+        "key": "agent_id", "type": "str", "default": "default",
+        "label": "Agent ID", "description": "Advanced: default agent_id",
+    },
+    {
+        "key": "binary_path", "type": "str", "default": "",
+        "label": "Binary path",
+        "description": "Advanced: path to hyatlas-go (empty = find it on PATH)",
+    },
+    {
+        "key": "launcher_path", "type": "str", "default": "",
+        "label": "Launcher script",
+        "description": "Advanced: Windows launcher script (empty = run the binary)",
+    },
+    {
+        "key": "data_dir", "type": "str", "default": "",
+        "label": "Data directory",
+        "description": "Advanced: server data folder (empty = the usual default)",
+    },
+    {
+        "key": "request_timeout", "type": "float", "default": 15.0,
+        "label": "Request timeout (s)",
+        "description": "Advanced: seconds to wait for the server",
     },
 )
 
@@ -216,7 +213,7 @@ ENV: Tuple[Tuple[str, str, Any], ...] = (
     ("HYATLAS_LAUNCHER_PATH", "launcher_path", str),
     ("HYATLAS_REQUEST_TIMEOUT", "request_timeout", float),
     ("HYATLAS_GO_DATA", "data_dir", str),
-    ("HYATLAS_MODE", "mode", lambda v: v.lower()),
+    ("HYATLAS_MODE", "mode", lambda v: normalize_mode(v)),
     ("HYATLAS_SYNC_EXTRACT", "sync", lambda v: _SYNC_ALIASES.get(v.lower(), v.lower())),
     # Non-secret: safe to land in hyatlas.json. The key is secret and is read
     # straight from the environment by the server, never persisted by us.
@@ -228,7 +225,7 @@ ENV: Tuple[Tuple[str, str, Any], ...] = (
 # the same way an environment variable is. Derived from ENV, never restated.
 CASTS = {key: cast for _, key, cast in ENV}
 
-# v3.5-era names that must not bleed into v4 settings.
+# v3.5-era names that must not bleed into the current settings.
 LEGACY_ENV = ("HY_MEMORY_HOST", "HY_MEMORY_PORT")
 
 
@@ -344,13 +341,26 @@ def load() -> Dict[str, Any]:
     return cfg
 
 
+def normalize_mode(v: Any) -> str:
+    """Reduce a stored mode to ``ultra``, ``pro`` or ``lite``, or "" for unset.
+
+    The setup wizard stores the whole menu line ("ultra — recommended: ..."),
+    while an older config or an environment variable holds the bare word. Both mean
+    the same thing, so every reader goes through here. An unknown word is returned
+    lower-cased so :func:`mode` can reject it by name.
+    """
+    s = str(v or "").strip().lower()
+    m = re.match(r"[a-z0-9_]+", s)
+    return m.group(0) if m else s
+
+
 def mode(cfg: Dict[str, Any] | None = None) -> str:
     """The configured extraction mode, or "" to let the server decide.
 
     Rejects a value the server would fatally refuse, naming the valid set —
     a spawned server that dies on boot reports it only in a log file.
     """
-    v = str((cfg or load()).get("mode") or "").strip().lower()
+    v = normalize_mode((cfg or load()).get("mode"))
     if not v:
         return ""
     if v not in VALID_MODES:
@@ -368,7 +378,7 @@ def sync(cfg: Dict[str, Any] | None = None) -> str:
     behaviour (pro blocks, ultra does not) rather than this plugin guessing at it.
     """
     v = str((cfg or load()).get("sync") or "").strip().lower()
-    if not v:
+    if not v or v == "default":
         return ""
     if v not in _SYNC_ALIASES:
         raise ValueError(
@@ -382,3 +392,18 @@ def base_url(cfg: Dict[str, Any] | None = None) -> str:
     """The server origin, honoring the configured host and port."""
     cfg = cfg or load()
     return f"http://{cfg.get('server_host') or '127.0.0.1'}:{cfg.get('server_port') or 19528}"
+
+
+def is_loopback_host(host: str) -> bool:
+    """True when ``host`` is this machine: localhost, 127.0.0.0/8 or ::1.
+
+    A name other than ``localhost`` is not resolved, since a name can point
+    anywhere; only a literal loopback address or ``localhost`` counts.
+    """
+    h = str(host or "").strip().strip("[]").lower()
+    if h == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        return False

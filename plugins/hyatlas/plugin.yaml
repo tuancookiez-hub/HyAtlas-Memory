@@ -2,7 +2,7 @@ name: hyatlas
 version: 5.0.0
 manifest_version: 2
 api_version: 1
-description: "HyAtlas v4 memory for Hermes: an 8-layer memory server (hyatlas-go, pure Go, runs on your machine) with four tools (hyatlas_status, hyatlas_search, hyatlas_recent, hyatlas_add), a Desktop pane and a web dashboard. Lite mode makes no LLM call; pro and ultra send memory text to the LLM endpoint you configure."
+description: "HyAtlas memory for Hermes: an 8-layer memory server (hyatlas-go, pure Go, runs on your machine) with four tools (hyatlas_search, hyatlas_recent, hyatlas_add, hyatlas_status), a Desktop pane and a web dashboard. Lite mode makes no LLM call; pro and ultra send memory text to the AI endpoint you configure."
 author: Tuna
 license: Apache-2.0
 homepage: https://github.com/tuancookiez-hub/HyAtlas-Memory
@@ -11,17 +11,21 @@ requires_hermes: ">=0.21.4"
 provides_commands:
   - hyatlas
 config_schema:
-  server_host: {type: str, default: "127.0.0.1", label: "Server host", description: "HyAtlas v4 server host"}
-  server_port: {type: int, default: 19528, label: "Server port", description: "HyAtlas v4 server port"}
-  user_id: {type: str, default: "default", label: "User ID", description: "Default user_id for memory scoping"}
-  agent_id: {type: str, default: "default", label: "Agent ID", description: "Default agent_id (overridden by agent identity per session)"}
-  auto_start: {type: bool, default: false, label: "Auto-start server", description: "Spawn the hyatlas-go binary when the server is unreachable"}
-  binary_path: {type: str, default: "", label: "Binary path", description: "Path to hyatlas-go (empty = discover from PATH)"}
-  launcher_path: {type: str, default: "", label: "Launcher script", description: "Windows only. Optional hyatlas-go.ps1 that `hermes hyatlas start|stop` runs instead of spawning the binary. Run as given, so only point it at a script you trust. Empty = spawn the binary directly."}
-  request_timeout: {type: float, default: 15.0, label: "Request timeout (s)", description: "HTTP timeout for server calls"}
-  data_dir: {type: str, default: "", label: "Data directory", description: "Server data directory (vector store, graph). Passed to a spawned server as HYATLAS_GO_DATA and used by `hermes backup`. Empty = HYATLAS_GO_DATA, then the conventional defaults."}
-  llm_base: {type: str, default: "", label: "LLM endpoint", description: "Base URL of any OpenAI-compatible chat-completions API, used for fact extraction and (in ultra) consolidation. Forwarded to the server as HYATLAS_LLM_BASE. Not used in lite mode, which makes no LLM call. The server has no default endpoint: empty leaves extraction unconfigured."}
-  llm_model: {type: str, default: "", label: "LLM model", description: "Model id at that endpoint, e.g. a `:free` tier. Forwarded as HYATLAS_LLM_MODEL. The server has no default model: empty leaves extraction unconfigured."}
-  llm_key: {type: str, default: "", label: "LLM API key", secret: true, env_var: "HYATLAS_LLM_KEY", description: "API key for the endpoint above. The setup wizard stores it in Hermes' .env (0600) as HYATLAS_LLM_KEY, never in hyatlas.json. The plugin never reads or logs it. Not needed in lite mode."}
-  mode: {type: str, default: "", label: "Extraction mode", choices: ["", "lite", "pro", "ultra"], description: "Passed to a spawned server as HYATLAS_MODE. lite makes no LLM call, so no conversation text goes to an LLM; pro sends each write to the LLM endpoint and reasons within that turn; ultra also runs a periodic consolidation pass over stored facts. Empty = the server's own default (ultra). The server's /api/v1/status `mode` field is authoritative at runtime, since a manually started server may differ."}
-  sync: {type: str, default: "", label: "Block on extraction", choices: ["", "on", "off"], description: "Passed to a spawned server as HYATLAS_SYNC_EXTRACT. on makes the write wait for extraction and report done or failed; off returns immediately and extracts behind it. Empty means off for a server this plugin spawns, so a Hermes turn never waits on the LLM. This is a latency choice and does not change what the mode can reason about."}
+  # The order is the order of the `hermes memory setup` questions. The API key is
+  # stored by Hermes in .env as HYATLAS_LLM_KEY; the plugin passes it to a server it
+  # starts, or hands it over localhost to a server on this machine that is waiting
+  # for a key. It is never logged. See the plugin README.
+  mode: {type: str, default: "ultra — recommended: one AI call per turn, plus background consolidation, a knowledge graph and patterns", label: "Mode", choices: ["ultra — recommended: one AI call per turn, plus background consolidation, a knowledge graph and patterns", "pro — one AI call per conversation turn to extract facts; nothing runs in the background", "lite — no AI calls at all: everything stays on this machine (local BGE embeddings, keyword + vector search)"], description: "How much should HyAtlas think? (all modes keep your memories and embeddings on this machine)"}
+  llm_base: {type: str, default: "https://inference-api.nousresearch.com/v1", label: "AI endpoint", description: "AI endpoint (any OpenAI-compatible API; Enter for the Nous Portal; ignored in lite)"}
+  llm_key: {type: str, default: "", label: "AI API key", secret: true, env_var: "HYATLAS_LLM_KEY", description: "API key for that endpoint (stored in Hermes's .env; Enter to skip in lite)"}
+  llm_model: {type: str, default: "meituan/longcat-2.5-preview:free", label: "AI model", description: "Model (Enter for a free Nous Portal model; ignored in lite)"}
+  auto_start: {type: bool, default: false, label: "Auto-start server", description: "Should Hermes start the HyAtlas server for you? (No if you start it yourself, e.g. with the launcher or a service)"}
+  sync: {type: str, default: "default", label: "Block on extraction", choices: ["default", "on", "off"], description: "Advanced: wait for extraction before a reply finishes?"}
+  server_host: {type: str, default: "127.0.0.1", label: "Server host", description: "Advanced: server host"}
+  server_port: {type: int, default: 19528, label: "Server port", description: "Advanced: server port"}
+  user_id: {type: str, default: "default", label: "User ID", description: "Advanced: user_id that scopes memories"}
+  agent_id: {type: str, default: "default", label: "Agent ID", description: "Advanced: default agent_id"}
+  binary_path: {type: str, default: "", label: "Binary path", description: "Advanced: path to hyatlas-go (empty = find it on PATH)"}
+  launcher_path: {type: str, default: "", label: "Launcher script", description: "Advanced: Windows launcher script (empty = run the binary)"}
+  data_dir: {type: str, default: "", label: "Data directory", description: "Advanced: server data folder (empty = the usual default)"}
+  request_timeout: {type: float, default: 15.0, label: "Request timeout (s)", description: "Advanced: seconds to wait for the server"}

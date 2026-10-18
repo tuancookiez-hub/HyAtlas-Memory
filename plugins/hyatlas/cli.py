@@ -57,10 +57,10 @@ def register_cli(plugin_parser: argparse.ArgumentParser) -> None:
     """Register ``hermes hyatlas <subcommand>`` subcommands."""
     sub = plugin_parser.add_subparsers(dest="hyatlas_cmd", required=True)
 
-    p_status = sub.add_parser("status", help="Show v4 server health + layer counts")
+    p_status = sub.add_parser("status", help="Show server health + layer counts")
     p_status.set_defaults(func=_cmd_status)
 
-    p_search = sub.add_parser("search", help="Semantic search the v4 memory store")
+    p_search = sub.add_parser("search", help="Semantic search the memory store")
     p_search.add_argument("query", help="Search query string")
     p_search.add_argument("--layer", default="", help="Restrict to one layer")
     p_search.add_argument("--limit", type=int, default=10)
@@ -81,10 +81,10 @@ def register_cli(plugin_parser: argparse.ArgumentParser) -> None:
     p_recent.add_argument("--no-include-raw", dest="include_raw", action="store_false")
     p_recent.set_defaults(include_raw=None, func=_cmd_recent)
 
-    p_start = sub.add_parser("start", help="Start the v4 Go server (canonical launcher when present)")
+    p_start = sub.add_parser("start", help="Start the Go server (canonical launcher when present)")
     p_start.set_defaults(func=_cmd_start)
 
-    p_stop = sub.add_parser("stop", help="Stop the v4 Go server")
+    p_stop = sub.add_parser("stop", help="Stop the Go server")
     p_stop.set_defaults(func=_cmd_stop)
 
 

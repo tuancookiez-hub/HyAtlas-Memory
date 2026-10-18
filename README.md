@@ -957,10 +957,27 @@ memory:
 ```
 
 On a real terminal, `hermes memory setup` prompts for each of the plugin's 14
-settings (server host and port, user and agent IDs, auto-start, binary path, launcher
-script, request timeout, data directory, LLM endpoint, model, key, extraction mode,
-block on extraction). Without a terminal it only selects the provider. The key goes
-to `.env` as `HYATLAS_LLM_KEY`. The other values go to `$HERMES_HOME/hyatlas.json`,
+settings. The first five are the ones that matter:
+
+1. **How much should HyAtlas think?** A menu: `ultra` (recommended), `pro` or `lite`.
+   Enter takes `ultra`. All modes keep your memories and embeddings on this machine;
+   only `pro` and `ultra` send memory text to the AI endpoint in question 2.
+2. **AI endpoint.** Any OpenAI-compatible API. Enter takes the Nous Portal
+   (`https://inference-api.nousresearch.com/v1`). Ignored in `lite`.
+3. **API key for that endpoint.** Entered masked and stored in Hermes's `.env` as
+   `HYATLAS_LLM_KEY`. Enter skips it, which is right for `lite`.
+4. **Model.** Enter takes a free Nous Portal model (`meituan/longcat-2.5-preview:free`).
+   Ignored in `lite`.
+5. **Should Hermes start the HyAtlas server for you?** Enter means no. Answer yes
+   unless you start the server yourself, for example with the launcher or a service.
+
+The questions after those five are marked "Advanced:" (wait for extraction, server
+host and port, user and agent IDs, binary path, launcher script, data directory,
+request timeout). Enter keeps each default, so you can press Enter through them.
+
+Without a terminal it only selects the provider. The key goes to `.env` as
+`HYATLAS_LLM_KEY`; the plugin passes it to a server it starts, or hands it over
+localhost to a server on this machine that is waiting for a key. The other values go to `$HERMES_HOME/hyatlas.json`,
 except `request_timeout`, which the wizard does not write there. Set that one in
 `config.yaml` or the environment. Plugin settings also live under
 `plugins.entries.hyatlas.settings` in `<HERMES_HOME>/config.yaml`, and are editable in

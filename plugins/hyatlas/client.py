@@ -1,8 +1,8 @@
-"""HTTP client for the HyAtlas v4 Go server.
+"""HTTP client for the HyAtlas Go server.
 
 Wire-compatible with the v3.5 ``HyMemoryClient`` interface that
 Hermes already imports. Same endpoints, same JSON shapes. Port is
-the only difference (19528 for v4, 19527 for v3.5).
+the only difference (19528; the old v3.5 server used 19527).
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ class HyatlasUnreachable(HyatlasClientError):
 
 
 class HyatlasClient:
-    """Thin HTTP client for the v4 server's /api/v1/* endpoints."""
+    """Thin HTTP client for the server's /api/v1/* endpoints."""
 
     def __init__(self, base_url: str = "http://127.0.0.1:19528",
                  timeout: float = 15.0) -> None:
@@ -139,11 +139,20 @@ class HyatlasClient:
         pass
 
     # ------------------------------------------------------------------
-    # v4 server endpoints (1:1 with the Go server's /api/v1/* surface)
+    # server endpoints (1:1 with the Go server's /api/v1/* surface)
     # ------------------------------------------------------------------
 
     def status(self) -> Dict[str, Any]:
         return self._get("/api/v1/status")
+
+    def set_llm_key(self, key: str) -> Dict[str, Any]:
+        """Hand the AI endpoint key to the server (POST /api/v1/llm/key).
+
+        The server keeps it in memory only and accepts it from this machine only.
+        The key is sent in the request body and appears in no log line or error
+        text built here.
+        """
+        return self._post("/api/v1/llm/key", {"key": key})
 
     def add(
         self,

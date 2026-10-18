@@ -113,6 +113,16 @@ and stricter key handling.
   `POST /api/v1/llm/key` is refused (403) unless the caller is a loopback address.
 - **Every retirement records how.** One record (by whom, how, why) is written at every
   place a row is retired.
+- **Setup wizard and the key.** `hermes memory setup` now asks the five questions that
+  matter first: how much HyAtlas should think (`ultra`, `pro`, `lite`, ultra by default),
+  the AI endpoint, the key, the model, and whether Hermes starts the server. Enter takes
+  the Nous Portal and a free model. The server host, port and the other settings follow
+  as "Advanced:" questions with defaults. The stored mode may be the whole menu line;
+  every reader uses its first word. The plugin hands its own key (`HYATLAS_LLM_KEY`)
+  over localhost to a server on this machine that reports `llm: "awaiting_key"`, so a
+  server you start yourself gets the key from setup. It checks at load and at session
+  start, then at most every 10 minutes, never for a remote host, and never logs the key.
+  No prompt or message calls the server "v4" any more.
 
 ### Upgrading from 4.9
 

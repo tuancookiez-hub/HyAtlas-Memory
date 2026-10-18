@@ -1,6 +1,6 @@
-"""HyAtlas v4 — Hermes memory provider plugin.
+"""HyAtlas — Hermes memory provider plugin.
 
-Pure-Python client that talks to the HyAtlas v4 Go binary at
+Pure-Python client that talks to the HyAtlas Go binary at
 ``server_host:server_port`` (default 127.0.0.1:19528, configurable via
 the Desktop settings form, config.yaml, env vars, or per-profile JSON).
 
@@ -14,7 +14,7 @@ This plugin follows the canonical Hermes memory-provider pattern
 (Honcho / Hindsight shape):
 
 * ``__init__.py`` — MemoryProvider subclass + register(ctx)
-* ``client.py`` — HTTP client to the v4 server
+* ``client.py`` — HTTP client to the server
 * ``process.py`` — optional auto-start of the Go binary as a subprocess
 * ``cli.py`` — ``hermes hyatlas`` subcommands (status, search, add, recent, start, stop)
 * ``schemas.py`` — tool schemas (status / search / recent / add)
@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -97,10 +98,14 @@ def _load_config() -> Dict[str, Any]:
 # =============================================================================
 
 
-class HyatlasMemoryProvider(MemoryProvider):
-    """Hermes MemoryProvider implementation for the HyAtlas v4 Go backend.
+# Seconds between checks of whether a local server is waiting for the AI key.
+_KEY_CHECK_INTERVAL = 600.0
 
-    The provider is a thin HTTP client wrapper. The v4 server handles
+
+class HyatlasMemoryProvider(MemoryProvider):
+    """Hermes MemoryProvider implementation for the HyAtlas Go backend.
+
+    The provider is a thin HTTP client wrapper. The server handles
     all storage (chromem-go), embedding (in-process BGE-small via
     onnxruntime-go), and LLM extraction (endpoint + model configured on
     the server side via HYATLAS_LLM_* env vars — no LLM credentials
@@ -110,7 +115,7 @@ class HyatlasMemoryProvider(MemoryProvider):
     * Per-session identity (user_id, agent_id) resolution
     * Format conversion (3-channel search -> prompt block)
     * Tool surface (status / search / recent / add)
-    * Prefetch + sync_turn persistence to the v4 server
+    * Prefetch + sync_turn persistence to the server
     * on_pre_compress checkpoint (fail-closed durability)
     * on_memory_write mirror for atomic agent-chosen facts
     """
@@ -141,6 +146,10 @@ class HyatlasMemoryProvider(MemoryProvider):
         # one is a re-flush of that session's current turn, not a correctness
         # failure.
         self._synced: "OrderedDict[str, int]" = OrderedDict()
+        # When the key hand-over was last checked, and a lock so two checks never
+        # run at once. See _hand_over_key.
+        self._key_check_lock = threading.Lock()
+        self._key_checked_at: float = 0.0
 
     # --- Required ABC methods ---
 
@@ -193,7 +202,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         return out
 
     def is_available(self) -> bool:
-        """True iff the v4 server is reachable on the configured port.
+        """True iff the server is reachable on the configured port.
 
         Does NOT auto-start the server — that's a separate decision
         via ``hermes hyatlas start`` (or the
@@ -209,7 +218,7 @@ class HyatlasMemoryProvider(MemoryProvider):
     def unavailable_reason(self) -> str:
         """Why is_available() returned False — surfaced in the dashboard."""
         return (
-            f"HyAtlas v4 not reachable at {self._origin()}. "
+            f"HyAtlas not reachable at {self._origin()}. "
             "Start it with `hermes hyatlas start`. The `hermes hyatlas` command "
             "exists only while memory.provider is hyatlas (`hermes memory setup`)."
         )
@@ -248,6 +257,7 @@ class HyatlasMemoryProvider(MemoryProvider):
             )
         except HyatlasUnreachable as e:
             logger.warning("hyatlas unreachable at initialize: %s", e)
+        self._hand_over_key_async(force=True)
 
     def shutdown(self) -> None:
         """Clean exit. We do not stop the server (it's user-owned)."""
@@ -269,7 +279,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         ]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs: Any) -> str:
-        """Dispatch tool calls to the v4 server."""
+        """Dispatch tool calls to the server."""
         if self._client is None:
             return json.dumps({"error": "hyatlas not initialized"})
 
@@ -323,16 +333,16 @@ class HyatlasMemoryProvider(MemoryProvider):
     def system_prompt_block(self) -> str:
         """Short static block for the agent's system prompt.
 
-        v4 already has prefetch() returning relevant context; this is
+        The server already has prefetch() returning relevant context; this is
         the static pointer the agent always sees.
         """
         return (
-            f"You have access to a HyAtlas v4 7-layer memory system "
+            f"You have access to a HyAtlas 7-layer memory system "
             f"(server: {self._origin()}). "
             "Use the `hyatlas_search` tool to recall relevant past context, "
             "`hyatlas_recent` to see the latest memories, and `hyatlas_add` "
             "to record durable facts. Adds through the standard Hermes "
-            "`memory` tool are also stored in v4 as raw memories; v4 fills the "
+            "`memory` tool are also stored in HyAtlas as raw memories; HyAtlas fills the "
             "L1 Profile layer when extraction labels them as user preferences "
             "(pro and ultra modes)."
         )
@@ -368,6 +378,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         """Fire-and-forget recall for the next agent turn."""
         if not query or not self._client:
             return
+        self._hand_over_key_async()
 
         def _do() -> None:
             try:
@@ -396,11 +407,11 @@ class HyatlasMemoryProvider(MemoryProvider):
         session_id: str = "",
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
-        """Persist a turn to v4. v4's server runs LLM extraction async.
+        """Persist a turn. the server runs LLM extraction async.
 
-        We send a single combined message that the v4 LLM can extract
+        We send a single combined message that the LLM can extract
         facts/summary/intentions from. v3.5's split-user/assistant model
-        still works (the v4 LLM is robust to either shape), but
+        still works (the LLM is robust to either shape), but
         concatenating gives a cleaner extraction input.
         """
         if not self._client:
@@ -430,16 +441,16 @@ class HyatlasMemoryProvider(MemoryProvider):
     def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
         """Before context compression, force-flush any pending turn.
 
-        v4's on_pre_compress returns '' (empty) because v4 doesn't need a
+        The server's on_pre_compress returns '' (empty) because the server doesn't need a
         pre-compress string injected — the LLM extraction runs on every
-        sync_turn immediately, and the data is durable in the v4 store.
+        sync_turn immediately, and the data is durable in the store.
         This hook exists as a fail-closed safety net: if any buffered
         prefetch is in flight, we wait briefly so it's not lost.
         """
-        # No-op for v4: sync_turn already persists immediately. We just
+        # No-op: sync_turn already persists immediately. We just
         # confirm the server is still reachable; if not, return empty.
         if self._client and not self._client.is_reachable():
-            logger.warning("on_pre_compress: v4 unreachable, skipping flush")
+            logger.warning("on_pre_compress: server unreachable, skipping flush")
         return ""
 
     # --- Optional: on_memory_write (atomic agent-chosen fact mirror) ---
@@ -451,7 +462,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         content: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Mirror Hermes' built-in memory tool writes to v4.
+        """Mirror Hermes' built-in memory tool writes to HyAtlas.
 
         ``add`` is a plain ``/api/v1/add``: it is stored as a raw (L2) memory,
         tagged with ``write_origin`` and ``target`` in its metadata. It does not
@@ -508,7 +519,7 @@ class HyatlasMemoryProvider(MemoryProvider):
     # --- Optional: on_session_end (final flush) ---
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
-        """Session-end hook. v4 persists per-turn, so this is a no-op
+        """Session-end hook. The server persists per-turn, so this is a no-op
         beyond a debug log."""
         logger.debug(
             "on_session_end: %d messages persisted across session %s",
@@ -532,10 +543,10 @@ class HyatlasMemoryProvider(MemoryProvider):
     def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
         """Persist non-secret config to ``$HERMES_HOME/hyatlas.json``.
 
-        Only v4-relevant keys are written. Legacy v3.5 fields (llm,
+        Only relevant keys are written. Legacy v3.5 fields (llm,
         vector_store, api_keys, etc.) are NOT written here — those
-        belong to the v3.5 Python server's config, not the v4 Go
-        client. The v4 binary itself reads LLM env vars
+        belong to the v3.5 Python server's config, not the Go
+        client. The binary itself reads LLM env vars
         (HYATLAS_LLM_BASE, etc.) directly, so no LLM creds belong
         in this JSON.
         """
@@ -687,7 +698,7 @@ class HyatlasMemoryProvider(MemoryProvider):
                 self._prefetch_cache.popitem(last=False)
 
     def _format_prefetch(self, results: Dict[str, Any], query: str) -> str:
-        """Format v4's search result into a prompt block: the Now page, then the channels.
+        """Format the server's search result into a prompt block: the Now page, then the channels.
 
         The Now page is the agent's working memory, a short rewrite of what is true
         at the moment, and it is read before every reply, so it leads the block and
@@ -814,6 +825,56 @@ class HyatlasMemoryProvider(MemoryProvider):
             logger.info("hyatlas auto_start: %s", result.get("message"))
         return bool(result.get("reachable"))
 
+    def _hand_over_key(self, force: bool = False) -> bool:
+        """Give the server this plugin's own AI key when it is waiting for one.
+
+        The key is the ``llm_key`` secret that setup stored in Hermes' ``.env`` as
+        HYATLAS_LLM_KEY, never a Hermes provider token. A server the plugin spawns
+        already receives it in its environment; a server started some other way
+        (the launcher, a service) reads no credentials, so it reports
+        ``llm: "awaiting_key"`` until someone hands one over. This does that, when
+        and only when: the key is non-empty, the server says ``awaiting_key``, and
+        the configured host is this machine. Checked at most every
+        :data:`_KEY_CHECK_INTERVAL` seconds unless ``force`` is set. Returns True
+        when a key was handed over. The key is never logged.
+        """
+        key = os.environ.get("HYATLAS_LLM_KEY", "").strip()
+        if not key:
+            return False
+        if not settings.is_loopback_host(self._config.get("server_host") or "127.0.0.1"):
+            return False
+        if not self._key_check_lock.acquire(blocking=False):
+            return False
+        try:
+            now = time.monotonic()
+            if not force and self._key_checked_at and now - self._key_checked_at < _KEY_CHECK_INTERVAL:
+                return False
+            self._key_checked_at = now
+            client = self._ensure_client()
+            if (client.status() or {}).get("llm") != "awaiting_key":
+                return False
+            client.set_llm_key(key)
+            logger.info("hyatlas handed its AI key to the local server")
+            return True
+        except Exception as e:  # noqa: BLE001 - best effort, and the message never holds the key
+            logger.debug("hyatlas key hand-over skipped: %s", type(e).__name__)
+            return False
+        finally:
+            self._key_check_lock.release()
+
+    def _hand_over_key_async(self, force: bool = False) -> None:
+        """Run :meth:`_hand_over_key` on a daemon thread, so loading never waits."""
+        if (not force and self._key_checked_at
+                and time.monotonic() - self._key_checked_at < _KEY_CHECK_INTERVAL):
+            return
+        try:
+            threading.Thread(
+                target=self._hand_over_key, args=(force,),
+                name="hyatlas-keyshare", daemon=True,
+            ).start()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("hyatlas key hand-over not scheduled: %s", e)
+
     def _autostart_at_load(self) -> None:
         """Start the server when Hermes loads the plugin, not only when a session begins.
 
@@ -832,6 +893,8 @@ class HyatlasMemoryProvider(MemoryProvider):
                 "hyatlas auto_start at load: server %s",
                 "reachable" if ok else "not reachable",
             )
+            if ok:
+                self._hand_over_key(force=True)
         except Exception as e:
             logger.debug("hyatlas auto_start at load failed: %s", e)
 
@@ -864,12 +927,14 @@ def register(ctx: Any) -> None:
             ).start()
     except Exception as e:
         logger.debug("hyatlas auto_start at load not scheduled: %s", e)
+    # A server this plugin did not start may be waiting for the key from setup.
+    provider._hand_over_key_async(force=True)
     # Also register a slash command for diagnostics
     try:
         ctx.register_command(
             "hyatlas",
             _slash_hyatlas,
-            description="HyAtlas v4 memory server — status, search, add, recent, start, stop",
+            description="HyAtlas memory server — status, search, add, recent, start, stop",
             args_hint="[status|search <q>|add <text>|recent|start|stop]",
         )
     except Exception as e:
