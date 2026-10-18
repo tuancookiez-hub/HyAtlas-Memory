@@ -188,7 +188,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     from . import doctor as doctor_mod
     try:
         provider = _provider()
-        return doctor_mod.run_doctor(provider._ensure_client(), provider._config)
+        return doctor_mod.run_doctor(provider._ensure_client(), provider._config,
+                                     sources=settings.load_with_sources()[1])
     except Exception as e:  # noqa: BLE001 - the doctor must end with a message, not a traceback
         print(f"The doctor could not run: {type(e).__name__}: {e}")
         return 1
@@ -235,15 +236,17 @@ def _cmd_settings_set(args: argparse.Namespace) -> int:
         print(f"Not changed: {e}")
         return 1
     try:
-        path = settings.save_profile({args.key: value})
+        path = settings.save_profile({args.key: value}, warn=print)
     except OSError as e:
         print(f"Could not write hyatlas.json: {e}")
         return 1
     print(f"{args.key} = {value} (saved in {path})")
-    _, src = settings.load_with_sources()
+    cfg, src = settings.load_with_sources()
     if src.get(args.key) in ("config.yaml", "env"):
         print(f"Note: {args.key} is also set in {src[args.key]}, which wins over hyatlas.json, "
               "so this change has no effect until that one is removed.")
+    if args.key in settings.SPAWNED_ONLY_KEYS and not settings.truthy(cfg.get("auto_start")):
+        print(f"Note: {settings.SPAWNED_ONLY_NOTE}")
     print("Restart Hermes (and the server, if it is running) for the change to apply.")
     return 0
 

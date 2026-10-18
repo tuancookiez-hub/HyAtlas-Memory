@@ -467,3 +467,130 @@ def test_plugin_never_touches_hermes_provider_tokens():
             if needle in text:
                 offenders.append(f"{f.name}: {needle}")
     assert not offenders, offenders
+
+
+# ---------------------------------------------------------------------------
+# hyatlas.json safety
+# ---------------------------------------------------------------------------
+
+def test_a_bom_file_keeps_every_advanced_value_through_load_and_save(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    for var in ("HYATLAS_SERVER_PORT", "HYATLAS_GO_DATA", "HYATLAS_MODE"):
+        monkeypatch.delenv(var, raising=False)
+    (tmp_path / "hyatlas.json").write_bytes(
+        b"\xef\xbb\xbf" + json.dumps({"server_port": 19600, "data_dir": "D:/m",
+                                       "mode": "lite"}).encode("utf-8"))
+    cfg = settings.load()
+    assert cfg["server_port"] == 19600 and cfg["data_dir"] == "D:/m" and cfg["mode"] == "lite"
+    settings.save_profile({"user_id": "tuna"}, tmp_path)
+    saved = json.loads((tmp_path / "hyatlas.json").read_text(encoding="utf-8"))
+    assert saved == {"server_port": 19600, "data_dir": "D:/m", "mode": "lite", "user_id": "tuna"}
+    assert not (tmp_path / "hyatlas.json.bad").exists(), "a BOM is not corruption"
+
+
+def test_a_corrupt_file_is_moved_aside_not_lost(tmp_path):
+    (tmp_path / "hyatlas.json").write_text("{server_port: 19600,", encoding="utf-8")
+    warnings = []
+    settings.save_profile({"mode": "lite"}, tmp_path, warn=warnings.append)
+    assert json.loads((tmp_path / "hyatlas.json").read_text(encoding="utf-8")) == {"mode": "lite"}
+    assert (tmp_path / "hyatlas.json.bad").read_text(encoding="utf-8") == "{server_port: 19600,"
+    assert len(warnings) == 1 and "hyatlas.json.bad" in warnings[0]
+    assert not list(tmp_path.glob("*.tmp")), "no temporary file is left behind"
+
+
+def test_a_newer_bad_file_replaces_an_older_one(tmp_path):
+    (tmp_path / "hyatlas.json.bad").write_text("old", encoding="utf-8")
+    (tmp_path / "hyatlas.json").write_text("[1, 2]", encoding="utf-8")  # valid JSON, not an object
+    settings.save_profile({"mode": "pro"}, tmp_path, warn=lambda m: None)
+    assert (tmp_path / "hyatlas.json.bad").read_text(encoding="utf-8") == "[1, 2]"
+    assert json.loads((tmp_path / "hyatlas.json").read_text(encoding="utf-8")) == {"mode": "pro"}
+
+
+def test_the_default_warning_goes_to_the_log(tmp_path, caplog):
+    (tmp_path / "hyatlas.json").write_text("{nope", encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        settings.save_profile({"mode": "pro"}, tmp_path)
+    assert "hyatlas.json.bad" in caplog.text
+
+
+def test_load_warns_once_about_an_unreadable_file(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "hyatlas.json").write_text("{nope", encoding="utf-8")
+    settings._WARNED_UNREADABLE.discard(str(tmp_path / "hyatlas.json"))
+    with caplog.at_level(logging.WARNING):
+        settings.load()
+        settings.load()
+    assert caplog.text.count("ignoring") == 1
+
+
+def test_settings_set_on_a_corrupt_file_names_the_bad_copy(cli_env, capsys):
+    cli, home = cli_env
+    (home / "hyatlas.json").write_text("{nope", encoding="utf-8")
+    assert _run_cli(cli, "settings", "set", "server_port", "19700") == 0
+    assert "hyatlas.json.bad" in capsys.readouterr().out
+    assert (home / "hyatlas.json.bad").exists()
+
+
+# ---------------------------------------------------------------------------
+# Settings only a spawned server reads
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("key,value", [
+    ("mode", "pro"), ("llm_base", "https://x.example/v1"), ("llm_model", "m"),
+    ("sync", "on"), ("data_dir", "D:/m"),
+])
+def test_settings_set_notes_that_a_separate_server_does_not_see_it(cli_env, capsys, key, value):
+    cli, _ = cli_env
+    assert _run_cli(cli, "settings", "set", key, value) == 0
+    out = capsys.readouterr().out
+    assert "Hermes passes these only to a server it starts" in out
+    assert "HYATLAS_LLM_MODEL / HYATLAS_LLM_BASE / HYATLAS_MODE" in out
+    assert "hermes hyatlas settings set auto_start y" in out
+
+
+def test_no_note_with_auto_start_on_or_for_other_settings(cli_env, capsys):
+    cli, _ = cli_env
+    assert _run_cli(cli, "settings", "set", "server_port", "19700") == 0
+    assert "only to a server it starts" not in capsys.readouterr().out
+    assert _run_cli(cli, "settings", "set", "auto_start", "y") == 0
+    capsys.readouterr()
+    assert _run_cli(cli, "settings", "set", "mode", "pro") == 0
+    assert "only to a server it starts" not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# A changed key reaches the server
+# ---------------------------------------------------------------------------
+
+def test_a_changed_key_is_handed_over_once_to_a_server_that_reports_ok(provider_for, monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG)
+    p, srv = provider_for(llm="awaiting_key")
+    assert p._hand_over_key(force=True) is True and srv.keys == [_SECRET]
+    srv.llm = "ok"
+    assert p._hand_over_key(force=True) is False, "same key, nothing to do"
+    new_key = "sk-test-NEW-key-456"
+    monkeypatch.setenv("HYATLAS_LLM_KEY", new_key)
+    assert p._hand_over_key(force=True) is True
+    assert srv.keys == [_SECRET, new_key]
+    assert p._hand_over_key(force=True) is False, "handed over once, not on every check"
+    assert srv.keys == [_SECRET, new_key]
+    import hashlib
+    assert _SECRET not in caplog.text and new_key not in caplog.text
+    assert hashlib.sha256(new_key.encode()).hexdigest() not in caplog.text
+
+
+def test_a_key_the_process_never_handed_over_is_not_resent_to_an_ok_server(provider_for):
+    p, srv = provider_for(llm="ok")
+    assert p._hand_over_key(force=True) is False
+    assert srv.keys == []
+
+
+def test_a_changed_key_is_never_sent_to_a_remote_host(provider_for, monkeypatch):
+    p, srv = provider_for(llm="ok", host="10.9.8.7")
+    p._handed_key_hash = "0" * 64
+    assert p._hand_over_key(force=True) is False and srv.keys == []
+
+
+def test_system_prompt_names_eight_layers(provider_for):
+    p, _ = provider_for()
+    assert "HyAtlas 8-layer memory system" in p.system_prompt_block()

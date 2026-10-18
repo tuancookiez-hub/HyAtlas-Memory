@@ -453,6 +453,23 @@ func (l *LLMClient) chat(ctx context.Context, messages []map[string]string, temp
 	return content, nil
 }
 
+// chatPrimary sends one request to the primary model only: no fallback is tried,
+// so the caller learns whether the primary itself answers. The model test uses it.
+func (l *LLMClient) chatPrimary(ctx context.Context, messages []map[string]string, temp float64) (string, error) {
+	return l.chatOnce(ctx, l.BaseURL, l.Model, l.resolveKey(), messages, temp)
+}
+
+// chatFallback sends one request to the fallback model only, on the same endpoint
+// and key rules the fallback path of chat uses. The model test uses it to say
+// whether the fallback would have answered.
+func (l *LLMClient) chatFallback(ctx context.Context, messages []map[string]string, temp float64) (string, error) {
+	base := l.FallbackBaseURL
+	if base == "" {
+		base = l.BaseURL
+	}
+	return l.chatOnce(ctx, base, l.FallbackModel, l.fallbackKey(base), messages, temp)
+}
+
 // chatOnce sends one request to one model and returns the assistant's text.
 //
 // Shared by the primary and fallback paths so the two cannot drift on the parts

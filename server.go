@@ -71,6 +71,12 @@ type Server struct {
 	// (HYATLAS_CATCHUP_EVERY, or a key arriving). nil in lite mode and in tests built
 	// without main, which turns it off.
 	catchup *Catchup
+	// llmTest is the rate limit of POST /api/v1/llm/test: when its last real model
+	// call started, checked and set under its own mutex (see llmtest.go).
+	llmTest struct {
+		mu   sync.Mutex
+		last time.Time
+	}
 
 	// mu guards lastExtractErr: the extraction goroutines write it from
 	// background contexts while /api/v1/status reads it on request.
@@ -503,6 +509,12 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	} else {
 		delete(meta, metaExtractWanted)
 	}
+	// The doctor's round-trip row is a plumbing check, not a conversation: it is
+	// stored as usual but never extracted, so the check makes no model call.
+	doctorWrite := meta["write_origin"] == doctorOrigin
+	if doctorWrite {
+		delete(meta, metaExtractWanted)
+	}
 
 	err := s.store.Add(memory.L2Raw, id, text, meta)
 	resp := map[string]any{"success": err == nil, "memory_id": id}
@@ -515,10 +527,18 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	// Whether extraction happens at all is the mode's decision; whether the
 	// write waits for it is the sync knob's. Lite stops here with only the raw
 	// trace stored, so no LLM call is made.
-	resp["extraction_status"] = s.extractForMode(text, body.UserID, body.AgentID, id)
+	if doctorWrite {
+		resp["extraction_status"] = "skipped"
+	} else {
+		resp["extraction_status"] = s.extractForMode(text, body.UserID, body.AgentID, id)
+	}
 
 	jsonResponse(w, 200, resp)
 }
+
+// doctorOrigin is the write_origin metadata value that marks the row the doctor
+// writes for its round-trip check. Such a row is stored but never extracted.
+const doctorOrigin = "doctor"
 
 // extractForMode applies the configured mode to one stored raw memory and
 // reports what the caller should expect.

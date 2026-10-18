@@ -2,10 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // llmTestServer builds a pro-mode server whose model endpoint is a stub that
@@ -95,5 +99,126 @@ func TestLLMTestRateLimit(t *testing.T) {
 	code, out := postLLMTest(srv, "POST", "127.0.0.1:5000")
 	if code != 429 || out["retry_after"] == nil {
 		t.Fatalf("second call: %d %v", code, out)
+	}
+}
+
+// Two requests that arrive together make at most one model call: the rate limit is
+// checked and set under one lock.
+func TestLLMTestConcurrentMakesOneCall(t *testing.T) {
+	var calls atomic.Int32
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		time.Sleep(50 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	defer stub.Close()
+	srv := newTestServer(t, "test-model", stub.URL+"/v1")
+	srv.mode = ModePro
+	srv.llm = NewLLMClient(stub.URL+"/v1", "k", "test-model")
+
+	var wg sync.WaitGroup
+	var limited atomic.Int32
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if code, _ := postLLMTest(srv, "POST", "127.0.0.1:5000"); code == 429 {
+				limited.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("%d model calls, want exactly 1", n)
+	}
+	if n := limited.Load(); n != 7 {
+		t.Fatalf("%d requests were rate limited, want 7", n)
+	}
+}
+
+// fallbackStub answers 404 to the model "bad-model" and 200 to any other model,
+// and records which models were asked.
+func fallbackStub(t *testing.T, fallbackStatus int) (*httptest.Server, *[]string) {
+	t.Helper()
+	var mu sync.Mutex
+	asked := []string{}
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var req struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		mu.Lock()
+		asked = append(asked, req.Model)
+		mu.Unlock()
+		if req.Model == "bad-model" {
+			w.WriteHeader(404)
+			_, _ = w.Write([]byte(`{"error":"model not found"}`))
+			return
+		}
+		w.WriteHeader(fallbackStatus)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	t.Cleanup(stub.Close)
+	return stub, &asked
+}
+
+// A failing primary is reported as failed even when the fallback answers, and the
+// fallback is named so setup can say extraction still works through it.
+func TestLLMTestCreditsTheFallback(t *testing.T) {
+	stub, asked := fallbackStub(t, 200)
+	srv := newTestServer(t, "bad-model", stub.URL+"/v1")
+	srv.mode = ModePro
+	srv.llm = NewLLMClient(stub.URL+"/v1", "k", "bad-model")
+	srv.llm.SetFallback("", "good-model", "")
+
+	code, out := postLLMTest(srv, "POST", "127.0.0.1:5000")
+	if code != 200 || out["ok"] != false || out["model"] != "bad-model" {
+		t.Fatalf("got %d %v", code, out)
+	}
+	if msg, _ := out["error"].(string); !strings.Contains(msg, "404") {
+		t.Fatalf("error should be the primary's: %v", out)
+	}
+	if out["fallback_model"] != "good-model" || out["fallback_ok"] != true {
+		t.Fatalf("fallback not reported: %v", out)
+	}
+	if len(*asked) != 2 || (*asked)[0] != "bad-model" || (*asked)[1] != "good-model" {
+		t.Fatalf("models asked: %v, want primary then fallback", *asked)
+	}
+}
+
+// A failing fallback is reported as failed too.
+func TestLLMTestFallbackAlsoFails(t *testing.T) {
+	stub, _ := fallbackStub(t, 500)
+	srv := newTestServer(t, "bad-model", stub.URL+"/v1")
+	srv.mode = ModePro
+	srv.llm = NewLLMClient(stub.URL+"/v1", "k", "bad-model")
+	srv.llm.SetFallback("", "good-model", "")
+
+	_, out := postLLMTest(srv, "POST", "127.0.0.1:5000")
+	if out["ok"] != false || out["fallback_model"] != "good-model" || out["fallback_ok"] != false {
+		t.Fatalf("got %v", out)
+	}
+}
+
+// A working primary never touches the fallback, and a failing primary with no
+// fallback configured reports no fallback fields.
+func TestLLMTestPrimaryOnly(t *testing.T) {
+	stub, asked := fallbackStub(t, 200)
+	srv := newTestServer(t, "good-model", stub.URL+"/v1")
+	srv.mode = ModePro
+	srv.llm = NewLLMClient(stub.URL+"/v1", "k", "good-model")
+	srv.llm.SetFallback("", "other-model", "")
+	_, out := postLLMTest(srv, "POST", "127.0.0.1:5000")
+	if out["ok"] != true || out["fallback_model"] != nil || len(*asked) != 1 {
+		t.Fatalf("got %v, asked %v", out, *asked)
+	}
+
+	srv2 := newTestServer(t, "bad-model", stub.URL+"/v1")
+	srv2.mode = ModePro
+	srv2.llm = NewLLMClient(stub.URL+"/v1", "k", "bad-model")
+	_, out = postLLMTest(srv2, "POST", "127.0.0.1:5000")
+	if out["ok"] != false || out["fallback_model"] != nil || out["fallback_ok"] != nil {
+		t.Fatalf("got %v", out)
 	}
 }

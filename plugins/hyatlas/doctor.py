@@ -20,6 +20,7 @@ import re
 import secrets
 import sys
 import time
+from urllib.parse import urlparse
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import settings
@@ -132,6 +133,30 @@ def _explain_model_error(error: str, mode_base: str) -> str:
     return "Check the endpoint, key and model with `hermes memory setup`, then run the doctor again."
 
 
+def _host_of(url: Any) -> str:
+    """The lower-cased host of an endpoint URL, or "" when there is none."""
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    try:
+        return (urlparse(text if "://" in text else "//" + text).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _is_auth_error(error: str) -> bool:
+    """True when a model-test error says the endpoint refused the key."""
+    e = error.lower()
+    return ("401" in e or "403" in e or "unauthorized" in e or "forbidden" in e
+            or "invalid api key" in e)
+
+
+def _short(error: str, limit: int = 80) -> str:
+    """An error cut to one short line for a message."""
+    error = " ".join(error.split())
+    return error if len(error) <= limit else error[: limit - 1] + "…"
+
+
 def run_doctor(
     client: Any,
     cfg: Dict[str, Any],
@@ -139,12 +164,16 @@ def run_doctor(
     emit: Callable[[str], None] = print,
     marks: Optional[Dict[str, str]] = None,
     sleep: Callable[[float], None] = time.sleep,
+    sources: Optional[Dict[str, str]] = None,
 ) -> int:
     """Run every check, print the report and return the exit code (0 ok, 1 failed).
 
     ``client`` is a :class:`~client.HyatlasClient` (or a stand-in with the same
     methods), ``cfg`` the plugin's resolved settings. ``emit`` receives each output
-    line, so a test can capture them.
+    line, so a test can capture them. ``sources`` says where each setting came from
+    (``default``, ``hyatlas.json``, ...): a setting still at its default was not
+    chosen by the user, so it is not compared with the server. Without it, every
+    non-empty setting counts as chosen.
     """
     marks = marks or symbols()
     env_key = os.environ.get("HYATLAS_LLM_KEY", "").strip()
@@ -213,6 +242,12 @@ def run_doctor(
 
     uses_llm = mode in ("pro", "ultra")
 
+    # 4b. Model and endpoint the setup chose, against what the server really uses.
+    # Hermes passes them only to a server it starts, so a server started separately
+    # can run something else.
+    if uses_llm:
+        _check_setup_matches(rep, cfg, status, sources)
+
     # 5. Key.
     key_ok = False
     llm = str(status.get("llm") or "")
@@ -259,7 +294,8 @@ def run_doctor(
 
     # 6. The model answers.
     if uses_llm and key_ok:
-        _check_model(client, rep, status)
+        _check_model(client, rep, status, env_key=env_key, loopback=loopback,
+                     handed=handed, sleep=sleep)
 
     # 7. A round trip: write, find, delete.
     _check_round_trip(client, rep, mode, sleep)
@@ -279,22 +315,59 @@ def run_doctor(
     return _finish(rep)
 
 
-def _check_model(client: Any, rep: _Report, status: Dict[str, Any]) -> None:
-    """Check 6: ask the server to make one tiny call with the configured model."""
-    try:
-        res = client.llm_test() or {}
-    except HyatlasClientError as e:
-        text = str(e)
-        if "429" in text:
-            rep.check(WARN, "Model", "the server limits model tests to one per 10 seconds",
-                      "Wait a few seconds and run `hermes hyatlas doctor` again.")
-        elif "404" in text or "405" in text:
-            rep.check(WARN, "Model", "this server is too old to test the model",
-                      "Update the hyatlas-go binary to the matching release.")
-        else:
-            rep.check(FAIL, "Model", f"the model test failed: {text}",
-                      "Restart the server and run the doctor again.")
+def _check_setup_matches(rep: _Report, cfg: Dict[str, Any], status: Dict[str, Any],
+                         sources: Optional[Dict[str, str]]) -> None:
+    """Warn when the model or endpoint the setup chose is not what the server uses."""
+    def chosen(key: str) -> str:
+        value = str(cfg.get(key) or "").strip()
+        if sources is not None and sources.get(key, "default") == "default":
+            return ""
+        return value
+
+    want_model, want_host = chosen("llm_model"), _host_of(chosen("llm_base"))
+    have_model = str(status.get("llm_model") or "").strip()
+    have_host = _host_of(status.get("llm_base"))
+    model_differs = bool(want_model and have_model and want_model != have_model)
+    host_differs = bool(want_host and have_host and want_host != have_host)
+    if not (model_differs or host_differs):
         return
+    rep.check(WARN, "Setup",
+              f"your setup chose {want_model or have_model} at {want_host or have_host}, "
+              f"the server uses {have_model or want_model} at {have_host or want_host}",
+              settings.SPAWNED_ONLY_NOTE)
+
+
+def _check_model(
+    client: Any,
+    rep: _Report,
+    status: Dict[str, Any],
+    *,
+    env_key: str = "",
+    loopback: bool = False,
+    handed: bool = False,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Check 6: ask the server to make one tiny call with the configured model.
+
+    The server tests the primary model alone. When it fails with an auth error on
+    this machine, the server may simply hold an older key than the one in the
+    environment, so the doctor hands the current one over and tests once more.
+    """
+    res = _llm_test(client, rep)
+    if res is None:
+        return
+    error = str(res.get("error") or "")
+    if (not res.get("ok") and error != "awaiting_key" and _is_auth_error(error)
+            and loopback and env_key and not handed):
+        again = _retest_with_current_key(client, env_key, res, sleep)
+        if again is not None:
+            res = again
+            if res.get("ok"):
+                rep.check(OK, "Model",
+                          f"the server had an old key; the doctor handed over the current one. "
+                          f"{res.get('model') or status.get('llm_model') or '?'} answered in "
+                          f"{_seconds(res.get('latency_ms'))}")
+                return
     model = res.get("model") or status.get("llm_model") or "?"
     base = res.get("base_host") or ""
     if res.get("ok"):
@@ -306,7 +379,58 @@ def _check_model(client: Any, rep: _Report, status: Dict[str, Any]) -> None:
         rep.check(FAIL, "Model", "the server has no key yet, so the model was not called",
                   "Run `hermes memory setup` and enter the API key.")
         return
+    if res.get("fallback_ok"):
+        rep.check(WARN, "Model",
+                  f"your model {model} failed ({_short(error)}); the fallback "
+                  f"{res.get('fallback_model') or '?'} answered",
+                  "Extraction still works through the fallback. Fix the model id: find valid ids "
+                  "in your provider's model list, then run `hermes hyatlas settings set llm_model "
+                  "<model id>` (and HYATLAS_LLM_MODEL where a separately started server runs).")
+        return
     rep.check(FAIL, "Model", f"{model} did not answer: {error}", _explain_model_error(error, base))
+
+
+def _llm_test(client: Any, rep: _Report) -> Optional[Dict[str, Any]]:
+    """Run the server's model test; report a refusal or an old server and return None."""
+    try:
+        return client.llm_test() or {}
+    except HyatlasClientError as e:
+        text = str(e)
+        if "429" in text:
+            rep.check(WARN, "Model", "the server limits model tests to one per 10 seconds",
+                      "Wait a few seconds and run `hermes hyatlas doctor` again.")
+        elif "404" in text or "405" in text:
+            rep.check(WARN, "Model", "this server is too old to test the model",
+                      "Update the hyatlas-go binary to the matching release.")
+        else:
+            rep.check(FAIL, "Model", f"the model test failed: {text}",
+                      "Restart the server and run the doctor again.")
+        return None
+
+
+def _retest_with_current_key(client: Any, env_key: str, first: Dict[str, Any],
+                             sleep: Callable[[float], None]) -> Optional[Dict[str, Any]]:
+    """Hand the environment's key to the local server and test the model once more.
+
+    The server allows one model test per 10 seconds, so this waits out what is left
+    of that (never more than 11 seconds). Returns the second result, or None when
+    the key could not be handed over or the second test could not run.
+    """
+    try:
+        client.set_llm_key(env_key)
+    except HyatlasClientError as e:
+        logger.debug("doctor key hand-over failed: %s", type(e).__name__)
+        return None
+    try:
+        spent = float(first.get("latency_ms") or 0) / 1000.0
+    except (TypeError, ValueError):
+        spent = 0.0
+    sleep(min(11.0, max(0.5, 10.5 - spent)))
+    try:
+        return client.llm_test() or {}
+    except HyatlasClientError as e:
+        logger.debug("doctor model retest failed: %s", type(e).__name__)
+        return None
 
 
 def _check_round_trip(client: Any, rep: _Report, mode: str, sleep: Callable[[float], None]) -> None:

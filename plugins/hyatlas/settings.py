@@ -25,7 +25,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Callable, Dict, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -302,6 +302,22 @@ def coerce(key: str, value: Any, cast: Any = None) -> Any:
     return value
 
 
+# Profile files already reported as unreadable, so the warning appears once per
+# file and not on every settings lookup (load runs many times per session).
+_WARNED_UNREADABLE: set = set()
+
+
+def _warn_unreadable(profile: Path, why: str) -> None:
+    """Warn once that ``profile`` could not be read and its values are being ignored."""
+    key = str(profile)
+    if key in _WARNED_UNREADABLE:
+        return
+    _WARNED_UNREADABLE.add(key)
+    logger.warning(
+        "hyatlas: ignoring %s (%s); fix or delete the file. `hermes hyatlas settings set` "
+        "saves the old one as hyatlas.json.bad before writing a new one.", profile, why)
+
+
 def load() -> Dict[str, Any]:
     """Resolve settings across all four layers."""
     return load_with_sources()[0]
@@ -319,7 +335,8 @@ def load_with_sources() -> Tuple[Dict[str, Any], Dict[str, str]]:
     profile = home() / "hyatlas.json"
     if profile.exists():
         try:
-            raw = json.loads(profile.read_text(encoding="utf-8"))
+            # utf-8-sig: Notepad and PowerShell write a BOM, which plain utf-8 rejects.
+            raw = json.loads(profile.read_text(encoding="utf-8-sig"))
             if isinstance(raw, dict):
                 for k in KEYS:
                     if k in raw:
@@ -328,9 +345,9 @@ def load_with_sources() -> Tuple[Dict[str, Any], Dict[str, str]]:
                             cfg[k] = got
                             src[k] = "hyatlas.json"
             else:
-                logger.debug("ignoring %s: not a mapping", profile)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.debug("ignoring %s: %s", profile, e)
+                _warn_unreadable(profile, "it is not a JSON object")
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+            _warn_unreadable(profile, type(e).__name__)
 
     try:
         try:
@@ -447,6 +464,19 @@ def is_loopback_host(host: str) -> bool:
         return False
 
 
+# Settings only a server that Hermes starts itself receives (as environment
+# variables); a server started some other way keeps whatever it was started with.
+SPAWNED_ONLY_KEYS = ("mode", "llm_base", "llm_model", "sync", "data_dir")
+
+# The one-sentence explanation of that, shared by the doctor and
+# ``hermes hyatlas settings set`` so the two cannot say different things.
+SPAWNED_ONLY_NOTE = (
+    "Hermes passes these only to a server it starts. Your server is started separately: "
+    "set HYATLAS_LLM_MODEL / HYATLAS_LLM_BASE / HYATLAS_MODE where it starts (e.g. "
+    "hyatlas-go.local.ps1), or turn on auto start with `hermes hyatlas settings set "
+    "auto_start y`."
+)
+
 # Settings ``hermes hyatlas settings set`` refuses: the key is a secret and lives in
 # Hermes's .env, never in hyatlas.json.
 SECRET_KEYS = ("llm_key",)
@@ -485,29 +515,52 @@ def parse_value(key: str, raw: str) -> Any:
     return text
 
 
-def save_profile(updates: Dict[str, Any], hermes_home: "str | Path | None" = None) -> Path:
+def save_profile(
+    updates: Dict[str, Any],
+    hermes_home: "str | Path | None" = None,
+    warn: Callable[[str], None] = logger.warning,
+) -> Path:
     """Merge ``updates`` into ``hyatlas.json`` and return its path.
 
     Keys already in the file stay, so running setup again never wipes an advanced
-    value. A secret is never written. An unreadable or non-mapping file is replaced.
-    Raises OSError when the file cannot be written.
+    value. A secret is never written. A file that exists but is not a JSON object
+    (a typo, a half-written edit) is not overwritten: it is renamed to
+    ``hyatlas.json.bad``, replacing an older one, the new file holds only the
+    merged answers, and ``warn`` is called with a message naming the ``.bad`` file.
+    The write goes to a temporary file in the same folder and replaces the real one
+    in a single step, so a crash never leaves half a file. Raises OSError when the
+    file cannot be written.
     """
     path = (Path(hermes_home) if hermes_home else home()) / "hyatlas.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     current: Dict[str, Any] = {}
     if path.exists():
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                current = raw
-        except (json.JSONDecodeError, OSError):
-            pass
+            raw = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raw = None
+        if isinstance(raw, dict):
+            current = raw
+        else:
+            bad = path.with_name(path.name + ".bad")
+            os.replace(path, bad)
+            warn(f"hyatlas: {path} was not valid JSON; it was kept as {bad} and a new "
+                 "file was written.")
     merged = {**current, **updates}
     for secret in SECRET_KEYS:
         merged.pop(secret, None)
-    path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+    tmp = path.with_name(path.name + ".tmp")
     try:
-        path.chmod(0o600)
-    except (OSError, AttributeError):
-        pass  # Windows
+        tmp.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        try:
+            tmp.chmod(0o600)
+        except (OSError, AttributeError):
+            pass  # Windows
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
     return path

@@ -287,3 +287,131 @@ def test_doctor_never_hands_the_key_to_a_remote_server(monkeypatch):
     fake = FakeClient(status={"llm": "awaiting_key"}, accept_key=True)
     code, out = run(fake, cfg={"server_host": "10.0.0.5"}, env_key=_SECRET, monkeypatch=monkeypatch)
     assert fake.keys_set == [] and code == 1
+
+
+# ---------------------------------------------------------------------------
+# Settings only a spawned server reads
+# ---------------------------------------------------------------------------
+
+def test_setup_that_the_server_does_not_use_is_a_warning_with_the_fix(monkeypatch):
+    fake = FakeClient(status={"llm_model": "server-model", "llm_base": "https://server.example/v1"})
+    code, out = run(fake, cfg={"llm_model": "chosen-model", "llm_base": "https://chosen.example/v1"},
+                    env_key=_SECRET, monkeypatch=monkeypatch)
+    assert code == 0
+    assert ("! Setup         your setup chose chosen-model at chosen.example, "
+            "the server uses server-model at server.example") in out
+    assert "Hermes passes these only to a server it starts" in out
+    assert "HYATLAS_LLM_MODEL / HYATLAS_LLM_BASE / HYATLAS_MODE" in out
+    assert "hermes hyatlas settings set auto_start y" in out
+
+
+def test_matching_setup_and_lite_mode_say_nothing(monkeypatch):
+    same = FakeClient(status={"llm_model": "m", "llm_base": "https://api.example.com/v1"})
+    _, out = run(same, cfg={"llm_model": "m", "llm_base": "https://api.example.com:443/v1"},
+                 env_key=_SECRET, monkeypatch=monkeypatch)
+    assert "Setup" not in out
+    lite = FakeClient(status={"mode": "lite", "llm": "unused", "llm_model": "x"})
+    _, out = run(lite, cfg={"llm_model": "other"}, monkeypatch=monkeypatch)
+    assert "Setup" not in out
+
+
+def test_a_setting_still_at_its_default_is_not_compared(monkeypatch):
+    fake = FakeClient(status={"llm_model": "server-model"})
+    lines = []
+    cfg = {"server_host": "127.0.0.1", "server_port": 19528, "auto_start": False, "mode": "",
+           "llm_model": "default-model"}
+    monkeypatch.setenv("HYATLAS_LLM_KEY", _SECRET)
+    doctor.run_doctor(fake, cfg, emit=lines.append, sleep=lambda s: None,
+                      sources={"llm_model": "default", "llm_base": "default"})
+    assert "Setup" not in "\n".join(lines)
+    lines.clear()
+    doctor.run_doctor(fake, cfg, emit=lines.append, sleep=lambda s: None,
+                      sources={"llm_model": "hyatlas.json"})
+    assert "! Setup" in "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# A changed key reaches the server
+# ---------------------------------------------------------------------------
+
+class KeyFakeClient(FakeClient):
+    """A server whose model test fails with 401 until it is handed a key."""
+
+    def llm_test(self):
+        self.llm_calls += 1
+        if self.keys_set:
+            return {"ok": True, "model": "m", "base_host": "api.example.com", "latency_ms": 900}
+        return {"ok": False, "model": "m", "base_host": "api.example.com", "latency_ms": 400,
+                "error": "LLM HTTP 401: unauthorized"}
+
+
+def test_doctor_hands_over_a_changed_key_and_retests(monkeypatch):
+    fake = KeyFakeClient()
+    sleeps = []
+    monkeypatch.setenv("HYATLAS_LLM_KEY", _SECRET)
+    lines = []
+    cfg = {"server_host": "127.0.0.1", "server_port": 19528, "auto_start": False, "mode": ""}
+    code = doctor.run_doctor(fake, cfg, emit=lines.append, sleep=sleeps.append)
+    out = "\n".join(lines)
+    assert code == 0, out
+    assert fake.keys_set == [_SECRET] and fake.llm_calls == 2
+    assert "the server had an old key; the doctor handed over the current one" in out
+    assert "✓ Model" in out and _SECRET not in out
+    assert len(sleeps) == 1 and 0 < sleeps[0] <= 11, sleeps
+
+
+def test_doctor_does_not_retest_when_the_new_key_is_refused_too(monkeypatch):
+    fake = FakeClient(llm_result={"ok": False, "model": "m", "base_host": "h", "latency_ms": 5,
+                                  "error": "LLM HTTP 403: forbidden"})
+    code, out = run(fake, env_key=_SECRET, monkeypatch=monkeypatch)
+    assert code == 1 and fake.keys_set == [_SECRET] and fake.llm_calls == 2
+    assert "✗ Model" in out and "refused the key" in out and _SECRET not in out
+
+
+@pytest.mark.parametrize("cfg,env,why", [
+    ({"server_host": "10.0.0.5"}, _SECRET, "never to a remote server"),
+    ({}, None, "no key visible"),
+])
+def test_doctor_hands_over_nothing_when_it_must_not(monkeypatch, cfg, env, why):
+    fake = KeyFakeClient()
+    code, out = run(fake, cfg=cfg, env_key=env, monkeypatch=monkeypatch)
+    assert fake.keys_set == [] and fake.llm_calls == 1, why
+    assert code == 1 and "✗ Model" in out
+
+
+def test_a_non_auth_failure_does_not_hand_over_the_key(monkeypatch):
+    fake = FakeClient(llm_result={"ok": False, "model": "m", "base_host": "h", "latency_ms": 5,
+                                  "error": "LLM HTTP 404: model not found"})
+    run(fake, env_key=_SECRET, monkeypatch=monkeypatch)
+    assert fake.keys_set == [] and fake.llm_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# The model test credits the fallback
+# ---------------------------------------------------------------------------
+
+def test_a_failing_model_with_a_working_fallback_is_a_warning(monkeypatch):
+    fake = FakeClient(llm_result={
+        "ok": False, "model": "bad-model", "base_host": "h", "latency_ms": 5,
+        "error": "LLM HTTP 404: model not found", "fallback_model": "good-model",
+        "fallback_ok": True})
+    code, out = run(fake, env_key=_SECRET, monkeypatch=monkeypatch)
+    assert code == 0, out
+    assert "! Model" in out and "✗ Model" not in out
+    assert "your model bad-model failed (LLM HTTP 404: model not found); the fallback good-model answered" in out
+    assert "model id" in out and "settings set llm_model" in out
+
+
+def test_a_failing_model_and_a_failing_fallback_is_a_failure(monkeypatch):
+    fake = FakeClient(llm_result={
+        "ok": False, "model": "bad-model", "base_host": "h", "latency_ms": 5,
+        "error": "LLM HTTP 404: model not found", "fallback_model": "good-model",
+        "fallback_ok": False})
+    code, out = run(fake, env_key=_SECRET, monkeypatch=monkeypatch)
+    assert code == 1 and "✗ Model" in out and "bad-model did not answer" in out
+
+
+def test_the_doctor_row_is_marked_so_the_server_skips_extraction(monkeypatch):
+    fake = FakeClient()
+    run(fake, env_key=_SECRET, monkeypatch=monkeypatch)
+    assert fake.added[0]["metadata"] == {"write_origin": "doctor"}

@@ -25,6 +25,7 @@ This plugin follows the canonical Hermes memory-provider pattern
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -150,6 +151,9 @@ class HyatlasMemoryProvider(MemoryProvider):
         # run at once. See _hand_over_key.
         self._key_check_lock = threading.Lock()
         self._key_checked_at: float = 0.0
+        # SHA-256 of the last key handed to the server, kept in memory only, so a key
+        # changed in .env while the server keeps running is noticed. Never logged.
+        self._handed_key_hash: str = ""
 
     # --- Required ABC methods ---
 
@@ -342,7 +346,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         the static pointer the agent always sees.
         """
         return (
-            f"You have access to a HyAtlas 7-layer memory system "
+            f"You have access to a HyAtlas 8-layer memory system "
             f"(server: {self._origin()}). "
             "Use the `hyatlas_search` tool to recall relevant past context, "
             "`hyatlas_recent` to see the latest memories, and `hyatlas_add` "
@@ -826,10 +830,12 @@ class HyatlasMemoryProvider(MemoryProvider):
         already receives it in its environment; a server started some other way
         (the launcher, a service) reads no credentials, so it reports
         ``llm: "awaiting_key"`` until someone hands one over. This does that, when
-        and only when: the key is non-empty, the server says ``awaiting_key``, and
-        the configured host is this machine. Checked at most every
-        :data:`_KEY_CHECK_INTERVAL` seconds unless ``force`` is set. Returns True
-        when a key was handed over. The key is never logged.
+        and only when: the key is non-empty, the configured host is this machine,
+        and the server says ``awaiting_key`` or (it says ``ok`` but the key in the
+        environment is not the one this process last handed over, so it was changed
+        since). Checked at most every :data:`_KEY_CHECK_INTERVAL` seconds unless
+        ``force`` is set. Returns True when a key was handed over. Neither the key
+        nor its hash is ever logged.
         """
         key = os.environ.get("HYATLAS_LLM_KEY", "").strip()
         if not key:
@@ -844,9 +850,13 @@ class HyatlasMemoryProvider(MemoryProvider):
                 return False
             self._key_checked_at = now
             client = self._ensure_client()
-            if (client.status() or {}).get("llm") != "awaiting_key":
+            state = (client.status() or {}).get("llm")
+            digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+            changed = state == "ok" and bool(self._handed_key_hash) and self._handed_key_hash != digest
+            if state != "awaiting_key" and not changed:
                 return False
             client.set_llm_key(key)
+            self._handed_key_hash = digest
             logger.info("hyatlas handed its AI key to the local server")
             return True
         except Exception as e:  # noqa: BLE001 - best effort, and the message never holds the key
