@@ -56,6 +56,9 @@ type Server struct {
 	// of results. The zero values turn both off, as for minScore.
 	recency      bool
 	intentionTTL time.Duration
+	// mmrLambda (HYATLAS_MMR_LAMBDA) is the relevance weight of the MMR diversity pass
+	// in search; the zero value, like 1, turns the pass off.
+	mmrLambda float64
 	// now keeps each owner's working-memory page (HYATLAS_NOW_EVERY); usage counts
 	// which recalled memories replies actually used (HYATLAS_USAGE_LEARNING). Either
 	// may be nil, as in tests built without main, which turns that feature off.
@@ -1792,6 +1795,7 @@ func main() {
 	srv.admin = rt.Admin
 	srv.recency = !envOff("HYATLAS_RECENCY")
 	srv.intentionTTL = parseDuration("HYATLAS_INTENTION_TTL", defaultIntentionTTL)
+	srv.mmrLambda = parseMMRLambda()
 	// The Now page needs an LLM; lite never calls one, so it gets none and only
 	// serves pages already stored.
 	var nowLLM *LLMClient

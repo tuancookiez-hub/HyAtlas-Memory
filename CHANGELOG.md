@@ -49,6 +49,11 @@ and stricter key handling.
 - **How a row was retired.** `/api/v1/list` with `include_superseded` returns
   `superseded_how` (`replaced`, `updated`, `merged`, `restated`, `dropped`, `done` or
   `forgotten`) beside `superseded_by` and `drop_reason`.
+- **MMR diversity in recall.** After near-duplicate demotion, the first twice `limit`
+  hits are reordered with Maximal Marginal Relevance, so the visible results cover
+  different aspects instead of several phrasings of one thing. `HYATLAS_MMR_LAMBDA`
+  (default 0.75, `1` turns it off) sets the balance. It applies to all-layer and L3-only
+  searches, never to a raw-only query, and pages, schemas and intentions keep their slots.
 
 ### Fixed
 

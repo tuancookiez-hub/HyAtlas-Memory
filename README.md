@@ -408,6 +408,7 @@ Notes:
 | `HYATLAS_LLM_KEY` | (empty) | LLM bearer token |
 | `HYATLAS_LLM_KEY_FILE` | (empty) | Read the key live from this file on every call, for a rotating key file of your own. The file must hold the token as plain text. A file whose content starts with `{` (JSON, such as another program's credential file) is refused with one warning in the log, and the key from `HYATLAS_LLM_KEY` is used instead. Wins over `HYATLAS_LLM_KEY`, which is the fallback if the file cannot be read or is refused. A key posted to `POST /api/v1/llm/key` wins over both. |
 | `HYATLAS_RECENCY` | on | `off` stops newer memories winning close calls in search (see *Search*) |
+| `HYATLAS_MMR_LAMBDA` | 0.75 | Relevance weight of the diversity pass in search, in (0, 1]; `1` turns it off (see *Search*) |
 | `HYATLAS_INTENTION_TTL` | `168h` (7 days) | How long an L7 intention without a due date stays in search results. Older intentions are kept but not returned. `0`, `off`, `false` or `no` means no limit: they are all returned. An intention with a due date stays until a day after it is due, then drops out |
 | `HYATLAS_SNAPSHOT_EVERY` | `24h` | How often the server zips its data directory (first one a minute after start). `0` or `off` turns snapshots off |
 | `HYATLAS_SNAPSHOT_KEEP` | `7` | How many snapshots to keep; older ones are deleted |
@@ -674,6 +675,13 @@ happened ("yesterday" is resolved against the write date).
 **Fewer repeats.** Of two hits that say the same thing (cosine 0.95 or more and the
 same numbers), the lower one moves to the end of the results. Only the first twice
 `limit` hits are compared.
+
+**Different aspects.** After that, the first twice `limit` hits are reordered with
+Maximal Marginal Relevance: each next hit is the one that is still ranked high and least
+like what was already chosen, so five phrasings of one fact do not fill the results.
+`HYATLAS_MMR_LAMBDA` (0 to 1, default 0.75; `1` turns it off) sets the balance. It runs
+for all-layer and L3-only searches, not for a raw-only query; entity pages, schemas and
+intentions keep their places.
 
 **Long facts.** A fact over 300 characters (consolidation merges make many) is also
 indexed by its sentences, up to 6, in a separate search-only collection. A query about

@@ -308,6 +308,17 @@ func (r *searchRun) rankSignals() {
 	} else {
 		res = s.store.demoteNearDuplicates(res, nearDupScore)
 	}
+	// MMR then spreads the head over different aspects. A single-layer raw query and
+	// the other single layers keep their order.
+	if s.mmrLambda > 0 && s.mmrLambda < 1 && (r.req.Layer == "" || r.req.Layer == string(memory.L3Fact)) {
+		if window := min(2*r.limit, len(res)); window >= mmrMinWindow {
+			ids := make([]string, 0, window)
+			for _, h := range res[:window] {
+				ids = append(ids, h.ID)
+			}
+			res = mmrRerank(res, s.store.vectors(ids), r.limit, s.mmrLambda)
+		}
+	}
 	r.hits = res
 }
 
