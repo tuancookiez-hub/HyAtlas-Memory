@@ -184,8 +184,10 @@ type Report struct {
 	Dropped int `json:"dropped"`
 	// KeptOffTopic counts facts a merge named that were left live because the
 	// merged text was not about them (see mergeMinSimilarity).
-	KeptOffTopic int      `json:"kept_off_topic"`
-	Schemas      int      `json:"schemas"`
+	KeptOffTopic int `json:"kept_off_topic"`
+	Schemas      int `json:"schemas"`
+	// CrossSchemas counts the cross-topic schemas the end-of-pass cross-topic pass wrote.
+	CrossSchemas int      `json:"cross_schemas"`
 	Arc          bool     `json:"arc"`
 	PrunedRaw    int      `json:"pruned_raw"`
 	Protected    int      `json:"protected_raw"`
@@ -200,6 +202,9 @@ type Report struct {
 type consolidateState struct {
 	Cursor   int                       `json:"cursor"`
 	Clusters map[string]*ownerClusters `json:"clusters,omitempty"`
+	// CrossRan is when each owner's cross-topic pass last ran (RFC 3339), so a
+	// restart does not run it early.
+	CrossRan map[string]string `json:"cross_ran,omitempty"`
 }
 
 // ownerClusters is one owner's stored clustering. Built is when the clusters were
@@ -310,8 +315,13 @@ type Consolidator struct {
 	// statePath.
 	clusters  map[string]*ownerClusters
 	cursor    int
+	crossRan  map[string]string
 	stateMu   sync.Mutex
 	statePath string
+
+	// crossEvery is the least time between two cross-topic passes for one owner;
+	// zero turns the pass off. It is read from HYATLAS_CROSS_SCHEMA_EVERY.
+	crossEvery time.Duration
 
 	// writeMu serialises the schema and arc writes of concurrent calls, so two
 	// calls for one owner cannot both write the same schema or leave two live arcs.
@@ -354,7 +364,8 @@ func NewConsolidator(store *MemoryStore, llm *LLMClient, every, retention time.D
 	}
 	c := &Consolidator{store: store, llm: llm, every: every, retention: retention, batch: batch,
 		graph: true, clusters: map[string]*ownerClusters{},
-		catchup: catchup, recluster: recluster, parallel: parallel}
+		catchup: catchup, recluster: recluster, parallel: parallel,
+		crossEvery: envDuration(crossSchemaEveryKey, defaultCrossSchemaEvery), crossRan: map[string]string{}}
 	if store != nil && store.indexPath != "" {
 		c.statePath = filepath.Join(filepath.Dir(store.indexPath), consolidateStateFile)
 	}
@@ -679,6 +690,10 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 	if err := c.saveState(); err != nil {
 		rep.Errors = append(rep.Errors, "state: "+err.Error())
 	}
+
+	// The cross-topic pass looks across the schemas the clusters just wrote. It is
+	// due at most once per owner per crossEvery, so most passes make no call here.
+	c.crossSchemaPass(ctx, owners, rep)
 
 	// Raw decay runs once per pass. Its citation guard already reads every
 	// owner's edges and facts, so it is not split by scope.
@@ -1462,6 +1477,9 @@ func (c *Consolidator) loadState() {
 		return
 	}
 	c.cursor = st.Cursor
+	for key, at := range st.CrossRan {
+		c.crossRan[key] = at
+	}
 	for key, oc := range st.Clusters {
 		if oc != nil {
 			c.clusters[key] = oc
@@ -1475,7 +1493,7 @@ func (c *Consolidator) saveState() error {
 	if c.statePath == "" {
 		return nil
 	}
-	b, err := json.MarshalIndent(consolidateState{Cursor: c.cursor, Clusters: c.clusters}, "", "  ")
+	b, err := json.MarshalIndent(consolidateState{Cursor: c.cursor, Clusters: c.clusters, CrossRan: c.crossRan}, "", "  ")
 	if err != nil {
 		return err
 	}

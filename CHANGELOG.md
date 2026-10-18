@@ -9,6 +9,14 @@ and stricter key handling.
 
 ### Added
 
+- **Cross-topic schemas** (ultra). Consolidation finds a schema only inside one topic. At
+  the end of a pass, an owner with at least 4 live schemas from at least 2 topics gets one
+  extra LLM call that looks for up to 3 patterns spanning two or more of them ("prefers small
+  reversible steps" seen in coding, finances and travel). Each is a new L6 schema with
+  `cross_topic` set and the facts behind the schemas it generalises as evidence, skipped when
+  the owner already has the same pattern (0.92 guard); existing schemas are never retired or
+  edited. At most once per owner per `HYATLAS_CROSS_SCHEMA_EVERY` (default `24h`, `off`
+  disables), remembered across restarts; the report gains `cross_schemas`.
 - **`hermes hyatlas doctor`.** One command that says whether memory works and how to fix
   it. It checks the provider and plugin version, that the server answers, that server and
   plugin versions match, the mode, the AI key, that the model answers, a write-search-delete

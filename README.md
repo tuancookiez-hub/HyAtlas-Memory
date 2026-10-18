@@ -170,7 +170,7 @@ default configuration is not fully local:
 | What | Goes where | Default | How to keep it local |
 |---|---|---|---|
 | **Memory text** (each write's text, sent for extraction) | The extraction LLM. Each write is one request, and a failed call or unparseable reply is retried once. From the Hermes plugin, a write is one turn: the user's message and the assistant's text only. Tool calls, tool output, system messages and Hermes compaction summaries are not sent. Each message is capped at 4,000 characters and the turn at 12,000. One extraction call sends at most 16,000 bytes of the write's text (the stored raw row keeps the full text) | **Nowhere** — no endpoint is shipped, so an unconfigured server makes no LLM call and reports `unconfigured` | Already opt-in: set `HYATLAS_LLM_BASE`/`_MODEL`/`_KEY` to choose where it goes. Point them at a local OpenAI-compatible server to keep it on-machine, or use `HYATLAS_MODE=lite` |
-| **Stored facts and schema patterns** (ultra only) | The same LLM, by the consolidation pass. One request per owner (`user_id`/`agent_id` pair) that is due: one of its topic clusters has changed members since the cluster's last successful call. An owner with one fact, or with nothing due, makes no request. Each request covers one cluster and carries up to `HYATLAS_CONSOLIDATE_BATCH` (50) facts of that owner, each cut to 400 characters with its fact and turn IDs, plus up to 20 existing schema patterns cut to 200 characters. Facts that a pass merges or drops are superseded: kept and hidden from search, not deleted. Each drop is stored with its reason | Nowhere until an endpoint is configured | Use `pro` or `lite` |
+| **Stored facts and schema patterns** (ultra only) | The same LLM, by the consolidation pass. One request per owner (`user_id`/`agent_id` pair) that is due: one of its topic clusters has changed members since the cluster's last successful call. An owner with one fact, or with nothing due, makes no request. Each request covers one cluster and carries up to `HYATLAS_CONSOLIDATE_BATCH` (50) facts of that owner, each cut to 400 characters with its fact and turn IDs, plus up to 20 existing schema patterns cut to 200 characters. Facts that a pass merges or drops are superseded: kept and hidden from search, not deleted. Each drop is stored with its reason. Once a day at most per owner (`HYATLAS_CROSS_SCHEMA_EVERY`, `off` to disable), one more request sends that owner's schema texts (up to 40, each cut to 300 characters) to look for patterns that span topics | Nowhere until an endpoint is configured | Use `pro` or `lite` |
 | **Embeddings** (each memory's text, and each search query) | In-process BGE-small (onnxruntime-go) | **Local** — `HYATLAS_EMBED_BASE=bge`, no network | Already local. If you set `HYATLAS_EMBED_BASE` to a URL, the text goes there instead, in every mode, including `lite` |
 | Stored memories, vector index, graph | `HYATLAS_GO_DATA` (default `./data`) | **Local** | Already local |
 | Telemetry / usage reporting | — | **None.** The only outbound HTTP the server makes is to the LLM and embedding endpoints you configure | — |
@@ -269,6 +269,15 @@ the mode has no slow path (`lite` and `pro`). A pass that finds nothing to recon
 still reports as run with zero changes, which is what distinguishes it from a pass
 that never happened. An owner whose facts have not changed since its last successful
 pass counts under `owners_unchanged` and is not sent to the LLM again.
+
+At the end of a pass, an owner with at least 4 live schemas from at least 2 topics also gets
+a **cross-topic pass**, at most once per `HYATLAS_CROSS_SCHEMA_EVERY` (24h; the last run is kept
+in `consolidate_state.json`, so a restart does not repeat it). One extra LLM call, at most once a
+day per owner, sends that owner's schema texts (newest 40) and asks for up to 3 patterns that hold
+across two or more of them. Each is written as a new L6 schema marked `cross_topic`, with the
+facts behind the schemas it generalises as evidence, unless the owner already has a schema that
+says the same (the 0.92 duplicate guard). Existing schemas are never retired or edited by it.
+The report counts them under `cross_schemas`.
 
 Facts are consolidated in **topic clusters** of up to `HYATLAS_CONSOLIDATE_BATCH`
 facts, built once per owner and kept in `consolidate_state.json`. An owner here is a
@@ -396,6 +405,7 @@ Notes:
 | `HYATLAS_CONSOLIDATE_PARALLEL` | `2` | Ultra only: how many consolidation calls run at once (1 to 4) |
 | `HYATLAS_CONSOLIDATE_CATCHUP` | `20m` | Ultra only: the interval between passes while clusters are still due |
 | `HYATLAS_CONSOLIDATE_RECLUSTER` | *(unset = never)* | Ultra only: rebuild an owner's topic clusters after this long; clusters whose members are unchanged keep their progress |
+| `HYATLAS_CROSS_SCHEMA_EVERY` | `24h` | Ultra only: the least time between two cross-topic schema passes for one owner; `0` or `off` disables it. The pass makes one extra LLM call, sending that owner's schema texts, only for an owner with at least 4 schemas from at least 2 topics |
 | `HYATLAS_RAW_RETENTION` | *(unset = never delete)* | Ultra only: age after which an L2 raw row cited by no live edge or fact is deleted |
 | `HYATLAS_USER_ALIASES` | *(unset = no aliases)* | Groups of user IDs that are one person, for search: groups separated by `;`, IDs in a group by `,`, e.g. `"221727702992945152,default,hermes-memory-archive"`. A search for any ID in a group covers the whole group, and so do list, write-time de-duplication, the related facts shown to extraction, consolidation, forget, episodes and the Now page. Episodes and Now pages are kept under the first ID of the group |
 | `HYATLAS_MIN_SCORE` | `0.60` | Search drops vector hits below this cosine similarity. `0` disables the floor. A request may override it with `min_score` |
