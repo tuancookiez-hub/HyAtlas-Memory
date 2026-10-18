@@ -108,8 +108,8 @@ def _launcher(cfg: dict) -> "Path | None":
     The script is never discovered implicitly: a script that runs a shell is only
     executed when the user names it in ``launcher_path``. The script itself is the
     user's tooling and is not part of this plugin. The repository's
-    ``hyatlas-go.ps1`` reads no credentials; a Hermes login reaches the server
-    through the ``share_llm_key`` setting instead (see keyshare.py).
+    ``hyatlas-go.ps1`` reads no credentials; the extraction key is your own
+    (``llm_key``, ``HYATLAS_LLM_KEY`` or ``HYATLAS_LLM_KEY_FILE``).
     With no ``launcher_path`` the binary is spawned directly.
     """
     if sys.platform != "win32":

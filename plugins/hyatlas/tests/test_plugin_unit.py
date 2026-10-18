@@ -612,7 +612,7 @@ _SERVER_READ = {
     "llm_model": "HYATLAS_LLM_MODEL",
 }
 _CLIENT_ONLY = {"user_id", "agent_id", "auto_start", "binary_path",
-                "launcher_path", "request_timeout", "llm_key", "share_llm_key"}
+                "launcher_path", "request_timeout", "llm_key"}
 
 
 def test_every_server_read_setting_is_forwarded_to_the_child(monkeypatch):

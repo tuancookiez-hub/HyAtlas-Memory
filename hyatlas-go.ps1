@@ -44,11 +44,9 @@ function Start-V4 {
     if (-not $env:HYATLAS_LLM_MODEL) { $env:HYATLAS_LLM_MODEL = "poolside/laguna-s-2.1:free" }
     # No key is read here. This launcher never opens Hermes's credential file: a
     # program reading another application's credentials is what credential
-    # stealers do, and antivirus rightly blocks it. With the Hermes plugin's
-    # share_llm_key setting on, Hermes hands its current Nous key to the running
-    # server over localhost (kept in memory only); until then status shows
-    # llm: "awaiting_key". A key of your own can go in hyatlas-go.local.ps1 as
-    # HYATLAS_LLM_KEY.
+    # stealers do, and antivirus rightly blocks it. Until you set a key of your
+    # own (HYATLAS_LLM_KEY in hyatlas-go.local.ps1, or in the environment), status
+    # shows llm: "awaiting_key".
 
     Set-Location $goDir
     $proc = Start-Process -FilePath ".\hyatlas-go.exe" -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError "$log.err" -PassThru

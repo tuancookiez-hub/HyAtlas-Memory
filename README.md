@@ -304,11 +304,12 @@ environment — OS essentials plus `HYATLAS_*` only — rather than a copy of th
 agent's environment, so provider API keys the agent holds do not reach the
 server process. The plugin forwards only the non-secret LLM endpoint and model
 settings, and only when you have set them in the plugin config. It forwards no
-LLM key at spawn time. A key reaches the server only if you export
-`HYATLAS_LLM_KEY` yourself, or if you turn on the plugin's `share_llm_key`
-setting: then Hermes hands its current Nous Portal key to the running server over
-localhost (`POST /api/v1/llm/key`), only when the server's endpoint is the Nous
-Portal, and the server keeps it in memory only. Until a key arrives,
+LLM key at spawn time. A key reaches the server only if you
+provide it: your own `HYATLAS_LLM_KEY`, a plain-text `HYATLAS_LLM_KEY_FILE`, the
+`llm_key` secret saved by `hermes memory setup`, or a launcher or tool you run that
+posts it to `POST /api/v1/llm/key` from the same machine (kept in memory only). A
+Nous Portal API key, or the key of any OpenAI-compatible provider, works. Until a key
+arrives,
 `/api/v1/status` reports `llm: "awaiting_key"` and writes are stored without
 extraction; once a key arrives the catch-up loop extracts them (see
 `HYATLAS_CATCHUP_EVERY`), and `/api/v1/status` shows how many are still waiting
@@ -318,7 +319,7 @@ as `unextracted`.
 Earlier versions of the sample launcher read Hermes' `auth.json`; a program that
 opens another application's credentials and then calls the internet is what
 credential stealers do, and behaviour-based antivirus (Bitdefender, for one) can
-quarantine it together with every file it wrote. `share_llm_key` replaces that, and it sends the key only to a HyAtlas server on the same machine (`127.0.0.1`, `::1` or `localhost`). `HYATLAS_LLM_KEY_FILE` takes a plain-text token file only, so it cannot be pointed at a JSON credential file.
+quarantine it together with every file it wrote. The extraction key is your own. `HYATLAS_LLM_KEY_FILE` takes a plain-text token file only, so it cannot be pointed at a JSON credential file.
 
 **Optional: a local memory model (Hy-Memory-30B-A3B).** If you want extraction
 and consolidation to stay on your machine, Tencent's
@@ -397,7 +398,7 @@ Notes:
 | `HYATLAS_LLM_BASE` | *(unset)* | OpenAI-compatible LLM endpoint. **Memory text is sent here once you set it** — see *Privacy* above. Unset means no LLM call at all. |
 | `HYATLAS_LLM_MODEL` | *(unset)* | LLM model name. Base, model and key must all be set for extraction to run. |
 | `HYATLAS_LLM_KEY` | (empty) | LLM bearer token |
-| `HYATLAS_LLM_KEY_FILE` | (empty) | Read the key live from this file on every call, for a rotating key file of your own. The file must hold the token as plain text. A file whose content starts with `{` (JSON, such as another program's credential file) is refused with one warning in the log, and the key from `HYATLAS_LLM_KEY` is used instead. Wins over `HYATLAS_LLM_KEY`, which is the fallback if the file cannot be read or is refused. For a Hermes login, use the plugin's `share_llm_key` instead, whose key wins over both. |
+| `HYATLAS_LLM_KEY_FILE` | (empty) | Read the key live from this file on every call, for a rotating key file of your own. The file must hold the token as plain text. A file whose content starts with `{` (JSON, such as another program's credential file) is refused with one warning in the log, and the key from `HYATLAS_LLM_KEY` is used instead. Wins over `HYATLAS_LLM_KEY`, which is the fallback if the file cannot be read or is refused. A key posted to `POST /api/v1/llm/key` wins over both. |
 | `HYATLAS_RECENCY` | on | `off` stops newer memories winning close calls in search (see *Search*) |
 | `HYATLAS_INTENTION_TTL` | `168h` (7 days) | How long an L7 intention without a due date stays in search results. Older intentions are kept but not returned. `0`, `off`, `false` or `no` means no limit: they are all returned. An intention with a due date stays until a day after it is due, then drops out |
 | `HYATLAS_SNAPSHOT_EVERY` | `24h` | How often the server zips its data directory (first one a minute after start). `0` or `off` turns snapshots off |
@@ -776,12 +777,11 @@ extra words, similarity 0.80 and up, same numbers) are not indexed again.
 
 `POST /api/v1/llm/key` with `{"key": "..."}` gives the server the key for its LLM
 endpoint, kept in memory only and never logged or echoed. It wins over
-`HYATLAS_LLM_KEY` and `HYATLAS_LLM_KEY_FILE`; `{"key": ""}` clears it. The Hermes
-plugin's `share_llm_key` setting uses it to supply Hermes's Nous Portal login, so
-no program but Hermes opens Hermes's credential file. A restarted server has no
-key until it is handed over again and reports `llm: "awaiting_key"` meanwhile;
-the plugin checks once a minute. A key with spaces or line breaks is refused
-(400).
+`HYATLAS_LLM_KEY` and `HYATLAS_LLM_KEY_FILE`; `{"key": ""}` clears it. It is for a
+launcher or tool you run on the same machine, and any caller that is not a loopback
+address is refused (403). The Hermes plugin does not use it. A restarted server has
+no key until it is handed over again (or `HYATLAS_LLM_KEY` is set) and reports
+`llm: "awaiting_key"` meanwhile. A key with spaces or line breaks is refused (400).
 
 ### Forget (Hermes memory replace and remove)
 
@@ -992,7 +992,7 @@ HyAtlas v4 is a **binary replacement** for the Python v3.5 floor. The memory dat
 ## Known gaps (honest)
 
 - The slow path runs on a timer, not at startup: a fresh ultra server shows 6/8 layers until the first pass (8/8 after a pass that finds relations and patterns) (up to `HYATLAS_CONSOLIDATE_EVERY` later). `POST /api/v1/digest` runs one on demand.
-- With `share_llm_key`, the key reaches the server only once Hermes loads the plugin, and Hermes loads memory plugins when an agent session runs (a chat), not when the gateway starts or for script-only cron jobs. Until the first chat the server reports `llm: "awaiting_key"`; nothing is lost, since there is nothing to extract before then.
+- Without an extraction key the server reports `llm: "awaiting_key"`; nothing is lost, since the catch-up pass extracts the stored turns once a key is set.
 - How well extraction follows the rules (explicit subjects, which items are intentions, entity names) depends on the model. On free models, check a few days of real extractions after changing models.
 - `HYATLAS_RECONCILE` has been tested with a mock model only; it is meant for a local model and is off by default.
 - `/api/quality-metrics` returns `{available: false}` (v3.5-only feature; the dashboard adapter's quality endpoint, not a `/api/v1/` route)

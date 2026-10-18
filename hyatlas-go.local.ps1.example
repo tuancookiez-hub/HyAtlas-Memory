@@ -3,7 +3,7 @@
 # wins. Any HYATLAS_* server variable can go here; see the README's settings table.
 
 # Extraction model on the Nous Portal endpoint. The key is not read from any file:
-# turn on the Hermes plugin's share_llm_key setting and Hermes hands it over.
+# set your own key in HYATLAS_LLM_KEY (a Nous Portal API key works).
 # $env:HYATLAS_LLM_MODEL = "stepfun/step-5-preview:free"
 
 # Facts per consolidation call (default 50). Lower it if a slow model misses the

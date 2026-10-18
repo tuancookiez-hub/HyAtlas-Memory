@@ -31,9 +31,8 @@ with a graph view, and a web dashboard panel. The server is a separate binary,
   result as that session's fallback.
 - **Agent tools.** `hyatlas_status`, `hyatlas_search` (channels: pages, profile,
   proactive, experiences, normal), `hyatlas_recent`, `hyatlas_add`.
-- **No credential files.** With `share_llm_key` on, the plugin hands Hermes's own
-  Nous key to the server over localhost; nothing but Hermes opens Hermes's
-  credentials (see Credentials).
+- **No credential files.** The plugin never reads Hermes's login or any other
+  tool's credentials. The extraction key is your own (see Credentials).
 - **Built-in `memory` tool.** An `add` through Hermes' `memory` tool is sent to
   the server as a plain add and stored as a raw memory (L2), tagged with its
   target in the metadata. It is not written to L1 Profile directly. L1 fills
@@ -170,7 +169,6 @@ writes to `.env`. The plugin does not use a key found in `hyatlas.json` or
 | `auto_start` | `HYATLAS_AUTO_START` | `false` | Start the server binary when it is unreachable |
 | `binary_path` | `HYATLAS_BINARY_PATH` | *(discover)* | Path to `hyatlas-go` |
 | `launcher_path` | `HYATLAS_LAUNCHER_PATH` | *(none)* | Windows only: a `hyatlas-go.ps1` that `hermes hyatlas start\|stop` runs instead of the binary |
-| `share_llm_key` | `HYATLAS_SHARE_LLM_KEY` | `false` | Hand Hermes's current Nous Portal key to the server over localhost, kept in its memory only, so no program but Hermes reads Hermes's credentials. Sent only to a HyAtlas server on this machine (`127.0.0.1`, `::1` or `localhost`), and only when its endpoint is the Nous Portal (see Credentials) |
 | `request_timeout` | `HYATLAS_REQUEST_TIMEOUT` | `15.0` | HTTP timeout for server calls, in seconds |
 | `data_dir` | `HYATLAS_GO_DATA` | *(conventional)* | Server data directory. Also used by `hermes backup` |
 | `llm_base` | `HYATLAS_LLM_BASE` | *(none)* | Base URL of an OpenAI-compatible extraction endpoint |
@@ -434,26 +432,19 @@ starts it.
   settings where you have not exported a value yourself. It does not receive other
   tools' keys (for example `OPENAI_API_KEY`). A `HYATLAS_LLM_KEY` exported in your
   environment does reach it.
-- **`share_llm_key`** (off by default) hands Hermes's own Nous Portal key to the
-  server, and only to a server on this machine: if `server_host` is not `127.0.0.1`,
-  `::1` or `localhost`, the plugin logs a warning (never the key) and sends nothing.
-  When it is on, the plugin asks Hermes for the current key through
-  Hermes's resolver (`hermes_cli.runtime_provider.resolve_runtime_provider`, the
-  call Hermes's bundled plugins use; it also renews the one-hour token) and posts
-  it to the server's `POST /api/v1/llm/key` over localhost. It checks once a minute
-  and sends again when the key changes, every 15 minutes, or when the server
-  reports `llm: "awaiting_key"` after a restart. The key is sent only when the
-  server's LLM endpoint is on the same host as Hermes's Nous endpoint, so it never
-  reaches another provider. The server keeps it in memory only. Neither side logs
-  it or writes it to disk. This is how HyAtlas uses a Nous login without any
-  program but Hermes opening Hermes's credential file.
+- **The extraction key is your own.** Save it with `hermes memory setup` (the
+  `llm_key` secret), or export `HYATLAS_LLM_KEY`, or point `HYATLAS_LLM_KEY_FILE` at
+  a plain-text file. A Nous Portal API key or any OpenAI-compatible provider key
+  works. The plugin never takes Hermes's own provider or sign-in token (Hermes
+  catalog rule 11). The server also accepts a key from a launcher or tool you run on
+  the same machine through `POST /api/v1/llm/key`; it is refused from any other
+  address, kept in memory only, and never logged.
 - **`HYATLAS_LLM_KEY_FILE`** is a server feature. If you export it, the server reads
   the bearer token from that file on every call. The plugin has no setting for it,
   but it passes the variable through. Point it only at a key file of your own:
   pointing it at another program's credential file (such as Hermes' `auth.json`)
   is the pattern antivirus software flags as credential theft, so the server accepts
-  only a plain-text token file there and refuses a JSON one. Use `share_llm_key` for a
-  Hermes login instead.
+  only a plain-text token file there and refuses a JSON one.
 - The plugin does not read another tool's login, token store or browser profile.
 
 ### Listening address

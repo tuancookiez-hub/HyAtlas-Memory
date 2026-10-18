@@ -16,6 +16,9 @@ _EVENT_DATE_RE = re.compile(r"^\d{4}-\d{2}(-\d{2})?$")
 _MAX_HISTORY = 2
 _HISTORY_CHARS = 160
 
+# How many dates of a recurring event a hit shows, newest first picked.
+_MAX_SERIES_DATES = 3
+
 
 def iso_date(unix_seconds: Any) -> str:
     """Return the YYYY-MM-DD (UTC) for a Unix timestamp, or "" when it has none.
@@ -34,12 +37,35 @@ def iso_date(unix_seconds: Any) -> str:
     return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
+def _series_note(m: Dict[str, Any]) -> str:
+    """Return ", 3 times (2026-03-02, 2026-05-14, 2026-10-13)" for a recurring event.
+
+    A hit carries series_count and series_dates when it stands for an event that
+    happened more than once. Fewer than two times, or a count that is not a number,
+    gives "". The newest three dates are shown, oldest of those first; a bad date
+    entry is skipped, and a series with no usable dates shows the count alone.
+    """
+    try:
+        count = int(m.get("series_count") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if count < 2:
+        return ""
+    raw = m.get("series_dates")
+    dates = [str(d) for d in raw if isinstance(d, str) and _EVENT_DATE_RE.match(d)] if isinstance(raw, list) else []
+    note = f", {count} times"
+    if dates:
+        note += f" ({', '.join(dates[-_MAX_SERIES_DATES:])})"
+    return note
+
+
 def format_hit_line(m: Dict[str, Any], limit: int) -> str:
     """Build the prompt lines for one search hit, or "" when it has no content.
 
     The first line is the hit itself, with its layer, its dates and its score.
     The date tells the agent when a fact happened or is due, and when it was
-    saved, so an old status does not read as current. Up to two superseded
+    saved, so an old status does not read as current. A recurring event adds how
+    many times it happened and its newest dates. Up to two superseded
     versions follow as "was:" lines, newest first, so the agent can see what
     changed. Each line is kept short to protect the prompt budget.
     """
@@ -61,7 +87,7 @@ def format_hit_line(m: Dict[str, Any], limit: int) -> str:
 
     layer = m.get("layer", "")
     score = m.get("score", 0.0)
-    lines = [f"- ({layer}{when}, score {score:.2f}) {snippet}"]
+    lines = [f"- ({layer}{when}, score {score:.2f}{_series_note(m)}) {snippet}"]
 
     shown = 0
     for entry in m.get("history") or []:

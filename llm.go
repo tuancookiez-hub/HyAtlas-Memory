@@ -36,10 +36,9 @@ type LLMClient struct {
 	FallbackKey string
 
 	// pushed is a key handed over at runtime through POST /api/v1/llm/key, typically
-	// by the Hermes plugin, which holds the user's provider credential. It is kept
-	// in memory only and wins over APIKey and KeyFile. This lets the server run
-	// without ever reading another application's credential file, which security
-	// software rightly treats as a credential-theft pattern.
+	// by a launcher or tool you run on this machine. It is kept in memory only and
+	// wins over APIKey and KeyFile. This lets the server run with a rotating key
+	// without that key being written to a file or the environment.
 	pushed atomic.Pointer[string]
 
 	// keyFileWarned makes the "key file looks like JSON" warning appear once.

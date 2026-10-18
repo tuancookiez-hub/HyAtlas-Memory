@@ -204,7 +204,9 @@ func TestCatchupRunsWhenKeyArrives(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	srv.handleLLMKey(w, httptest.NewRequest("POST", "/api/v1/llm/key", strings.NewReader(`{"key":"abc"}`)))
+	keyReq := httptest.NewRequest("POST", "/api/v1/llm/key", strings.NewReader(`{"key":"abc"}`))
+	keyReq.RemoteAddr = "127.0.0.1:50000"
+	srv.handleLLMKey(w, keyReq)
 	if w.Code != http.StatusOK {
 		t.Fatalf("key push: want 200, got %d", w.Code)
 	}

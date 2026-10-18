@@ -78,25 +78,13 @@ plugins:
 
 Or export the matching `HYATLAS_*` variable, such as `HYATLAS_MODE=pro`.
 
-The LLM key is set only through the environment: export `HYATLAS_LLM_KEY`, or keep
-the value that `hermes memory setup` wrote to `.env`. The plugin does not use a key
-found in `hyatlas.json` or `config.yaml`.
-
-**Using your Hermes Nous login instead.** If Hermes is signed in to the Nous Portal
-and the server's endpoint is the Nous Portal, turn on `share_llm_key`:
-
-```json
-{ "share_llm_key": true }
-```
-
-in `$HERMES_HOME/hyatlas.json` (or `HYATLAS_SHARE_LLM_KEY=true`). The plugin then asks
-Hermes for its current key and hands it to the server over localhost, renewing it
-before the one-hour token expires. The server keeps it in memory only. Until the
-first Hermes chat after a restart, `status` shows `llm: "awaiting_key"`. Do not point
-`HYATLAS_LLM_KEY_FILE` at Hermes' `auth.json`: antivirus software treats a program
-reading another application's credentials as credential theft, so the server now
-refuses a JSON key file. The key is sent only to a HyAtlas server on this machine
-(`127.0.0.1`, `::1` or `localhost`).
+The LLM key is your own, and it is set only through the environment: save it with
+`hermes memory setup` (the `llm_key` secret, which Hermes keeps in `.env`), or export
+`HYATLAS_LLM_KEY`, or point `HYATLAS_LLM_KEY_FILE` at a plain-text file holding the
+token. The plugin does not use a key found in `hyatlas.json` or `config.yaml`. A Nous
+Portal API key, or the key of any OpenAI-compatible provider, works. The plugin never
+reads Hermes's own login or credential files. Until a key is set, `status` shows
+`llm: "awaiting_key"`.
 
 Then check it:
 
@@ -241,8 +229,11 @@ the server's installer or by replacing the binary with a newer release.
 - **Searches carry the session id**, so the current session's intentions rank first,
   and the recall block follows the channel order the server sends.
 - **The plugin never sends local calls through a proxy.**
-- **`share_llm_key` sends only to a local server.** With a remote `server_host` the
-  key is not sent.
+- **`share_llm_key` is removed (Hermes catalog rule 11).** The plugin no longer takes
+  Hermes's Nous sign-in token or hands it to the server. Set your own extraction key
+  (`llm_key` through `hermes memory setup`, or `HYATLAS_LLM_KEY`, or a plain-text
+  `HYATLAS_LLM_KEY_FILE`). A Nous Portal API key, or any OpenAI-compatible provider
+  key, works as `llm_key`. A `share_llm_key` left in `hyatlas.json` is ignored.
 - **`HYATLAS_LLM_KEY_FILE` takes a plain-text token only.** A JSON file (such as
   `auth.json`) gives no key; the server logs a warning and uses `HYATLAS_LLM_KEY`.
 - **Durations read one way**: `15m`, a bare number as seconds, and `0`, `off`, `false`
@@ -257,8 +248,8 @@ the server's installer or by replacing the binary with a newer release.
 ### Upgrading to 4.8 or later
 
 - **The sample launcher no longer reads Hermes' `auth.json`.** If you used it with a
-  Nous login, turn on `share_llm_key` (above); otherwise extraction waits with
-  `llm: "awaiting_key"`.
+  Nous login, set your own extraction key (see the key section above); otherwise
+  extraction waits with `llm: "awaiting_key"`.
 - **Per-write summaries stop.** L4 now holds one summary per episode of work
   (`HYATLAS_EPISODE_GAP`, 30 minutes). Older per-write summaries stay as they are.
 - **Usage learning moves to `usage_learning.json`.** An old `usage.json` with usage

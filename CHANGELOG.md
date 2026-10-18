@@ -29,6 +29,11 @@ and stricter key handling.
   identifier (`19528`) finds the turn that mentions it. `pro` and `ultra` still leave raw
   rows out of an all-layer search.
 - **`POST /api/v1/flush`.** Writes the buffered doc index and usage counts now.
+- **Links and recurring events in recall.** Each search hit carries its `links` (a list of
+  `{id, relation}`) and, for a recurring event, `series_count` and `series_dates`, each
+  left out when empty. The plugin adds ", 3 times (2026-03-02, 2026-05-14, 2026-10-13)"
+  (the newest three dates) to the hit's line for a series; links are for the agent's tools
+  and are not put in the prompt.
 - **How a row was retired.** `/api/v1/list` with `include_superseded` returns
   `superseded_how` (`replaced`, `updated`, `merged`, `restated`, `dropped`, `done` or
   `forgotten`) beside `superseded_by` and `drop_reason`.
@@ -51,8 +56,20 @@ and stricter key handling.
 - **Raw decay keeps what it must** (`HYATLAS_RAW_RETENTION`, opt-in): it never deletes a
   row that is not extracted yet, and it protects the sources of live rows of every layer.
 - **The plugin never sends loopback traffic through a proxy.** With `HTTP_PROXY` set,
-  memory writes, searches and the `share_llm_key` hand-over went to the proxy. The plugin
+  memory writes and searches went to the proxy. The plugin
   client and the dashboard bridge now ignore proxy settings for the local server.
+
+### Removed
+
+- **`share_llm_key`** (the plugin no longer takes Hermes's Nous sign-in token; set your
+  own extraction key). Hermes's catalog rule 11 says a plugin gets credentials only
+  through Hermes routes and must not hand Hermes's provider token to another program.
+  Set `llm_key` with `hermes memory setup`, or `HYATLAS_LLM_KEY`, or a plain-text
+  `HYATLAS_LLM_KEY_FILE`; a Nous Portal API key, or the key of any OpenAI-compatible
+  provider, works. A `share_llm_key` left in `hyatlas.json` is ignored. The plugin no
+  longer imports anything from Hermes's runtime provider or reads a Hermes credential.
+  The server keeps `POST /api/v1/llm/key` for a launcher or tool you run on the same
+  machine; it now answers 403 to any non-loopback caller.
 
 ### Changed
 
@@ -69,8 +86,8 @@ and stricter key handling.
   `HYATLAS_INTENTION_TTL` and the snapshot interval) shares one parser: a bare number means
   seconds, and `0`, `off`, `false` or `no` turn the feature off. So
   `HYATLAS_CONSOLIDATE_EVERY=off` now fails at start in ultra, as `0` always did, and
-  `HYATLAS_INTENTION_TTL=off` means no limit on intentions. The plugin's `auto_start` and
-  `share_llm_key` environment switches accept `on`. Near-duplicate demotion looks at the
+  `HYATLAS_INTENTION_TTL=off` means no limit on intentions. The plugin's `auto_start`
+  environment switch accepts `on`. Near-duplicate demotion looks at the
   first 2×limit hits.
 - **One alias rule.** `HYATLAS_USER_ALIASES` is held by the store, and everything asks it:
   `/api/v1/list` with a `user_id` includes that person's other IDs, write-time
@@ -82,16 +99,16 @@ and stricter key handling.
   so they no longer use up slots; a repeat of the lesson still updates one.
 - **Key handling.** `HYATLAS_LLM_KEY_FILE` takes a plain-text token only. A file whose
   content starts with `{` (JSON, such as another program's credential file) gives no key,
-  logs one warning without its content, and `HYATLAS_LLM_KEY` is used instead. The plugin's
-  `share_llm_key` hands the key only to a HyAtlas server on `127.0.0.1`, `::1` or
-  `localhost`, and logs a warning (never the key) when the server is elsewhere.
+  logs one warning without its content, and `HYATLAS_LLM_KEY` is used instead.
+  `POST /api/v1/llm/key` is refused (403) unless the caller is a loopback address.
 - **Every retirement records how.** One record (by whom, how, why) is written at every
   place a row is retired.
 
 ### Upgrading from 4.9
 
 - A JSON `HYATLAS_LLM_KEY_FILE` stops working: switch to a plain-text token file, or use
-  `HYATLAS_LLM_KEY`, or the plugin's `share_llm_key` for a Hermes login.
+  `HYATLAS_LLM_KEY`.
+- `share_llm_key` is gone: set your own extraction key (see Removed).
 - Scripts that call `delete_all` by layer, user, agent or all need `HYATLAS_ADMIN=on`.
 - `HYATLAS_CONSOLIDATE_EVERY=off` (or `false`, `no`) stops an ultra server at start;
   use `HYATLAS_MODE=pro` to run without the slow path.

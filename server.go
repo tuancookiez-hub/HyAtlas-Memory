@@ -573,15 +573,20 @@ func windowFloor(minScore float64) float64 {
 // JWTs are a few hundred bytes to a few kilobytes.
 const maxPushedKey = 16 << 10
 
-// handleLLMKey is POST /api/v1/llm/key: the Hermes plugin hands over the current
+// handleLLMKey is POST /api/v1/llm/key: a launcher or tool you run hands over a
 // provider key, which the server keeps in memory only and uses for its LLM calls.
-// This is how a rotating credential (a 1-hour Nous Portal token) reaches the server
-// without the server or its launcher ever opening another application's credential
-// file. The key is never logged or echoed back. {"key": ""} clears it.
+// This is a generic way to give a rotating key to the server without writing it to
+// a file or the environment. The key is never logged or echoed back. {"key": ""}
+// clears it. Only a loopback caller is accepted, so the endpoint cannot be used from
+// another machine even when the server listens on a LAN address.
 func (s *Server) handleLLMKey(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		jsonResponse(w, 405, map[string]any{"error": "method not allowed: use POST"})
+		return
+	}
+	if !isLoopbackRemote(r.RemoteAddr) {
+		jsonResponse(w, 403, map[string]any{"error": "the key can only be set from this machine"})
 		return
 	}
 	var body struct {
@@ -2016,6 +2021,17 @@ func parseHostList(raw string) []string {
 		}
 	}
 	return out
+}
+
+// isLoopbackRemote reports whether a request's RemoteAddr (host:port) is a loopback
+// IP: 127.0.0.0/8 or ::1. A name or an unparsable address is not loopback.
+func isLoopbackRemote(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 // isLoopbackHost reports whether h names this machine: localhost (with or without

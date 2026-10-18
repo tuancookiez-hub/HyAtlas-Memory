@@ -137,23 +137,43 @@ def test_provider_version_is_plugin_version(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("raw", ["1", "true", "yes", "on", "ON"])
 def test_env_bool_accepts_truthy_words(monkeypatch, tmp_path, raw):
-    """HYATLAS_AUTO_START and HYATLAS_SHARE_LLM_KEY accept every word truthy() accepts."""
+    """HYATLAS_AUTO_START accepts every word truthy() accepts."""
     settings = _load_module("hyatlas_settings_truthy_test", "settings.py")
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("HYATLAS_AUTO_START", raw)
-    monkeypatch.setenv("HYATLAS_SHARE_LLM_KEY", raw)
     cfg = settings.load()
     assert cfg["auto_start"] is True
-    assert cfg["share_llm_key"] is True
 
 
 @pytest.mark.parametrize("raw", ["0", "false", "no", "off"])
 def test_env_bool_rejects_falsy_words(monkeypatch, tmp_path, raw):
-    """The same two variables read every falsy word as False."""
+    """HYATLAS_AUTO_START reads every falsy word as False."""
     settings = _load_module("hyatlas_settings_falsy_test", "settings.py")
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("HYATLAS_AUTO_START", raw)
-    monkeypatch.setenv("HYATLAS_SHARE_LLM_KEY", raw)
     cfg = settings.load()
     assert cfg["auto_start"] is False
-    assert cfg["share_llm_key"] is False
+
+
+def test_removed_share_llm_key_in_hyatlas_json_is_ignored(monkeypatch, tmp_path):
+    """A hyatlas.json that still names share_llm_key loads; the key is just unknown."""
+    settings = _load_module("hyatlas_settings_removed_key_test", "settings.py")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    for var in ("HYATLAS_AUTO_START", "HYATLAS_SHARE_LLM_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    (tmp_path / "hyatlas.json").write_text(
+        json.dumps({"share_llm_key": True, "auto_start": True, "server_port": 20000}),
+        encoding="utf-8",
+    )
+    cfg = settings.load()
+    assert cfg["auto_start"] is True
+    assert cfg["server_port"] == 20000
+    assert "share_llm_key" not in cfg
+
+
+def test_environment_share_llm_key_is_ignored(monkeypatch, tmp_path):
+    """The old HYATLAS_SHARE_LLM_KEY variable no longer does anything."""
+    settings = _load_module("hyatlas_settings_removed_env_test", "settings.py")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HYATLAS_SHARE_LLM_KEY", "true")
+    assert "share_llm_key" not in settings.load()

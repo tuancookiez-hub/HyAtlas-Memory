@@ -21,7 +21,9 @@ func TestLLMKeyHandOver(t *testing.T) {
 
 	post := func(body string) (int, string) {
 		w := httptest.NewRecorder()
-		srv.handleLLMKey(w, httptest.NewRequest("POST", "/api/v1/llm/key", strings.NewReader(body)))
+		req := httptest.NewRequest("POST", "/api/v1/llm/key", strings.NewReader(body))
+		req.RemoteAddr = "127.0.0.1:50000"
+		srv.handleLLMKey(w, req)
 		return w.Code, w.Body.String()
 	}
 	code, out := post(`{"key":"secret-token-123"}`)
@@ -47,5 +49,34 @@ func TestLLMKeyHandOver(t *testing.T) {
 	srv.handleLLMKey(w, httptest.NewRequest("GET", "/api/v1/llm/key", nil))
 	if w.Code != 405 {
 		t.Errorf("GET: code %d, want 405", w.Code)
+	}
+}
+
+// The key endpoint refuses a caller that is not on this machine and leaves the
+// stored key untouched, while 127.0.0.0/8 and ::1 callers are accepted.
+func TestLLMKeyLoopbackOnly(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	srv.mode = ModePro
+	srv.llm = NewLLMClient("http://127.0.0.1:1/v1", "", "m")
+
+	call := func(remote string) int {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/v1/llm/key", strings.NewReader(`{"key":"abc"}`))
+		req.RemoteAddr = remote
+		srv.handleLLMKey(w, req)
+		return w.Code
+	}
+	for _, remote := range []string{"192.0.2.1:1234", "10.0.0.5:80", "[2001:db8::1]:443", "example.com:80", "garbage"} {
+		if code := call(remote); code != 403 {
+			t.Errorf("remote %q: code %d, want 403", remote, code)
+		}
+		if srv.llm.resolveKey() != "" {
+			t.Fatalf("remote %q: a refused call still stored a key", remote)
+		}
+	}
+	for _, remote := range []string{"127.0.0.1:1234", "127.5.6.7:1", "[::1]:8080"} {
+		if code := call(remote); code != 200 {
+			t.Errorf("remote %q: code %d, want 200", remote, code)
+		}
 	}
 }

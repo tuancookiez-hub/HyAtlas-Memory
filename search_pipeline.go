@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tuancookiez-hub/hyatlas-v4/memory"
@@ -67,6 +69,45 @@ type searchHitJSON struct {
 	EventDate string `json:"event_date,omitempty"`
 	// History holds the older versions this hit replaced, newest first.
 	History []HistoryEntry `json:"history,omitempty"`
+	// Links are the facts this one is linked to, with the relation of each link.
+	Links []searchLinkJSON `json:"links,omitempty"`
+	// SeriesCount is how many times a recurring event has happened, when it is a series.
+	SeriesCount int `json:"series_count,omitempty"`
+	// SeriesDates are the days the recurring event happened, oldest first.
+	SeriesDates []string `json:"series_dates,omitempty"`
+}
+
+// searchLinkJSON is one link from a hit to another fact in the search response.
+type searchLinkJSON struct {
+	ID       string `json:"id"`
+	Relation string `json:"relation"`
+}
+
+// linksJSON converts the links metadata of a hit to its response form. A hit with no
+// valid link gives nil, so the field is left out of the response.
+func linksJSON(meta map[string]string) []searchLinkJSON {
+	var out []searchLinkJSON
+	for _, l := range parseLinks(meta[metaLinks]) {
+		out = append(out, searchLinkJSON{ID: l.ID, Relation: l.Relation})
+	}
+	return out
+}
+
+// seriesJSON reads the series metadata of a hit: the count and the dates. A hit that
+// is not a series, or whose count is not a positive number, gives 0 and nil, so both
+// fields are left out of the response.
+func seriesJSON(meta map[string]string) (int, []string) {
+	n, err := strconv.Atoi(strings.TrimSpace(meta[metaSeriesCount]))
+	if err != nil || n < 1 {
+		return 0, nil
+	}
+	var dates []string
+	for _, d := range strings.Split(meta[metaSeriesDates], ",") {
+		if d = strings.TrimSpace(d); d != "" {
+			dates = append(dates, d)
+		}
+	}
+	return n, dates
 }
 
 // searchChannels lists the response channels in plugin order: now -> pages ->
@@ -366,10 +407,12 @@ func (r *searchRun) render() map[string]any {
 	}
 	for _, h := range r.hits {
 		c := channelOf(h)
+		seriesCount, seriesDates := seriesJSON(h.Meta)
 		channels[c] = append(channels[c], searchHitJSON{MemoryID: h.ID, Content: h.Content,
 			Score: float64(h.Score), Layer: string(h.Layer), GmtCreated: gmtCreated(h.Meta["ts"]),
 			UserID: h.Meta["user_id"], AgentID: h.Meta["agent_id"],
-			EventDate: normalizeEventDate(h.Meta[metaEventAt]), History: history[h.ID]})
+			EventDate: normalizeEventDate(h.Meta[metaEventAt]), History: history[h.ID],
+			Links: linksJSON(h.Meta), SeriesCount: seriesCount, SeriesDates: seriesDates})
 	}
 	order := append([]string{"now"}, searchChannels...)
 	out := map[string]any{"memories": channels, "order": order}
