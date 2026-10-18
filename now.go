@@ -48,6 +48,11 @@ type NowPages struct {
 	every    time.Duration
 	inflight map[string]bool
 	last     map[string]time.Time
+	// pending marks an owner that had a write after its last refresh started, so
+	// that refresh did not see it and a trailing one is due.
+	pending map[string]bool
+	// timers holds the one trailing refresh timer per owner, if any.
+	timers map[string]*time.Timer
 }
 
 // nowPagesFile is the name of the persisted page map inside the data directory.
@@ -66,6 +71,8 @@ func NewNowPages(dataDir string, store *MemoryStore, llm *LLMClient, every time.
 		every:    every,
 		inflight: map[string]bool{},
 		last:     map[string]time.Time{},
+		pending:  map[string]bool{},
+		timers:   map[string]*time.Timer{},
 	}
 	b, err := os.ReadFile(n.path)
 	if err != nil {
@@ -91,10 +98,11 @@ func nowOwnerKey(user, agent string) string {
 	return user + "\x1f" + agent
 }
 
-// Touch asks for a refresh of the owner's page. It never blocks: if a refresh for
-// this owner ran less than `every` ago, or one is in flight, it returns at once;
-// otherwise it starts one in a goroutine. Without a usable LLM it does nothing,
-// because the page cannot be rewritten.
+// Touch asks for a refresh of the owner's page. It never blocks. The first write
+// starts a refresh in a goroutine at once. A write during the window after a refresh,
+// or while one is in flight, is not dropped: the owner is marked pending, and when the
+// window ends exactly one trailing refresh runs. Without a usable LLM it does nothing,
+// because the page cannot be rewritten. With every of zero each write refreshes.
 func (n *NowPages) Touch(user, agent string) {
 	if !n.llm.Configured() {
 		return
@@ -102,31 +110,75 @@ func (n *NowPages) Touch(user, agent string) {
 	key := nowOwnerKey(user, agent)
 
 	n.mu.Lock()
+	defer n.mu.Unlock()
 	if n.inflight[key] {
-		n.mu.Unlock()
+		// The running refresh may have read the store before this write.
+		if n.every > 0 {
+			n.pending[key] = true
+		}
 		return
 	}
 	if t, ok := n.last[key]; ok && time.Since(t) < n.every {
-		n.mu.Unlock()
+		n.pending[key] = true
+		n.armLocked(key, user, agent, t.Add(n.every))
 		return
 	}
-	n.inflight[key] = true
-	n.mu.Unlock()
+	n.startLocked(key, user, agent)
+}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), nowRefreshLimit)
-		defer cancel()
-		err := n.refresh(ctx, user, agent)
-		if err != nil {
-			log.Printf("now: refresh %q: %v", key, err)
-		}
-		n.mu.Lock()
-		delete(n.inflight, key)
-		// The timestamp is set even after a failure, so a broken endpoint is not
-		// called again on every write.
-		n.last[key] = time.Now()
-		n.mu.Unlock()
-	}()
+// startLocked starts one refresh of the owner in a goroutine. It clears the pending
+// mark, because the refresh reads the store from now on. The caller must hold n.mu.
+func (n *NowPages) startLocked(key, user, agent string) {
+	n.inflight[key] = true
+	delete(n.pending, key)
+	go n.run(key, user, agent)
+}
+
+// armLocked schedules the owner's trailing refresh for at. It does nothing when a
+// timer is already waiting, so each owner has at most one. The caller must hold n.mu.
+func (n *NowPages) armLocked(key, user, agent string, at time.Time) {
+	if _, ok := n.timers[key]; ok {
+		return
+	}
+	n.timers[key] = time.AfterFunc(time.Until(at), func() { n.fire(key, user, agent) })
+}
+
+// fire runs when a trailing timer ends. It starts the refresh only when a write is
+// still pending and no refresh is in flight. A running refresh re-arms the timer when
+// it ends, so no write is lost.
+func (n *NowPages) fire(key, user, agent string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	delete(n.timers, key)
+	if !n.pending[key] || n.inflight[key] {
+		return
+	}
+	if t, ok := n.last[key]; ok && n.every > 0 && time.Since(t) < n.every {
+		n.armLocked(key, user, agent, t.Add(n.every))
+		return
+	}
+	n.startLocked(key, user, agent)
+}
+
+// run performs one refresh for the owner and then records when it ended. A write
+// that arrived while it ran leaves the owner pending, so a trailing refresh is armed
+// for one window after this one.
+func (n *NowPages) run(key, user, agent string) {
+	ctx, cancel := context.WithTimeout(context.Background(), nowRefreshLimit)
+	defer cancel()
+	err := n.refresh(ctx, user, agent)
+	if err != nil {
+		log.Printf("now: refresh %q: %v", key, err)
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	delete(n.inflight, key)
+	// The timestamp is set even after a failure, so a broken endpoint is not
+	// called again on every write.
+	n.last[key] = time.Now()
+	if n.every > 0 && n.pending[key] {
+		n.armLocked(key, user, agent, n.last[key].Add(n.every))
+	}
 }
 
 // Get returns the owner's stored page, if one exists.
@@ -151,19 +203,7 @@ func (n *NowPages) HandleNow(w http.ResponseWriter, r *http.Request) {
 // A value that is not a duration is ignored, so a typo falls back to the default
 // rather than refreshing on every write.
 func resolveNowEvery() time.Duration {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("HYATLAS_NOW_EVERY")))
-	switch v {
-	case "":
-		return nowDefaultEvery
-	case "0", "off", "false", "no":
-		return 0
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d < 0 {
-		log.Printf("now: HYATLAS_NOW_EVERY=%q is not a duration; using %s", v, nowDefaultEvery)
-		return nowDefaultEvery
-	}
-	return d
+	return envDuration("HYATLAS_NOW_EVERY", nowDefaultEvery)
 }
 
 // refresh rewrites one owner's page from the current page, open intentions, recent
@@ -180,26 +220,31 @@ func (n *NowPages) refresh(ctx context.Context, user, agent string) error {
 	current := n.pages[key].Text
 	n.mu.Unlock()
 
+	// recent lists one owner's rows from a layer, newest first, that are no older than
+	// win. Each line reads "date | text", and a positive trunc cuts the text to that
+	// many bytes.
+	recent := func(layer memory.Layer, limit int, win time.Duration, trunc int) []string {
+		var out []string
+		rows, _ := n.store.List(layer, user, agent, limit, 0, false)
+		for _, d := range rows {
+			ts, err := time.Parse(time.RFC3339, d.Ts)
+			if err != nil || now.Sub(ts) > win {
+				continue
+			}
+			text := oneLine(d.Content)
+			if trunc > 0 {
+				text = utf8Trunc(text, trunc)
+			}
+			out = append(out, fmt.Sprintf("%s | %s", dateOf(d.Ts), text))
+		}
+		return out
+	}
+
 	var intents, sums, facts []string
 	if n.store != nil {
-		items, _ := n.store.List(memory.L7Intention, user, agent, nowIntentMax, 0, false)
-		for _, d := range items {
-			if ts, err := time.Parse(time.RFC3339, d.Ts); err == nil && now.Sub(ts) <= nowIntentWindow {
-				intents = append(intents, fmt.Sprintf("%s | %s", dateOf(d.Ts), oneLine(d.Content)))
-			}
-		}
-		rows, _ := n.store.List(memory.L4Summary, user, agent, nowSummaryMax, 0, false)
-		for _, d := range rows {
-			if ts, err := time.Parse(time.RFC3339, d.Ts); err == nil && now.Sub(ts) <= nowSummaryWin {
-				sums = append(sums, fmt.Sprintf("%s | %s", dateOf(d.Ts), oneLine(d.Content)))
-			}
-		}
-		rows, _ = n.store.List(memory.L3Fact, user, agent, nowFactMax, 0, false)
-		for _, d := range rows {
-			if ts, err := time.Parse(time.RFC3339, d.Ts); err == nil && now.Sub(ts) <= nowFactWin {
-				facts = append(facts, fmt.Sprintf("%s | %s", dateOf(d.Ts), utf8Trunc(oneLine(d.Content), 300)))
-			}
-		}
+		intents = recent(memory.L7Intention, nowIntentMax, nowIntentWindow, 0)
+		sums = recent(memory.L4Summary, nowSummaryMax, nowSummaryWin, 0)
+		facts = recent(memory.L3Fact, nowFactMax, nowFactWin, 300)
 	}
 	if len(intents) == 0 && len(sums) == 0 && len(facts) == 0 {
 		return nil

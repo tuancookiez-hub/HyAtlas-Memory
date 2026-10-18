@@ -214,3 +214,43 @@ func TestResolveNowEvery(t *testing.T) {
 		}
 	}
 }
+
+// nowWaitCalls waits until the fake LLM has received at least want requests, or two
+// seconds pass, so a test can then check for calls that must not happen.
+func nowWaitCalls(rec *ctxLLM, want int) {
+	deadline := time.Now().Add(2 * time.Second)
+	for nowCalls(rec) < want && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A burst of writes inside one window gives the leading refresh and one trailing
+// refresh for the writes it did not see, never one per write.
+func TestNowTouchBurstRefreshesTwice(t *testing.T) {
+	srv, rec := newCtxServer(t, func() string { return "Active:\n- x" })
+	nowAddRow(t, srv.store, memory.L7Intention, "i1", "goal", "u", time.Hour)
+
+	n := NewNowPages(t.TempDir(), srv.store, srv.llm, 50*time.Millisecond)
+	for i := 0; i < 5; i++ {
+		n.Touch("u", "a")
+	}
+	nowWaitCalls(rec, 2)
+	time.Sleep(150 * time.Millisecond)
+	if got := nowCalls(rec); got != 2 {
+		t.Fatalf("LLM calls for a burst of 5: want 2 (leading + trailing), got %d", got)
+	}
+}
+
+// A single write gives one refresh and no trailing one.
+func TestNowTouchSingleWriteRefreshesOnce(t *testing.T) {
+	srv, rec := newCtxServer(t, func() string { return "Active:\n- x" })
+	nowAddRow(t, srv.store, memory.L7Intention, "i1", "goal", "u", time.Hour)
+
+	n := NewNowPages(t.TempDir(), srv.store, srv.llm, 50*time.Millisecond)
+	n.Touch("u", "a")
+	nowWaitCalls(rec, 1)
+	time.Sleep(150 * time.Millisecond)
+	if got := nowCalls(rec); got != 1 {
+		t.Fatalf("LLM calls for one write: want 1, got %d", got)
+	}
+}
