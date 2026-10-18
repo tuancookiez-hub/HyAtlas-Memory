@@ -170,7 +170,9 @@ func (r *searchRun) retrieve() error {
 		// identifier's top ranks can all be terse L5 relations, which the L5 cap below
 		// then thins out. A shallow fetch left nothing else to fill the slots (2 hits
 		// for "19528" though 20 facts mention it). Ranking already scores every row.
-		kw, err := s.store.KeywordSearchVec(r.req.Query, qv, r.limit*10, layer, r.users, r.agentID)
+		// Lite stores only raw rows, so a lite server ranks them; the modes that extract
+		// leave them out of an all-layer search, as before.
+		kw, err := s.store.keywordSearch(r.req.Query, qv, r.limit*10, layer, r.users, r.agentID, !s.mode.UsesLLM())
 		if err != nil {
 			return err
 		}

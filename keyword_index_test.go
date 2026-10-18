@@ -169,15 +169,15 @@ func TestKeywordIndexMatchesLegacyScoring(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// A raw row never enters the keyword index.
+	// A raw row is in the keyword index too (lite mode searches it); the comparison below leaves it out of the ids it ranks.
 	if err := s.Add(memory.L2Raw, "raw1", "HYATLAS_SYNC_EXTRACT raw transcript sync review", map[string]string{"user_id": "alice", "agent_id": "a1"}); err != nil {
 		t.Fatal(err)
 	}
 	s.mu.RLock()
 	_, rawIndexed := s.kw.docs["raw1"]
 	s.mu.RUnlock()
-	if rawIndexed {
-		t.Error("a raw row was put in the keyword index")
+	if !rawIndexed {
+		t.Error("a raw row was not put in the keyword index")
 	}
 	compareKeywordRanks(t, s, "fresh")
 

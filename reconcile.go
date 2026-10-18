@@ -82,13 +82,14 @@ func (s *MemoryStore) reconcileCandidates(f DocIndex, users []string, agentID st
 		if agentID != "" {
 			where["agent_id"] = agentID
 		}
-		found, err := s.searchWhere(qv, 2*reconcilePerFact, memory.L3Fact, where)
+		found, err := s.searchWhereOpts(qv, reconcilePerFact, memory.L3Fact, where,
+			searchOpts{excludeLabel: experienceLabel})
 		if err != nil {
 			log.Printf("reconcile: search for fact %s: %v", f.ID, err)
 			continue
 		}
 		for _, h := range found {
-			if seen[h.ID] || isExperience(h) || float64(h.Score) < reconcileMinScore {
+			if seen[h.ID] || float64(h.Score) < reconcileMinScore {
 				continue
 			}
 			seen[h.ID] = true
@@ -104,13 +105,6 @@ func (s *MemoryStore) reconcileCandidates(f DocIndex, users []string, agentID st
 		ids = append(ids, h.ID)
 	}
 	return s.GetMany(ids)
-}
-
-// reconcile compares the facts just stored by one write with the owner's similar
-// stored facts under userID alone. It is reconcileOwners with the write's own ID as
-// the only owner.
-func (s *MemoryStore) reconcile(ctx context.Context, llm *LLMClient, newFacts []string, userID, agentID string) (int, error) {
-	return s.reconcileOwners(ctx, llm, newFacts, []string{userID}, userID, agentID)
 }
 
 // reconcileOwners compares the facts just stored by one write with the similar stored

@@ -62,7 +62,7 @@ type MemoryStore struct {
 	// superseded row. It is kept in step with superseded by putLocked, forgetLocked
 	// and rebuildSupersededLocked.
 	replacedBy map[string][]string
-	// kw is the inverted keyword index over the live non-raw rows (see keyword.go). It
+	// kw is the inverted keyword index over the live rows (see keyword.go). It
 	// is kept in step with index by putLocked and forgetLocked and rebuilt with the
 	// superseded bookkeeping, and read under mu like the index itself.
 	kw *kwIndex
@@ -72,6 +72,13 @@ type MemoryStore struct {
 	// Every index write goes through putLocked or forgetLocked to keep them in step.
 	superseded map[string]memory.Layer
 	hidden     map[memory.Layer]int
+	// labelRows counts the live rows of each source_layer_label per layer, so a search
+	// that leaves one label out knows how far to over-fetch. mirrors maps a live row's
+	// (layer, source_id) to the ids of the live rows that carry it, so MirrorsOf reads
+	// one bucket instead of the whole index. Both are kept in step with index by
+	// putLocked, forgetIndexLocked and rebuildSupersededLocked.
+	labelRows map[memory.Layer]map[string]int
+	mirrors   map[mirrorKey][]string
 	// supMu serializes Supersede passes. It is separate from mu so Adds and
 	// Searches do not wait on the chromem rewrites a pass makes.
 	supMu sync.Mutex
@@ -136,6 +143,7 @@ func NewMemoryStore(ctx context.Context, dir string, embed Embedder, graphPath s
 	s := &MemoryStore{db: db, g: g, embed: embed, semantic: isSemantic(embed), ctx: ctx,
 		cols: map[memory.Layer]*chromem.Collection{}, index: map[string]DocIndex{},
 		superseded: map[string]memory.Layer{}, hidden: map[memory.Layer]int{},
+		labelRows: map[memory.Layer]map[string]int{}, mirrors: map[mirrorKey][]string{},
 		replacedBy: map[string][]string{}, kw: newKwIndex(),
 		indexPath:  filepath.Join(dir, "doc_index.json"),
 		countsPath: filepath.Join(dir, "usage.json"),
@@ -420,6 +428,19 @@ func (s *MemoryStore) liveDocs(layer memory.Layer, users []string, agentID strin
 // matches only rows whose field is empty or absent, which is how SearchOwners asks
 // for ownerless rows; searchVec instead leaves an empty owner out of the filter.
 func (s *MemoryStore) searchWhere(qv []float32, limit int, layer memory.Layer, where map[string]string) ([]SearchHit, error) {
+	return s.searchWhereOpts(qv, limit, layer, where, searchOpts{})
+}
+
+// searchOpts are the optional filters of searchWhereOpts.
+type searchOpts struct {
+	// excludeLabel, when set, leaves out rows whose source_layer_label equals it. The
+	// walk skips them as it skips superseded rows, and each layer is over-fetched by the
+	// number of live rows carrying the label, so the live rows still fill the limit.
+	excludeLabel string
+}
+
+// searchWhereOpts is searchWhere with the extra filters of opts.
+func (s *MemoryStore) searchWhereOpts(qv []float32, limit int, layer memory.Layer, where map[string]string, opts searchOpts) ([]SearchHit, error) {
 	if limit <= 0 {
 		limit = 5
 	}
@@ -439,6 +460,9 @@ func (s *MemoryStore) searchWhere(qv []float32, limit int, layer memory.Layer, w
 		n := col.Count()
 		s.mu.RLock()
 		k := limit + s.hidden[l] // note: chromem requires k <= n; guard below
+		if opts.excludeLabel != "" {
+			k += s.labelRows[l][opts.excludeLabel]
+		}
 		s.mu.RUnlock()
 		if k > n {
 			k = n
@@ -455,6 +479,9 @@ func (s *MemoryStore) searchWhere(qv []float32, limit int, layer memory.Layer, w
 			if _, dead := s.superseded[r.ID]; dead {
 				continue
 			}
+			if opts.excludeLabel != "" && r.Metadata[metaSourceLabel] == opts.excludeLabel {
+				continue
+			}
 			hits = append(hits, SearchHit{ID: r.ID, Content: r.Content,
 				Score: r.Similarity, Layer: memory.Layer(l), Meta: r.Metadata})
 		}
@@ -466,6 +493,10 @@ func (s *MemoryStore) searchWhere(qv []float32, limit int, layer memory.Layer, w
 	}
 	return hits, nil
 }
+
+// metaSourceLabel is the metadata key that says what produced a row, such as
+// experience or user_preferences.
+const metaSourceLabel = "source_layer_label"
 
 // SearchHit is a ranked result tagged with its layer.
 type SearchHit struct {
@@ -490,6 +521,13 @@ func (s *MemoryStore) ListAll(layer memory.Layer, userID, agentID string, limit,
 	return s.list(layer, userID, agentID, limit, offset, excludeRaw, true)
 }
 
+// listTopKRatio is how many times larger the match set must be than offset+limit for
+// list to select the page with a bounded top-k pass instead of sorting every match.
+const listTopKRatio = 8
+
+// list returns one page of the matching rows, newest first, and the total number of
+// matches. A small page of a large match set is selected with a bounded top-k pass,
+// which gives the same order as a full sort without sorting every match.
 func (s *MemoryStore) list(layer memory.Layer, userID, agentID string, limit, offset int, excludeRaw, includeSuperseded bool) ([]DocIndex, int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -512,8 +550,12 @@ func (s *MemoryStore) list(layer memory.Layer, userID, agentID string, limit, of
 		}
 		all = append(all, d)
 	}
-	sort.Slice(all, func(i, j int) bool { return newerFirst(all[i], all[j]) })
 	total := len(all)
+	if need := offset + limit; limit > 0 && offset >= 0 && need*listTopKRatio <= total {
+		top := topNewest(all, need)
+		return top[offset:], total
+	}
+	sort.Slice(all, func(i, j int) bool { return newerFirst(all[i], all[j]) })
 	if offset > total {
 		offset = total
 	}
@@ -525,6 +567,26 @@ func (s *MemoryStore) list(layer memory.Layer, userID, agentID string, limit, of
 		offset = end
 	}
 	return all[offset:end], total
+}
+
+// topNewest returns the n newest rows of docs, newest first, in the order newerFirst
+// gives. It keeps a sorted buffer of at most n rows and inserts a row only when it
+// beats the buffer's last, so it does not sort the rest. n must be at least 1 and at
+// most len(docs).
+func topNewest(docs []DocIndex, n int) []DocIndex {
+	buf := make([]DocIndex, 0, n)
+	for _, d := range docs {
+		if len(buf) == n && !newerFirst(d, buf[n-1]) {
+			continue
+		}
+		i := sort.Search(len(buf), func(i int) bool { return newerFirst(d, buf[i]) })
+		if len(buf) < n {
+			buf = append(buf, DocIndex{})
+		}
+		copy(buf[i+1:], buf[i:])
+		buf[i] = d
+	}
+	return buf
 }
 
 // Delete removes docs by id (or by layer/user/agent scope). Returns count deleted.
@@ -816,14 +878,10 @@ func (s *MemoryStore) MirrorsOf(layer memory.Layer, sourceID, content string) []
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var ids []string
-	for id, d := range s.index {
-		if d.Layer != string(layer) || d.Content != content || isSuperseded(d) {
-			continue
+	for _, id := range s.mirrors[mirrorKey{layer, sourceID}] {
+		if d, ok := s.index[id]; ok && d.Content == content && !isSuperseded(d) {
+			ids = append(ids, id)
 		}
-		if d.Meta["source_id"] != sourceID {
-			continue
-		}
-		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	return ids
@@ -996,6 +1054,50 @@ func (s *MemoryStore) putLocked(d DocIndex) {
 		s.superseded[d.ID] = l
 		s.hidden[l]++
 		s.noteReplacedLocked(d)
+	} else {
+		s.trackLiveLocked(d)
+	}
+}
+
+// mirrorKey is the (layer, source_id) pair MirrorsOf looks rows up by.
+type mirrorKey struct {
+	layer    memory.Layer
+	sourceID string
+}
+
+// trackLiveLocked adds the live row d to the per-label counts and the mirror map. The
+// caller holds s.mu for writing.
+func (s *MemoryStore) trackLiveLocked(d DocIndex) {
+	l := memory.Layer(d.Layer)
+	if label := d.Meta[metaSourceLabel]; label != "" {
+		if s.labelRows[l] == nil {
+			s.labelRows[l] = map[string]int{}
+		}
+		s.labelRows[l][label]++
+	}
+	if src := d.Meta["source_id"]; src != "" {
+		k := mirrorKey{l, src}
+		s.mirrors[k] = append(s.mirrors[k], d.ID)
+	}
+}
+
+// untrackLiveLocked undoes trackLiveLocked for the live row d. The caller holds s.mu
+// for writing.
+func (s *MemoryStore) untrackLiveLocked(d DocIndex) {
+	l := memory.Layer(d.Layer)
+	if label := d.Meta[metaSourceLabel]; label != "" {
+		if s.labelRows[l][label]--; s.labelRows[l][label] <= 0 {
+			delete(s.labelRows[l], label)
+		}
+	}
+	if src := d.Meta["source_id"]; src != "" {
+		k := mirrorKey{l, src}
+		ids := slices.DeleteFunc(s.mirrors[k], func(x string) bool { return x == d.ID })
+		if len(ids) == 0 {
+			delete(s.mirrors, k)
+		} else {
+			s.mirrors[k] = ids
+		}
 	}
 }
 
@@ -1017,11 +1119,11 @@ func (s *MemoryStore) forgetLocked(id string) {
 	s.kw.remove(id)
 }
 
-// syncKeywordLocked makes the keyword index agree with d: a live non-raw row is
-// indexed, and any other row (raw, or superseded) is not. The caller holds s.mu for
-// writing.
+// syncKeywordLocked makes the keyword index agree with d: a live row is indexed (raw
+// rows too, so lite mode can find an identifier; hybrid search leaves them out unless
+// the mode needs them), and a superseded row is not. The caller holds s.mu for writing.
 func (s *MemoryStore) syncKeywordLocked(d DocIndex) {
-	if d.Layer == string(memory.L2Raw) || isSuperseded(d) {
+	if isSuperseded(d) {
 		s.kw.remove(d.ID)
 		return
 	}
@@ -1032,6 +1134,11 @@ func (s *MemoryStore) syncKeywordLocked(d DocIndex) {
 // then decides whether the row stays indexed and skips the work when its text did
 // not change.
 func (s *MemoryStore) forgetIndexLocked(id string) {
+	if d, ok := s.index[id]; ok {
+		if _, dead := s.superseded[id]; !dead {
+			s.untrackLiveLocked(d)
+		}
+	}
 	if l, ok := s.superseded[id]; ok {
 		delete(s.superseded, id)
 		s.hidden[l]--
@@ -1057,6 +1164,8 @@ func (s *MemoryStore) rebuildSupersededLocked() {
 	s.superseded = map[string]memory.Layer{}
 	s.hidden = map[memory.Layer]int{}
 	s.replacedBy = map[string][]string{}
+	s.labelRows = map[memory.Layer]map[string]int{}
+	s.mirrors = map[mirrorKey][]string{}
 	s.kw = newKwIndex()
 	for id, d := range s.index {
 		s.syncKeywordLocked(d)
@@ -1065,6 +1174,8 @@ func (s *MemoryStore) rebuildSupersededLocked() {
 			s.superseded[id] = l
 			s.hidden[l]++
 			s.noteReplacedLocked(d)
+		} else {
+			s.trackLiveLocked(d)
 		}
 	}
 }
@@ -1175,3 +1286,70 @@ func (s *MemoryStore) rebuildIndex() error {
 }
 
 func dimFor(l memory.Layer) int { return 384 }
+
+// updateMeta sets the metadata keys of patch on the live row id, and deletes a key
+// whose value is empty. The row's content and vector are kept: the chromem row is
+// written again with the new metadata and the index record follows, under the same
+// rowMu and index lock a supersede rewrite takes. It fails for a row that does not
+// exist or is superseded, since a retired row's history is not edited this way. The
+// row's clause rows are not touched, so a patch should not change its owner.
+func (s *MemoryStore) updateMeta(id string, patch map[string]string) error {
+	s.rowMu.Lock()
+	defer s.rowMu.Unlock()
+	s.mu.RLock()
+	cur, ok := s.index[id]
+	col := s.cols[memory.Layer(cur.Layer)]
+	if !ok || col == nil {
+		s.mu.RUnlock()
+		return fmt.Errorf("memory %s not found", id)
+	}
+	if isSuperseded(cur) {
+		s.mu.RUnlock()
+		return fmt.Errorf("memory %s is superseded", id)
+	}
+	old, err := col.GetByID(s.ctx, id)
+	s.mu.RUnlock()
+	if err != nil {
+		return err
+	}
+	meta := make(map[string]string, len(cur.Meta)+len(patch))
+	maps.Copy(meta, cur.Meta)
+	for k, v := range patch {
+		if v == "" {
+			delete(meta, k)
+		} else {
+			meta[k] = v
+		}
+	}
+	meta["layer"] = cur.Layer
+	if err := col.AddDocument(s.ctx, chromem.Document{
+		ID: id, Content: old.Content, Embedding: old.Embedding, Metadata: meta,
+	}); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now, ok := s.index[id]
+	if !ok {
+		// Deleted while the row was being rewritten, which may have re-created it.
+		_ = col.Delete(s.ctx, nil, nil, id)
+		return fmt.Errorf("memory %s was deleted", id)
+	}
+	now.Meta = meta
+	// The index fields that mirror a metadata key follow it only when the patch names it.
+	if _, set := patch["user_id"]; set {
+		now.UserID = meta["user_id"]
+	}
+	if _, set := patch["agent_id"]; set {
+		now.AgentID = meta["agent_id"]
+	}
+	if _, set := patch["ts"]; set {
+		now.Ts = meta["ts"]
+	}
+	if _, set := patch["extracted"]; set {
+		now.Extracted = meta["extracted"] == "true"
+	}
+	s.putLocked(now)
+	s.markDirtyLocked()
+	return nil
+}

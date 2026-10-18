@@ -207,11 +207,13 @@ func (s *MemoryStore) extractContext(text, userID, agentID string, now time.Time
 		log.Printf("extract context: embed: %v", err)
 	}
 
-	// Experiences take some of the nearest L3 slots, so twice as many rows are read
-	// and the walk stops once the ordinary facts fill extractRelatedMax.
+	// An experience is updated only by its own repeat (experience.go), never by an
+	// extracted fact, so the search leaves experiences out and the ordinary facts
+	// fill extractRelatedMax.
 	var near []SearchHit
 	if err == nil {
-		near, err = s.searchWhere(qv, extractRelatedMax*2, memory.L3Fact, ownerWhere(userID, agentID))
+		near, err = s.searchWhereOpts(qv, extractRelatedMax, memory.L3Fact, ownerWhere(userID, agentID),
+			searchOpts{excludeLabel: experienceLabel})
 		if err != nil {
 			log.Printf("extract context: related facts: %v", err)
 		}
@@ -219,10 +221,6 @@ func (s *MemoryStore) extractContext(text, userID, agentID string, now time.Time
 	for _, h := range near {
 		if len(ec.Related) == extractRelatedMax {
 			break
-		}
-		// An experience is updated only by its own repeat (experience.go), never by an extracted fact.
-		if isExperience(h) {
-			continue
 		}
 		if float64(h.Score) < extractRelatedMin {
 			continue

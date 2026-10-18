@@ -207,7 +207,7 @@ type kwDoc struct {
 
 // kwIndex is an inverted keyword index: for every term, the documents that contain it,
 // and for every document its term counts and length. The store keeps one over its live
-// non-raw rows, updated as rows are written, replaced and deleted, so a search reads
+// rows, raw ones included, updated as rows are written, replaced and deleted, so a search reads
 // the posting lists of its query terms instead of tokenising and stemming every row.
 // It is not safe for concurrent use; the store guards it with its own lock.
 type kwIndex struct {
@@ -347,9 +347,8 @@ func (k *kwIndex) rank(query []string, ids []string) []kwMatch {
 
 // bm25Rank scores docs against the query with BM25 and keeps the documents that
 // contain at least keywordRequired of its distinct terms, best first, ties broken by
-// ID. It indexes docs on the spot, so it suits a small set of rows the store does not
-// index (raw rows) and tests; a search over the store's live rows uses the store's
-// own index.
+// ID. It indexes docs on the spot, so it suits tests and one-off ranking of a small
+// set of rows; a search over the store's live rows uses the store's own index.
 func bm25Rank(query []string, docs []DocIndex) []keywordScore {
 	idx := newKwIndex()
 	ids := make([]string, 0, len(docs))
@@ -388,7 +387,8 @@ func cosineSim(a, b []float32) float64 {
 
 // KeywordSearch finds live memories by their words rather than their meaning, which
 // catches exact names and identifiers an embedding blurs. Raw (L2) rows are left out
-// unless layer asks for them. userIDs, when given, restricts to those owners plus
+// unless layer asks for them (a server that extracts passes includeRaw false; see
+// keywordSearch). userIDs, when given, restricts to those owners plus
 // rows with no owner at all, and agentID, when set, to that agent. Each hit's Score is its cosine similarity to the
 // query, so it reads like a vector hit; it is 0 when that cannot be computed. It does
 // not count toward the search counter, because the caller's search already does.
@@ -406,6 +406,15 @@ func (s *MemoryStore) KeywordSearch(query string, limit int, layer memory.Layer,
 // KeywordSearchVec is KeywordSearch with the query already embedded, so a caller that
 // holds the query vector does not embed it again. A nil qv gives every hit a score of 0.
 func (s *MemoryStore) KeywordSearchVec(query string, qv []float32, limit int, layer memory.Layer, userIDs []string, agentID string) ([]SearchHit, error) {
+	return s.keywordSearch(query, qv, limit, layer, userIDs, agentID, false)
+}
+
+// keywordSearch is KeywordSearchVec with a switch for raw rows. With includeRaw true,
+// a search over all layers ranks L2 raw rows with the rest; a server in lite mode sets
+// it, because raw rows are all lite stores and an identifier would otherwise find
+// nothing. With it false a search over all layers leaves them out, so the rankings of
+// the modes that extract do not change.
+func (s *MemoryStore) keywordSearch(query string, qv []float32, limit int, layer memory.Layer, userIDs []string, agentID string, includeRaw bool) ([]SearchHit, error) {
 	if limit <= 0 {
 		limit = 5
 	}
@@ -426,7 +435,6 @@ func (s *MemoryStore) KeywordSearchVec(query string, qv []float32, limit int, la
 	var ranked []keywordScore
 	s.mu.RLock()
 	var ids []string
-	var rawDocs []DocIndex
 	for _, d := range s.index {
 		if isSuperseded(d) {
 			continue
@@ -435,7 +443,7 @@ func (s *MemoryStore) KeywordSearchVec(query string, qv []float32, limit int, la
 			if d.Layer != string(layer) {
 				continue
 			}
-		} else if d.Layer == string(memory.L2Raw) {
+		} else if d.Layer == string(memory.L2Raw) && !includeRaw {
 			continue
 		}
 		// A row with no owner at all predates owner tracking; under an owner filter
@@ -447,24 +455,14 @@ func (s *MemoryStore) KeywordSearchVec(query string, qv []float32, limit int, la
 		if agentID != "" && d.AgentID != agentID && !(len(owners) > 0 && ownerless) {
 			continue
 		}
-		if layer == memory.L2Raw {
-			rawDocs = append(rawDocs, d)
-		} else {
-			ids = append(ids, d.ID)
-		}
+		ids = append(ids, d.ID)
 	}
-	if layer == memory.L2Raw {
-		// Raw rows are large and rarely searched by word, so they are not kept in the
-		// index; this branch ranks the ones that passed the filters directly.
-		ranked = bm25Rank(q, rawDocs)
-	} else {
-		matches := s.kw.rank(q, ids)
-		if len(matches) > limit {
-			matches = matches[:limit]
-		}
-		for _, m := range matches {
-			ranked = append(ranked, keywordScore{Doc: s.index[m.ID], Score: m.Score, Matched: m.Matched})
-		}
+	matches := s.kw.rank(q, ids)
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	for _, m := range matches {
+		ranked = append(ranked, keywordScore{Doc: s.index[m.ID], Score: m.Score, Matched: m.Matched})
 	}
 	s.mu.RUnlock()
 	if len(ranked) > limit {

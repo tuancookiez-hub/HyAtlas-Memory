@@ -57,7 +57,7 @@ func TestReconcileNoCandidatesNoCall(t *testing.T) {
 
 	calls := 0
 	llm := reconcileLLM(t, &calls, `{"ops":[]}`, http.StatusOK)
-	n, err := st.reconcile(context.Background(), llm, []string{newID}, "u", "a")
+	n, err := st.reconcileOwners(context.Background(), llm, []string{newID}, []string{"u"}, "u", "a")
 	if err != nil || n != 0 {
 		t.Fatalf("reconcile = %d, %v; want 0, nil", n, err)
 	}
@@ -80,7 +80,7 @@ func TestReconcileUpdateMergesIntoOneFact(t *testing.T) {
 	calls := 0
 	reply := fmt.Sprintf(`{"ops":[{"op":"UPDATE","fact":%q,"targets":[%q],"text":"merged fact"}]}`, newID, oldID)
 	llm := reconcileLLM(t, &calls, reply, http.StatusOK)
-	n, err := st.reconcile(context.Background(), llm, []string{newID}, "u", "a")
+	n, err := st.reconcileOwners(context.Background(), llm, []string{newID}, []string{"u"}, "u", "a")
 	if err != nil || n != 1 {
 		t.Fatalf("reconcile = %d, %v; want 1, nil", n, err)
 	}
@@ -112,7 +112,7 @@ func TestReconcileSupersedeReplacesTarget(t *testing.T) {
 	calls := 0
 	reply := fmt.Sprintf(`{"ops":[{"op":"SUPERSEDE","fact":%q,"targets":[%q],"reason":"moved to Paris"}]}`, newID, oldID)
 	llm := reconcileLLM(t, &calls, reply, http.StatusOK)
-	n, err := st.reconcile(context.Background(), llm, []string{newID}, "u", "a")
+	n, err := st.reconcileOwners(context.Background(), llm, []string{newID}, []string{"u"}, "u", "a")
 	if err != nil || n != 1 {
 		t.Fatalf("reconcile = %d, %v; want 1, nil", n, err)
 	}
@@ -141,7 +141,7 @@ func TestReconcileInventedIdsChangeNothing(t *testing.T) {
 		`{"op":"SUPERSEDE","fact":"ghost","targets":[%q],"reason":"x"},`+
 		`{"op":"SUPERSEDE","fact":%q,"targets":["ghost"],"reason":"x"}]}`, oldID, newID)
 	llm := reconcileLLM(t, &calls, reply, http.StatusOK)
-	n, err := st.reconcile(context.Background(), llm, []string{newID}, "u", "a")
+	n, err := st.reconcileOwners(context.Background(), llm, []string{newID}, []string{"u"}, "u", "a")
 	if err != nil || n != 0 {
 		t.Fatalf("reconcile = %d, %v; want 0, nil", n, err)
 	}
@@ -164,7 +164,7 @@ func TestReconcileLLMErrorChangesNothing(t *testing.T) {
 
 	calls := 0
 	llm := reconcileLLM(t, &calls, "", http.StatusBadRequest)
-	n, err := st.reconcile(context.Background(), llm, []string{newID}, "u", "a")
+	n, err := st.reconcileOwners(context.Background(), llm, []string{newID}, []string{"u"}, "u", "a")
 	if err == nil || n != 0 {
 		t.Fatalf("reconcile = %d, %v; want 0 and an error", n, err)
 	}
@@ -194,7 +194,7 @@ func TestReconcileOwnersSeesAliasFacts(t *testing.T) {
 	calls := 0
 	reply := fmt.Sprintf(`{"ops":[{"op":"SUPERSEDE","fact":%q,"targets":["old-alias"],"reason":"moved"}]}`, newID)
 	llm := reconcileLLM(t, &calls, reply, http.StatusOK)
-	n, err := st.reconcile(context.Background(), llm, []string{newID}, "u", "a")
+	n, err := st.reconcileOwners(context.Background(), llm, []string{newID}, []string{"u"}, "u", "a")
 	if err != nil || n != 0 || calls != 0 {
 		t.Fatalf("reconcile = %d, %v with %d calls; want 0, nil, 0 calls", n, err, calls)
 	}
@@ -229,7 +229,7 @@ func TestReconcileSupersedeAfterUpdateSkipped(t *testing.T) {
 		`{"op":"UPDATE","fact":%q,"targets":[%q],"text":"merged fact"},`+
 		`{"op":"SUPERSEDE","fact":%q,"targets":[%q],"reason":"moved"}]}`, newID, aID, newID, bID)
 	llm := reconcileLLM(t, &calls, reply, http.StatusOK)
-	n, err := st.reconcile(context.Background(), llm, []string{newID}, "u", "a")
+	n, err := st.reconcileOwners(context.Background(), llm, []string{newID}, []string{"u"}, "u", "a")
 	if err != nil || n != 1 {
 		t.Fatalf("reconcile = %d, %v; want 1, nil", n, err)
 	}
@@ -257,7 +257,7 @@ func TestReconcileUpdateAfterSupersedeSkipped(t *testing.T) {
 		`{"op":"SUPERSEDE","fact":%q,"targets":[%q],"reason":"moved"},`+
 		`{"op":"UPDATE","fact":%q,"targets":[%q],"text":"merged fact"}]}`, newID, aID, newID, bID)
 	llm := reconcileLLM(t, &calls, reply, http.StatusOK)
-	n, err := st.reconcile(context.Background(), llm, []string{newID}, "u", "a")
+	n, err := st.reconcileOwners(context.Background(), llm, []string{newID}, []string{"u"}, "u", "a")
 	if err != nil || n != 1 {
 		t.Fatalf("reconcile = %d, %v; want 1, nil", n, err)
 	}
