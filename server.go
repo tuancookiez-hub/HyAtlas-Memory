@@ -507,15 +507,11 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	meta["ts"] = time.Now().UTC().Format(time.RFC3339)
 	// A row written by a mode that extracts is meant to be extracted, whatever the
 	// outcome of this write's own attempt; the catch-up loop only takes such rows.
-	if s.mode.UsesLLM() {
+	// Some write origins (the doctor's round-trip check) are never extracted.
+	extracts := policyFor(meta[metaWriteOrigin]).extracts
+	if s.mode.UsesLLM() && extracts {
 		meta[metaExtractWanted] = "true"
 	} else {
-		delete(meta, metaExtractWanted)
-	}
-	// The doctor's round-trip row is a plumbing check, not a conversation: it is
-	// stored as usual but never extracted, so the check makes no model call.
-	doctorWrite := meta["write_origin"] == doctorOrigin
-	if doctorWrite {
 		delete(meta, metaExtractWanted)
 	}
 
@@ -530,7 +526,7 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	// Whether extraction happens at all is the mode's decision; whether the
 	// write waits for it is the sync knob's. Lite stops here with only the raw
 	// trace stored, so no LLM call is made.
-	if doctorWrite {
+	if !extracts {
 		resp["extraction_status"] = "skipped"
 	} else {
 		resp["extraction_status"] = s.extractForMode(text, body.UserID, body.AgentID, id)
@@ -538,10 +534,6 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 
 	jsonResponse(w, 200, resp)
 }
-
-// doctorOrigin is the write_origin metadata value that marks the row the doctor
-// writes for its round-trip check. Such a row is stored but never extracted.
-const doctorOrigin = "doctor"
 
 // extractForMode applies the configured mode to one stored raw memory and
 // reports what the caller should expect.
@@ -1912,7 +1904,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/v1/feedback", s.handleFeedback)
 	mux.HandleFunc("/api/v1/forget", s.handleForget)
 	// Dashboard UI (embedded single-file frontend)
-	// --- v3.5 dashboard adapter endpoints (real v4 data, v3.5 shapes) ---
+	// --- v3.5 dashboard adapter endpoints (real data, v3.5 shapes) ---
 	mux.HandleFunc("/api/status", s.handleDashStatus)
 	mux.HandleFunc("/api/info", s.handleDashInfo)
 	mux.HandleFunc("/api/memories", s.handleDashMemories)

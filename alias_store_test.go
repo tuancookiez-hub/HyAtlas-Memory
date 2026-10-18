@@ -163,7 +163,7 @@ func TestAliasForgetFindsAliasRow(t *testing.T) {
 	srv, _ := newCtxServer(t, func() string { return `{"facts":[]}` })
 	aliasUU2(srv.store)
 	if err := srv.store.Add(memory.L2Raw, "mt1", "likes oat milk", map[string]string{
-		"user_id": "u2", "agent_id": "a", "write_origin": memoryToolOrigin,
+		"user_id": "u2", "agent_id": "a", "write_origin": originMemoryTool,
 		"ts": time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		t.Fatal(err)

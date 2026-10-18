@@ -604,7 +604,7 @@ func (p *PageStore) ForgetSources(ids map[string]bool) (pages int, err error) {
 		if pg.DocID == "" {
 			continue
 		}
-		if _, e := p.store.retire([]string{pg.DocID}, Retire{How: howForgotten, Reason: defaultForgetReason}); e != nil {
+		if _, e := p.store.retire([]string{pg.DocID}, Retire{How: howForgotten, Reason: reasonPageEmptied}); e != nil {
 			log.Printf("pages: retire emptied page %s: %v", pg.ID, e)
 			if err == nil {
 				err = e

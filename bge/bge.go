@@ -3,7 +3,7 @@
 // It loads the ONNX model via onnxruntime_go (cgo -> onnxruntime shared library),
 // tokenizes text with the BERT WordPiece vocab, runs inference, mean-pools with
 // the BGE attention mask, and normalizes. This is the in-Go embedder that
-// removes the Python embed_server dependency from the v4 server.
+// removes the Python embed_server dependency from the server.
 //
 // File layout (runtime, gitignored):
 //

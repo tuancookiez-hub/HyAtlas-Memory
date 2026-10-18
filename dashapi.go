@@ -1,7 +1,7 @@
 package main
 
 // Dashboard-facing API endpoints (v3.5 parity for the copied dashboard UI).
-// All values are REAL data from the v4 store — no fabricated payloads.
+// All values are REAL data from the store — no fabricated payloads.
 // Endpoints the dashboard needs:
 //   GET /api/status            — infra health (vdb/embed/llm) + counts
 //   GET /api/info              — static build info
@@ -13,9 +13,9 @@ package main
 //   GET /api/layer-health      — per-layer freshness
 //   GET /api/l6-schemas        — schema layer items
 //   GET /api/l5/graph          — graph nodes/rels (all layers or filtered)
-//   GET /api/quality-metrics   — quality snapshot (honest: not computed in v4 yet)
-//   GET /api/coding-count      — coding-layer count (v4: 0, honest)
-//   GET /api/coding-memories   — coding-layer items (v4: empty, honest)
+//   GET /api/quality-metrics   — quality snapshot (honest: not computed)
+//   GET /api/coding-count      — coding-layer count (always 0, honest)
+//   GET /api/coding-memories   — coding-layer items (always empty, honest)
 
 import (
 	"encoding/json"
@@ -85,7 +85,7 @@ func (s *Server) handleDashStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDashInfo(w http.ResponseWriter, r *http.Request) {
 	writes, searches := s.store.Usage()
 	writeJSON(w, 200, map[string]any{
-		"name":           "HyAtlas v4 (Go)",
+		"name":           "HyAtlas (Go)",
 		"version":        Version,
 		"mode":           string(s.mode.OrDefault()),
 		"llm_model":      s.llmModel,
@@ -248,11 +248,11 @@ func (s *Server) handleDashL5Graph(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDashQuality(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"available": false,
-		"reason":    "quality scoring not ported to v4 yet",
+		"reason":    "quality scoring is not available in this version",
 	})
 }
 
-// handleDashCoding — the coding layer doesn't exist in v4; honest zeros.
+// handleDashCoding — there is no coding layer; honest zeros.
 func (s *Server) handleDashCodingCount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"count": 0})
 }

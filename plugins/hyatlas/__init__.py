@@ -873,7 +873,7 @@ class HyatlasMemoryProvider(MemoryProvider):
         try:
             threading.Thread(
                 target=self._hand_over_key, args=(force,),
-                name="hyatlas-keyshare", daemon=True,
+                name="hyatlas-key-handover", daemon=True,
             ).start()
         except Exception as e:  # noqa: BLE001
             logger.debug("hyatlas key hand-over not scheduled: %s", e)

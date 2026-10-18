@@ -10,18 +10,6 @@ import (
 	"github.com/tuancookiez-hub/hyatlas-v4/memory"
 )
 
-// howForgotten is the superseded_how of a row that Hermes's memory tool removed or
-// replaced, mirrored to HyAtlas by /api/v1/forget. Such a row is retired, not
-// deleted, so the admin restore brings it back.
-const howForgotten = "forgotten"
-
-// memoryToolOrigin is the write_origin metadata value that marks a raw row as one
-// the Hermes memory tool wrote. Only rows with this origin are forgotten.
-const memoryToolOrigin = "memory_tool"
-
-// defaultForgetReason is the drop_reason recorded when a forget request gives none.
-const defaultForgetReason = "removed with Hermes's memory tool"
-
 // handleForget is POST /api/v1/forget: it retires the memory-tool raw rows of one
 // owner whose content equals text, and every live row derived from them, as
 // forgotten. It is reversible through the admin restore, so it needs no admin
@@ -126,7 +114,7 @@ func (s *MemoryStore) forgetTargets(text, userID, agentID string) (raw []string,
 		if !slices.Contains(users, d.UserID) || d.AgentID != agentID {
 			continue
 		}
-		if d.Meta["write_origin"] != memoryToolOrigin {
+		if !policyFor(d.Meta[metaWriteOrigin]).forgettable {
 			continue
 		}
 		if strings.TrimSpace(d.Content) != text {
