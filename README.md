@@ -310,7 +310,9 @@ setting: then Hermes hands its current Nous Portal key to the running server ove
 localhost (`POST /api/v1/llm/key`), only when the server's endpoint is the Nous
 Portal, and the server keeps it in memory only. Until a key arrives,
 `/api/v1/status` reports `llm: "awaiting_key"` and writes are stored without
-extraction.
+extraction; once a key arrives the catch-up loop extracts them (see
+`HYATLAS_CATCHUP_EVERY`), and `/api/v1/status` shows how many are still waiting
+as `unextracted`.
 
 **Neither the server nor its launcher reads another program's credential file.**
 Earlier versions of the sample launcher read Hermes' `auth.json`; a program that
@@ -390,7 +392,8 @@ Notes:
 | `HYATLAS_USER_ALIASES` | *(unset = no aliases)* | Groups of user IDs that are one person, for search: groups separated by `;`, IDs in a group by `,`, e.g. `"221727702992945152,default,hermes-memory-archive"`. A search for any ID in a group covers the whole group |
 | `HYATLAS_MIN_SCORE` | `0.60` | Search drops vector hits below this cosine similarity. `0` disables the floor. A request may override it with `min_score` |
 | `HYATLAS_DEDUPE_SCORE` | `0.92` | Write-time de-duplication: a new L3 fact at or above this similarity to the owner's nearest live fact supersedes it. `0` disables it |
-| `HYATLAS_ADMIN` | off | `on` enables the two `/api/v1/admin/*` maintenance endpoints (see *Maintenance (admin)* in the API Reference). Otherwise they return 403 |
+| `HYATLAS_ADMIN` | off | `on` enables the two `/api/v1/admin/*` maintenance endpoints (see *Maintenance (admin)* in the API Reference), and bulk delete (`/api/v1/delete_all` by layer, user, agent or `all`). Otherwise they return 403. Deleting one memory by `id` needs no switch |
+| `HYATLAS_CATCHUP_EVERY` | `10m` | Pro and ultra: how often the server re-extracts raw memories that extraction never reached (written while no key was set, or whose extraction call failed). Up to 20 per run, oldest first, one at a time; a row under 2 minutes old is left alone, and the run stops at the first model error. A key arriving also triggers a run. `0` or `off` turns it off |
 | `HYATLAS_LLM_BASE` | *(unset)* | OpenAI-compatible LLM endpoint. **Memory text is sent here once you set it** — see *Privacy* above. Unset means no LLM call at all. |
 | `HYATLAS_LLM_MODEL` | *(unset)* | LLM model name. Base, model and key must all be set for extraction to run. |
 | `HYATLAS_LLM_KEY` | (empty) | LLM bearer token |
@@ -550,7 +553,7 @@ if you depend on that. Every route is behind the Host/Origin guard described abo
 | `GET` | `/api/v1/edges` | Query: `n` (default 500), `k_semantic` (default 3), `user_id`, `agent_id` (`all` = no filter). Returns `nodes`, `knowledge` (L5 relations, each with `sources`), `co_session`, `semantic`, `total_edges`. |
 | `GET` | `/api/v1/learning/graph` | Query: `n`, `k_semantic`, `user_id`, `agent_id`. Returns the starmap feed: `nodes`, `edges`, `memory`, `stats`. |
 | `GET` | `/api/v1/graph-as-of` | Query: `ts` (unix seconds, default now), `n` (default 500), `user_id`, `agent_id`. Returns `nodes`, `relations` and `as_of`, as they were at `ts` (world validity and recording axes). |
-| `POST` or `DELETE` | `/api/v1/delete_all` | Query or body: `id`, `layer` (`*` = all), `user_id`, `agent_id`, `all` (`true`), `confirm` (`wipe-all`, the older spelling of `all`). Other methods return 405. A call with no scope (no `id`, `layer`, `user_id`, `agent_id`, or `all`) returns 400. Returns `deleted_count`. |
+| `POST` or `DELETE` | `/api/v1/delete_all` | Query or body: `id`, `layer` (`*` = all), `user_id`, `agent_id`, `all` (`true`), `confirm` (`wipe-all`, the older spelling of `all`). Other methods return 405. A call with no scope (no `id`, `layer`, `user_id`, `agent_id`, or `all`) returns 400. Deleting one memory by `id` always works; a scoped delete (`layer`, `user_id`, `agent_id`) or `all` returns 403 unless the server runs with `HYATLAS_ADMIN=on`. Returns `deleted_count`. |
 | `POST` | `/api/v1/reprocess` | Body: `ids` (explicit raw IDs; extracted rows are re-extracted too), or `max` (default 200). Without `ids`, takes up to `max` raw rows that extraction has not reached, oldest first (by `ts`, then `id`). Extracted rows are dropped before the cut, so they do not use up `max`. Returns `reprocessed`, `failed`, `skipped`. `skipped` is 0 on both paths. In `lite` it extracts nothing: `skipped` is the number of rows it would have processed, and `note` says so. |
 | `GET` | `/api/v1/digest` | Slow-path state. Returns `digest_ok: true`, `runs`, `last`, `last_at`, `graph_nodes`, `graph_edges`. In `lite` or `pro` it returns `digest_ok: false` with a `reason`. |
 | `GET` | `/api/v1/now` | Query: `user_id`, `agent_id`. Returns `now`: the owner's Now page (`text`, `updated`) or `null`. |

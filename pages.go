@@ -262,6 +262,15 @@ func (p *PageStore) Related(text, user, agent string, n int) []Page {
 		log.Printf("pages: related: embed: %v", err)
 		return nil
 	}
+	return p.RelatedVec(qv, user, agent, n)
+}
+
+// RelatedVec is Related with the text already embedded, so a caller that holds the
+// vector does not embed it again. An empty vector gives no pages.
+func (p *PageStore) RelatedVec(qv []float32, user, agent string, n int) []Page {
+	if p == nil || n <= 0 || len(qv) == 0 {
+		return nil
+	}
 	hits, err := p.store.searchWhere(qv, n*3, memory.L8Entity, map[string]string{"user_id": user, "agent_id": agent})
 	if err != nil {
 		log.Printf("pages: related: %v", err)

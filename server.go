@@ -13,7 +13,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,6 +69,10 @@ type Server struct {
 	// backlog is the one-time admin pass over facts stored before 4.7.0
 	// (/api/v1/admin/backlog): contradictions and entity pages.
 	backlog *BacklogJob
+	// catchup re-extracts raw memories whose extraction never happened or failed
+	// (HYATLAS_CATCHUP_EVERY, or a key arriving). nil in lite mode and in tests built
+	// without main, which turns it off.
+	catchup *Catchup
 
 	// mu guards lastExtractErr: the extraction goroutines write it from
 	// background contexts while /api/v1/status reads it on request.
@@ -142,6 +145,10 @@ type Status struct {
 	// Episodes counts episodes still open and closed ones waiting for a summary.
 	// Absent when episodes are off (lite mode or HYATLAS_EPISODE_GAP=off).
 	Episodes *EpisodeCounts `json:"episodes,omitempty"`
+	// Unextracted is how many raw memories extraction has not reached: written
+	// while the server had no key, or whose extraction failed. The catch-up loop
+	// works these off (see catchup.go). It is 0 in lite mode, which extracts nothing.
+	Unextracted int `json:"unextracted"`
 }
 
 // EpisodeCounts is the episodes part of /api/v1/status.
@@ -192,6 +199,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Consolidations:   consRuns,
 		LastConsolidated: lastCons,
 		Episodes:         s.episodeCounts(),
+		Unextracted:      s.unextractedCount(),
 	})
 }
 
@@ -254,8 +262,16 @@ func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext,
 		// are written, so the new L1 mirror is not taken for one of the old fact's
 		// mirrors.
 		stale := map[string][]string{}
-		if dedupe > 0 {
-			near, err := store.search(f.Data, 1, memory.L3Fact, userID, agentID)
+		// The fact is embedded once. The vector serves the dedupe search, the fact
+		// and its L1 mirror. When the embedding fails the dedupe is skipped and Add
+		// tries again, as it always did.
+		qv, embedErr := store.embed.Embed(store.ctx, f.Data)
+		if embedErr != nil {
+			log.Printf("extract: embed fact: %v", embedErr)
+			qv = nil
+		}
+		if dedupe > 0 && qv != nil {
+			near, err := store.searchWhere(qv, 1, memory.L3Fact, ownerWhere(userID, agentID))
 			if err == nil && len(near) > 0 && float64(near[0].Score) >= dedupe && sameNumbers(near[0].Content, f.Data) {
 				old := near[0]
 				stale[howRestated] = append([]string{old.ID}, store.MirrorsOf(memory.L1Profile, old.Meta["source_id"], old.Content)...)
@@ -287,17 +303,17 @@ func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext,
 		if when := normalizeEventDate(f.When); when != "" && f.Layer != "user_preferences" {
 			meta[metaEventAt] = when
 		}
-		if err := store.Add(memory.L3Fact, factID, f.Data, meta); err != nil {
+		if err := store.addWithVector(memory.L3Fact, factID, f.Data, meta, qv); err != nil {
 			log.Printf("extract: fact: %v", err)
 			continue
 		}
 		factIDs = append(factIDs, factID)
 		// L1 Profile: user_preferences are stable identity — mirror to profile layer.
 		if f.Layer == "user_preferences" {
-			_ = store.Add(memory.L1Profile, newID(), f.Data, map[string]string{
+			_ = store.addWithVector(memory.L1Profile, newID(), f.Data, map[string]string{
 				"user_id": userID, "agent_id": agentID,
 				"source_id": sourceID, "ts": now,
-			})
+			}, qv)
 		}
 		for _, how := range []string{howRestated, howReplaced, howUpdated} {
 			ids := stale[how]
@@ -519,6 +535,11 @@ func (s *Server) handleLLMKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.llm.SetPushedKey(key)
+	// A key that arrives may be the one the server has been waiting for, so writes
+	// stored raw-only in the meantime are extracted now rather than at the next tick.
+	if key != "" {
+		s.catchup.Kick()
+	}
 	jsonResponse(w, 200, map[string]any{"ok": true, "llm": s.llmState()})
 }
 
@@ -792,6 +813,16 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// Deleting one memory by id stays open. A scoped delete or a wipe removes many
+	// rows at once and cannot be undone, and any local process can reach the port,
+	// so it needs the same HYATLAS_ADMIN switch as the maintenance endpoints.
+	if len(ids) == 0 && !s.admin {
+		jsonResponse(w, 403, map[string]any{
+			"deleted_count": 0,
+			"error":         "bulk delete is off: delete one memory with id, or restart the server with HYATLAS_ADMIN=on to delete by layer, user_id, agent_id or all",
+		})
+		return
+	}
 	deleted, err := s.store.Delete(ids, memory.Layer(layer), userID, agentID)
 	jsonResponse(w, 200, map[string]any{"deleted_count": deleted, "error": errStr(err)})
 }
@@ -909,26 +940,19 @@ func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 
 // unextractedRaw returns up to max raw rows that extraction has not reached, oldest
 // first (ts, then id, so equal timestamps order the same way each time). Extracted
-// rows are removed before the cut: a page of already-extracted rows must not hide
+// rows are skipped before the cut: a page of already-extracted rows must not hide
 // older unextracted ones, and the newest rows must not be re-picked while an old
 // backlog starves.
 func (s *Server) unextractedRaw(max int) []DocIndex {
 	_, total := s.store.List(memory.L2Raw, "", "", 1, 0, false)
+	// List is newest first, ties by larger id first, so walking it backwards gives
+	// the oldest first order and the walk can stop as soon as max rows are found.
 	all, _ := s.store.List(memory.L2Raw, "", "", total, 0, false)
-	out := make([]DocIndex, 0, len(all))
-	for _, d := range all {
-		if !d.Extracted {
-			out = append(out, d)
+	out := make([]DocIndex, 0, min(max, len(all)))
+	for i := len(all) - 1; i >= 0 && len(out) < max; i-- {
+		if !all[i].Extracted {
+			out = append(out, all[i])
 		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Ts != out[j].Ts {
-			return out[i].Ts < out[j].Ts
-		}
-		return out[i].ID < out[j].ID
-	})
-	if len(out) > max {
-		out = out[:max]
 	}
 	return out
 }
@@ -1637,6 +1661,13 @@ func main() {
 	go runSnapshots(ctx, store, dir, snap)
 	if rt.Admin {
 		log.Print("HYATLAS_ADMIN=on: /api/v1/admin/compact_raw, /api/v1/admin/dedupe_facts and /api/v1/admin/restore are enabled")
+	}
+	// Started last, once every part extraction touches (Now pages, episodes) is wired.
+	// pro and ultra extract, so a write that missed its extraction (no key yet, or a
+	// failed call) is retried in the background. Lite makes no LLM call at all.
+	if rt.Mode.UsesLLM() {
+		srv.catchup = NewCatchup(srv, envDuration(catchupEveryKey, catchupEveryDefault))
+		go srv.catchup.Run(ctx)
 	}
 	hs := &http.Server{Addr: net.JoinHostPort(rt.Host, port), Handler: srv.routes(), ReadHeaderTimeout: readHeaderTimeout}
 	// Ctrl-C or a service stop ends the server cleanly, writing what is still

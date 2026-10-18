@@ -94,6 +94,7 @@ func TestLoadIndexFallsBackToRebuild(t *testing.T) {
 // TestDeleteAllGuard covers the unscoped-wipe guard and both scoping styles.
 func TestDeleteAllGuard(t *testing.T) {
 	srv := newTestServer(t, "test", "test")
+	srv.admin = true // scoped deletes and wipes need HYATLAS_ADMIN=on
 	for _, u := range []string{"keep-user", "drop-user"} {
 		if err := srv.store.Add(memory.L2Raw, "doc-"+u, "text", map[string]string{
 			"user_id": u, "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
@@ -230,6 +231,7 @@ func TestReprocessByIds(t *testing.T) {
 // carries a scope that would otherwise be valid.
 func TestDeleteAllRejectsNonDeleteMethods(t *testing.T) {
 	srv := newTestServer(t, "test", "test")
+	srv.admin = true // scoped deletes and wipes need HYATLAS_ADMIN=on
 	if err := srv.store.Add(memory.L2Raw, "doc-1", "text", map[string]string{
 		"user_id": "u", "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
 	}); err != nil {
@@ -260,6 +262,7 @@ func TestDeleteAllRejectsNonDeleteMethods(t *testing.T) {
 // A call with no filter is refused, and only an explicit all=true wipes.
 func TestDeleteAllRequiresFilterOrAll(t *testing.T) {
 	srv := newTestServer(t, "test", "test")
+	srv.admin = true // scoped deletes and wipes need HYATLAS_ADMIN=on
 	if err := srv.store.Add(memory.L2Raw, "doc-1", "text", map[string]string{
 		"user_id": "u", "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
 	}); err != nil {
@@ -497,5 +500,49 @@ func TestGuardLocalRefusesBrowserOriginsAndRebinding(t *testing.T) {
 		if got := send("GET", "/api/v1/status", c.host, c.hdr); got != c.want {
 			t.Errorf("%s: host=%q hdr=%v: want %d, got %d", c.name, c.host, c.hdr, c.want, got)
 		}
+	}
+}
+
+// A delete by one id works without the admin switch, while a scoped delete or a wipe
+// is refused with 403 and removes nothing. With the switch on, both go through.
+func TestBulkDeleteNeedsAdmin(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	for _, id := range []string{"doc-1", "doc-2"} {
+		if err := srv.store.Add(memory.L2Raw, id, "text "+id, map[string]string{
+			"user_id": "u", "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
+		}); err != nil {
+			t.Fatalf("add: %v", err)
+		}
+	}
+	for _, body := range []string{`{"user_id":"u"}`, `{"layer":"l2_raw"}`, `{"agent_id":"a"}`, `{"all":true}`, `{"confirm":"wipe-all"}`} {
+		w := httptest.NewRecorder()
+		srv.handleDelete(w, httptest.NewRequest("POST", "/api/v1/delete_all", strings.NewReader(body)))
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s without admin: want 403, got %d", body, w.Code)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out["deleted_count"] != float64(0) || out["error"] == "" {
+			t.Errorf("%s without admin: want deleted_count 0 and an error, got %v", body, out)
+		}
+	}
+	if srv.store.TotalMemories() != 2 {
+		t.Fatalf("refused bulk deletes removed rows: %d left", srv.store.TotalMemories())
+	}
+
+	// One id is allowed with the switch off.
+	w := httptest.NewRecorder()
+	srv.handleDelete(w, httptest.NewRequest("POST", "/api/v1/delete_all", strings.NewReader(`{"id":"doc-1"}`)))
+	if w.Code != http.StatusOK || srv.store.TotalMemories() != 1 {
+		t.Errorf("delete by id: code %d, %d rows left; want 200 and 1", w.Code, srv.store.TotalMemories())
+	}
+
+	srv.admin = true
+	w = httptest.NewRecorder()
+	srv.handleDelete(w, httptest.NewRequest("POST", "/api/v1/delete_all", strings.NewReader(`{"user_id":"u"}`)))
+	if w.Code != http.StatusOK || srv.store.TotalMemories() != 0 {
+		t.Errorf("scoped delete with admin: code %d, %d rows left; want 200 and 0", w.Code, srv.store.TotalMemories())
 	}
 }

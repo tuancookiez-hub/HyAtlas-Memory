@@ -62,10 +62,15 @@ func reconcileEnabled() bool {
 // them. f itself is never a candidate. The search runs per owner, so a person known
 // by several user IDs is compared across all of them.
 func (s *MemoryStore) reconcileCandidates(f DocIndex, users []string, agentID string) []DocIndex {
-	qv, err := s.embed.Embed(s.ctx, f.Content)
-	if err != nil {
-		log.Printf("reconcile: embed fact %s: %v", f.ID, err)
-		return nil
+	// The fact was embedded when it was stored; reading that vector back saves a
+	// second embedding. Only a fact whose vector cannot be read is embedded here.
+	qv := s.vectors([]string{f.ID})[f.ID]
+	if len(qv) == 0 {
+		var err error
+		if qv, err = s.embed.Embed(s.ctx, f.Content); err != nil {
+			log.Printf("reconcile: embed fact %s: %v", f.ID, err)
+			return nil
+		}
 	}
 	var hits []SearchHit
 	seen := map[string]bool{f.ID: true}

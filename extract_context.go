@@ -199,11 +199,22 @@ Return ONLY valid JSON, no prose, no markdown fences.`
 func (s *MemoryStore) extractContext(text, userID, agentID string, now time.Time) ExtractContext {
 	var ec ExtractContext
 
+	// The input is embedded once, and that vector serves the fact search and the
+	// entity-page search. Without a vector neither can run, so the context stays
+	// empty and the extraction proceeds without it.
+	qv, err := s.embed.Embed(s.ctx, text)
+	if err != nil {
+		log.Printf("extract context: embed: %v", err)
+	}
+
 	// Experiences take some of the nearest L3 slots, so twice as many rows are read
 	// and the walk stops once the ordinary facts fill extractRelatedMax.
-	near, err := s.search(text, extractRelatedMax*2, memory.L3Fact, userID, agentID)
-	if err != nil {
-		log.Printf("extract context: related facts: %v", err)
+	var near []SearchHit
+	if err == nil {
+		near, err = s.searchWhere(qv, extractRelatedMax*2, memory.L3Fact, ownerWhere(userID, agentID))
+		if err != nil {
+			log.Printf("extract context: related facts: %v", err)
+		}
 	}
 	for _, h := range near {
 		if len(ec.Related) == extractRelatedMax {
@@ -221,8 +232,8 @@ func (s *MemoryStore) extractContext(text, userID, agentID string, now time.Time
 
 	// The owner's nearest entity pages, so the model updates a page rather than
 	// creating a second one for the same thing. Skipped when there is no page store.
-	if s.pages != nil {
-		ec.Pages = s.pages.Related(text, userID, agentID, extractPagesMax)
+	if s.pages != nil && strings.TrimSpace(text) != "" {
+		ec.Pages = s.pages.RelatedVec(qv, userID, agentID, extractPagesMax)
 	}
 
 	// List is newest first, so the first extractIntentionMax rows are the newest

@@ -62,6 +62,10 @@ type MemoryStore struct {
 	// superseded row. It is kept in step with superseded by putLocked, forgetLocked
 	// and rebuildSupersededLocked.
 	replacedBy map[string][]string
+	// kw is the inverted keyword index over the live non-raw rows (see keyword.go). It
+	// is kept in step with index by putLocked and forgetLocked and rebuilt with the
+	// superseded bookkeeping, and read under mu like the index itself.
+	kw *kwIndex
 	// superseded is the set of index ids that are superseded, with their layer, and
 	// hidden counts those per layer. Search reads hidden to decide how far to
 	// over-fetch, and checks membership in superseded, so neither scans the index.
@@ -132,7 +136,7 @@ func NewMemoryStore(ctx context.Context, dir string, embed Embedder, graphPath s
 	s := &MemoryStore{db: db, g: g, embed: embed, semantic: isSemantic(embed), ctx: ctx,
 		cols: map[memory.Layer]*chromem.Collection{}, index: map[string]DocIndex{},
 		superseded: map[string]memory.Layer{}, hidden: map[memory.Layer]int{},
-		replacedBy: map[string][]string{},
+		replacedBy: map[string][]string{}, kw: newKwIndex(),
 		indexPath:  filepath.Join(dir, "doc_index.json"),
 		countsPath: filepath.Join(dir, "usage.json"),
 		stopFlush:  make(chan struct{}), flushDone: make(chan struct{})}
@@ -935,8 +939,9 @@ func docIndexFrom(id, layer, content string, meta map[string]string) DocIndex {
 // putLocked stores d in the exact index and keeps the superseded set, the replaced-by
 // map and the per-layer counts in step. The caller holds s.mu for writing.
 func (s *MemoryStore) putLocked(d DocIndex) {
-	s.forgetLocked(d.ID)
+	s.forgetIndexLocked(d.ID)
 	s.index[d.ID] = d
+	s.syncKeywordLocked(d)
 	if isSuperseded(d) {
 		l := memory.Layer(d.Layer)
 		s.superseded[d.ID] = l
@@ -959,6 +964,25 @@ func (s *MemoryStore) noteReplacedLocked(d DocIndex) {
 // forgetLocked removes id from the exact index and from the superseded
 // bookkeeping. The caller holds s.mu for writing.
 func (s *MemoryStore) forgetLocked(id string) {
+	s.forgetIndexLocked(id)
+	s.kw.remove(id)
+}
+
+// syncKeywordLocked makes the keyword index agree with d: a live non-raw row is
+// indexed, and any other row (raw, or superseded) is not. The caller holds s.mu for
+// writing.
+func (s *MemoryStore) syncKeywordLocked(d DocIndex) {
+	if d.Layer == string(memory.L2Raw) || isSuperseded(d) {
+		s.kw.remove(d.ID)
+		return
+	}
+	s.kw.put(d.ID, d.Content)
+}
+
+// forgetIndexLocked is forgetLocked without the keyword index, for putLocked, which
+// then decides whether the row stays indexed and skips the work when its text did
+// not change.
+func (s *MemoryStore) forgetIndexLocked(id string) {
 	if l, ok := s.superseded[id]; ok {
 		delete(s.superseded, id)
 		s.hidden[l]--
@@ -977,14 +1001,16 @@ func (s *MemoryStore) forgetLocked(id string) {
 	delete(s.index, id)
 }
 
-// rebuildSupersededLocked recomputes the superseded set, the replaced-by map and
-// per-layer counts from the whole index. It runs once after the index is loaded from
+// rebuildSupersededLocked recomputes the superseded set, the replaced-by map,
+// per-layer counts and the keyword index from the whole index. It runs once after the index is loaded from
 // disk.
 func (s *MemoryStore) rebuildSupersededLocked() {
 	s.superseded = map[string]memory.Layer{}
 	s.hidden = map[memory.Layer]int{}
 	s.replacedBy = map[string][]string{}
+	s.kw = newKwIndex()
 	for id, d := range s.index {
+		s.syncKeywordLocked(d)
 		if isSuperseded(d) {
 			l := memory.Layer(d.Layer)
 			s.superseded[id] = l
