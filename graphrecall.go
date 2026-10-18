@@ -100,3 +100,32 @@ func graphAdmit(candidates []SearchHit, admitted []SearchHit, neighbour []string
 	}
 	return out
 }
+
+// graphAdmitWithin runs graphAdmit and then places the graph-linked extras inside the
+// visible part of the result, which is the first limit hits. Graph-linked facts take at
+// most a third of the visible slots, at the end of the visible part. The query's own
+// best hits keep the top limit - n places, so a graph link can never push one of them
+// down. When limit is zero or less, the result is graphAdmit's result unchanged. The
+// returned slice is new, the inputs are not modified, and scores are unchanged.
+func graphAdmitWithin(candidates, admitted []SearchHit, neighbour []string, floor float64, max, limit int) []SearchHit {
+	out := graphAdmit(candidates, admitted, neighbour, floor, max)
+	if limit <= 0 {
+		return out
+	}
+	extras := out[len(admitted):]
+	room := limit / 3
+	if room < 1 {
+		room = 1
+	}
+	n := min(len(extras), room)
+	pos := min(len(admitted), limit-n)
+	if pos < 0 {
+		pos = 0
+	}
+	res := make([]SearchHit, 0, len(out))
+	res = append(res, admitted[:pos]...)
+	res = append(res, extras[:n]...)
+	res = append(res, admitted[pos:]...)
+	res = append(res, extras[n:]...)
+	return res
+}
