@@ -1771,6 +1771,8 @@ func main() {
 	if left := srv.waitExtractions(shutdownExtractWait); left > 0 {
 		log.Printf("shutdown: %d extraction(s) still running after %s; the catch-up pass finishes them on the next start", left, shutdownExtractWait)
 	}
+	// The catch-up loop stopped with the signal; let a pass already running finish.
+	srv.catchup.Wait(shutdownExtractWait)
 	srv.flush()
 	store.Close()
 	log.Print("stopped")

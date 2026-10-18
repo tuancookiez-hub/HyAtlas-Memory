@@ -96,6 +96,19 @@ func (c *Catchup) Run(ctx context.Context) {
 	}
 }
 
+// Wait blocks until a running pass has finished or timeout passes, so a shutdown does
+// not close the store under an extraction the loop started. It does nothing on a nil
+// Catchup.
+func (c *Catchup) Wait(timeout time.Duration) {
+	if c == nil {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	for c.running.Load() && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // Once runs one pass and reports what it did; ran is false when another run was in
 // progress or the server cannot extract right now (lite mode, or no usable key), in
 // which case nothing was tried. Up to catchupBatch unextracted raw rows are taken
