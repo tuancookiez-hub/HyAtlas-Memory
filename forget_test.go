@@ -136,3 +136,84 @@ func TestForgetRejectsBadRequests(t *testing.T) {
 		t.Errorf("GET: status = %d, want 405", w.Code)
 	}
 }
+
+// Forget clears a forgotten raw id from entity pages (state and history), retires a
+// page left empty, removes and trims graph edges, and reports the counts.
+func TestForgetClearsPagesAndEdges(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	st := srv.store
+	raw := newID()
+	if err := st.Add(memory.L2Raw, raw, "uses stepfun", map[string]string{
+		"user_id": "u", "agent_id": "a", "write_origin": "memory_tool", "ts": nowTS(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// One page cites the raw row only; another also has state from a different source.
+	if _, _, err := st.pages.Apply("u", "a", raw, []PageUpdate{{Name: "Only", Set: []PageSet{{Attr: "model", Value: "stepfun"}}, Event: "chose it"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.pages.Apply("u", "a", "other", []PageUpdate{{Name: "Both", Set: []PageSet{{Attr: "tool", Value: "go"}}}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var bothPg, onlyPg Page
+	for _, p := range st.pages.List("u", "a") {
+		if p.Name == "Both" {
+			bothPg = p
+		} else {
+			onlyPg = p
+		}
+	}
+	if _, _, err := st.pages.Apply("u", "a", raw, []PageUpdate{{Page: bothPg.ID, Set: []PageSet{{Attr: "model", Value: "stepfun"}}, Event: "ran it"}}, map[string]bool{bothPg.ID: true}); err != nil {
+		t.Fatal(err)
+	}
+	bothPg, _ = st.pages.Get(bothPg.ID)
+	oldDoc := bothPg.DocID
+	if _, err := st.Graph().AddEdgeWithSources("u", "a", "A", "uses", "B", []string{raw}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Graph().AddEdgeWithSources("u", "a", "C", "uses", "D", []string{raw, "keep"}); err != nil {
+		t.Fatal(err)
+	}
+
+	code, resp := forgetReq(t, srv, `{"text":"uses stepfun","user_id":"u","agent_id":"a"}`)
+	if code != 200 || resp["forgotten"] != float64(1) {
+		t.Fatalf("status %d, response %v", code, resp)
+	}
+	if resp["pages"] != float64(2) || resp["edges"] != float64(2) {
+		t.Errorf("response = %v, want pages 2 and edges 2", resp)
+	}
+	if _, ok := st.pages.Get(onlyPg.ID); ok {
+		t.Error("a page with nothing left was kept")
+	}
+	if d := st.GetMany([]string{onlyPg.DocID}); len(d) != 1 || d[0].Meta[metaSupersededHow] != howForgotten {
+		t.Errorf("emptied page doc not retired as forgotten: %+v", d)
+	}
+	got, _ := st.pages.Get(bothPg.ID)
+	if len(got.State) != 1 || got.State[0].Attr != "tool" {
+		t.Errorf("state = %+v, want only the tool entry", got.State)
+	}
+	for _, ev := range got.History {
+		if ev.Source == raw {
+			t.Errorf("forgotten event kept: %+v", ev)
+		}
+	}
+	if got.DocID == oldDoc {
+		t.Error("page doc was not replaced")
+	}
+	if d := st.GetMany([]string{oldDoc}); len(d) != 1 || !isSuperseded(d[0]) || d[0].Meta["superseded_by"] != got.DocID {
+		t.Errorf("old page doc not superseded by the new one: %+v", d)
+	}
+	if n := st.Graph().EdgeCount(); n != 1 {
+		t.Errorf("edges = %d, want 1", n)
+	}
+	// Restore brings the raw row back but not page entries or edges.
+	if n, err := st.Restore([]string{raw}); err != nil || n != 1 {
+		t.Fatalf("restore = %d, %v", n, err)
+	}
+	if again, _ := st.pages.Get(bothPg.ID); len(again.State) != 1 {
+		t.Errorf("restore rebuilt page state: %+v", again.State)
+	}
+	if n := st.Graph().EdgeCount(); n != 1 {
+		t.Errorf("restore rebuilt edges: %d", n)
+	}
+}

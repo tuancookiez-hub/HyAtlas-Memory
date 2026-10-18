@@ -573,7 +573,7 @@ if you depend on that. Every route is behind the Host/Origin guard described abo
 | `GET` | `/api/v1/graph-as-of` | Query: `ts` (unix seconds, default now), `n` (default 500), `user_id`, `agent_id`. Returns `nodes`, `relations` and `as_of`, as they were at `ts` (world validity and recording axes). |
 | `POST` or `DELETE` | `/api/v1/delete_all` | Query or body: `id`, `layer` (`*` = all), `user_id`, `agent_id`, `all` (`true`), `confirm` (`wipe-all`, the older spelling of `all`). Other methods return 405. A call with no scope (no `id`, `layer`, `user_id`, `agent_id`, or `all`) returns 400. Deleting one memory by `id` always works; a scoped delete (`layer`, `user_id`, `agent_id`) or `all` returns 403 unless the server runs with `HYATLAS_ADMIN=on`. Returns `deleted_count`. |
 | `POST` | `/api/v1/flush` | Writes the buffered doc index and usage counts to disk now and returns `{"ok": true}`. A clean stop does this itself; a launcher calls it before a hard kill. It changes no data, so it needs no admin switch. Other methods return 405. |
-| `POST` | `/api/v1/forget` | Body: `text` (required), `user_id`, `agent_id`, `reason`. Retires the owner's memory-tool raw rows with that text, and the rows derived from them, as `forgotten`. Returns `forgotten` and `derived` counts. See *Forget* below. |
+| `POST` | `/api/v1/forget` | Body: `text` (required), `user_id`, `agent_id`, `reason`. Retires the owner's memory-tool raw rows with that text, and the rows derived from them, as `forgotten`. Returns `forgotten`, `derived`, `pages` and `edges` counts. See *Forget* below. |
 | `POST` | `/api/v1/reprocess` | Body: `ids` (explicit raw IDs; extracted rows are re-extracted too), or `max` (default 200). Without `ids`, takes up to `max` raw rows that extraction has not reached, oldest first (by `ts`, then `id`). Extracted rows are dropped before the cut, so they do not use up `max`. Returns `reprocessed`, `failed`, `skipped`. `skipped` is 0 on both paths. In `lite` it extracts nothing: `skipped` is the number of rows it would have processed, and `note` says so. |
 | `GET` | `/api/v1/digest` | Slow-path state. Returns `digest_ok: true`, `runs`, `last`, `last_at`, `graph_nodes`, `graph_edges`. In `lite` or `pro` it returns `digest_ok: false` with a `reason`. |
 | `GET` | `/api/v1/now` | Query: `user_id`, `agent_id`. Returns `now`: the owner's Now page (`text`, `updated`) or `null`. |
@@ -796,10 +796,14 @@ no key until it is handed over again (or `HYATLAS_LLM_KEY` is set) and reports
 "reason": "..."}` retires what Hermes's memory tool wrote with that text. It matches
 the owner's raw rows whose `write_origin` is `memory_tool` and whose content equals
 the text after trimming spaces, then retires each one and every live row derived from
-it, as `forgotten`. The response is `{"forgotten": n, "derived": n}`. The Hermes
+it, as `forgotten`. It also clears the same raw ids from entity pages (state entries and
+history events; a page left empty is retired) and from graph edges (an edge with no
+other source is removed), and refreshes the Now page. The response is
+`{"forgotten": n, "derived": n, "pages": n, "edges": n}`. Restore brings the rows back,
+but not page entries or edges. The Hermes
 plugin sends it on a memory `replace` or `remove`, with the replaced entry as the
 text. It is not admin-gated because the retirement is reversible through
-`/api/v1/admin/restore`. The owner's alias IDs count: a row written under any ID of the
+`/api/v1/admin/restore` for the rows. The owner's alias IDs count: a row written under any ID of the
 person matches. Empty text is a 400, and a method other than POST is a 405.
 
 ### Maintenance (admin)

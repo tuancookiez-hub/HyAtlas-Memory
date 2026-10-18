@@ -132,6 +132,49 @@ func (s *Store) persistLocked() error {
 	return os.Rename(tmp, s.path)
 }
 
+// RemoveSources forgets the given raw ids as evidence. An edge whose sources are all
+// in ids is removed; an edge with other sources keeps them, drops the forgotten
+// ones and takes the first remaining as its Source. An edge with no sources is left
+// alone. It returns how many edges it removed and how many it trimmed, and writes
+// the file only when something changed. Nodes are kept, since another owner row
+// or a later write may still use them.
+func (s *Store) RemoveSources(ids map[string]bool) (removed, trimmed int, err error) {
+	if len(ids) == 0 {
+		return 0, 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := make([]Edge, 0, len(s.edges))
+	for _, e := range s.edges {
+		hit := false
+		var rest []string
+		for _, src := range e.Sources {
+			if ids[src] {
+				hit = true
+			} else {
+				rest = append(rest, src)
+			}
+		}
+		if !hit {
+			kept = append(kept, e)
+			continue
+		}
+		if len(rest) == 0 {
+			removed++
+			continue
+		}
+		e.Sources = rest
+		e.Source = rest[0]
+		trimmed++
+		kept = append(kept, e)
+	}
+	if removed == 0 && trimmed == 0 {
+		return 0, 0, nil
+	}
+	s.edges = kept
+	return removed, trimmed, s.persistLocked()
+}
+
 // UpsertNode adds or updates a node. Returns the node id (stable).
 func (s *Store) UpsertNode(node Node) (string, error) {
 	s.mu.Lock()

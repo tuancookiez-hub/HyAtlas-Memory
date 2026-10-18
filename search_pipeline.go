@@ -75,6 +75,9 @@ type searchHitJSON struct {
 	SeriesCount int `json:"series_count,omitempty"`
 	// SeriesDates are the days the recurring event happened, oldest first.
 	SeriesDates []string `json:"series_dates,omitempty"`
+	// Via says how a hit got in when the query did not find it: "link" for a fact
+	// brought in by a link, in which case Score is its own similarity to the query.
+	Via string `json:"via,omitempty"`
 }
 
 // searchLinkJSON is one link from a hit to another fact in the search response.
@@ -331,7 +334,7 @@ func sessionFactor(h SearchHit, sid string) float64 {
 // only applies when the search covers L3 facts.
 func (r *searchRun) admitLinkedFacts() {
 	if r.factsWanted {
-		r.hits = admitLinked(r.srv.store, r.hits, r.users, r.agentID, r.limit)
+		r.hits = admitLinked(r.srv.store, r.hits, r.users, r.agentID, r.limit, r.qv)
 	}
 }
 
@@ -412,7 +415,7 @@ func (r *searchRun) render() map[string]any {
 			Score: float64(h.Score), Layer: string(h.Layer), GmtCreated: gmtCreated(h.Meta["ts"]),
 			UserID: h.Meta["user_id"], AgentID: h.Meta["agent_id"],
 			EventDate: normalizeEventDate(h.Meta[metaEventAt]), History: history[h.ID],
-			Links: linksJSON(h.Meta), SeriesCount: seriesCount, SeriesDates: seriesDates})
+			Links: linksJSON(h.Meta), SeriesCount: seriesCount, SeriesDates: seriesDates, Via: h.Meta[metaVia]})
 	}
 	order := append([]string{"now"}, searchChannels...)
 	out := map[string]any{"memories": channels, "order": order}

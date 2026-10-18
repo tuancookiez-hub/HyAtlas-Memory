@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"slices"
 	"strings"
@@ -69,7 +70,41 @@ func (s *Server) handleForget(w http.ResponseWriter, r *http.Request) {
 		}
 		nDerived = n
 	}
-	jsonResponse(w, 200, map[string]any{"forgotten": nRaw, "derived": nDerived})
+	nPages, nEdges := s.forgetBeyondRows(raw, body.UserID, body.AgentID, nRaw+nDerived > 0)
+	jsonResponse(w, 200, map[string]any{"forgotten": nRaw, "derived": nDerived, "pages": nPages, "edges": nEdges})
+}
+
+// forgetBeyondRows clears what a forgotten raw row left outside the row store: the
+// entity-page entries and the graph edges that cite it, and then it asks for the Now
+// page to be rebuilt. It returns how many pages and edges it changed. Failures are
+// logged and never fail the request, because the rows are already retired. These
+// are not undone by a restore: a restored row comes back, its page entries and
+// edges do not. The refresh runs only when retired is true.
+func (s *Server) forgetBeyondRows(raw []string, userID, agentID string, retired bool) (pages, edges int) {
+	if len(raw) > 0 {
+		ids := make(map[string]bool, len(raw))
+		for _, id := range raw {
+			ids[id] = true
+		}
+		if s.store.pages != nil {
+			n, err := s.store.pages.ForgetSources(ids)
+			if err != nil {
+				log.Printf("forget: pages: %v", err)
+			}
+			pages = n
+		}
+		if g := s.store.Graph(); g != nil {
+			removed, trimmed, err := g.RemoveSources(ids)
+			if err != nil {
+				log.Printf("forget: graph: %v", err)
+			}
+			edges = removed + trimmed
+		}
+	}
+	if retired && s.now != nil {
+		s.now.Touch(userID, agentID)
+	}
+	return pages, edges
 }
 
 // forgetTargets finds the live raw rows that forget should retire and the live

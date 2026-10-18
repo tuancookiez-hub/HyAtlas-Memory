@@ -553,6 +553,75 @@ func (p *PageStore) reindex(pg Page) error {
 	return nil
 }
 
+// ForgetSources removes every state entry and history event whose Source is in ids,
+// the raw rows a forget retired, and returns how many pages changed. A changed page
+// is re-indexed like an Apply update (a new l8_entity document, the previous one
+// superseded, so it stays recoverable). A page left with no state and no history
+// is dropped, and its live document retired as forgotten. A restore of the raw row
+// does not bring page entries back.
+func (p *PageStore) ForgetSources(ids map[string]bool) (pages int, err error) {
+	if p == nil || len(ids) == 0 {
+		return 0, nil
+	}
+	p.applyMu.Lock()
+	defer p.applyMu.Unlock()
+
+	var snaps []Page
+	var emptied []Page
+	p.mu.Lock()
+	for id, pg := range p.pages {
+		state := make([]PageState, 0, len(pg.State))
+		for _, s := range pg.State {
+			if !ids[s.Source] {
+				state = append(state, s)
+			}
+		}
+		hist := make([]PageEvent, 0, len(pg.History))
+		for _, ev := range pg.History {
+			if !ids[ev.Source] {
+				hist = append(hist, ev)
+			}
+		}
+		if len(state) == len(pg.State) && len(hist) == len(pg.History) {
+			continue
+		}
+		pages++
+		p.invalidateNamesLocked(pg.UserID, pg.AgentID)
+		if len(state) == 0 && len(hist) == 0 {
+			emptied = append(emptied, clonePage(*pg))
+			delete(p.pages, id)
+			continue
+		}
+		pg.State, pg.History = state, hist
+		snaps = append(snaps, clonePage(*pg))
+	}
+	if pages > 0 {
+		err = p.persistLocked()
+	}
+	p.mu.Unlock()
+
+	for _, pg := range emptied {
+		if pg.DocID == "" {
+			continue
+		}
+		if _, e := p.store.retire([]string{pg.DocID}, Retire{How: howForgotten, Reason: defaultForgetReason}); e != nil {
+			log.Printf("pages: retire emptied page %s: %v", pg.ID, e)
+			if err == nil {
+				err = e
+			}
+		}
+	}
+	for _, snap := range snaps {
+		if e := p.reindex(snap); e != nil {
+			log.Printf("pages: reindex after forget %s: %v", snap.ID, e)
+			if err == nil {
+				err = e
+			}
+		}
+	}
+	return pages, err
+}
+
 // Repair re-indexes every page whose live document is missing, and returns how many
 // it wrote. The orchestrator calls it at startup, so pages whose documents were
 // removed (for example by delete_all) become searchable again without waiting for

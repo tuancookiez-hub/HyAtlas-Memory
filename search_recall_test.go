@@ -54,7 +54,7 @@ func TestAdmitLinkedBringsInMissedFact(t *testing.T) {
 	docs := st.GetMany([]string{src})
 	hits := []SearchHit{{ID: src, Content: "source fact", Score: 0.8, Layer: memory.L3Fact, Meta: docs[0].Meta},
 		{ID: "x1", Layer: memory.L3Fact}, {ID: "x2", Layer: memory.L3Fact}, {ID: "x3", Layer: memory.L3Fact}}
-	out := admitLinked(st, hits, []string{"u"}, "a", 4)
+	out := admitLinked(st, hits, []string{"u"}, "a", 4, nil)
 	if len(out) != 5 {
 		t.Fatalf("got %d hits, want 5: %v", len(out), out)
 	}
@@ -74,7 +74,7 @@ func TestAdmitLinkedBringsInMissedFact(t *testing.T) {
 		t.Errorf("linked fact at %d, want inside the first 4", found)
 	}
 	// An already present fact is not added twice.
-	if again := admitLinked(st, out, []string{"u"}, "a", 4); len(again) != len(out) {
+	if again := admitLinked(st, out, []string{"u"}, "a", 4, nil); len(again) != len(out) {
 		t.Errorf("repeat admit grew the list to %d", len(again))
 	}
 }
@@ -140,5 +140,36 @@ func TestSearchResponseCarriesChannelOrder(t *testing.T) {
 	}
 	if strings.Join(resp.Order, ",") != "now,pages,profile,proactive,experiences,normal" || len(resp.Memories) != 5 {
 		t.Errorf("order %v, %d channels", resp.Order, len(resp.Memories))
+	}
+}
+
+// A linked fact reports its own similarity to the query, not the score of the hit
+// that links to it, and is marked as having come in through a link.
+func TestAdmitLinkedUsesOwnScore(t *testing.T) {
+	st, _ := newPagesStore(t)
+	live := addOwned(t, st, memory.L3Fact, "the contrasting fact", "u", nil)
+	src := addOwned(t, st, memory.L3Fact, "source fact", "u", map[string]string{metaLinks: live + ":contrasts"})
+	qv, err := st.embed.Embed(st.ctx, "the contrasting fact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hits := []SearchHit{{ID: src, Content: "source fact", Score: 0.99, Layer: memory.L3Fact, Meta: st.GetMany([]string{src})[0].Meta}}
+	out := admitLinked(st, hits, []string{"u"}, "a", 4, qv)
+	if len(out) != 2 {
+		t.Fatalf("got %d hits, want 2", len(out))
+	}
+	linked := out[1]
+	if linked.ID != live || linked.Meta[metaVia] != viaLink {
+		t.Fatalf("linked hit = %+v", linked)
+	}
+	if linked.Score < 0.9 || linked.Score > 1.001 || linked.Score == 0.99 {
+		t.Errorf("linked score = %v, want its own cosine to the query (about 1)", linked.Score)
+	}
+	if out[0].Meta[metaVia] != "" {
+		t.Error("the query's own hit was marked as linked")
+	}
+	raw, err := json.Marshal(searchHitJSON{MemoryID: live, Via: linked.Meta[metaVia]})
+	if err != nil || !strings.Contains(string(raw), `"via":"link"`) {
+		t.Errorf("via missing from JSON: %s", raw)
 	}
 }

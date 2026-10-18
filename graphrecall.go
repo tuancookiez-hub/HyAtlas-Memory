@@ -9,6 +9,13 @@ import (
 	"github.com/tuancookiez-hub/hyatlas-v4/memory"
 )
 
+// metaVia is the Meta key of a search hit that records how the hit got into the
+// result when it was not found by the query itself; admitLinked sets it to viaLink.
+const metaVia = "via"
+
+// viaLink is the metaVia value of a fact that came in through a link.
+const viaLink = "link"
+
 // metaLinks is the metadata key holding a fact's links: comma-separated id:relation.
 const metaLinks = "links"
 
@@ -179,8 +186,8 @@ func parseLinks(s string) []factLink {
 // linkedFacts returns the live L3 facts with the given ids that belong to one of the
 // owners in users (any owner when users is empty) and to agentID when that is set. A
 // superseded row, a missing row and another owner's row are left out. The result keeps
-// the order of ids, each hit scored with score, and each Meta is a copy.
-func (s *MemoryStore) linkedFacts(ids []string, score float32, users []string, agentID string) []SearchHit {
+// the order of ids, each hit unscored (admitLinked scores it) and each Meta a copy.
+func (s *MemoryStore) linkedFacts(ids []string, users []string, agentID string) []SearchHit {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []SearchHit
@@ -198,8 +205,7 @@ func (s *MemoryStore) linkedFacts(ids []string, score float32, users []string, a
 		if agentID != "" && d.AgentID != agentID {
 			continue
 		}
-		out = append(out, SearchHit{ID: d.ID, Content: d.Content, Score: score,
-			Layer: memory.L3Fact, Meta: maps.Clone(d.Meta)})
+		out = append(out, SearchHit{ID: d.ID, Content: d.Content, Layer: memory.L3Fact, Meta: maps.Clone(d.Meta)})
 	}
 	return out
 }
@@ -207,8 +213,10 @@ func (s *MemoryStore) linkedFacts(ids []string, score float32, users []string, a
 // admitLinked adds up to linkedMax facts that the top limit hits link to and the query
 // itself missed. A linked fact needs no score floor, because the model linked it, and
 // it takes at most a third of the visible slots (placeWithin), after the query's own
-// best hits. Each is scored as the hit that links to it, and ranks in link order.
-func admitLinked(s *MemoryStore, hits []SearchHit, users []string, agentID string, limit int) []SearchHit {
+// best hits. Each reports its own cosine similarity to the query vector qv (0 when qv is
+// empty or the fact has no stored vector), never the score of the hit that links to it,
+// and is marked with metaVia = viaLink. It ranks in link order.
+func admitLinked(s *MemoryStore, hits []SearchHit, users []string, agentID string, limit int, qv []float32) []SearchHit {
 	if limit <= 0 {
 		return hits
 	}
@@ -227,11 +235,18 @@ func admitLinked(s *MemoryStore, hits []SearchHit, users []string, agentID strin
 				ids = append(ids, l.ID)
 			}
 		}
-		for _, e := range s.linkedFacts(ids, h.Score, users, agentID) {
+		for _, e := range s.linkedFacts(ids, users, agentID) {
 			if len(extras) >= linkedMax || have[e.ID] {
 				continue
 			}
 			have[e.ID] = true
+			if e.Meta == nil {
+				e.Meta = map[string]string{}
+			}
+			e.Meta[metaVia] = viaLink
+			if len(qv) > 0 {
+				e.Score = float32(cosineSim(qv, s.vectors([]string{e.ID})[e.ID]))
+			}
 			extras = append(extras, e)
 		}
 	}

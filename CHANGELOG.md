@@ -10,8 +10,10 @@ and stricter key handling.
 ### Added
 
 - **Forget.** `POST /api/v1/forget` retires the owner's memory-tool raw rows with a given
-  text, and every live row derived from them, as `forgotten`. It is reversible through
-  `/api/v1/admin/restore`, so it needs no admin switch. The Hermes plugin sends it when
+  text, and every live row derived from them, as `forgotten`. It also clears them from
+  entity pages, graph edges and the Now page. It is reversible through
+  `/api/v1/admin/restore`, so it needs no admin switch; restore brings back the rows but
+  not page entries or edges. The Hermes plugin sends it when
   Hermes's `memory` tool replaces or removes an entry (the old text arrives as
   `previous_content`); a replace then adds the new content as an add does. A remove with
   no old text does nothing.

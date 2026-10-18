@@ -354,3 +354,47 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// RemoveSources drops an edge whose only evidence is forgotten and trims one that
+// has other sources, making the first remaining source the primary.
+func TestRemoveSourcesRemovesAndTrims(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "g.json")
+	s, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddEdgeWithSources("u", "a", "A", "uses", "B", []string{"r1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddEdgeWithSources("u", "a", "C", "uses", "D", []string{"r1", "r2"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddEdgeWithSources("u", "a", "E", "uses", "F", []string{"r3"}); err != nil {
+		t.Fatal(err)
+	}
+	removed, trimmed, err := s.RemoveSources(map[string]bool{"r1": true})
+	if err != nil || removed != 1 || trimmed != 1 {
+		t.Fatalf("removed=%d trimmed=%d err=%v", removed, trimmed, err)
+	}
+	if s.EdgeCount() != 2 {
+		t.Fatalf("edges = %d, want 2", s.EdgeCount())
+	}
+	_, edges := s.Snapshot(0)
+	for _, e := range edges {
+		if len(e.Sources) == 0 || e.Sources[0] != e.Source {
+			t.Errorf("edge %+v lost its source", e)
+		}
+		for _, src := range e.Sources {
+			if src == "r1" {
+				t.Errorf("forgotten source kept: %+v", e)
+			}
+		}
+	}
+	again, err := New(path)
+	if err != nil || again.EdgeCount() != 2 {
+		t.Fatalf("reloaded edges = %d, err %v", again.EdgeCount(), err)
+	}
+	if r, tr, err := s.RemoveSources(map[string]bool{"nope": true}); err != nil || r != 0 || tr != 0 {
+		t.Errorf("no-op = %d %d %v", r, tr, err)
+	}
+}
