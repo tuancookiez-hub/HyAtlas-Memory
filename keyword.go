@@ -197,10 +197,87 @@ func keywordRequired(n int) int {
 	return int(math.Ceil(0.75 * float64(n)))
 }
 
-// bm25Rank scores docs against the distinct query terms with BM25 (k1 1.2, b 0.75),
-// keeps the documents that contain at least keywordRequired of them, and returns
-// them best first, ties broken by ID.
-func bm25Rank(query []string, docs []DocIndex) []keywordScore {
+// kwDoc is one indexed document: how often each term occurs in it, and how many terms
+// it has in all, which is the document length BM25 needs.
+type kwDoc struct {
+	content string
+	tf      map[string]int
+	n       int
+}
+
+// kwIndex is an inverted keyword index: for every term, the documents that contain it,
+// and for every document its term counts and length. The store keeps one over its live
+// rows, raw ones only when it is told to (see SetKeywordRaw), updated as rows are
+// written, replaced and deleted, so a search reads
+// the posting lists of its query terms instead of tokenising and stemming every row.
+// It is not safe for concurrent use; the store guards it with its own lock.
+type kwIndex struct {
+	docs map[string]kwDoc
+	post map[string]map[string]struct{}
+}
+
+// newKwIndex returns an empty keyword index.
+func newKwIndex() *kwIndex {
+	return &kwIndex{docs: map[string]kwDoc{}, post: map[string]map[string]struct{}{}}
+}
+
+// put indexes content under id, replacing what id held before. Content that is
+// unchanged since the last put is not tokenised again.
+func (k *kwIndex) put(id, content string) {
+	if cur, ok := k.docs[id]; ok {
+		if cur.content == content {
+			return
+		}
+		k.remove(id)
+	}
+	tokens := keywordTokens(content)
+	tf := make(map[string]int, len(tokens))
+	for _, t := range tokens {
+		tf[t]++
+	}
+	k.docs[id] = kwDoc{content: content, tf: tf, n: len(tokens)}
+	for t := range tf {
+		ids := k.post[t]
+		if ids == nil {
+			ids = map[string]struct{}{}
+			k.post[t] = ids
+		}
+		ids[id] = struct{}{}
+	}
+}
+
+// remove drops id from the index. An id that is not indexed is ignored.
+func (k *kwIndex) remove(id string) {
+	cur, ok := k.docs[id]
+	if !ok {
+		return
+	}
+	delete(k.docs, id)
+	for t := range cur.tf {
+		if ids := k.post[t]; ids != nil {
+			delete(ids, id)
+			if len(ids) == 0 {
+				delete(k.post, t)
+			}
+		}
+	}
+}
+
+// kwMatch is one ranked document of kwIndex.rank: its id, BM25 score, and how many
+// distinct query terms it contains.
+type kwMatch struct {
+	ID      string
+	Score   float64
+	Matched int
+}
+
+// rank scores the documents named by ids against the distinct query terms with BM25
+// (k1 1.2, b 0.75), keeps those that contain at least keywordRequired of them, and
+// returns them best first, ties broken by ID. The collection statistics (document
+// count, average length and each term's document frequency) are taken over ids alone,
+// so a search scoped to one owner scores as if the store held only that owner's rows.
+// Ids the index does not hold count as empty documents.
+func (k *kwIndex) rank(query []string, ids []string) []kwMatch {
 	seen := make(map[string]bool, len(query))
 	uniq := make([]string, 0, len(query))
 	for _, t := range query {
@@ -209,33 +286,32 @@ func bm25Rank(query []string, docs []DocIndex) []keywordScore {
 			uniq = append(uniq, t)
 		}
 	}
-	if len(uniq) == 0 || len(docs) == 0 {
+	if len(uniq) == 0 || len(ids) == 0 {
 		return nil
 	}
 
 	const k1, b = 1.2, 0.75
-	N := len(docs)
-	tokens := make([][]string, N)
-	tfs := make([]map[string]int, N)
-	df := make(map[string]int)
+	N := len(ids)
+	pos := make(map[string]int, N)
 	totalLen := 0
-	for i, d := range docs {
-		tokens[i] = keywordTokens(d.Content)
-		totalLen += len(tokens[i])
-		tf := make(map[string]int, len(tokens[i]))
-		for _, t := range tokens[i] {
-			tf[t]++
-		}
-		tfs[i] = tf
-		for _, t := range uniq {
-			if tf[t] > 0 {
-				df[t]++
-			}
-		}
+	for i, id := range ids {
+		pos[id] = i
+		totalLen += k.docs[id].n
 	}
 	avgdl := float64(totalLen) / float64(N)
 	if avgdl == 0 {
 		avgdl = 1
+	}
+	// Only the posting lists of the query terms are read.
+	df := make(map[string]int, len(uniq))
+	matched := make(map[string]int)
+	for _, t := range uniq {
+		for id := range k.post[t] {
+			if _, in := pos[id]; in {
+				df[t]++
+				matched[id]++
+			}
+		}
 	}
 	idf := make(map[string]float64, len(uniq))
 	for _, t := range uniq {
@@ -244,29 +320,50 @@ func bm25Rank(query []string, docs []DocIndex) []keywordScore {
 	}
 
 	need := keywordRequired(len(uniq))
-	var out []keywordScore
-	for i, d := range docs {
-		dl := float64(len(tokens[i]))
+	var out []kwMatch
+	for id, m := range matched {
+		if m < need {
+			continue
+		}
+		doc := k.docs[id]
+		dl := float64(doc.n)
 		score := 0.0
-		matched := 0
 		for _, t := range uniq {
-			tf := float64(tfs[i][t])
+			tf := float64(doc.tf[t])
 			if tf == 0 {
 				continue
 			}
-			matched++
 			score += idf[t] * (tf * (k1 + 1)) / (tf + k1*(1-b+b*dl/avgdl))
 		}
-		if matched >= need {
-			out = append(out, keywordScore{Doc: d, Score: score, Matched: matched})
-		}
+		out = append(out, kwMatch{ID: id, Score: score, Matched: m})
 	}
-	sort.SliceStable(out, func(i, j int) bool {
+	sort.Slice(out, func(i, j int) bool {
 		if out[i].Score != out[j].Score {
 			return out[i].Score > out[j].Score
 		}
-		return out[i].Doc.ID < out[j].Doc.ID
+		return out[i].ID < out[j].ID
 	})
+	return out
+}
+
+// bm25Rank scores docs against the query with BM25 and keeps the documents that
+// contain at least keywordRequired of its distinct terms, best first, ties broken by
+// ID. It indexes docs on the spot, so it suits tests and one-off ranking of a small
+// set of rows; a search over the store's live rows uses the store's own index.
+func bm25Rank(query []string, docs []DocIndex) []keywordScore {
+	idx := newKwIndex()
+	ids := make([]string, 0, len(docs))
+	byID := make(map[string]DocIndex, len(docs))
+	for _, d := range docs {
+		idx.put(d.ID, d.Content)
+		ids = append(ids, d.ID)
+		byID[d.ID] = d
+	}
+	matches := idx.rank(query, ids)
+	out := make([]keywordScore, 0, len(matches))
+	for _, m := range matches {
+		out = append(out, keywordScore{Doc: byID[m.ID], Score: m.Score, Matched: m.Matched})
+	}
 	return out
 }
 
@@ -291,11 +388,34 @@ func cosineSim(a, b []float32) float64 {
 
 // KeywordSearch finds live memories by their words rather than their meaning, which
 // catches exact names and identifiers an embedding blurs. Raw (L2) rows are left out
-// unless layer asks for them. userIDs, when given, restricts to those owners plus
+// unless layer asks for them (a server that extracts passes includeRaw false; see
+// keywordSearch). userIDs, when given, restricts to those owners plus
 // rows with no owner at all, and agentID, when set, to that agent. Each hit's Score is its cosine similarity to the
 // query, so it reads like a vector hit; it is 0 when that cannot be computed. It does
 // not count toward the search counter, because the caller's search already does.
 func (s *MemoryStore) KeywordSearch(query string, limit int, layer memory.Layer, userIDs []string, agentID string) ([]SearchHit, error) {
+	if len(keywordTokens(query)) == 0 {
+		return nil, nil
+	}
+	qv, err := s.embed.Embed(s.ctx, query)
+	if err != nil {
+		qv = nil
+	}
+	return s.KeywordSearchVec(query, qv, limit, layer, userIDs, agentID)
+}
+
+// KeywordSearchVec is KeywordSearch with the query already embedded, so a caller that
+// holds the query vector does not embed it again. A nil qv gives every hit a score of 0.
+func (s *MemoryStore) KeywordSearchVec(query string, qv []float32, limit int, layer memory.Layer, userIDs []string, agentID string) ([]SearchHit, error) {
+	return s.keywordSearch(query, qv, limit, layer, userIDs, agentID, false)
+}
+
+// keywordSearch is KeywordSearchVec with a switch for raw rows. With includeRaw true,
+// a search over all layers ranks L2 raw rows with the rest; a server in lite mode sets
+// it, because raw rows are all lite stores and an identifier would otherwise find
+// nothing. With it false a search over all layers leaves them out, so the rankings of
+// the modes that extract do not change.
+func (s *MemoryStore) keywordSearch(query string, qv []float32, limit int, layer memory.Layer, userIDs []string, agentID string, includeRaw bool) ([]SearchHit, error) {
 	if limit <= 0 {
 		limit = 5
 	}
@@ -311,8 +431,14 @@ func (s *MemoryStore) KeywordSearch(query string, limit int, layer memory.Layer,
 		}
 	}
 
-	var docs []DocIndex
+	// Rows are chosen under the read lock without tokenising any of them: the ids that
+	// pass the layer, superseded and owner filters are ranked from the inverted index.
+	var ranked []keywordScore
 	s.mu.RLock()
+	var ids []string
+	// Raw rows the store keeps out of its keyword index (keywordRaw false) are ranked
+	// on the fly below, as before the index existed.
+	var rawDocs []DocIndex
 	for _, d := range s.index {
 		if isSuperseded(d) {
 			continue
@@ -321,7 +447,7 @@ func (s *MemoryStore) KeywordSearch(query string, limit int, layer memory.Layer,
 			if d.Layer != string(layer) {
 				continue
 			}
-		} else if d.Layer == string(memory.L2Raw) {
+		} else if d.Layer == string(memory.L2Raw) && !includeRaw {
 			continue
 		}
 		// A row with no owner at all predates owner tracking; under an owner filter
@@ -333,18 +459,33 @@ func (s *MemoryStore) KeywordSearch(query string, limit int, layer memory.Layer,
 		if agentID != "" && d.AgentID != agentID && !(len(owners) > 0 && ownerless) {
 			continue
 		}
-		docs = append(docs, d)
+		if d.Layer == string(memory.L2Raw) && !s.keywordRaw {
+			rawDocs = append(rawDocs, d)
+			continue
+		}
+		ids = append(ids, d.ID)
+	}
+	matches := s.kw.rank(q, ids)
+	if len(rawDocs) > 0 {
+		for _, r := range bm25Rank(q, rawDocs) {
+			matches = append(matches, kwMatch{ID: r.Doc.ID, Score: r.Score, Matched: r.Matched})
+		}
+		sort.Slice(matches, func(i, j int) bool {
+			if matches[i].Score != matches[j].Score {
+				return matches[i].Score > matches[j].Score
+			}
+			return matches[i].ID < matches[j].ID
+		})
+	}
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	for _, m := range matches {
+		ranked = append(ranked, keywordScore{Doc: s.index[m.ID], Score: m.Score, Matched: m.Matched})
 	}
 	s.mu.RUnlock()
-
-	ranked := bm25Rank(q, docs)
 	if len(ranked) > limit {
 		ranked = ranked[:limit]
-	}
-
-	qv, err := s.embed.Embed(s.ctx, query)
-	if err != nil {
-		qv = nil
 	}
 
 	hits := make([]SearchHit, 0, len(ranked))

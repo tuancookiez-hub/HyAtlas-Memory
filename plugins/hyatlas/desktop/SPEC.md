@@ -45,7 +45,7 @@ A fifth tab — toggle **List / Spatial** in the header. Spatial view is the tem
 
 ### 3.1 What a HyAtlas memory becomes on the map
 
-Every memory in HyAtlas v4 has:
+Every memory in HyAtlas has:
 - `id` (string)
 - `content` (text)
 - `layer` (L0..L7)
@@ -251,7 +251,7 @@ This is optional for v1 — the radial placement of L5 nodes by timestamp alread
 - Render loop: same rAF cap at 30fps, same pause-on-blur
 
 ### Different from starmap
-- Data source: HyAtlas v4 (L0..L7) instead of memory+skill
+- Data source: HyAtlas (L1..L8) instead of memory+skill
 - 8 layer kinds instead of 2 — more glyphs
 - 5–12 rings instead of fixed 4
 - Bitemporal scrubber (when server supports it) instead of just timestamp

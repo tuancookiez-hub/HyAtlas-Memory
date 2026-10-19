@@ -10,8 +10,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -101,15 +101,22 @@ type Drop struct {
 }
 
 // UnmarshalJSON accepts a drop object or, from a model that ignores the format, a
-// bare id string, which carries no reason and so is not applied.
+// bare id, which carries no reason and so is not applied. It never fails: a field
+// of the wrong type is empty, and any other shape gives an empty Drop that the
+// consolidation pass skips, so the rest of the reply survives.
 func (d *Drop) UnmarshalJSON(b []byte) error {
-	var id string
-	if err := json.Unmarshal(b, &id); err == nil {
-		*d = Drop{ID: id}
+	*d = Drop{}
+	var obj struct {
+		ID     json.RawMessage `json:"id"`
+		Reason json.RawMessage `json:"reason"`
+	}
+	if err := json.Unmarshal(b, &obj); err != nil {
+		d.ID = looseString(b)
 		return nil
 	}
-	type plain Drop
-	return json.Unmarshal(b, (*plain)(d))
+	d.ID = looseString(obj.ID)
+	d.Reason = looseString(obj.Reason)
+	return nil
 }
 
 // CitedRelation is an L5 edge plus the fact IDs that evidence it. Unlike the
@@ -178,8 +185,10 @@ type Report struct {
 	Dropped int `json:"dropped"`
 	// KeptOffTopic counts facts a merge named that were left live because the
 	// merged text was not about them (see mergeMinSimilarity).
-	KeptOffTopic int      `json:"kept_off_topic"`
-	Schemas      int      `json:"schemas"`
+	KeptOffTopic int `json:"kept_off_topic"`
+	Schemas      int `json:"schemas"`
+	// CrossSchemas counts the cross-topic schemas the end-of-pass cross-topic pass wrote.
+	CrossSchemas int      `json:"cross_schemas"`
 	Arc          bool     `json:"arc"`
 	PrunedRaw    int      `json:"pruned_raw"`
 	Protected    int      `json:"protected_raw"`
@@ -194,6 +203,9 @@ type Report struct {
 type consolidateState struct {
 	Cursor   int                       `json:"cursor"`
 	Clusters map[string]*ownerClusters `json:"clusters,omitempty"`
+	// CrossRan is when each owner's cross-topic pass last ran (RFC 3339), so a
+	// restart does not run it early.
+	CrossRan map[string]string `json:"cross_ran,omitempty"`
 }
 
 // ownerClusters is one owner's stored clustering. Built is when the clusters were
@@ -219,7 +231,7 @@ type clusterState struct {
 	Fails   int      `json:"fails,omitempty"`
 	FailFP  string   `json:"fail_fp,omitempty"`
 	// FailedAt is when the last counted failure happened (RFC 3339). A cluster left
-	// alone after maxWindowFails is tried again once failCooldown has passed.
+	// alone after maxClusterFails is tried again once failCooldown has passed.
 	FailedAt string `json:"failed_at,omitempty"`
 }
 
@@ -228,7 +240,7 @@ func (cs *clusterState) fp() string { return idsFingerprint(cs.FactIDs) }
 
 // due reports whether the cluster needs a call: it holds at least two facts (one
 // fact has nothing to be reconciled against), its membership differs from the last
-// successful call, and it has not failed maxWindowFails times on this membership
+// successful call, and it has not failed maxClusterFails times on this membership
 // within the last failCooldown.
 func (cs *clusterState) due() bool {
 	if len(cs.FactIDs) < 2 {
@@ -238,7 +250,7 @@ func (cs *clusterState) due() bool {
 	if fp == cs.DoneFP {
 		return false
 	}
-	if cs.Fails >= maxWindowFails && cs.FailFP == fp {
+	if cs.Fails >= maxClusterFails && cs.FailFP == fp {
 		// Left alone, but not forever: a quiet cluster's membership may never change,
 		// and the failures may have been the model's bad day rather than the cluster.
 		at, err := time.Parse(time.RFC3339, cs.FailedAt)
@@ -247,12 +259,12 @@ func (cs *clusterState) due() bool {
 	return true
 }
 
-// maxWindowFails is how many consecutive failed calls on one unchanged cluster are
+// maxClusterFails is how many consecutive failed calls on one unchanged cluster are
 // tolerated before it is left alone (until its membership changes, or failCooldown
 // passes), so one bad cluster cannot re-spend an LLM call on every pass.
-const maxWindowFails = 3
+const maxClusterFails = 3
 
-// failCooldown is how long a cluster left alone after maxWindowFails waits before
+// failCooldown is how long a cluster left alone after maxClusterFails waits before
 // it is tried again with the same members.
 const failCooldown = 24 * time.Hour
 
@@ -289,6 +301,10 @@ type Consolidator struct {
 	// HYATLAS_CONSOLIDATE_GRAPH is off, which leaves ultra with six layers.
 	graph bool
 
+	// wg tracks the Run loop started by Start, so a shutdown can wait for a pass that
+	// is still writing (see Wait).
+	wg sync.WaitGroup
+
 	// gate makes a pass single-flight. The ticker and a manual POST /digest can
 	// both ask for one, and two passes over the same batch would duplicate the
 	// LLM spend and race each other's merges and edge writes.
@@ -300,18 +316,17 @@ type Consolidator struct {
 	// statePath.
 	clusters  map[string]*ownerClusters
 	cursor    int
+	crossRan  map[string]string
 	stateMu   sync.Mutex
 	statePath string
+
+	// crossEvery is the least time between two cross-topic passes for one owner;
+	// zero turns the pass off. It is read from HYATLAS_CROSS_SCHEMA_EVERY.
+	crossEvery time.Duration
 
 	// writeMu serialises the schema and arc writes of concurrent calls, so two
 	// calls for one owner cannot both write the same schema or leave two live arcs.
 	writeMu sync.Mutex
-
-	// aliases maps a user ID to every ID of the same person (HYATLAS_USER_ALIASES),
-	// as the server's search does. A person's facts are consolidated as one owner,
-	// so a contradiction between facts written under two of their IDs meets in one
-	// call. Set once with SetAliases before the first pass; nil means no aliases.
-	aliases map[string][]string
 
 	// durations holds the most recent successful call times (guarded by stateMu),
 	// so callBudget can tell how long a call really takes on this model.
@@ -335,22 +350,20 @@ func NewConsolidator(store *MemoryStore, llm *LLMClient, every, retention time.D
 	if batch <= 0 {
 		batch = defaultBatch
 	}
-	catchup := parseDuration("HYATLAS_CONSOLIDATE_CATCHUP", defaultCatchup)
+	catchup := envDuration("HYATLAS_CONSOLIDATE_CATCHUP", defaultCatchup)
 	if catchup <= 0 {
 		log.Printf("HYATLAS_CONSOLIDATE_CATCHUP must be positive; using %s", defaultCatchup)
 		catchup = defaultCatchup
 	}
-	recluster := parseDuration("HYATLAS_CONSOLIDATE_RECLUSTER", 0)
-	if recluster < 0 {
-		recluster = 0
-	}
+	recluster := envDuration("HYATLAS_CONSOLIDATE_RECLUSTER", 0)
 	parallel := envInt("HYATLAS_CONSOLIDATE_PARALLEL", defaultParallel)
 	if parallel > maxParallel {
 		parallel = maxParallel
 	}
 	c := &Consolidator{store: store, llm: llm, every: every, retention: retention, batch: batch,
 		graph: true, clusters: map[string]*ownerClusters{},
-		catchup: catchup, recluster: recluster, parallel: parallel}
+		catchup: catchup, recluster: recluster, parallel: parallel,
+		crossEvery: envDuration(crossSchemaEveryKey, defaultCrossSchemaEvery), crossRan: map[string]string{}}
 	if store != nil && store.indexPath != "" {
 		c.statePath = filepath.Join(filepath.Dir(store.indexPath), consolidateStateFile)
 	}
@@ -358,22 +371,33 @@ func NewConsolidator(store *MemoryStore, llm *LLMClient, every, retention time.D
 	return c
 }
 
-// SetAliases gives the consolidator the server's alias groups (see aliases). Call
-// it before Run starts.
-func (c *Consolidator) SetAliases(m map[string][]string) { c.aliases = m }
-
-// groupOf is every user ID of the person behind user, user first when there are no
-// aliases.
-func (c *Consolidator) groupOf(user string) []string {
-	if g := c.aliases[user]; len(g) > 0 {
-		return g
+// SetAliases gives the store the server's alias groups, which the consolidator reads
+// through it (see MemoryStore.SetAliases). A person's facts are consolidated as one
+// owner, so a contradiction between facts written under two of their IDs meets in one
+// call. Call it before Run starts; it does nothing without a store.
+func (c *Consolidator) SetAliases(m map[string][]string) {
+	if c.store != nil {
+		c.store.SetAliases(m)
 	}
-	return []string{user}
+}
+
+// groupOf is every user ID of the person behind user, user first; just user when
+// there are no aliases.
+func (c *Consolidator) groupOf(user string) []string {
+	if c.store == nil {
+		return []string{user}
+	}
+	return c.store.owners(user)
 }
 
 // canonical is the ID a person's facts are consolidated under: the first ID of
 // their alias group, the same for every ID in it.
-func (c *Consolidator) canonical(user string) string { return c.groupOf(user)[0] }
+func (c *Consolidator) canonical(user string) string {
+	if c.store == nil {
+		return user
+	}
+	return c.store.canonicalOwner(user)
+}
 
 // groupOwners groups facts by owner like groupByOwner, with each user ID replaced
 // by its canonical alias, so one person's IDs form one owner.
@@ -430,6 +454,29 @@ func (c *Consolidator) Stats() (runs int, last *Report, at time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.ran, c.last, c.lastAt
+}
+
+// Start runs the loop in a goroutine that Wait can wait for. It does nothing on a nil
+// Consolidator.
+func (c *Consolidator) Start(ctx context.Context) {
+	if c == nil {
+		return
+	}
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.Run(ctx)
+	}()
+}
+
+// Wait blocks until the loop started by Start has stopped or timeout passes, and
+// reports whether it stopped. A shutdown cancels the loop's context first, which also
+// ends the pass in progress. A nil Consolidator, or one never started, returns true.
+func (c *Consolidator) Wait(timeout time.Duration) bool {
+	if c == nil {
+		return true
+	}
+	return waitTimed(&c.wg, timeout)
 }
 
 // Run drives the passes until ctx is cancelled. Called as a goroutine only in
@@ -642,6 +689,10 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 		rep.Errors = append(rep.Errors, "state: "+err.Error())
 	}
 
+	// The cross-topic pass looks across the schemas the clusters just wrote. It is
+	// due at most once per owner per crossEvery, so most passes make no call here.
+	c.crossSchemaPass(ctx, owners, rep)
+
 	// Raw decay runs once per pass. Its citation guard already reads every
 	// owner's edges and facts, so it is not split by scope.
 	pruned, protected := c.decayRaw()
@@ -653,7 +704,7 @@ func (c *Consolidator) Once(ctx context.Context) (*Report, error) {
 // more calls failed and none succeeded. Then the model or provider was down (an
 // outage, an expired key, a WAF block), not the clusters; with catch-up passes every
 // few minutes, counting those would let one bad hour use up every cluster's
-// maxWindowFails and leave the backlog untouched. A pass with a single call cannot
+// maxClusterFails and leave the backlog untouched. A pass with a single call cannot
 // tell the two apart, so a lone failure is charged; failCooldown bounds the cost if
 // it was an outage after all.
 func (c *Consolidator) countFailures(jobs []*clusterJob, rep *Report) {
@@ -686,7 +737,7 @@ func (c *Consolidator) countFailures(jobs []*clusterJob, rep *Report) {
 			cs.Fails, cs.FailFP = 1, j.fp
 		}
 		cs.FailedAt = now
-		if cs.Fails >= maxWindowFails {
+		if cs.Fails >= maxClusterFails {
 			rep.Errors = append(rep.Errors, fmt.Sprintf(
 				"%s: cluster %s failed %d passes in a row; skipped until its facts change or %s passes",
 				j.owner, cs.ID, cs.Fails, failCooldown))
@@ -830,7 +881,7 @@ func (c *Consolidator) liveMembers(ids []string) []DocIndex {
 // live plus the facts the call wrote, and DoneFP follows. A fact that arrived
 // during the call is in neither, so it is assigned on the next sync and the
 // cluster is due again. On failure Fails counts up on the same membership; at
-// maxWindowFails the cluster is left until its membership changes. A call the
+// maxClusterFails the cluster is left until its membership changes. A call the
 // deadline cut off after earlier calls had spent the pass is not the cluster's
 // fault, so it counts as nothing and the cluster stays pending.
 func (c *Consolidator) runCluster(ctx context.Context, j *clusterJob, rep *Report, release func()) {
@@ -893,13 +944,14 @@ func (r *Report) absorb(s *Report) {
 	r.Errors = append(r.Errors, s.Errors...)
 }
 
-// consolidateScope is one LLM pass over a window of a single owner's facts. It
+// consolidateScope is one LLM pass over one cluster of a single owner's facts. It
 // applies the merges, drops, L5 edges, schemas and arc the model returned. facts
-// is that window, and everything written carries the owner's scope.
+// is that cluster, and everything written carries the owner's scope.
 //
 // Only IDs in facts are acted on. An ID that belongs to another owner, or one the
 // model invented, fails the live-set guard and changes nothing. It reports whether
-// the owner's watermark may advance, and returns the IDs of the facts it wrote.
+// the cluster's call succeeded (so its DoneFP may be set), and returns the IDs of
+// the facts it wrote.
 //
 // Failures are fatal or soft. Fatal ones (the LLM call or its reply, a merge's
 // replacement write, and supersedes of merged or dropped facts) make the owner
@@ -927,12 +979,12 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		cons.Knowledge, cons.Arc = nil, nil
 	}
 
-	live := liveIDs(facts)
+	live := idSetOf(facts)
 	// batch is the immutable membership of what the LLM was shown. Evidence is
 	// resolved against this rather than `live`, because merges delete IDs from
 	// `live` — two facts merged into one would otherwise stop corroborating the
 	// edge that cited them, silently dropping it.
-	batch := liveIDs(facts)
+	batch := idSetOf(facts)
 	byID := byIDOf(facts)
 	now := time.Now().UTC().Format(time.RFC3339)
 	var created []string
@@ -986,7 +1038,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		dropped[d.ID] = true
 		drops = append(drops, d.ID)
 		// An empty supersededBy means dropped rather than replaced.
-		if _, e := c.store.supersedeWith([]string{d.ID}, "", map[string]string{"drop_reason": truncate(reason, 200)}); e != nil && dropErr == nil {
+		if _, e := c.store.retire([]string{d.ID}, Retire{How: howDropped, Reason: utf8Trunc(reason, 200)}); e != nil && dropErr == nil {
 			dropErr = e
 		}
 	}
@@ -1098,12 +1150,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		// Evidence counts only facts the model was shown, each once. Two or more
 		// are needed to call it a pattern; with fewer, the schema is still written
 		// without the key, since losing the pattern would be worse.
-		var evidence []string
-		for _, fid := range sc.Evidence {
-			if batch[fid] && !containsID(evidence, fid) {
-				evidence = append(evidence, fid)
-			}
-		}
+		evidence := shown(sc.Evidence, func(id string) bool { return batch[id] })
 		if len(evidence) >= 2 {
 			meta["evidence"] = strings.Join(evidence, ",")
 		}
@@ -1114,12 +1161,12 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		rep.Schemas++
 		var retire []string
 		for _, old := range sc.Supersedes {
-			if existing[old] && old != id && !containsID(retire, old) {
+			if existing[old] && old != id && !slices.Contains(retire, old) {
 				retire = append(retire, old)
 			}
 		}
 		if len(retire) > 0 {
-			if _, err := c.store.Supersede(retire, id); err != nil {
+			if _, err := c.store.retire(retire, Retire{By: id, How: howUpdated}); err != nil {
 				soft("schema supersede: " + err.Error())
 			}
 		}
@@ -1144,7 +1191,7 @@ func (c *Consolidator) consolidateScope(ctx context.Context, owner scopeKey, fac
 		} else {
 			rep.Arc = true
 			if len(prevArcs) > 0 {
-				if _, err := c.store.Supersede(prevArcs, arcID); err != nil {
+				if _, err := c.store.retire(prevArcs, Retire{By: arcID, How: howUpdated}); err != nil {
 					soft("arc supersede: " + err.Error())
 				}
 			}
@@ -1200,7 +1247,7 @@ func (c *Consolidator) applyMerge(owner scopeKey, text string, vec []float32, la
 	for i, d := range absorbed {
 		ids[i] = d.ID
 	}
-	_, supErr := c.store.supersedeWith(ids, mergedID, map[string]string{metaSupersededHow: howMerged})
+	_, supErr := c.store.retire(ids, Retire{By: mergedID, How: howMerged})
 
 	// Count what the store marked, not what was asked for.
 	marked := c.supersededOf(ids)
@@ -1209,7 +1256,7 @@ func (c *Consolidator) applyMerge(owner scopeKey, text string, vec []float32, la
 	}
 	rep.Absorbed += len(marked)
 	if len(marked) == 0 {
-		_, retractErr := c.store.supersedeWith([]string{mergedID}, "", map[string]string{"drop_reason": reasonMergeRetracted})
+		_, retractErr := c.store.retire([]string{mergedID}, Retire{How: howDropped, Reason: reasonMergeRetracted})
 		msg := fmt.Sprintf("merge supersede: 0 of %d absorbed facts marked; replacement retracted", len(ids))
 		if retractErr != nil {
 			msg += ": retract: " + retractErr.Error()
@@ -1338,7 +1385,7 @@ func (c *Consolidator) schemaKnown(owner scopeKey, pattern string, replaces []st
 		return false, v
 	}
 	for _, h := range hits {
-		if float64(h.Score) >= schemaDupScore && !containsID(replaces, h.ID) {
+		if float64(h.Score) >= schemaDupScore && !slices.Contains(replaces, h.ID) {
 			return true, v
 		}
 	}
@@ -1346,7 +1393,7 @@ func (c *Consolidator) schemaKnown(owner scopeKey, pattern string, replaces []st
 }
 
 // retireMirrors supersedes the L1 Profile rows that mirror superseded
-// user_preferences facts. promoteExtraction writes such a fact to L1 with the
+// user_preferences facts. promoteExtractionCtx writes such a fact to L1 with the
 // same source_id and content, which is how the mirror is found.
 func (c *Consolidator) retireMirrors(docs []DocIndex, by string) error {
 	var ids []string
@@ -1365,7 +1412,11 @@ func (c *Consolidator) retireMirrors(docs []DocIndex, by string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	_, err := c.store.Supersede(ids, by)
+	how := howMerged
+	if by == "" {
+		how = howDropped
+	}
+	_, err := c.store.retire(ids, Retire{By: by, How: how})
 	return err
 }
 
@@ -1395,9 +1446,7 @@ func (c *Consolidator) liveOf(layer memory.Layer, owner scopeKey) []DocIndex {
 
 // listAllLive returns every live doc in a layer, not one page of it.
 func (c *Consolidator) listAllLive(layer memory.Layer) []DocIndex {
-	_, total := c.store.List(layer, "", "", 1, 0, false)
-	docs, _ := c.store.List(layer, "", "", total, 0, false)
-	return docs
+	return c.store.liveNewestFirst(layer)
 }
 
 func (c *Consolidator) finish(rep *Report, start time.Time) *Report {
@@ -1425,6 +1474,9 @@ func (c *Consolidator) loadState() {
 		return
 	}
 	c.cursor = st.Cursor
+	for key, at := range st.CrossRan {
+		c.crossRan[key] = at
+	}
 	for key, oc := range st.Clusters {
 		if oc != nil {
 			c.clusters[key] = oc
@@ -1438,7 +1490,7 @@ func (c *Consolidator) saveState() error {
 	if c.statePath == "" {
 		return nil
 	}
-	b, err := json.MarshalIndent(consolidateState{Cursor: c.cursor, Clusters: c.clusters}, "", "  ")
+	b, err := json.MarshalIndent(consolidateState{Cursor: c.cursor, Clusters: c.clusters, CrossRan: c.crossRan}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -1453,9 +1505,11 @@ func (c *Consolidator) saveState() error {
 }
 
 // decayRaw removes old L2 raw memories, but never one that a live L5 edge
-// cites. Every graph edge stores its source memory IDs as evidence, so deleting
-// a cited row would leave the knowledge graph pointing at a memory that no
-// longer exists — a dangling citation is worse than the disk space it saves.
+// cites, and never one that has not been extracted yet. Every graph edge stores
+// its source memory IDs as evidence, so deleting a cited row would leave the
+// knowledge graph pointing at a memory that no longer exists — a dangling
+// citation is worse than the disk space it saves. An unextracted row has not
+// yet been read by the extraction pass, so deleting it would lose it for good.
 func (c *Consolidator) decayRaw() (pruned, protected int) {
 	if c.retention <= 0 {
 		return 0, 0
@@ -1474,25 +1528,25 @@ func (c *Consolidator) decayRaw() (pruned, protected int) {
 			}
 		}
 	}
-	// A raw row that a live fact was extracted from is still that fact's
-	// provenance, so it is protected too. Superseded facts do not count: they
-	// are history, and their raw rows age out with them.
-	for _, layer := range []memory.Layer{memory.L1Profile, memory.L3Fact} {
-		for _, f := range c.listAllLive(layer) {
-			for _, src := range sourcesOf(f) {
+	// A raw row that a live memory of any layer was extracted from or refers to is
+	// still that memory's provenance, so it is protected too. L2 is skipped, since
+	// its rows are what this pass decays. Superseded rows do not count: they are
+	// history, and their raw rows age out with them.
+	for _, layer := range memory.All() {
+		if layer == memory.L2Raw {
+			continue
+		}
+		for _, d := range c.listAllLive(layer) {
+			for _, src := range sourcesOf(d) {
 				cited[src] = true
 			}
 		}
 	}
 
-	// List's limit is a page size, not "all": 0 returns an empty slice rather
-	// than every row. Read the total first, then fetch that many, so the decay
-	// pass actually sees the history it is supposed to age out.
-	_, total := c.store.List(memory.L2Raw, "", "", 1, 0, false)
-	if total == 0 {
+	raw := c.listAllLive(memory.L2Raw)
+	if len(raw) == 0 {
 		return 0, 0
 	}
-	raw, _ := c.store.List(memory.L2Raw, "", "", total, 0, false)
 	old := make([]string, 0, 64)
 	for _, d := range raw {
 		ts, err := time.Parse(time.RFC3339, d.Ts)
@@ -1503,14 +1557,18 @@ func (c *Consolidator) decayRaw() (pruned, protected int) {
 			protected++
 			continue
 		}
+		if !d.Extracted {
+			continue
+		}
 		old = append(old, d.ID)
 	}
 	if len(old) == 0 {
 		return 0, protected
 	}
+	// A failed delete keeps its row for the next pass; the rows that did go count.
 	n, err := c.store.Delete(old, "", "", "")
 	if err != nil {
-		return 0, protected
+		log.Printf("raw decay: %v", err)
 	}
 	return n, protected
 }
@@ -1528,7 +1586,7 @@ func (c *Consolidator) ask(ctx context.Context, facts, schemas []DocIndex) (*Con
 		}
 		// date lets the model tell which of two contradicting facts is newer; the
 		// rule below says to keep the newer one, and without a date it had to guess.
-		fmt.Fprintf(&b, "- id=%s | turn=%s | date=%s | %s\n", f.ID, turn, factDate(f.Ts), truncate(f.Content, 400))
+		fmt.Fprintf(&b, "- id=%s | turn=%s | date=%s | %s\n", f.ID, turn, factDate(f.Ts), utf8Trunc(f.Content, 400))
 	}
 	var existing strings.Builder
 	if len(schemas) > 0 {
@@ -1537,7 +1595,7 @@ func (c *Consolidator) ask(ctx context.Context, facts, schemas []DocIndex) (*Con
 			if i >= maxPromptSchemas {
 				break
 			}
-			fmt.Fprintf(&existing, "- schema_id=%s | %s\n", sc.ID, truncate(sc.Content, 200))
+			fmt.Fprintf(&existing, "- schema_id=%s | %s\n", sc.ID, utf8Trunc(sc.Content, 200))
 		}
 	}
 	// The graph keys are asked for only when the graph is on, so a pass without it
@@ -1604,25 +1662,11 @@ func factDate(ts string) string {
 // parseConsolidation tolerantly extracts the JSON object, mirroring the
 // extraction parser: small models wrap objects in prose or fences.
 func parseConsolidation(content string) (*Consolidation, error) {
-	content = trimFences(content)
 	var cons Consolidation
-	if err := json.Unmarshal([]byte(content), &cons); err == nil {
-		return &cons, nil
-	}
-	start, end := strings.Index(content, "{"), strings.LastIndex(content, "}")
-	if start == -1 || end <= start {
-		return nil, fmt.Errorf("consolidation parse failed (raw %.80s)", content)
-	}
-	if err := json.Unmarshal([]byte(content[start:end+1]), &cons); err != nil {
-		return nil, err
+	if err := decodeLenient(content, &cons); err != nil {
+		return nil, fmt.Errorf("consolidation parse failed: %w", err)
 	}
 	return &cons, nil
-}
-
-// groupByOwner splits facts by owner. The owners come back in a fixed sorted
-// order, so the pass order is reproducible before the cursor rotates it.
-func groupByOwner(facts []DocIndex) (map[scopeKey][]DocIndex, []scopeKey) {
-	return groupByOwnerWith(facts, func(user string) string { return user })
 }
 
 // groupByOwnerWith is groupByOwner with each user ID mapped through user first, so
@@ -1646,17 +1690,9 @@ func groupByOwnerWith(facts []DocIndex, user func(string) string) (map[scopeKey]
 	return byOwner, owners
 }
 
-// factsFingerprint identifies an owner's live facts by the IDs they hold. See
-// idsFingerprint.
-func factsFingerprint(facts []DocIndex) string {
-	return idsFingerprint(idsOf(facts))
-}
-
 // idsFingerprint is a hash of a set of fact IDs, taken over the sorted IDs. Any
-// add, remove or swap changes it, so a delete and an add in the same second
-// cannot collide the way a count and a newest timestamp could. A watermark written
-// before this format is a count@timestamp string, which never matches, so its
-// owner runs once.
+// add, remove or swap changes it, so a cluster's DoneFP no longer matches once its
+// membership changes.
 func idsFingerprint(ids []string) string {
 	s := append([]string(nil), ids...)
 	sort.Strings(s)
@@ -1687,14 +1723,9 @@ func idSetOf(facts []DocIndex) map[string]bool {
 }
 
 // sortNewestFirst orders an owner's facts by timestamp, newest first, then by ID,
-// so a window is the same set on every pass.
+// so clustering sees them in the same order on every pass.
 func sortNewestFirst(facts []DocIndex) {
-	sort.Slice(facts, func(i, j int) bool {
-		if facts[i].Ts != facts[j].Ts {
-			return facts[i].Ts > facts[j].Ts
-		}
-		return facts[i].ID > facts[j].ID
-	})
+	sort.Slice(facts, func(i, j int) bool { return newerFirst(facts[i], facts[j]) })
 }
 
 // normalizeText is the comparison key for schemas: case, runs of whitespace and
@@ -1704,28 +1735,11 @@ func normalizeText(s string) string {
 	return strings.Trim(s, " .,;:!?\"'`*-()[]")
 }
 
-func containsID(ids []string, id string) bool {
-	for _, v := range ids {
-		if v == id {
-			return true
-		}
-	}
-	return false
-}
-
 // byIDOf indexes the batch so evidence lookups do not rescan it.
 func byIDOf(facts []DocIndex) map[string]DocIndex {
 	m := make(map[string]DocIndex, len(facts))
 	for _, f := range facts {
 		m[f.ID] = f
-	}
-	return m
-}
-
-func liveIDs(facts []DocIndex) map[string]bool {
-	m := make(map[string]bool, len(facts))
-	for _, f := range facts {
-		m[f.ID] = true
 	}
 	return m
 }
@@ -1757,29 +1771,4 @@ func distinctSources(facts []DocIndex) []string {
 		}
 	}
 	return out
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
-}
-
-// parseDuration reads an env var as a duration, returning def when unset or
-// invalid. A typo must not silently disable the slow path.
-func parseDuration(key string, def time.Duration) time.Duration {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return def
-	}
-	if n, err := strconv.Atoi(v); err == nil {
-		return time.Duration(n) * time.Second
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		log.Printf("%s=%q is not a duration; using %s", key, v, def)
-		return def
-	}
-	return d
 }

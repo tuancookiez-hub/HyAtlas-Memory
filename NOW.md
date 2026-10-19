@@ -1,12 +1,24 @@
-# HyAtlas v4 — NOW
+# HyAtlas — NOW
 
-**v4.9.0** | 2026-10-18 | Release: tuancookiez-hub/HyAtlas-Memory
+**5.0.0 assembled locally, not released** | last release v4.9.0 (2026-10-18) | Release: tuancookiez-hub/HyAtlas-Memory
+
+## 5.0.0 (assembled locally, not released, not tagged, not pushed)
+A stable floor: the whole 4.8 and 4.9 code reviewed and tidied, then the gaps closed.
+Catch-up extraction for turns that were never extracted, admin-only bulk delete, clean
+shutdown with `/api/v1/flush`, a reversible forget mirrored from Hermes's memory tool
+replace and remove, reconcile links and recurring-event series, the current session's
+intentions first, a server-sent channel order, identifier search in lite, one alias rule
+in the store, a plain-text-only key file, and `share_llm_key` removed (Hermes catalog rule 11) with
+links and recurring-event series shown in recall.
+The `Version` constant, the plugin version and the changelog say 5.0.0; the install.sh
+default `HYATLAS_VERSION` stays at the last tag until 5.0.0 is cut. Next: the user's go
+for the push, the tag and the catalog re-pin.
 
 ## Running
 - Release: **v4.9.0** (2026-10-18), 3 release binaries. `Version` in server.go, `plugins/hyatlas/plugin.yaml`, the provider, the dashboard manifest and the install.sh default `HYATLAS_VERSION` all agree.
 - Install folder `F:\HyAtlas-Memory-Go` is a checkout of `main`, started by the user with `hyatlas-go.ps1 start` (agents do not start or stop it). Personal settings (model, fallback, batch, owner aliases) live in the git-ignored `hyatlas-go.local.ps1`: longcat-2.5-preview with laguna-xs-2.1 as fallback.
 - The store was started fresh on 2026-10-18; the previous store is archived beside it as `data-archive-20261018`.
-- Plugin: `hyatlas` @ `%HERMES_HOME%\plugins\hyatlas\` with `share_llm_key` on, so Hermes hands its Nous key to the server over localhost. The catalog entry (NousResearch/hermes-agent) pins 4.7.3.
+- Plugin: `hyatlas` @ `%HERMES_HOME%\plugins\hyatlas\` (on 5.0.0 `share_llm_key` is gone; the extraction key is the user's own `llm_key`). The catalog entry (NousResearch/hermes-agent) pins 4.7.3.
 - Watchdog: hourly extraction-freshness cron (`hyatlas-extraction-watchdog`).
 
 ## 4.9.0 (released 2026-10-18)

@@ -314,7 +314,7 @@ func TestParseBacklogReplyDedupAndTolerance(t *testing.T) {
 	if err != nil || len(ans.outdated) != 1 || len(ans.pages) != 0 {
 		t.Errorf("ans=%+v err=%v", ans, err)
 	}
-	if got := dedupFacts(append(cluster, cluster[0])); len(got) != 2 {
+	if got := dedupDocs(append(cluster, cluster[0])); len(got) != 2 {
 		t.Errorf("dedupFacts = %d", len(got))
 	}
 }
@@ -442,5 +442,23 @@ func TestBacklogOnlyFailedDropsSupersededFacts(t *testing.T) {
 	if len(bodies) != 1 || strings.Contains(bodies[0], "id=v1") ||
 		!strings.Contains(bodies[0], "id=v2") || !strings.Contains(bodies[0], "id=v3") {
 		t.Errorf("retry requests = %d, want one about v2 and v3 only", len(bodies))
+	}
+}
+
+// TestReplacesChainStopsLoops checks the apply guard: a step that would close a loop
+// of replacements (two or more facts naming each other) is detected.
+func TestReplacesChainStopsLoops(t *testing.T) {
+	rb := map[string]string{"a": "b", "b": "c"}
+	if !replacesChain(rb, "a", "c") { // c -> a would close a -> b -> c -> a
+		t.Error("three-fact loop not detected")
+	}
+	if !replacesChain(map[string]string{"a": "b"}, "a", "b") { // b -> a
+		t.Error("two-fact loop not detected")
+	}
+	if replacesChain(rb, "c", "a") || replacesChain(rb, "b", "x") {
+		t.Error("loop reported where there is none")
+	}
+	if replacesChain(map[string]string{"a": "b", "b": "a"}, "a", "z") {
+		t.Error("existing loop in the map made the walk report a match")
 	}
 }

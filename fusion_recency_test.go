@@ -52,7 +52,7 @@ func TestRerankRecencyNewerWinsCloseCall(t *testing.T) {
 	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
 	old := recencyHit("old", memory.L3Fact, "project_state", now.AddDate(0, 0, -200))
 	fresh := recencyHit("fresh", memory.L3Fact, "project_state", now.AddDate(0, 0, -1))
-	got := rerankRecency([]SearchHit{old, fresh}, now)
+	got := rerankRecencyUsed([]SearchHit{old, fresh}, now, nil)
 	if len(got) != 2 || got[0].ID != "fresh" || got[1].ID != "old" {
 		t.Fatalf("order = %v, want fresh first", ids(got))
 	}
@@ -69,7 +69,7 @@ func TestRerankRecencyRelevanceDominates(t *testing.T) {
 		hits = append(hits, SearchHit{ID: "filler", Layer: memory.L1Profile})
 	}
 	hits = append(hits, recencyHit("fresh30", memory.L3Fact, "project_state", now.AddDate(0, 0, -1)))
-	got := rerankRecency(hits, now)
+	got := rerankRecencyUsed(hits, now, nil)
 	oldAt, freshAt := -1, -1
 	for i, h := range got {
 		switch h.ID {
@@ -90,7 +90,7 @@ func TestRerankRecencyLayerOneNeverMoves(t *testing.T) {
 	// newer hit that sits at the same or a lower position.
 	profile := recencyHit("profile", memory.L1Profile, "", now.AddDate(-5, 0, 0))
 	fact := recencyHit("fact", memory.L3Fact, "project_state", now)
-	got := rerankRecency([]SearchHit{profile, fact}, now)
+	got := rerankRecencyUsed([]SearchHit{profile, fact}, now, nil)
 	if got[0].ID != "profile" {
 		t.Fatalf("order = %v, want profile kept first", ids(got))
 	}
@@ -102,7 +102,7 @@ func TestRerankRecencyUnknownAndFutureKeepFactorOne(t *testing.T) {
 	future := recencyHit("future", memory.L3Fact, "project_state", now.AddDate(0, 0, 10))
 	dated := recencyHit("dated", memory.L3Fact, "project_state", now.AddDate(0, 0, -20))
 	// Position weights decrease, so with factor 1.0 the order must be unchanged.
-	got := rerankRecency([]SearchHit{unknown, future, dated}, now)
+	got := rerankRecencyUsed([]SearchHit{unknown, future, dated}, now, nil)
 	want := []string{"unknown", "future", "dated"}
 	if !sameIDs(got, want) {
 		t.Fatalf("order = %v, want %v", ids(got), want)
@@ -116,18 +116,18 @@ func TestRerankRecencyDoesNotMutateInput(t *testing.T) {
 	fresh := recencyHit("fresh", memory.L3Fact, "project_state", now.AddDate(0, 0, -1))
 	fresh.Score = 0.4
 	in := []SearchHit{old, fresh}
-	_ = rerankRecency(in, now)
+	_ = rerankRecencyUsed(in, now, nil)
 	if in[0].ID != "old" || in[1].ID != "fresh" || in[0].Score != 0.5 || in[1].Score != 0.4 {
 		t.Fatalf("input changed: %v", ids(in))
 	}
 }
 
 func TestRerankRecencyEmpty(t *testing.T) {
-	if got := rerankRecency(nil, time.Now()); got != nil {
+	if got := rerankRecencyUsed(nil, time.Now(), nil); got != nil {
 		t.Fatalf("nil input returned %v, want nil", got)
 	}
 	empty := []SearchHit{}
-	if got := rerankRecency(empty, time.Now()); len(got) != 0 {
+	if got := rerankRecencyUsed(empty, time.Now(), nil); len(got) != 0 {
 		t.Fatalf("empty input returned %v", got)
 	}
 }

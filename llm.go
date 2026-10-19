@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -36,11 +37,13 @@ type LLMClient struct {
 	FallbackKey string
 
 	// pushed is a key handed over at runtime through POST /api/v1/llm/key, typically
-	// by the Hermes plugin, which holds the user's provider credential. It is kept
-	// in memory only and wins over APIKey and KeyFile. This lets the server run
-	// without ever reading another application's credential file, which security
-	// software rightly treats as a credential-theft pattern.
+	// by a launcher or tool you run on this machine. It is kept in memory only and
+	// wins over APIKey and KeyFile. This lets the server run with a rotating key
+	// without that key being written to a file or the environment.
 	pushed atomic.Pointer[string]
+
+	// keyFileWarned makes the "key file looks like JSON" warning appear once.
+	keyFileWarned atomic.Bool
 }
 
 // SetPushedKey replaces the in-memory key handed over at runtime. An empty key
@@ -127,9 +130,10 @@ func (l *LLMClient) Configured() bool {
 }
 
 // resolveKey returns the bearer key to use for this request. When KeyFile is
-// set it is read live, so a rotating credential — e.g. the 1-hour JWT Hermes
-// keeps fresh in auth.json — never goes stale the way a startup-frozen env
-// value does. Any read/parse failure falls back to the static APIKey.
+// set it is read live, so a rotating token that something of your own rewrites
+// never goes stale the way a startup-frozen env value does. The file must hold a
+// bare token as plain text; a file that looks like JSON is refused. Any read or
+// parse failure falls back to the static APIKey.
 func (l *LLMClient) resolveKey() string {
 	if k := l.pushed.Load(); k != nil && *k != "" {
 		return *k
@@ -144,46 +148,28 @@ func (l *LLMClient) resolveKey() string {
 	if k := extractKey(b); k != "" {
 		return k
 	}
+	if strings.HasPrefix(strings.TrimSpace(string(b)), "{") && l.keyFileWarned.CompareAndSwap(false, true) {
+		log.Printf("HYATLAS_LLM_KEY_FILE looks like JSON, which is refused: it must hold a plain-text token (falling back to HYATLAS_LLM_KEY)")
+	}
 	return l.APIKey
 }
 
-// extractKey reads a bearer key from either a JSON auth file (Hermes auth.json
-// shape: providers.nous.agent_key, falling back to access_token) or a
-// plain-text file whose trimmed contents are the key.
+// extractKey reads a bearer key from a plain-text file whose trimmed contents are
+// the token. Content that starts with "{" is JSON, such as another program's
+// credential file, and yields no key, so the server never parses such files.
 func extractKey(b []byte) string {
-	var auth struct {
-		Providers map[string]struct {
-			AgentKey    string `json:"agent_key"`
-			AccessToken string `json:"access_token"`
-		} `json:"providers"`
+	s := strings.TrimSpace(string(b))
+	if s == "" || strings.HasPrefix(s, "{") {
+		return ""
 	}
-	if err := json.Unmarshal(b, &auth); err == nil {
-		if n := auth.Providers["nous"]; n.AgentKey != "" {
-			return n.AgentKey
-		} else if n := auth.Providers["nous"]; n.AccessToken != "" {
-			return n.AccessToken
-		}
-	}
-	if s := strings.TrimSpace(string(b)); s != "" && !strings.HasPrefix(s, "{") {
-		return s
-	}
-	return ""
+	return s
 }
 
-// Facts, Summary, Knowledge, Schema, Intention is the structured output the LLM
-// returns for one raw input. It drives the full 7-layer promotion.
 // Extraction is the structured result of one System1 pass over a single input.
-//
-// Knowledge and Schemas are retained for tolerant parsing — a model that
-// volunteers them must not break the decode — but the per-turn prompt no longer
-// requests them and promoteExtraction no longer writes them. L5 knowledge and
-// L6 schemas are System2 products, synthesised across many memories by the
-// consolidation pass.
+// Keys it does not name, such as the retired summary, knowledge and schemas, are
+// ignored by the decoder, so a reply that still sends them keeps decoding.
 type Extraction struct {
 	Facts     []Fact     `json:"facts"`
-	Summary   *Summary   `json:"summary,omitempty"`
-	Knowledge []Relation `json:"knowledge,omitempty"`
-	Schemas   []Schema   `json:"schemas,omitempty"`
 	Intention *Intention `json:"intention,omitempty"`
 	// IntentionsDone lists open intentions (shown to the model as context) that
 	// this input shows finished or abandoned. Empty when the model omits it.
@@ -203,6 +189,87 @@ type Experience struct {
 	Solution    string `json:"solution"`
 	Environment string `json:"environment"`
 	Confidence  string `json:"confidence"` // high / medium / low
+}
+
+// UnmarshalJSON decodes an experience tolerantly and never returns an error, so
+// one malformed lesson cannot discard the whole extraction. A text field takes a
+// JSON string and becomes empty for any other type, a number included, which is
+// why it uses stringOnly rather than looseString. Confidence takes a string
+// as it is, a number (0.75 or more is high, under 0.4 is low, otherwise medium)
+// or a bool (true is high, false is low). A value that is not an object yields
+// an empty Experience.
+func (e *Experience) UnmarshalJSON(b []byte) error {
+	*e = Experience{}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return nil
+	}
+	e.Task = stringOnly(obj["task"])
+	e.Solution = stringOnly(obj["solution"])
+	e.Environment = stringOnly(obj["environment"])
+	e.Confidence = looseConfidence(obj["confidence"])
+	return nil
+}
+
+// looseString is the one tolerance rule for a text field the model sends. A JSON
+// string is used as it is, a number or bool is taken as its JSON spelling, and a
+// missing, null, object or array value gives "". It never fails, so a field of the
+// wrong type empties itself and the rest of the reply still decodes.
+func looseString(raw json.RawMessage) string {
+	t := bytes.TrimSpace(raw)
+	if len(t) == 0 {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(t, &s) == nil {
+		return s
+	}
+	if t[0] == '-' || (t[0] >= '0' && t[0] <= '9') || string(t) == "true" || string(t) == "false" {
+		return string(t)
+	}
+	return ""
+}
+
+// stringOnly returns raw as a string, or "" when raw is missing, null or not a JSON
+// string. Experience fields use it because a lesson with a number in a text field
+// keeps that field empty rather than reading the number as text.
+func stringOnly(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return s
+}
+
+// looseConfidence maps a raw confidence value to high, medium or low, as
+// Experience.UnmarshalJSON describes. A missing, null or unusable value yields "".
+func looseConfidence(raw json.RawMessage) string {
+	if t := bytes.TrimSpace(raw); len(t) == 0 || string(t) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var f float64
+	if json.Unmarshal(raw, &f) == nil {
+		switch {
+		case f >= 0.75:
+			return "high"
+		case f < 0.4:
+			return "low"
+		default:
+			return "medium"
+		}
+	}
+	var t bool
+	if json.Unmarshal(raw, &t) == nil {
+		if t {
+			return "high"
+		}
+		return "low"
+	}
+	return ""
 }
 
 // Fact is a single durable fact (L3).
@@ -254,42 +321,6 @@ func splitIDs(s string) []string {
 	})
 }
 
-// Summary is the session narrative arc (L4). The LLM may return it as either
-// a string or an object, so this custom type accepts both.
-type Summary struct {
-	Text string
-}
-
-// UnmarshalJSON accepts both `"summary": "text"` and `"summary": {"text":"..."}`.
-func (s *Summary) UnmarshalJSON(b []byte) error {
-	var raw string
-	if err := json.Unmarshal(b, &raw); err == nil {
-		s.Text = raw
-		return nil
-	}
-	var obj struct {
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(b, &obj); err != nil {
-		return err
-	}
-	s.Text = obj.Text
-	return nil
-}
-
-// Relation is a knowledge-graph edge (L5): entity A <rel> entity B.
-type Relation struct {
-	From     string `json:"from"`
-	Relation string `json:"relation"`
-	To       string `json:"to"`
-}
-
-// Schema is a recurring pattern / structural template (L6).
-type Schema struct {
-	Pattern string `json:"pattern"`
-	Context string `json:"context,omitempty"`
-}
-
 // Intention is the user's current goal / intent (L7). Accepts string or object.
 type Intention struct {
 	Goal string
@@ -301,51 +332,56 @@ type Intention struct {
 	Replaces idList
 }
 
-// UnmarshalJSON accepts both `"intention": "text"` and `"intention":{"goal":"..."}`.
+// UnmarshalJSON accepts `"intention": "text"` and `"intention":{"goal":"..."}`. Any
+// other value never fails the decode: a number or bool becomes the goal text, and
+// anything else leaves the goal empty, so the rest of the reply survives.
 func (i *Intention) UnmarshalJSON(b []byte) error {
-	var raw string
-	if err := json.Unmarshal(b, &raw); err == nil {
-		i.Goal = raw
-		return nil
-	}
+	*i = Intention{}
 	var obj struct {
-		Goal     string `json:"goal"`
-		Due      string `json:"due"`
-		Replaces idList `json:"replaces"`
+		Goal     json.RawMessage `json:"goal"`
+		Due      json.RawMessage `json:"due"`
+		Replaces idList          `json:"replaces"`
 	}
 	if err := json.Unmarshal(b, &obj); err != nil {
-		return err
+		// Not an object: the value itself is the goal text, when it is text.
+		i.Goal = looseString(b)
+		return nil
 	}
-	i.Goal = obj.Goal
-	i.Due = obj.Due
+	i.Goal = looseString(obj.Goal)
+	i.Due = looseString(obj.Due)
 	i.Replaces = obj.Replaces
 	return nil
 }
 
-// Complete runs one structured extraction producing all layers, with one
+// CompleteWith runs one structured extraction producing all layers, with one
 // reinforced retry: small models sometimes reply to the input conversationally
 // instead of extracting (their prose then fails JSON parsing), and a single
-// firm reminder recovers most of those.
-func (l *LLMClient) Complete(ctx context.Context, text string) (*Extraction, error) {
-	return l.CompleteWith(ctx, text, ExtractContext{})
-}
-
-// CompleteWith is Complete that also shows the model what the store already
-// holds about this input, so it can say which stored facts and open intentions
-// the input updates, finishes or abandons. An empty ec yields the plain prompt.
+// firm reminder recovers most of those. It also shows the model what the store
+// already holds about this input, so it can say which stored facts and open
+// intentions the input updates, finishes or abandons. An empty ec yields the
+// plain prompt.
+//
+// The reinforced retry runs only when the chat call succeeded and its reply did
+// not parse. A failed chat call (an HTTP error, a timeout, an empty reply) is
+// returned at once, because the same request would fail the same way again.
 func (l *LLMClient) CompleteWith(ctx context.Context, text string, ec ExtractContext) (*Extraction, error) {
-	ex, err := l.completeOnce(ctx, text, false, ec)
+	ex, chatFailed, err := l.completeOnce(ctx, text, false, ec)
 	if err == nil {
 		return ex, nil
 	}
-	ex2, err2 := l.completeOnce(ctx, text, true, ec)
+	if chatFailed {
+		return nil, err
+	}
+	ex2, _, err2 := l.completeOnce(ctx, text, true, ec)
 	if err2 == nil {
 		return ex2, nil
 	}
 	return nil, fmt.Errorf("after retry: %w", err2)
 }
 
-func (l *LLMClient) completeOnce(ctx context.Context, text string, reinforce bool, ec ExtractContext) (*Extraction, error) {
+// completeOnce makes one chat call and parses its reply. It also reports whether
+// the chat call itself failed, which tells CompleteWith a retry would not help.
+func (l *LLMClient) completeOnce(ctx context.Context, text string, reinforce bool, ec ExtractContext) (*Extraction, bool, error) {
 	// System1: this pass sees ONE turn, so it may only produce what a single turn
 	// can actually evidence: facts, the current intention and entity pages.
 	// Summaries come from episodes (episode.go), not from each turn. L5 knowledge
@@ -369,9 +405,13 @@ func (l *LLMClient) completeOnce(ctx context.Context, text string, reinforce boo
 	}
 	content, err := l.chat(ctx, messages, 0.2)
 	if err != nil {
-		return nil, err
+		return nil, true, err
 	}
-	return parseExtraction(content)
+	ex, err := parseExtraction(content)
+	if err != nil {
+		return nil, false, err
+	}
+	return ex, false, nil
 }
 
 // chat sends one chat-completions request and returns the assistant's text,
@@ -413,6 +453,23 @@ func (l *LLMClient) chat(ctx context.Context, messages []map[string]string, temp
 	return content, nil
 }
 
+// chatPrimary sends one request to the primary model only: no fallback is tried,
+// so the caller learns whether the primary itself answers. The model test uses it.
+func (l *LLMClient) chatPrimary(ctx context.Context, messages []map[string]string, temp float64) (string, error) {
+	return l.chatOnce(ctx, l.BaseURL, l.Model, l.resolveKey(), messages, temp)
+}
+
+// chatFallback sends one request to the fallback model only, on the same endpoint
+// and key rules the fallback path of chat uses. The model test uses it to say
+// whether the fallback would have answered.
+func (l *LLMClient) chatFallback(ctx context.Context, messages []map[string]string, temp float64) (string, error) {
+	base := l.FallbackBaseURL
+	if base == "" {
+		base = l.BaseURL
+	}
+	return l.chatOnce(ctx, base, l.FallbackModel, l.fallbackKey(base), messages, temp)
+}
+
 // chatOnce sends one request to one model and returns the assistant's text.
 //
 // Shared by the primary and fallback paths so the two cannot drift on the parts
@@ -434,7 +491,7 @@ func (l *LLMClient) chatOnce(ctx context.Context, base, model, key string, messa
 	// The Nous Portal sits behind Cloudflare, which 403s Go's default
 	// "Go-http-client" User-Agent; identify honestly so the WAF lets the
 	// extraction call through.
-	req.Header.Set("User-Agent", "HyAtlas/4.3 (+https://github.com/tuancookiez-hub/HyAtlas-Memory)")
+	req.Header.Set("User-Agent", "HyAtlas/"+Version+" (+https://github.com/tuancookiez-hub/HyAtlas-Memory)")
 	// Resolve the key per request so a rotating credential (KeyFile) never
 	// goes stale the way a startup-frozen env value does.
 	k := key
@@ -490,21 +547,37 @@ func (l *LLMClient) chatOnce(ctx context.Context, base, model, key string, messa
 	return msg.Content, nil
 }
 
-// parseExtraction tolerantly extracts the JSON object from the LLM reply.
-func parseExtraction(content string) (*Extraction, error) {
+// decodeLenient decodes the JSON object in an LLM reply into v. It tries the whole
+// reply first, then the span from the first "{" to the last "}", since a model may
+// wrap the object in fences or prose. On failure the error names up to 80 bytes of
+// the raw reply.
+func decodeLenient(content string, v any) error {
 	content = trimFences(content)
-	// the model may wrap the object or add trailing text; try direct first
+	err := json.Unmarshal([]byte(content), v)
+	if err == nil {
+		return nil
+	}
+	start, end := strings.Index(content, "{"), strings.LastIndex(content, "}")
+	if start != -1 && end > start {
+		err = json.Unmarshal([]byte(content[start:end+1]), v)
+		if err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w (raw %.80s)", err, content)
+}
+
+// errParse marks an extraction whose chat call succeeded but whose reply held no
+// usable JSON. Callers test for it with errors.Is to tell a row the model cannot
+// handle (try the next row) from an endpoint that is down (stop).
+var errParse = errors.New("extraction parse")
+
+// parseExtraction tolerantly extracts the JSON object from the LLM reply. A reply
+// that cannot be decoded returns an error that wraps errParse.
+func parseExtraction(content string) (*Extraction, error) {
 	var ex Extraction
-	if err := json.Unmarshal([]byte(content), &ex); err != nil {
-		// try to find the first { ... } block
-		start := strings.Index(content, "{")
-		end := strings.LastIndex(content, "}")
-		if start == -1 || end == -1 || end <= start {
-			return nil, fmt.Errorf("extraction parse: %w (raw %.80s)", err, content)
-		}
-		if err := json.Unmarshal([]byte(content[start:end+1]), &ex); err != nil {
-			return nil, err
-		}
+	if err := decodeLenient(content, &ex); err != nil {
+		return nil, fmt.Errorf("%w: %v", errParse, err)
 	}
 	// normalize fields
 	if ex.Facts == nil {

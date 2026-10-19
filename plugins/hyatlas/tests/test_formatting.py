@@ -127,3 +127,56 @@ def test_iso_date_handles_zero_none_and_bad_values():
     assert fmt.iso_date(0) == ""
     assert fmt.iso_date(None) == ""
     assert fmt.iso_date("not a number") == ""
+
+
+def test_series_of_three_shows_count_and_dates():
+    m = {
+        "content": "text",
+        "layer": "l3_fact",
+        "gmt_created": SAVED,
+        "score": 0.81,
+        "series_count": 3,
+        "series_dates": ["2026-03-02", "2026-05-14", "2026-10-13"],
+    }
+    assert (
+        fmt.format_hit_line(m, 300)
+        == "- (l3_fact, 2026-10-12, score 0.81, 3 times (2026-03-02, 2026-05-14, 2026-10-13)) text"
+    )
+
+
+def test_series_shows_only_the_newest_three_dates():
+    m = {
+        "content": "text",
+        "layer": "l3_fact",
+        "gmt_created": SAVED,
+        "score": 0.5,
+        "series_count": 5,
+        "series_dates": ["2026-01-01", "2026-02-01", "2026-03-02", "2026-05-14", "2026-10-13"],
+    }
+    assert fmt.format_hit_line(m, 300).endswith(
+        "5 times (2026-03-02, 2026-05-14, 2026-10-13)) text"
+    )
+
+
+def test_single_or_missing_series_adds_nothing():
+    base = {"content": "text", "layer": "l3_fact", "gmt_created": SAVED, "score": 0.81}
+    plain = fmt.format_hit_line(base, 300)
+    assert fmt.format_hit_line({**base, "series_count": 1, "series_dates": ["2026-03-02"]}, 300) == plain
+    assert fmt.format_hit_line({**base, "series_count": "x"}, 300) == plain
+    assert fmt.format_hit_line({**base, "series_count": None}, 300) == plain
+
+
+def test_series_without_dates_shows_the_count_alone():
+    m = {"content": "text", "layer": "l3_fact", "gmt_created": SAVED, "score": 0.81, "series_count": 2}
+    assert fmt.format_hit_line(m, 300) == "- (l3_fact, 2026-10-12, score 0.81, 2 times) text"
+
+
+def test_links_are_not_shown_in_the_prompt():
+    m = {
+        "content": "text",
+        "layer": "l3_fact",
+        "gmt_created": SAVED,
+        "score": 0.81,
+        "links": [{"id": "f2", "relation": "related"}],
+    }
+    assert fmt.format_hit_line(m, 300) == "- (l3_fact, 2026-10-12, score 0.81) text"

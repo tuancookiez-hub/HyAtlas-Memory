@@ -1,9 +1,6 @@
 package main
 
-import (
-	"sort"
-	"time"
-)
+import "sort"
 
 // HistoryEntry is one older version of a memory, shown under the hit that replaced it.
 type HistoryEntry struct {
@@ -47,24 +44,27 @@ func (s *MemoryStore) historyOf(ids []string, perHit int) map[string][]HistoryEn
 
 	var rows []historyRow
 	s.mu.RLock()
-	for id := range s.superseded {
-		d, ok := s.index[id]
-		if !ok || d.Meta[metaSupersededHow] != howReplaced || !want[d.Meta["superseded_by"]] {
-			continue
+	for by := range want {
+		for _, id := range s.replacedBy[by] {
+			d, ok := s.index[id]
+			ret := retirementOf(d)
+			if !ok || ret.How != howReplaced || ret.By != by {
+				continue
+			}
+			date := normalizeEventDate(d.Meta[metaEventAt])
+			if date == "" && len(d.Ts) >= 10 {
+				date = d.Ts[:10]
+			}
+			rows = append(rows, historyRow{
+				by: by,
+				ts: d.Ts,
+				entry: HistoryEntry{
+					Content: utf8Trunc(oneLine(d.Content), historyContentMax),
+					Date:    date,
+					How:     ret.How,
+				},
+			})
 		}
-		date := normalizeEventDate(d.Meta[metaEventAt])
-		if date == "" && len(d.Ts) >= 10 {
-			date = d.Ts[:10]
-		}
-		rows = append(rows, historyRow{
-			by: d.Meta["superseded_by"],
-			ts: d.Ts,
-			entry: HistoryEntry{
-				Content: utf8Trunc(oneLine(d.Content), historyContentMax),
-				Date:    date,
-				How:     d.Meta[metaSupersededHow],
-			},
-		})
 	}
 	s.mu.RUnlock()
 
@@ -82,9 +82,8 @@ func (s *MemoryStore) historyOf(ids []string, perHit int) map[string][]HistoryEn
 // RFC3339 times when they parse, and as plain strings otherwise, so a malformed
 // timestamp still sorts deterministically.
 func historyNewer(a, b string) bool {
-	ta, errA := time.Parse(time.RFC3339, a)
-	tb, errB := time.Parse(time.RFC3339, b)
-	if errA == nil && errB == nil {
+	ta, tb := docTime(a), docTime(b)
+	if !ta.IsZero() && !tb.IsZero() {
 		return ta.After(tb)
 	}
 	return a > b

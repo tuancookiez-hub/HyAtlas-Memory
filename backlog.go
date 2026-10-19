@@ -105,7 +105,11 @@ type BacklogJob struct {
 	llm     *LLMClient
 	admin   func() bool
 
-	wg sync.WaitGroup // lets tests wait for the background goroutine
+	wg sync.WaitGroup // lets tests and Wait wait for the background goroutine
+
+	// base is the context the job runs on; SetContext sets it, and it is Background
+	// until then. The server passes its signal context, so a shutdown cancels a dry run.
+	base context.Context
 
 	mu     sync.Mutex
 	status BacklogStatus
@@ -116,6 +120,27 @@ type BacklogJob struct {
 func NewBacklogJob(dataDir string, store *MemoryStore, cons *Consolidator, llm *LLMClient, admin func() bool) *BacklogJob {
 	return &BacklogJob{dataDir: dataDir, store: store, cons: cons, llm: llm, admin: admin,
 		status: BacklogStatus{State: "idle"}}
+}
+
+// SetContext makes ctx the context later jobs run on. Call it before the server
+// serves; it is not safe against a job that is starting.
+func (b *BacklogJob) SetContext(ctx context.Context) { b.base = ctx }
+
+// Wait blocks until a job in progress has finished or timeout passes, and reports
+// whether it finished. A nil BacklogJob returns true.
+func (b *BacklogJob) Wait(timeout time.Duration) bool {
+	if b == nil {
+		return true
+	}
+	return waitTimed(&b.wg, timeout)
+}
+
+// jobContext is the context a job runs on.
+func (b *BacklogJob) jobContext() context.Context {
+	if b.base != nil {
+		return b.base
+	}
+	return context.Background()
 }
 
 func (b *BacklogJob) planPath() string { return filepath.Join(b.dataDir, backlogPlanFile) }
@@ -230,9 +255,9 @@ func (b *BacklogJob) start(dry, onlyFailed bool) (int, error) {
 		var err error
 		switch {
 		case dry && onlyFailed:
-			err = b.runRetry(context.Background(), failed)
+			err = b.runRetry(b.jobContext(), failed)
 		case dry:
-			err = b.runDry(context.Background())
+			err = b.runDry(b.jobContext())
 		default:
 			err = b.runApply(plan)
 		}
@@ -361,13 +386,13 @@ func (b *BacklogJob) planWork(ctx context.Context, work []ownerWork) error {
 		seenPair := map[string]bool{}
 		pageAt := map[string]int{} // normalized page name -> index in po.Pages
 		for _, cluster := range ow.clusters {
-			cluster = dedupFacts(cluster)
+			cluster = dedupDocs(cluster)
 			out, err := b.askCluster(ctx, cluster)
 			if err != nil {
 				msg := fmt.Sprintf("%s: %v", ow.key, err)
 				log.Printf("backlog: %s", msg)
 				plan.Failed = append(plan.Failed, BacklogFailed{User: ow.key.user, Agent: ow.key.agent,
-					FactIDs: backlogFactIDs(cluster), Error: err.Error()})
+					FactIDs: idsOf(cluster), Error: err.Error()})
 				b.update(func(s *BacklogStatus) { s.Errors = append(s.Errors, msg); s.ClustersDone++ })
 				continue
 			}
@@ -418,29 +443,6 @@ func (b *BacklogJob) planWork(ctx context.Context, work []ownerWork) error {
 	return nil
 }
 
-// backlogFactIDs lists the ids of a cluster, in order, for the failed-cluster record.
-func backlogFactIDs(fs []DocIndex) []string {
-	ids := make([]string, 0, len(fs))
-	for _, f := range fs {
-		ids = append(ids, f.ID)
-	}
-	return ids
-}
-
-// dedupFacts drops repeated ids from a cluster. Trailing time-ordered windows can
-// overlap by a few facts, so the same fact may be listed twice.
-func dedupFacts(fs []DocIndex) []DocIndex {
-	seen := make(map[string]bool, len(fs))
-	out := make([]DocIndex, 0, len(fs))
-	for _, f := range fs {
-		if !seen[f.ID] {
-			seen[f.ID] = true
-			out = append(out, f)
-		}
-	}
-	return out
-}
-
 // mergePageUpdate folds a later cluster's proposal for the same page into the
 // first. Clusters are walked newest topic first, so the first value of an
 // attribute wins and a later cluster only adds what is missing.
@@ -474,7 +476,7 @@ func (b *BacklogJob) askCluster(ctx context.Context, cluster []DocIndex) (cluste
 	var sb strings.Builder
 	sb.WriteString("Facts:\n")
 	for _, f := range cluster {
-		fmt.Fprintf(&sb, "- id=%s | date=%s | %s\n", f.ID, factDate(f.Ts), truncate(f.Content, 400))
+		fmt.Fprintf(&sb, "- id=%s | date=%s | %s\n", f.ID, factDate(f.Ts), utf8Trunc(f.Content, 400))
 	}
 	cctx, cancel := context.WithTimeout(ctx, backlogCallTimeout)
 	defer cancel()
@@ -492,16 +494,9 @@ func (b *BacklogJob) askCluster(ctx context.Context, cluster []DocIndex) (cluste
 // ids belong to this cluster, differ, and the newer fact is not older than the one
 // it replaces. A missing key is an empty list.
 func parseBacklogReply(content string, cluster []DocIndex) (clusterAnswer, error) {
-	content = trimFences(content)
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(content), &raw); err != nil {
-		start, end := strings.Index(content, "{"), strings.LastIndex(content, "}")
-		if start == -1 || end <= start {
-			return clusterAnswer{}, fmt.Errorf("backlog reply parse failed (raw %.80s)", content)
-		}
-		if err := json.Unmarshal([]byte(content[start:end+1]), &raw); err != nil {
-			return clusterAnswer{}, err
-		}
+	if err := decodeLenient(content, &raw); err != nil {
+		return clusterAnswer{}, fmt.Errorf("backlog reply parse failed: %w", err)
 	}
 	byID := byIDOf(cluster)
 	var ans clusterAnswer
@@ -529,8 +524,8 @@ func parseBacklogReply(content string, cluster []DocIndex) (clusterAnswer, error
 			}
 			seen[o.ID] = true
 			ans.outdated = append(ans.outdated, BacklogOutdated{ID: o.ID, By: o.By,
-				Reason: truncate(strings.TrimSpace(o.Reason), 200),
-				Text:   truncate(old.Content, 400), ByText: truncate(newer.Content, 400)})
+				Reason: utf8Trunc(strings.TrimSpace(o.Reason), 200),
+				Text:   utf8Trunc(old.Content, 400), ByText: utf8Trunc(newer.Content, 400)})
 		}
 	}
 
@@ -549,6 +544,22 @@ func parseBacklogReply(content string, cluster []DocIndex) (clusterAnswer, error
 		}
 	}
 	return ans, nil
+}
+
+// replacesChain reports whether following replacedBy from id reaches target, that
+// is, whether target already (directly or through others) replaces id.
+func replacesChain(replacedBy map[string]string, id, target string) bool {
+	for steps := 0; steps <= len(replacedBy); steps++ {
+		next, ok := replacedBy[id]
+		if !ok {
+			return false
+		}
+		if next == target {
+			return true
+		}
+		id = next
+	}
+	return false
 }
 
 // runApply carries out the saved plan without any LLM call. Every planned
@@ -573,15 +584,16 @@ func (b *BacklogJob) runApply(plan *backlogPlan) error {
 		}
 		replacedBy := map[string]string{}
 		for _, o := range po.Outdated {
-			// Liveness was judged up front, so two facts that name each other (same-day
-			// dates pass the date check) would both be superseded and neither survive.
-			if o.ID == o.By || !liveOwned(o.ID) || !liveOwned(o.By) || replacedBy[o.By] == o.ID {
+			// Liveness was judged up front, so facts that name each other in a loop
+			// (same-day dates pass the date check) would all be superseded and none
+			// survive. The step that would close a loop is skipped.
+			if o.ID == o.By || !liveOwned(o.ID) || !liveOwned(o.By) || replacesChain(replacedBy, o.By, o.ID) {
 				skipped++
 				continue
 			}
 			replacedBy[o.ID] = o.By
 			// The plan names facts a newer one contradicts, so they are replaced.
-			n, err := b.store.supersedeWith([]string{o.ID}, o.By, map[string]string{metaSupersededHow: howReplaced})
+			n, err := b.store.retire([]string{o.ID}, Retire{By: o.By, How: howReplaced})
 			if err != nil {
 				errs = append(errs, fmt.Sprintf("supersede %s: %v", o.ID, err))
 			}

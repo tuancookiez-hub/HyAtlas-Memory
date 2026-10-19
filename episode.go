@@ -82,9 +82,14 @@ func episodeRetryDelay(tries int) time.Duration {
 	return d
 }
 
-// key is the owner key that keys an open episode: the user and agent joined by a bar.
+// key is the owner key that keys an open episode.
 func (ep *episode) key() string {
-	return ep.User + "|" + ep.Agent
+	return episodeKey(ep.User, ep.Agent)
+}
+
+// episodeKey is the owner key that keys an open episode: the user and agent joined by a bar.
+func episodeKey(user, agent string) string {
+	return user + "|" + agent
 }
 
 // episodesState is the on-disk shape of episodes.json.
@@ -105,6 +110,9 @@ type Episodes struct {
 	gap     time.Duration
 	open    map[string]*episode // one open episode per owner key
 	pending []*episode          // ended episodes waiting for a summary
+	// wg tracks the Run loop started by Start, so a shutdown can wait for a summary
+	// that is being written (see Wait).
+	wg sync.WaitGroup
 }
 
 // resolveEpisodeGap reads HYATLAS_EPISODE_GAP and returns the gap between writes
@@ -112,20 +120,7 @@ type Episodes struct {
 // An unset value returns the default, and an invalid value logs and also returns
 // the default, so a typo never silently turns the feature off.
 func resolveEpisodeGap() time.Duration {
-	raw := strings.TrimSpace(os.Getenv("HYATLAS_EPISODE_GAP"))
-	if raw == "" {
-		return defaultEpisodeGap
-	}
-	switch strings.ToLower(raw) {
-	case "0", "off", "false":
-		return 0
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		log.Printf("episodes: HYATLAS_EPISODE_GAP=%q is not a duration; using 30m", raw)
-		return defaultEpisodeGap
-	}
-	return d
+	return envDuration("HYATLAS_EPISODE_GAP", defaultEpisodeGap)
 }
 
 // NewEpisodes returns an Episodes that cuts episodes with the given gap and
@@ -180,11 +175,16 @@ func (e *Episodes) Note(user, agent string, factIDs []string, at time.Time) {
 	}
 	at = at.UTC()
 	stamp := at.Format(time.RFC3339)
-	key := user + "|" + agent
+	// One person's alias IDs share one episode, keyed by the canonical ID.
+	if e.store != nil {
+		user = e.store.canonicalOwner(user)
+	}
+	key := episodeKey(user, agent)
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	closed := false
 	if ep, ok := e.open[key]; ok {
 		if at.Sub(episodeTime(ep.Last)) <= e.gap {
 			ep.FactIDs = appendUniqueIDs(ep.FactIDs, factIDs)
@@ -192,12 +192,14 @@ func (e *Episodes) Note(user, agent string, factIDs []string, at time.Time) {
 			e.persistLocked()
 			return
 		}
-		delete(e.open, key)
-		e.pending = append(e.pending, ep)
-		log.Printf("episodes: closed %s (%d facts)", key, len(ep.FactIDs))
+		e.closeLocked(key, ep)
+		closed = true
 	}
 	if len(factIDs) == 0 {
-		e.persistLocked()
+		// Nothing new to open, so the file is only written when a close changed it.
+		if closed {
+			e.persistLocked()
+		}
 		return
 	}
 	e.open[key] = &episode{
@@ -208,6 +210,36 @@ func (e *Episodes) Note(user, agent string, factIDs []string, at time.Time) {
 		FactIDs: appendUniqueIDs(nil, factIDs),
 	}
 	e.persistLocked()
+}
+
+// closeLocked moves an open episode to the pending list and logs it, so it is
+// summarised on a later tick. The caller must hold e.mu.
+func (e *Episodes) closeLocked(key string, ep *episode) {
+	delete(e.open, key)
+	e.pending = append(e.pending, ep)
+	log.Printf("episodes: closed %s (%d facts)", key, len(ep.FactIDs))
+}
+
+// Start runs the loop in a goroutine that Wait can wait for. It does nothing on a nil
+// Episodes.
+func (e *Episodes) Start(ctx context.Context) {
+	if e == nil {
+		return
+	}
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		e.Run(ctx)
+	}()
+}
+
+// Wait blocks until the loop started by Start has stopped or timeout passes, and
+// reports whether it stopped. A nil Episodes returns true.
+func (e *Episodes) Wait(timeout time.Duration) bool {
+	if e == nil {
+		return true
+	}
+	return waitTimed(&e.wg, timeout)
 }
 
 // Run closes ended episodes and summarises them until ctx is done. It runs one
@@ -251,10 +283,8 @@ func (e *Episodes) tick(ctx context.Context, now time.Time) {
 	changed := false
 	for key, ep := range e.open {
 		if now.Sub(episodeTime(ep.Last)) > e.gap {
-			delete(e.open, key)
-			e.pending = append(e.pending, ep)
+			e.closeLocked(key, ep)
 			changed = true
-			log.Printf("episodes: closed %s (%d facts)", key, len(ep.FactIDs))
 		}
 	}
 	var batch []*episode

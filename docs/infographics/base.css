@@ -1,0 +1,23 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: #0b0b0d; }
+body {
+  width: 1200px; overflow: hidden; color: #e9e4da;
+  font-family: Georgia, "Times New Roman", serif;
+  background:
+    radial-gradient(1200px 500px at 15% -10%, #1b1730 0%, transparent 60%),
+    radial-gradient(900px 400px at 100% 110%, #13201b 0%, transparent 60%),
+    #0b0b0d;
+}
+.mono { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; letter-spacing: .14em; text-transform: uppercase; font-size: 12px; color: #b8b1a4; }
+.grad { background: linear-gradient(90deg, #8fb4ff 0%, #c79bff 45%, #f3c26b 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.green { --c: #4fe3a5; --cbg: rgba(79,227,165,.10); }
+.amber { --c: #f3c26b; --cbg: rgba(243,194,107,.10); }
+.purple { --c: #c79bff; --cbg: rgba(199,155,255,.12); }
+.blue { --c: #8fb4ff; --cbg: rgba(143,180,255,.10); }
+.card { border: 1.5px solid var(--c); border-radius: 14px; background: linear-gradient(180deg, var(--cbg), rgba(255,255,255,.015)); }
+.pill { display: inline-block; border: 1.5px solid var(--c); color: var(--c); border-radius: 999px; padding: 5px 13px; font-family: "Segoe UI", Arial, sans-serif; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; }
+.kicker { color: var(--c); font-family: "Segoe UI", Arial, sans-serif; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; }
+.chip { width: 32px; height: 28px; border-radius: 7px; border: 1px solid #2c2a2e; background: #141316; color: #8d877d; display: inline-flex; align-items: center; justify-content: center; font-family: "Segoe UI", Arial, sans-serif; font-size: 12.5px; margin-right: 5px; }
+.chip.on { background: var(--c); color: #141016; border-color: var(--c); box-shadow: 0 0 14px var(--c); font-weight: 600; }
+.body { font-size: 15.5px; line-height: 1.5; color: #dcd6cb; }
+.muted { color: #a59f94; }

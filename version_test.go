@@ -31,8 +31,10 @@ func TestStatusReportsRealVersion(t *testing.T) {
 	if got != Version {
 		t.Errorf("status.version = %q, want canonical Version %q", got, Version)
 	}
-	if !strings.HasPrefix(got, "4.") {
-		t.Errorf("status.version = %q, want a v4 major (got something unexpected)", got)
+	// A release version, major.minor.patch, so a placeholder or a stray "v4" badge
+	// string cannot pass for one.
+	if parts := strings.Split(got, "."); len(parts) != 3 || strings.Trim(got, "0123456789.") != "" {
+		t.Errorf("status.version = %q, want major.minor.patch", got)
 	}
 }
 

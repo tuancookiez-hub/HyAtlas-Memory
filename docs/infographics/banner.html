@@ -1,0 +1,65 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="base.css">
+<style>
+body { height: 600px; }
+.top { display: flex; align-items: center; padding: 4px 30px 0 26px; height: 170px; }
+.mascot { width: 200px; height: 162px; flex: none; -webkit-mask-image: radial-gradient(ellipse 72% 70% at 50% 50%, #000 62%, transparent 100%); mask-image: radial-gradient(ellipse 72% 70% at 50% 50%, #000 62%, transparent 100%); }
+.title { margin-left: 8px; flex: none; }
+.title h1 { font-size: 66px; font-weight: 700; letter-spacing: -.5px; line-height: 1; }
+.title .sub { margin-top: 14px; }
+.ver { display: inline-block; margin-left: 12px; font-size: 22px; font-weight: 400; vertical-align: 38px; color: #f3c26b; font-family: "Segoe UI", Arial, sans-serif; letter-spacing: .06em; }
+.side { margin-left: auto; border-left: 1px solid #3a3740; padding-left: 24px; width: 290px; }
+.side .hook { font-size: 27px; line-height: 1.15; }
+.side p { margin-top: 10px; font-size: 15px; line-height: 1.45; color: #cfc8bb; }
+.cards { display: flex; gap: 22px; padding: 4px 30px 0 30px; }
+.card { flex: 1; height: 404px; padding: 18px 22px; position: relative; }
+.head { display: flex; justify-content: space-between; align-items: flex-start; }
+.name { font-size: 38px; font-weight: 700; margin-top: 2px; }
+.frac { position: absolute; right: 22px; top: 58px; font-size: 34px; color: var(--c); font-family: "Segoe UI", Arial, sans-serif; letter-spacing: .08em; }
+.desc { margin-top: 8px; height: 112px; font-size: 15px; }
+.rule { border-top: 1px solid #2f2d33; margin: 6px 0 10px; }
+.fit { margin-top: 12px; border: 1px solid #2c2a2e; border-radius: 10px; padding: 11px 14px; background: rgba(0,0,0,.25); }
+.fit .body { font-size: 14.5px; margin-top: 3px; line-height: 1.35; }
+</style></head>
+<body>
+<div class="top">
+  <img class="mascot" src="mascot.png" alt="">
+  <div class="title">
+    <h1>HyAtlas <span class="grad">Memory</span><span class="ver">5.0</span></h1>
+    <div class="mono sub">Three modes &nbsp;·&nbsp; One eight-layer memory &nbsp;·&nbsp; Single Go binary</div>
+  </div>
+  <div class="side">
+    <div class="hook">Memory you can<br><span class="grad">take back.</span></div>
+    <p>Every memory can be retired and restored. Delete a note in Hermes and HyAtlas forgets it too.</p>
+  </div>
+</div>
+<div class="cards">
+  <div class="card green">
+    <div class="head"><div class="kicker">Lightweight access</div><span class="pill">No LLM</span></div>
+    <div class="name">Lite</div><div class="frac">1 / 8</div>
+    <div class="body desc">No model is called, so conversation text never leaves the machine. Local BGE embeddings with hybrid vector and keyword search, identifiers included.</div>
+    <div class="rule"></div>
+    <div class="kicker">Layers touched</div>
+    <div style="margin-top:9px"><span class="chip">L1</span><span class="chip on">L2</span><span class="chip">L3</span><span class="chip">L4</span><span class="chip">L5</span><span class="chip">L6</span><span class="chip">L7</span><span class="chip">L8</span></div>
+    <div class="fit"><div class="kicker">Fit</div><div class="body">Remember everything now, understand it later.</div></div>
+  </div>
+  <div class="card amber">
+    <div class="head"><div class="kicker">Per-write extraction</div><span class="pill">Per turn</span></div>
+    <div class="name">Pro</div><div class="frac">6 / 8</div>
+    <div class="body desc">One model call per write: facts, preferences, intentions, task experiences and entity pages. A summary after each stretch of work.</div>
+    <div class="rule"></div>
+    <div class="kicker">Layers touched</div>
+    <div style="margin-top:9px"><span class="chip on">L1</span><span class="chip on">L2</span><span class="chip on">L3</span><span class="chip on">L4</span><span class="chip">L5</span><span class="chip">L6</span><span class="chip on">L7</span><span class="chip on">L8</span></div>
+    <div class="fit"><div class="kicker">Fit</div><div class="body">Understand each turn, with nothing heavy running behind it.</div></div>
+  </div>
+  <div class="card purple">
+    <div class="head"><div class="kicker">Full cognitive architecture</div><span class="pill">Default</span></div>
+    <div class="name">Ultra</div><div class="frac">8 / 8</div>
+    <div class="body desc">Pro, plus a slow path that reasons across memories: merges and retires facts reversibly, builds L5 relations and L6 patterns.</div>
+    <div class="rule"></div>
+    <div class="kicker">Layers touched</div>
+    <div style="margin-top:9px"><span class="chip on">L1</span><span class="chip on">L2</span><span class="chip on">L3</span><span class="chip on">L4</span><span class="chip on">L5</span><span class="chip on">L6</span><span class="chip on">L7</span><span class="chip on">L8</span></div>
+    <div class="fit"><div class="kicker">Fit</div><div class="body">The more it is used, the more it looks like you.</div></div>
+  </div>
+</div>
+</body></html>

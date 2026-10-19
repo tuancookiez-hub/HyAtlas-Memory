@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="base.css">
+<style>
+body { height: 600px; position: relative; background: #050409; }
+.art { position: absolute; left: 0; top: 0; height: 600px; width: 800px; object-fit: cover;
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 62%, transparent 97%);
+  mask-image: linear-gradient(90deg, #000 0%, #000 62%, transparent 97%); }
+.glow { position: absolute; inset: 0; background: radial-gradient(520px 380px at 82% 48%, rgba(120,90,200,.16), transparent 70%); }
+.text { position: absolute; left: 640px; right: 48px; top: 0; bottom: 0; display: flex; flex-direction: column; justify-content: center; }
+.kick { font-family: "Segoe UI", Arial, sans-serif; letter-spacing: .22em; font-size: 13px; color: #f3c26b; text-transform: uppercase; }
+h1 { font-size: 72px; font-weight: 700; line-height: .98; margin-top: 14px; color: #f1ebe0; }
+.hook { margin-top: 18px; font-size: 32px; line-height: 1.15; color: #e9e4da; }
+.desc { margin-top: 16px; font-size: 16px; line-height: 1.5; color: #c9c2b6; max-width: 470px; }
+.meta { margin-top: 22px; }
+</style></head>
+<body>
+<img class="art" src="hero-art.png" alt="">
+<div class="glow"></div>
+<div class="text">
+  <div class="kick">Version 5.0 · the stable floor</div>
+  <h1>HyAtlas<br><span class="grad">Memory</span></h1>
+  <div class="hook">Memory you can <span class="grad">take back.</span></div>
+  <div class="desc">Self-hosted, eight-layer memory for Hermes in one Go binary. Every memory can be retired and restored, and a note you delete in Hermes is forgotten here too.</div>
+  <div class="mono meta">Lite · Pro · Ultra &nbsp;·&nbsp; knowledge graph &nbsp;·&nbsp; no telemetry</div>
+</div>
+</body></html>

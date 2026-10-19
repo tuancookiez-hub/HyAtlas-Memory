@@ -9,13 +9,12 @@ import (
 	"testing"
 )
 
-// The Nous Portal key is a 1-hour JWT that Hermes rotates in auth.json. The
-// server must read the CURRENT key per call, not the one frozen at startup —
-// otherwise extraction silently 401s an hour after boot.
+// A rotating key kept in a plain-text token file must be read per call, not
+// frozen at startup, or extraction silently 401s once the token expires.
 func TestResolveKeyReadsFileLive(t *testing.T) {
 	dir := t.TempDir()
-	kf := filepath.Join(dir, "auth.json")
-	writeKeyFile(t, kf, `{"providers":{"nous":{"agent_key":"key-A"}}}`)
+	kf := filepath.Join(dir, "key.txt")
+	writeKeyFile(t, kf, "key-A\n")
 
 	c := NewLLMClient("http://x", "frozen-bootstrap", "m")
 	c.KeyFile = kf
@@ -24,9 +23,9 @@ func TestResolveKeyReadsFileLive(t *testing.T) {
 		t.Fatalf("resolveKey = %q, want key-A (from file, not the frozen bootstrap)", got)
 	}
 
-	// Hermes rotates the JWT in place; the very next call must see the new key
+	// The token is rewritten in place; the very next call must see the new key
 	// with no restart and no refresh timer.
-	writeKeyFile(t, kf, `{"providers":{"nous":{"agent_key":"key-B"}}}`)
+	writeKeyFile(t, kf, "key-B\n")
 	if got := c.resolveKey(); got != "key-B" {
 		t.Fatalf("after rotation resolveKey = %q, want key-B", got)
 	}
@@ -59,22 +58,40 @@ func TestResolveKeyFallsBackToStaticOnAnyFailure(t *testing.T) {
 	}
 }
 
+// extractKey accepts only a plain-text token; anything that starts with "{" is
+// JSON, such as another program's credential file, and yields no key.
 func TestExtractKeyShapes(t *testing.T) {
-	// access_token fallback when agent_key is absent
-	if got := extractKey([]byte(`{"providers":{"nous":{"access_token":"tok-1"}}}`)); got != "tok-1" {
-		t.Errorf("access_token fallback = %q, want tok-1", got)
-	}
-	// agent_key wins over access_token
-	if got := extractKey([]byte(`{"providers":{"nous":{"agent_key":"ak","access_token":"tok"}}}`)); got != "ak" {
-		t.Errorf("agent_key precedence = %q, want ak", got)
-	}
-	// plain-text key file (bare token on a line)
 	if got := extractKey([]byte("  sk-live-abc123\n")); got != "sk-live-abc123" {
 		t.Errorf("plain text = %q, want sk-live-abc123", got)
 	}
-	// unrelated JSON (no nous provider, looks like an object) -> empty, caller falls back
-	if got := extractKey([]byte(`{"foo":"bar"}`)); got != "" {
-		t.Errorf("unrelated json = %q, want empty", got)
+	for _, js := range []string{
+		`{"providers":{"nous":{"agent_key":"ak"}}}`,
+		`{"providers":{"nous":{"access_token":"tok"}}}`,
+		"  \n{\"foo\":\"bar\"}",
+	} {
+		if got := extractKey([]byte(js)); got != "" {
+			t.Errorf("JSON %q gave %q, want no key", js, got)
+		}
+	}
+	if got := extractKey([]byte("  \n")); got != "" {
+		t.Errorf("blank file = %q, want empty", got)
+	}
+}
+
+// A key file holding JSON is refused and the static HYATLAS_LLM_KEY is used.
+func TestResolveKeyRefusesJSONKeyFile(t *testing.T) {
+	kf := filepath.Join(t.TempDir(), "auth.json")
+	writeKeyFile(t, kf, `{"providers":{"nous":{"agent_key":"stolen"}}}`)
+	c := NewLLMClient("http://x", "static-key", "m")
+	c.KeyFile = kf
+	for i := 0; i < 2; i++ {
+		if got := c.resolveKey(); got != "static-key" {
+			t.Fatalf("JSON key file: resolveKey = %q, want static-key", got)
+		}
+	}
+	c.APIKey = ""
+	if got := c.resolveKey(); got != "" {
+		t.Fatalf("JSON key file with no static key: resolveKey = %q, want empty", got)
 	}
 }
 
@@ -82,8 +99,8 @@ func TestExtractKeyShapes(t *testing.T) {
 // live key from the file, proving the per-request resolution reaches the wire.
 func TestCompleteSendsLiveKeyOnTheWire(t *testing.T) {
 	dir := t.TempDir()
-	kf := filepath.Join(dir, "auth.json")
-	writeKeyFile(t, kf, `{"providers":{"nous":{"agent_key":"wire-key-1"}}}`)
+	kf := filepath.Join(dir, "key.txt")
+	writeKeyFile(t, kf, "wire-key-1\n")
 
 	var sent atomic.Value // last Authorization header seen
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +112,7 @@ func TestCompleteSendsLiveKeyOnTheWire(t *testing.T) {
 
 	c := NewLLMClient(srv.URL, "frozen", "mock-model")
 	c.KeyFile = kf
-	if _, err := c.Complete(t.Context(), "some input"); err != nil {
+	if _, err := c.CompleteWith(t.Context(), "some input", ExtractContext{}); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 	if got := sent.Load().(string); got != "Bearer wire-key-1" {
@@ -103,8 +120,8 @@ func TestCompleteSendsLiveKeyOnTheWire(t *testing.T) {
 	}
 
 	// Rotate the file; the next call must send the NEW key on the wire.
-	writeKeyFile(t, kf, `{"providers":{"nous":{"agent_key":"wire-key-2"}}}`)
-	if _, err := c.Complete(t.Context(), "another input"); err != nil {
+	writeKeyFile(t, kf, "wire-key-2\n")
+	if _, err := c.CompleteWith(t.Context(), "another input", ExtractContext{}); err != nil {
 		t.Fatalf("Complete after rotation: %v", err)
 	}
 	if got := sent.Load().(string); got != "Bearer wire-key-2" {

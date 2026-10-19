@@ -11,7 +11,7 @@ $log    = Join-Path $data "hyatlas-v4.log"
 function Start-V4 {
     try {
         $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/healthz" -TimeoutSec 2 -UseBasicParsing
-        if ($r.StatusCode -eq 200) { Write-Host "HyAtlas v4 already running on $port."; return }
+        if ($r.StatusCode -eq 200) { Write-Host "HyAtlas already running on $port."; return }
     } catch { }
 
     if (-not (Test-Path $goExe)) {
@@ -44,11 +44,9 @@ function Start-V4 {
     if (-not $env:HYATLAS_LLM_MODEL) { $env:HYATLAS_LLM_MODEL = "poolside/laguna-s-2.1:free" }
     # No key is read here. This launcher never opens Hermes's credential file: a
     # program reading another application's credentials is what credential
-    # stealers do, and antivirus rightly blocks it. With the Hermes plugin's
-    # share_llm_key setting on, Hermes hands its current Nous key to the running
-    # server over localhost (kept in memory only); until then status shows
-    # llm: "awaiting_key". A key of your own can go in hyatlas-go.local.ps1 as
-    # HYATLAS_LLM_KEY.
+    # stealers do, and antivirus rightly blocks it. Until you set a key of your
+    # own (HYATLAS_LLM_KEY in hyatlas-go.local.ps1, or in the environment), status
+    # shows llm: "awaiting_key".
 
     Set-Location $goDir
     $proc = Start-Process -FilePath ".\hyatlas-go.exe" -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError "$log.err" -PassThru
@@ -58,27 +56,29 @@ function Start-V4 {
         Start-Sleep -Milliseconds 500
         try {
             $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/healthz" -TimeoutSec 1 -UseBasicParsing
-            if ($r.StatusCode -eq 200) { Write-Host "HyAtlas v4 started on $port."; return }
+            if ($r.StatusCode -eq 200) { Write-Host "HyAtlas started on $port."; return }
         } catch { }
     }
-    Write-Error "HyAtlas v4 did not respond on $port after 10s. Check $log"
+    Write-Error "HyAtlas did not respond on $port after 10s. Check $log"
     exit 1
 }
 
 function Stop-V4 {
+    # Stop-Process is a hard kill, so ask the server to write its buffered state first.
+    try { Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/v1/flush" -Method Post -TimeoutSec 3 -UseBasicParsing | Out-Null } catch { }
     Get-Process -Name "hyatlas-go" -ErrorAction SilentlyContinue | ForEach-Object {
         Write-Host "Stopped hyatlas-go.exe (pid $($_.Id))"
         Stop-Process -Id $_.Id -Force
     }
-    Write-Host "HyAtlas v4 stopped."
+    Write-Host "HyAtlas stopped."
 }
 
 function Status-V4 {
-    Write-Host "v4: 127.0.0.1:$port" -ForegroundColor Cyan
+    Write-Host "HyAtlas: 127.0.0.1:$port" -ForegroundColor Cyan
     try {
         $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/healthz" -TimeoutSec 4 -UseBasicParsing
         Write-Host $r.Content -ForegroundColor Green
-    } catch { Write-Host "[v4 offline]" -ForegroundColor Red }
+    } catch { Write-Host "[HyAtlas offline]" -ForegroundColor Red }
     Write-Host ""
     try {
         $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/v1/status" -TimeoutSec 4 -UseBasicParsing

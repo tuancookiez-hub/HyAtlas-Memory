@@ -1,8 +1,8 @@
-"""HTTP client for the HyAtlas v4 Go server.
+"""HTTP client for the HyAtlas Go server.
 
 Wire-compatible with the v3.5 ``HyMemoryClient`` interface that
 Hermes already imports. Same endpoints, same JSON shapes. Port is
-the only difference (19528 for v4, 19527 for v3.5).
+the only difference (19528; the old v3.5 server used 19527).
 """
 
 from __future__ import annotations
@@ -12,9 +12,32 @@ import logging
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _read_plugin_version() -> str:
+    """Return the version from the ``version:`` line of plugin.yaml beside this package.
+
+    The file is parsed as plain text so the client needs no YAML dependency. The
+    result is "unknown" when the file or the line is missing, so a damaged install
+    still imports.
+    """
+    try:
+        text = (Path(__file__).resolve().parent / "plugin.yaml").read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return "unknown"
+    for line in text.splitlines():
+        if line.startswith("version:"):
+            value = line.split(":", 1)[1].strip().strip("\"'")
+            return value or "unknown"
+    return "unknown"
+
+
+# The plugin version, read once at import so the provider and the User-Agent agree.
+PLUGIN_VERSION = _read_plugin_version()
 
 
 class HyatlasClientError(Exception):
@@ -26,13 +49,15 @@ class HyatlasUnreachable(HyatlasClientError):
 
 
 class HyatlasClient:
-    """Thin HTTP client for the v4 server's /api/v1/* endpoints."""
+    """Thin HTTP client for the server's /api/v1/* endpoints."""
 
     def __init__(self, base_url: str = "http://127.0.0.1:19528",
                  timeout: float = 15.0) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        self._opener = urllib.request.build_opener()
+        # An empty ProxyHandler stops urllib from sending loopback calls through
+        # HTTP_PROXY or HTTPS_PROXY, which Python does not exempt for 127.0.0.1.
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     # ------------------------------------------------------------------
     # Low-level HTTP
@@ -40,16 +65,17 @@ class HyatlasClient:
 
     def _request(
         self, method: str, path: str, body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
     ) -> Any:
         url = f"{self.base_url}{path}"
         data = None
-        headers = {"Accept": "application/json", "User-Agent": "hermes-hyatlas/4.0"}
+        headers = {"Accept": "application/json", "User-Agent": "hermes-hyatlas/" + PLUGIN_VERSION}
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
-            with self._opener.open(req, timeout=self.timeout) as resp:
+            with self._opener.open(req, timeout=timeout or self.timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
             raw = e.read()
@@ -114,15 +140,36 @@ class HyatlasClient:
         pass
 
     # ------------------------------------------------------------------
-    # v4 server endpoints (1:1 with the Go server's /api/v1/* surface)
+    # server endpoints (1:1 with the Go server's /api/v1/* surface)
     # ------------------------------------------------------------------
 
     def status(self) -> Dict[str, Any]:
         return self._get("/api/v1/status")
 
-    def push_llm_key(self, key: str) -> Dict[str, Any]:
-        """Hand the server the current LLM key; it is kept in the server's memory only."""
+    def set_llm_key(self, key: str) -> Dict[str, Any]:
+        """Hand the AI endpoint key to the server (POST /api/v1/llm/key).
+
+        The server keeps it in memory only and accepts it from this machine only.
+        The key is sent in the request body and appears in no log line or error
+        text built here.
+        """
         return self._post("/api/v1/llm/key", {"key": key})
+
+    def llm_test(self) -> Dict[str, Any]:
+        """Ask the server to make one tiny call with its model (POST /api/v1/llm/test).
+
+        Returns ``ok``, ``model``, ``base_host``, ``latency_ms`` and a short ``error``.
+        The server allows one call per 10 seconds (HTTP 429 otherwise) and answers only
+        this machine. The wait is longer than the usual timeout because the server gives
+        the model up to 20 seconds.
+        """
+        return self._request("POST", "/api/v1/llm/test", {}, timeout=max(self.timeout, 30.0))
+
+    def delete_memory(self, memory_id: str) -> Dict[str, Any]:
+        """Delete one memory by id. Deleting by id needs no admin switch on the server."""
+        if not str(memory_id or "").strip():
+            raise ValueError("delete_memory needs a memory id")
+        return self._post("/api/v1/delete_all", {"id": memory_id})
 
     def add(
         self,
@@ -142,6 +189,26 @@ class HyatlasClient:
             body["metadata"] = metadata
         return self._post("/api/v1/add", body)
 
+    def forget(
+        self,
+        text: str,
+        user_id: str = "",
+        agent_id: str = "",
+        reason: str = "",
+    ) -> Dict[str, Any]:
+        """Retire the memory-tool rows that match text, and what was derived from them.
+
+        The server marks them as forgotten, which keeps them restorable. Returns
+        ``forgotten`` (raw rows retired) and ``derived`` (rows derived from them).
+        """
+        body: Dict[str, Any] = {
+            "text": text,
+            "user_id": user_id,
+            "agent_id": agent_id,
+            "reason": reason,
+        }
+        return self._post("/api/v1/forget", body)
+
     def search(
         self,
         query: str,
@@ -149,6 +216,7 @@ class HyatlasClient:
         agent_id: str = "",
         layer: str = "",
         limit: int = 10,
+        session_id: str = "",
     ) -> Dict[str, Any]:
         body: Dict[str, Any] = {
             "query": query,
@@ -158,6 +226,9 @@ class HyatlasClient:
         }
         if layer:
             body["layer"] = layer
+        if session_id:
+            # The server ranks this session's intentions above other sessions'.
+            body["session_id"] = session_id
         return self._post("/api/v1/search", body)
 
     def feedback(

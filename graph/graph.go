@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -132,6 +133,49 @@ func (s *Store) persistLocked() error {
 	return os.Rename(tmp, s.path)
 }
 
+// RemoveSources forgets the given raw ids as evidence. An edge whose sources are all
+// in ids is removed; an edge with other sources keeps them, drops the forgotten
+// ones and takes the first remaining as its Source. An edge with no sources is left
+// alone. It returns how many edges it removed and how many it trimmed, and writes
+// the file only when something changed. Nodes are kept, since another owner row
+// or a later write may still use them.
+func (s *Store) RemoveSources(ids map[string]bool) (removed, trimmed int, err error) {
+	if len(ids) == 0 {
+		return 0, 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := make([]Edge, 0, len(s.edges))
+	for _, e := range s.edges {
+		hit := false
+		var rest []string
+		for _, src := range e.Sources {
+			if ids[src] {
+				hit = true
+			} else {
+				rest = append(rest, src)
+			}
+		}
+		if !hit {
+			kept = append(kept, e)
+			continue
+		}
+		if len(rest) == 0 {
+			removed++
+			continue
+		}
+		e.Sources = rest
+		e.Source = rest[0]
+		trimmed++
+		kept = append(kept, e)
+	}
+	if removed == 0 && trimmed == 0 {
+		return 0, 0, nil
+	}
+	s.edges = kept
+	return removed, trimmed, s.persistLocked()
+}
+
 // UpsertNode adds or updates a node. Returns the node id (stable).
 func (s *Store) UpsertNode(node Node) (string, error) {
 	s.mu.Lock()
@@ -173,7 +217,7 @@ func (s *Store) AddEdgeWithSources(userID, agentID, fromLabel, rel, toLabel stri
 		}
 		added := false
 		for _, src := range srcs {
-			if !containsString(e.Sources, src) {
+			if !slices.Contains(e.Sources, src) {
 				e.Sources = append(e.Sources, src)
 				added = true
 			}
@@ -247,12 +291,6 @@ type Neighbor struct {
 	Label    string `json:"label"`
 	Relation string `json:"relation"`
 	Incoming bool   `json:"incoming"` // true if edge points TO this node
-}
-
-// Neighbors returns nodes connected to the given node (by label or id) across
-// every owner, both directions, with the relation labeled.
-func (s *Store) Neighbors(label string) []Neighbor {
-	return s.NeighborsScoped(Scope{}, label)
 }
 
 // NeighborsScoped is Neighbors restricted to the owner named by sc: only nodes
@@ -450,20 +488,11 @@ func fnv(s string) string {
 func cleanSources(primary string, srcs []string) []string {
 	var out []string
 	for _, s := range append([]string{primary}, srcs...) {
-		if s != "" && !containsString(out, s) {
+		if s != "" && !slices.Contains(out, s) {
 			out = append(out, s)
 		}
 	}
 	return out
-}
-
-func containsString(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 // cloneEdge copies an edge so a snapshot does not share its Sources backing

@@ -30,7 +30,7 @@ func TestFuseKeepsKeywordHitBelowFloor(t *testing.T) {
 
 	// k1 is first in the keyword ranking, so it ties v1 (first by vector) and
 	// beats v2 (second by vector). The tie goes to the higher cosine.
-	got := fusedIDs(fuseHits(vec, kw, 0.60, 5))
+	got := fusedIDs(fuseHitsWeighted(vec, kw, 0.60, 5, 1, 1))
 	if len(got) != 3 || got[0] != "v1" || got[1] != "k1" || got[2] != "v2" {
 		t.Fatalf("fused = %v, want [v1 k1 v2]", got)
 	}
@@ -42,7 +42,7 @@ func TestFuseDropsWeakVectorOnlyHit(t *testing.T) {
 		{ID: "good", Content: "relevant", Score: 0.80, Layer: memory.L3Fact},
 		{ID: "weak", Content: "unrelated", Score: 0.52, Layer: memory.L3Fact},
 	}
-	got := fusedIDs(fuseHits(vec, nil, 0.60, 5))
+	got := fusedIDs(fuseHitsWeighted(vec, nil, 0.60, 5, 1, 1))
 	if len(got) != 1 || got[0] != "good" {
 		t.Fatalf("fused = %v, want [good]", got)
 	}
@@ -56,7 +56,7 @@ func TestFuseWithoutKeywordKeepsVectorOrder(t *testing.T) {
 		{ID: "b", Content: "b", Score: 0.8, Layer: memory.L3Fact},
 		{ID: "c", Content: "c", Score: 0.7, Layer: memory.L3Fact},
 	}
-	got := fusedIDs(fuseHits(vec, nil, 0, 2))
+	got := fusedIDs(fuseHitsWeighted(vec, nil, 0, 2, 1, 1))
 	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
 		t.Fatalf("fused = %v, want [a b]", got)
 	}
@@ -68,7 +68,7 @@ func TestFuseCollapsesMirrorText(t *testing.T) {
 		{ID: "l3", Content: "Tuna starts the server by hand", Score: 0.8, Layer: memory.L3Fact},
 		{ID: "l1", Content: "tuna starts the server by hand", Score: 0.8, Layer: memory.L1Profile},
 	}
-	got := fuseHits(vec, nil, 0, 5)
+	got := fuseHitsWeighted(vec, nil, 0, 5, 1, 1)
 	if len(got) != 1 || got[0].Layer != memory.L1Profile {
 		t.Fatalf("fused = %v, want one L1 Profile hit", fusedIDs(got))
 	}

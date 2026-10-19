@@ -192,6 +192,12 @@ func TestExtractIntentionDoneAndReplaces(t *testing.T) {
 	if dead, by := ctxSuperseded(t, srv.store, "int-b"); !dead || by != "raw1" {
 		t.Errorf("int-b: dead=%v by=%q, want superseded by raw1", dead, by)
 	}
+	if got := srv.store.GetMany([]string{"int-a"})[0].Meta[metaSupersededHow]; got != howReplaced {
+		t.Errorf("int-a superseded_how = %q, want %q", got, howReplaced)
+	}
+	if got := srv.store.GetMany([]string{"int-b"})[0].Meta[metaSupersededHow]; got != howDone {
+		t.Errorf("int-b superseded_how = %q, want %q", got, howDone)
+	}
 	if dead, _ := ctxSuperseded(t, srv.store, "int-c"); dead {
 		t.Error("an intention the reply did not mention was closed")
 	}

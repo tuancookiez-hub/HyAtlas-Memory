@@ -94,6 +94,7 @@ func TestLoadIndexFallsBackToRebuild(t *testing.T) {
 // TestDeleteAllGuard covers the unscoped-wipe guard and both scoping styles.
 func TestDeleteAllGuard(t *testing.T) {
 	srv := newTestServer(t, "test", "test")
+	srv.admin = true // scoped deletes and wipes need HYATLAS_ADMIN=on
 	for _, u := range []string{"keep-user", "drop-user"} {
 		if err := srv.store.Add(memory.L2Raw, "doc-"+u, "text", map[string]string{
 			"user_id": u, "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
@@ -230,6 +231,7 @@ func TestReprocessByIds(t *testing.T) {
 // carries a scope that would otherwise be valid.
 func TestDeleteAllRejectsNonDeleteMethods(t *testing.T) {
 	srv := newTestServer(t, "test", "test")
+	srv.admin = true // scoped deletes and wipes need HYATLAS_ADMIN=on
 	if err := srv.store.Add(memory.L2Raw, "doc-1", "text", map[string]string{
 		"user_id": "u", "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
 	}); err != nil {
@@ -260,6 +262,7 @@ func TestDeleteAllRejectsNonDeleteMethods(t *testing.T) {
 // A call with no filter is refused, and only an explicit all=true wipes.
 func TestDeleteAllRequiresFilterOrAll(t *testing.T) {
 	srv := newTestServer(t, "test", "test")
+	srv.admin = true // scoped deletes and wipes need HYATLAS_ADMIN=on
 	if err := srv.store.Add(memory.L2Raw, "doc-1", "text", map[string]string{
 		"user_id": "u", "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
 	}); err != nil {
@@ -305,42 +308,9 @@ func TestRequestBodyIsBounded(t *testing.T) {
 	}
 }
 
-// The dashboard status must report the configured mode and the same LLM state
-// as /api/v1/status, not a hardcoded "ok".
-func TestDashStatusReportsModeAndLLMState(t *testing.T) {
-	cases := []struct {
-		mode    Mode
-		withKey bool
-		wantLLM string
-	}{
-		{ModeLite, true, "unused"},
-		{ModeUltra, false, "unconfigured"},
-		{ModePro, true, "ok"},
-	}
-	for _, c := range cases {
-		srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
-		srv.mode = c.mode
-		if c.withKey {
-			srv.llm = NewLLMClient("http://127.0.0.1:1/v1", "k", "m")
-		}
-		w := httptest.NewRecorder()
-		srv.handleDashStatus(w, httptest.NewRequest("GET", "/api/status", nil))
-		var st map[string]any
-		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
-			t.Fatal(err)
-		}
-		if st["mode"] != string(c.mode) {
-			t.Errorf("%s: dash mode = %v", c.mode, st["mode"])
-		}
-		if st["llm"] != c.wantLLM {
-			t.Errorf("%s: dash llm = %v, want %q", c.mode, st["llm"], c.wantLLM)
-		}
-	}
-}
-
-// The dashboard status reads the extraction error that background goroutines
+// The status endpoint reads the extraction error that background goroutines
 // write. Run with -race: this must not read the field unsynchronised.
-func TestDashStatusConcurrentWithExtractErr(t *testing.T) {
+func TestStatusConcurrentWithExtractErr(t *testing.T) {
 	srv := newTestServer(t, "test", "test")
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -353,7 +323,7 @@ func TestDashStatusConcurrentWithExtractErr(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			w := httptest.NewRecorder()
-			srv.handleDashStatus(w, httptest.NewRequest("GET", "/api/status", nil))
+			srv.handleStatus(w, httptest.NewRequest("GET", "/api/v1/status", nil))
 		}()
 	}
 	wg.Wait()
@@ -383,6 +353,9 @@ func TestConcurrentAddsKeepIndexValid(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Errorf("concurrent add: %v", err)
+	}
+	if err := srv.store.Flush(); err != nil {
+		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(srv.store.indexPath))
 	if err != nil {
@@ -494,5 +467,49 @@ func TestGuardLocalRefusesBrowserOriginsAndRebinding(t *testing.T) {
 		if got := send("GET", "/api/v1/status", c.host, c.hdr); got != c.want {
 			t.Errorf("%s: host=%q hdr=%v: want %d, got %d", c.name, c.host, c.hdr, c.want, got)
 		}
+	}
+}
+
+// A delete by one id works without the admin switch, while a scoped delete or a wipe
+// is refused with 403 and removes nothing. With the switch on, both go through.
+func TestBulkDeleteNeedsAdmin(t *testing.T) {
+	srv := newTestServer(t, "test", "test")
+	for _, id := range []string{"doc-1", "doc-2"} {
+		if err := srv.store.Add(memory.L2Raw, id, "text "+id, map[string]string{
+			"user_id": "u", "agent_id": "a", "ts": "2026-10-06T00:00:00Z",
+		}); err != nil {
+			t.Fatalf("add: %v", err)
+		}
+	}
+	for _, body := range []string{`{"user_id":"u"}`, `{"layer":"l2_raw"}`, `{"agent_id":"a"}`, `{"all":true}`, `{"confirm":"wipe-all"}`} {
+		w := httptest.NewRecorder()
+		srv.handleDelete(w, httptest.NewRequest("POST", "/api/v1/delete_all", strings.NewReader(body)))
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s without admin: want 403, got %d", body, w.Code)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out["deleted_count"] != float64(0) || out["error"] == "" {
+			t.Errorf("%s without admin: want deleted_count 0 and an error, got %v", body, out)
+		}
+	}
+	if srv.store.TotalMemories() != 2 {
+		t.Fatalf("refused bulk deletes removed rows: %d left", srv.store.TotalMemories())
+	}
+
+	// One id is allowed with the switch off.
+	w := httptest.NewRecorder()
+	srv.handleDelete(w, httptest.NewRequest("POST", "/api/v1/delete_all", strings.NewReader(`{"id":"doc-1"}`)))
+	if w.Code != http.StatusOK || srv.store.TotalMemories() != 1 {
+		t.Errorf("delete by id: code %d, %d rows left; want 200 and 1", w.Code, srv.store.TotalMemories())
+	}
+
+	srv.admin = true
+	w = httptest.NewRecorder()
+	srv.handleDelete(w, httptest.NewRequest("POST", "/api/v1/delete_all", strings.NewReader(`{"user_id":"u"}`)))
+	if w.Code != http.StatusOK || srv.store.TotalMemories() != 0 {
+		t.Errorf("scoped delete with admin: code %d, %d rows left; want 200 and 0", w.Code, srv.store.TotalMemories())
 	}
 }

@@ -1,5 +1,194 @@
 # Changelog
 
+## [5.0.0] — 2026-10-20
+
+A stable floor: a review of the whole system and a clean-up of the 4.8 and 4.9 code. The
+same eight layers and three modes, faster and harder to lose data from, with the gaps the
+review found closed: forgetting, links between facts, session-aware recall, one alias rule,
+and stricter key handling.
+
+### Added
+
+- **Cross-topic schemas** (ultra). Consolidation finds a schema only inside one topic. At
+  the end of a pass, an owner with at least 4 live schemas from at least 2 topics gets one
+  extra LLM call that looks for up to 3 patterns spanning two or more of them ("prefers small
+  reversible steps" seen in coding, finances and travel). Each is a new L6 schema with
+  `cross_topic` set and the facts behind the schemas it generalises as evidence, skipped when
+  the owner already has the same pattern (0.92 guard); existing schemas are never retired or
+  edited. At most once per owner per `HYATLAS_CROSS_SCHEMA_EVERY` (default `24h`, `off`
+  disables), remembered across restarts; the report gains `cross_schemas`.
+- **`hermes hyatlas doctor`.** One command that says whether memory works and how to fix
+  it. It checks the provider and plugin version, that the server answers, that server and
+  plugin versions match, the mode, the AI key, that the model answers, a write-search-delete
+  round trip and the extraction backlog. Each line is `✓`, `!` or `✗`, every `!` and `✗` has
+  a `Fix:` line, and the exit code is 1 when anything failed. The key is never printed. The
+  setup text and the first-connect log line point at it.
+- **`POST /api/v1/llm/test`.** Makes one tiny call with the configured model and returns
+  `ok`, `model`, `base_host`, `latency_ms` and a short `error` with no key or URL. This
+  machine only, POST only, at most one call per 10 seconds (429 with `retry_after`). Lite
+  makes no call; no key reports `awaiting_key`.
+- **Forget.** `POST /api/v1/forget` retires the owner's memory-tool raw rows with a given
+  text, and every live row derived from them, as `forgotten`. It also clears them from
+  entity pages, graph edges and the Now page. It is reversible through
+  `/api/v1/admin/restore`, so it needs no admin switch; restore brings back the rows but
+  not page entries or edges. The Hermes plugin sends it when
+  Hermes's `memory` tool replaces or removes an entry (the old text arrives as
+  `previous_content`); a replace then adds the new content as an add does. A remove with
+  no old text does nothing.
+- **Links and recurring events** (with `HYATLAS_RECONCILE=on`). Reconcile can LINK a new
+  fact to stored ones as `related`, `contrasts` or `same_series` without retiring either,
+  keeping the newest 8 links a fact. An UPDATE that merges a recurring event also keeps its
+  count and its newest 20 dates on the merged fact. Search adds up to 2 facts that the top
+  hits link to and the query missed, inside the result limit, after the query's own best
+  hits.
+- **The current session's intentions first.** Search takes `session_id`; an L7 intention
+  from that session ranks above one from another session. The Hermes plugin sends it.
+- **Channel order from the server.** The search response carries `order`, and the plugin
+  shows the channels in it, falling back to its own order for an older server.
+- **Identifiers in lite.** Keyword search in `lite` covers the raw rows, so a query for an
+  identifier (`19528`) finds the turn that mentions it. `pro` and `ultra` still leave raw
+  rows out of an all-layer search.
+- **`POST /api/v1/flush`.** Writes the buffered doc index and usage counts now.
+- **Links and recurring events in recall.** Each search hit carries its `links` (a list of
+  `{id, relation}`) and, for a recurring event, `series_count` and `series_dates`, each
+  left out when empty. The plugin adds ", 3 times (2026-03-02, 2026-05-14, 2026-10-13)"
+  (the newest three dates) to the hit's line for a series; links are for the agent's tools
+  and are not put in the prompt.
+- **How a row was retired.** `/api/v1/list` with `include_superseded` returns
+  `superseded_how` (`replaced`, `updated`, `merged`, `restated`, `dropped`, `done` or
+  `forgotten`) beside `superseded_by` and `drop_reason`.
+- **MMR diversity in recall.** After near-duplicate demotion, the first twice `limit`
+  hits are reordered with Maximal Marginal Relevance, so the visible results cover
+  different aspects instead of several phrasings of one thing. `HYATLAS_MMR_LAMBDA`
+  (default 0.75, `1` turns it off) sets the balance. It applies to all-layer and L3-only
+  searches, never to a raw-only query, and pages, schemas and intentions keep their slots.
+
+### Fixed
+
+- **No native memory leak in embeddings.** Each embedding left its onnxruntime tensors
+  allocated, so a long-running server's memory kept growing. They are freed after every run.
+- **A long token no longer stalls a write.** A hash or pasted blob without spaces took
+  seconds to tokenize; the tokenizer now stops at the longest vocabulary entry and once the
+  sequence is full. Tokens, and so stored vectors, are unchanged.
+- **The AI key is read through Hermes's secret route** (`get_secret`, which honours the active
+  profile), and config.yaml through Hermes's public config loader (catalog rules 9 and 11).
+- Smaller store fixes: a deleted row can no longer be revived by a rewrite in flight, a
+  failed delete is reported instead of leaving a ghost row, the "extracted" flag survives an
+  index rebuild, a failed topic cluster's retry wait is kept when clusters are re-cut,
+  shortened text never splits a multi-byte character, and the backlog apply refuses a
+  replacement loop of any length.
+
+- **Turns are no longer left unextracted.** A write made while the server waits for its
+  key, or whose extraction failed (outage, rate limit), stayed raw-only until someone
+  called `/api/v1/reprocess`. A catch-up pass now extracts them: when a key arrives and
+  every `HYATLAS_CATCHUP_EVERY` (default 10m; `off` disables), up to 20 rows a run,
+  oldest first, stopping at the first model error. A reply that cannot be parsed counts a
+  try on that row and the run goes on; after 3 tries the row is left alone (`/api/v1/reprocess`
+  can still extract it). Only rows written in `pro` or `ultra` (marked `extract_wanted`) and
+  younger than `HYATLAS_CATCHUP_MAX_AGE` (default 168h, 7 days; `off` for no limit) are caught up, so
+  switching from `lite` does not re-extract old history. A raw row that already has facts is
+  marked extracted instead of being sent again. `/api/v1/status` reports `unextracted`.
+- **Forgetting beats a slow extraction, and shutdown waits for every writer.** An
+  extraction whose raw row was forgotten while the model answered stores nothing. A clean
+  stop cancels and waits for consolidation, episodes, Now pages and the backlog job, as it
+  did for extractions, before the final flush.
+- **A numeric confidence no longer loses the whole turn.** An experience with
+  `"confidence": 0.9` failed the decode of the entire extraction. Experiences now decode
+  tolerantly.
+- **The format-error retry runs only after a parse error.** An HTTP error or timeout was
+  retried with a "your reply was not JSON" prompt, doubling calls during an outage.
+- **The Now page catches up after a burst.** It refreshed on the first write of a
+  15-minute window and ignored the rest; a trailing refresh now follows.
+- **Raw decay keeps what it must** (`HYATLAS_RAW_RETENTION`, opt-in): it never deletes a
+  row that is not extracted yet, and it protects the sources of live rows of every layer.
+- **The plugin never sends loopback traffic through a proxy.** With `HTTP_PROXY` set,
+  memory writes and searches went to the proxy. The plugin
+  client and the dashboard bridge now ignore proxy settings for the local server.
+
+### Removed
+
+- **`/api/status`**, a v3.5 dashboard shim nothing called; use `/api/v1/status`.
+- **`share_llm_key`** (the plugin no longer takes Hermes's Nous sign-in token; set your
+  own extraction key). Hermes's catalog rule 11 says a plugin gets credentials only
+  through Hermes routes and must not hand Hermes's provider token to another program.
+  Set `llm_key` with `hermes memory setup`, or `HYATLAS_LLM_KEY`, or a plain-text
+  `HYATLAS_LLM_KEY_FILE`; a Nous Portal API key, or the key of any OpenAI-compatible
+  provider, works. A `share_llm_key` left in `hyatlas.json` is ignored. The plugin no
+  longer imports anything from Hermes's runtime provider or reads a Hermes credential.
+  The server keeps `POST /api/v1/llm/key` for a launcher or tool you run on the same
+  machine; it now answers 403 to any non-loopback caller.
+
+### Changed
+
+- **Bulk delete needs `HYATLAS_ADMIN=on`.** `/api/v1/delete_all` by layer, user, agent or
+  all is refused (403) without it; deleting one memory by id is unchanged. Everything
+  else in HyAtlas retires data reversibly, and this was the one irreversible path.
+- **Clean shutdown.** Ctrl-C or SIGTERM stops the server after in-flight requests and
+  writes buffered state. `POST /api/v1/flush` writes it on demand; the Windows launcher
+  and the plugin call it before a hard kill. The server also waits up to 10 seconds for
+  the background extractions that writes just served; the catch-up pass finishes any
+  that are left on the next start, and never extracts a row a write is still working on.
+- **Settings.** Every duration setting (the consolidation intervals, `HYATLAS_RAW_RETENTION`,
+  `HYATLAS_CATCHUP_EVERY`, `HYATLAS_EPISODE_GAP`, `HYATLAS_NOW_EVERY`,
+  `HYATLAS_INTENTION_TTL` and the snapshot interval) shares one parser: a bare number means
+  seconds, and `0`, `off`, `false` or `no` turn the feature off. So
+  `HYATLAS_CONSOLIDATE_EVERY=off` now fails at start in ultra, as `0` always did, and
+  `HYATLAS_INTENTION_TTL=off` means no limit on intentions. The plugin's `auto_start`
+  environment switch accepts `on`. Near-duplicate demotion looks at the
+  first 2×limit hits.
+- **One alias rule.** `HYATLAS_USER_ALIASES` is held by the store, and everything asks it:
+  `/api/v1/list` with a `user_id` includes that person's other IDs, write-time
+  de-duplication, the related facts, entity pages and open intentions shown to extraction,
+  consolidation and forget cover them, and episodes and Now pages are keyed by the
+  person's first ID (a Now page stored under another ID is still found).
+- **Experiences stay out of the candidate lists.** Task experiences are left out of the
+  related facts shown to extraction and of reconcile's candidates by the search itself,
+  so they no longer use up slots; a repeat of the lesson still updates one.
+- **Key handling.** `HYATLAS_LLM_KEY_FILE` takes a plain-text token only. A file whose
+  content starts with `{` (JSON, such as another program's credential file) gives no key,
+  logs one warning without its content, and `HYATLAS_LLM_KEY` is used instead.
+  `POST /api/v1/llm/key` is refused (403) unless the caller is a loopback address.
+- **Every retirement records how.** One record (by whom, how, why) is written at every
+  place a row is retired.
+- **Setup wizard and the key.** `hermes memory setup` asks five questions: how much
+  HyAtlas should think (`ultra`, `pro`, `lite`, ultra by default), the AI endpoint, the
+  key, the model, and "Auto-start the HyAtlas server with Hermes? (y/N)". Enter takes
+  the Nous Portal and a free model. Advanced settings moved out of setup, to
+  `hermes hyatlas settings` (it lists every setting and where its value comes from;
+  `hermes hyatlas settings set KEY VALUE` changes one) and the Desktop settings form.
+  Running setup again keeps your advanced values. The stored mode may be the whole menu line;
+  every reader uses its first word. The plugin hands its own key (`HYATLAS_LLM_KEY`)
+  over localhost to a server on this machine that reports `llm: "awaiting_key"`, so a
+  server you start yourself gets the key from setup. It checks at load and at session
+  start, then at most every 10 minutes, never for a remote host, and never logs the key.
+  No prompt or message calls the server "v4" any more.
+
+### Upgrading from 4.9
+
+- A JSON `HYATLAS_LLM_KEY_FILE` stops working: switch to a plain-text token file, or use
+  `HYATLAS_LLM_KEY`.
+- `share_llm_key` is gone: set your own extraction key (see Removed).
+- Scripts that call `delete_all` by layer, user, agent or all need `HYATLAS_ADMIN=on`.
+- `HYATLAS_CONSOLIDATE_EVERY=off` (or `false`, `no`) stops an ultra server at start;
+  use `HYATLAS_MODE=pro` to run without the slow path.
+- A bare number in any duration setting is read as seconds.
+
+### Performance
+
+- The doc index is written in the background at most once a second, compact, outside the
+  write lock, instead of in full on every write while searches waited.
+- A search embeds the query once instead of three times, and keyword search reads an
+  inverted index instead of re-tokenising every stored memory per query.
+- A write embeds each text once (facts were embedded up to three times).
+- History on read, entity names and usage counts no longer scan or rewrite whole files
+  per request.
+
+### Internal
+
+- One lenient decoder for model replies, one rerank helper, the search handler split into
+  named steps, shared helpers for time parsing, owner filters and live rows, and dead
+  extraction fields removed.
+
 ## [4.9.1] — 2026-10-18
 
 Fixes from a review of the 4.8 and 4.9 code. Server only: the Hermes plugin is unchanged.

@@ -10,12 +10,15 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -27,7 +30,7 @@ import (
 // It is exposed on /api/v1/status and /api/info so every client (Desktop pane,
 // web dashboard, CLI) reports the real running version instead of hardcoding
 // a "v4" badge that silently goes stale on each release. Bump in one place.
-const Version = "4.9.1"
+const Version = "5.0.0"
 
 // Server mirrors the HyAtlas REST contract for drop-in parity.
 type Server struct {
@@ -43,9 +46,6 @@ type Server struct {
 	// allowedHosts are the extra hostnames (HYATLAS_ALLOWED_HOSTS) a request may
 	// name in Host or Origin, beyond localhost and IP literals (see guardLocal).
 	allowedHosts []string
-	// ownerAliases maps a user ID to every ID of the same person
-	// (HYATLAS_USER_ALIASES), so search covers all of them.
-	ownerAliases map[string][]string
 	// minScore and dedupeScore are HYATLAS_MIN_SCORE and HYATLAS_DEDUPE_SCORE. The
 	// zero value turns each off, which is what tests built without main get.
 	minScore    float64
@@ -57,6 +57,9 @@ type Server struct {
 	// of results. The zero values turn both off, as for minScore.
 	recency      bool
 	intentionTTL time.Duration
+	// mmrLambda (HYATLAS_MMR_LAMBDA) is the relevance weight of the MMR diversity pass
+	// in search; the zero value, like 1, turns the pass off.
+	mmrLambda float64
 	// now keeps each owner's working-memory page (HYATLAS_NOW_EVERY); usage counts
 	// which recalled memories replies actually used (HYATLAS_USAGE_LEARNING). Either
 	// may be nil, as in tests built without main, which turns that feature off.
@@ -68,11 +71,134 @@ type Server struct {
 	// backlog is the one-time admin pass over facts stored before 4.7.0
 	// (/api/v1/admin/backlog): contradictions and entity pages.
 	backlog *BacklogJob
+	// catchup re-extracts raw memories whose extraction never happened or failed
+	// (HYATLAS_CATCHUP_EVERY, or a key arriving). nil in lite mode and in tests built
+	// without main, which turns it off.
+	catchup *Catchup
+	// llmTest is the rate limit of POST /api/v1/llm/test: when its last real model
+	// call started, checked and set under its own mutex (see llmtest.go).
+	llmTest struct {
+		mu   sync.Mutex
+		last time.Time
+	}
 
 	// mu guards lastExtractErr: the extraction goroutines write it from
 	// background contexts while /api/v1/status reads it on request.
 	mu             sync.RWMutex
 	lastExtractErr string
+
+	// extracting counts, per raw memory id, the extractions running or about to run
+	// (guarded by extractMu), so the catch-up pass never extracts a row a write is
+	// still working on. bg tracks the background extractions and bgRunning counts them,
+	// so a shutdown can wait for them (see waitExtractions).
+	extractMu  sync.Mutex
+	extracting map[string]int
+	bg         sync.WaitGroup
+	bgRunning  atomic.Int64
+}
+
+// beginExtract marks the raw memory id as being extracted. Marks nest: each call
+// needs its own endExtract.
+func (s *Server) beginExtract(id string) {
+	s.extractMu.Lock()
+	defer s.extractMu.Unlock()
+	if s.extracting == nil {
+		s.extracting = map[string]int{}
+	}
+	s.extracting[id]++
+}
+
+// endExtract undoes one beginExtract of id.
+func (s *Server) endExtract(id string) {
+	s.extractMu.Lock()
+	defer s.extractMu.Unlock()
+	if s.extracting[id] <= 1 {
+		delete(s.extracting, id)
+		return
+	}
+	s.extracting[id]--
+}
+
+// extractionRunning reports whether an extraction of the raw memory id is running.
+func (s *Server) extractionRunning(id string) bool {
+	s.extractMu.Lock()
+	defer s.extractMu.Unlock()
+	return s.extracting[id] > 0
+}
+
+// goExtract runs extract in the background. The row is marked as in flight before
+// the goroutine starts, so the catch-up pass cannot slip in between, and the run is
+// counted so waitExtractions can wait for it.
+func (s *Server) goExtract(text, userID, agentID, id string) {
+	s.beginExtract(id)
+	s.bg.Add(1)
+	s.bgRunning.Add(1)
+	go func() {
+		defer s.bgRunning.Add(-1)
+		defer s.bg.Done()
+		defer s.endExtract(id)
+		_ = s.extract(text, userID, agentID, id)
+	}()
+}
+
+// shutdownExtractWait is how long a clean shutdown waits for background extractions.
+const shutdownExtractWait = 10 * time.Second
+
+// waitExtractions waits up to timeout for the background extractions to finish and
+// returns how many are still running (0 when all finished). A shutdown calls it
+// after the HTTP server has drained, so a write whose extraction was still running
+// is not cut off mid-way.
+func (s *Server) waitExtractions(timeout time.Duration) int {
+	if waitTimed(&s.bg, timeout) {
+		return 0
+	}
+	return int(s.bgRunning.Load())
+}
+
+// waitTimed waits for wg and reports whether it finished within timeout. On a timeout
+// the waiting goroutine is left to end whenever the work does. It is the one wait every
+// background writer uses at shutdown: extractions, the catch-up loop, consolidation,
+// episodes, the Now pages and the backlog job.
+func waitTimed(wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		return false
+	}
+}
+
+// waitBackground waits, up to timeout for each, for every background writer to stop:
+// first the extractions and catch-up passes, then the consolidation, episode and
+// backlog work they may have fed, and last the Now pages, which extraction asks to
+// refresh. The caller has already cancelled their context and drained the HTTP
+// server, so nothing starts new work. Whatever is still running after its wait is
+// named in the log, because the store is closed right after.
+func (s *Server) waitBackground(timeout time.Duration) {
+	if left := s.waitExtractions(timeout); left > 0 {
+		log.Printf("shutdown: %d extraction(s) still running after %s; the catch-up pass finishes them on the next start", left, timeout)
+	}
+	writers := []struct {
+		name string
+		wait func(time.Duration) bool
+	}{
+		{"consolidation", s.cons.Wait},
+		{"episodes", s.episodes.Wait},
+		{"backlog", s.backlog.Wait},
+		{"now pages", s.now.Shutdown},
+	}
+	for _, w := range writers {
+		if !w.wait(timeout) {
+			log.Printf("shutdown: %s still running after %s", w.name, timeout)
+		}
+	}
 }
 
 func (s *Server) setExtractErr(err string) {
@@ -140,6 +266,10 @@ type Status struct {
 	// Episodes counts episodes still open and closed ones waiting for a summary.
 	// Absent when episodes are off (lite mode or HYATLAS_EPISODE_GAP=off).
 	Episodes *EpisodeCounts `json:"episodes,omitempty"`
+	// Unextracted is how many raw memories extraction has not reached: written
+	// while the server had no key, or whose extraction failed. The catch-up loop
+	// works these off (see catchup.go). It is 0 in lite mode, which extracts nothing.
+	Unextracted int `json:"unextracted"`
 }
 
 // EpisodeCounts is the episodes part of /api/v1/status.
@@ -190,6 +320,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Consolidations:   consRuns,
 		LastConsolidated: lastCons,
 		Episodes:         s.episodeCounts(),
+		Unextracted:      s.unextractedCount(),
 	})
 }
 
@@ -202,7 +333,7 @@ func (s *Server) episodeCounts() *EpisodeCounts {
 	return &EpisodeCounts{Open: open, Pending: pending}
 }
 
-// promoteExtraction writes one System1 pass to the layers that pass owns:
+// promoteExtractionCtx writes one System1 pass to the layers that pass owns:
 // L3 facts (and the L1 profile mirror for preferences), L7 intention and entity
 // pages.
 //
@@ -218,26 +349,16 @@ func (s *Server) episodeCounts() *EpisodeCounts {
 // conversations that produced it, and so raw decay can protect the rows a live
 // claim still depends on.
 //
-// It never de-duplicates; the server path uses promoteExtractionDedupe.
-func promoteExtraction(store *MemoryStore, ex *Extraction, userID, agentID, sourceID string) {
-	promoteExtractionDedupe(store, ex, userID, agentID, sourceID, 0)
-}
-
-// promoteExtractionDedupe is promoteExtraction that also folds restatements. Before an
-// L3 fact is written, the owner's nearest live L3 fact is looked up; if it scores at
-// least dedupe, the new fact is written and the old one, with its L1 Profile mirrors,
-// is superseded by it. Newest wins, so an updated value replaces the stale one rather
-// than being dropped as a duplicate. dedupe <= 0 turns this off.
-func promoteExtractionDedupe(store *MemoryStore, ex *Extraction, userID, agentID, sourceID string, dedupe float64) {
-	promoteExtractionCtx(store, ex, ExtractContext{}, userID, agentID, sourceID, dedupe)
-}
-
-// promoteExtractionCtx is promoteExtractionDedupe that also applies what the model
-// said about the context it was shown (ec): facts that replace related facts, an
-// intention that replaces an open one, and open intentions that are done. Only ids
-// that are in ec are honoured, because the reply is model output and an id it
-// invents or garbles must never supersede a real row. With an empty ec it is
-// promoteExtractionDedupe exactly.
+// Before an L3 fact is written, the owner's nearest live L3 fact is looked up; if
+// it scores at least dedupe, the new fact is written and the old one, with its L1
+// Profile mirrors, is superseded by it. Newest wins, so an updated value replaces
+// the stale one rather than being dropped as a duplicate. dedupe <= 0 turns this off.
+//
+// ec is what the model was shown about the store (see ExtractContext): facts that
+// replace related facts, an intention that replaces an open one, and open
+// intentions that are done. Only ids that are in ec are honoured, because the reply
+// is model output and an id it invents or garbles must never supersede a real row.
+// An empty ec applies none of that.
 // It returns the ids of the L3 facts it wrote, which episodes group.
 func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext, userID, agentID, sourceID string, dedupe float64) []string {
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -252,8 +373,16 @@ func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext,
 		// are written, so the new L1 mirror is not taken for one of the old fact's
 		// mirrors.
 		stale := map[string][]string{}
-		if dedupe > 0 {
-			near, err := store.search(f.Data, 1, memory.L3Fact, userID, agentID)
+		// The fact is embedded once. The vector serves the dedupe search, the fact
+		// and its L1 mirror. When the embedding fails the dedupe is skipped and Add
+		// tries again, as it always did.
+		qv, embedErr := store.embed.Embed(store.ctx, f.Data)
+		if embedErr != nil {
+			log.Printf("extract: embed fact: %v", embedErr)
+			qv = nil
+		}
+		if dedupe > 0 && qv != nil {
+			near, err := store.searchOwnersWhere(qv, 1, memory.L3Fact, store.owners(userID), agentID, searchOpts{})
 			if err == nil && len(near) > 0 && float64(near[0].Score) >= dedupe && sameNumbers(near[0].Content, f.Data) {
 				old := near[0]
 				stale[howRestated] = append([]string{old.ID}, store.MirrorsOf(memory.L1Profile, old.Meta["source_id"], old.Content)...)
@@ -267,7 +396,7 @@ func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext,
 		}
 		var updated []string
 		for _, id := range shown(f.Updates, ec.hasRelated) {
-			if !containsID(replaced, id) {
+			if !slices.Contains(replaced, id) {
 				updated = append(updated, id)
 			}
 		}
@@ -285,24 +414,24 @@ func promoteExtractionCtx(store *MemoryStore, ex *Extraction, ec ExtractContext,
 		if when := normalizeEventDate(f.When); when != "" && f.Layer != "user_preferences" {
 			meta[metaEventAt] = when
 		}
-		if err := store.Add(memory.L3Fact, factID, f.Data, meta); err != nil {
+		if err := store.addWithVector(memory.L3Fact, factID, f.Data, meta, qv); err != nil {
 			log.Printf("extract: fact: %v", err)
 			continue
 		}
 		factIDs = append(factIDs, factID)
 		// L1 Profile: user_preferences are stable identity — mirror to profile layer.
 		if f.Layer == "user_preferences" {
-			_ = store.Add(memory.L1Profile, newID(), f.Data, map[string]string{
+			_ = store.addWithVector(memory.L1Profile, newID(), f.Data, map[string]string{
 				"user_id": userID, "agent_id": agentID,
 				"source_id": sourceID, "ts": now,
-			})
+			}, qv)
 		}
 		for _, how := range []string{howRestated, howReplaced, howUpdated} {
 			ids := stale[how]
 			if len(ids) == 0 {
 				continue
 			}
-			n, err := store.supersedeWith(ids, factID, map[string]string{metaSupersededHow: how})
+			n, err := store.retire(ids, Retire{By: factID, How: how})
 			if err != nil {
 				log.Printf("extract: supersede (%s) %s: %v", how, ids[0], err)
 			} else if how != howRestated {
@@ -377,6 +506,15 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	meta["layer"] = string(memory.L2Raw)
 	meta["ts"] = time.Now().UTC().Format(time.RFC3339)
+	// A row written by a mode that extracts is meant to be extracted, whatever the
+	// outcome of this write's own attempt; the catch-up loop only takes such rows.
+	// Some write origins (the doctor's round-trip check) are never extracted.
+	extracts := policyFor(meta[metaWriteOrigin]).extracts
+	if s.mode.UsesLLM() && extracts {
+		meta[metaExtractWanted] = "true"
+	} else {
+		delete(meta, metaExtractWanted)
+	}
 
 	err := s.store.Add(memory.L2Raw, id, text, meta)
 	resp := map[string]any{"success": err == nil, "memory_id": id}
@@ -389,7 +527,11 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	// Whether extraction happens at all is the mode's decision; whether the
 	// write waits for it is the sync knob's. Lite stops here with only the raw
 	// trace stored, so no LLM call is made.
-	resp["extraction_status"] = s.extractForMode(text, body.UserID, body.AgentID, id)
+	if !extracts {
+		resp["extraction_status"] = "skipped"
+	} else {
+		resp["extraction_status"] = s.extractForMode(text, body.UserID, body.AgentID, id)
+	}
 
 	jsonResponse(w, 200, resp)
 }
@@ -397,7 +539,7 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 // extractForMode applies the configured mode to one stored raw memory and
 // reports what the caller should expect.
 //
-// One extraction call is System1: promoteExtraction writes L3 Fact, L4 Summary,
+// One extraction call is System1: promoteExtractionCtx writes L3 Fact, L4 Summary,
 // L7 Intention, and L1 Profile when a fact is a user preference, all from the L2
 // raw doc. L5 Knowledge and L6 Schema belong to System2 and are only ever written
 // by the consolidation pass, so a mode's layer count depends on whether that pass
@@ -417,7 +559,7 @@ func (s *Server) extractForMode(text, userID, agentID, id string) string {
 	// so the write never waits. Either can be overridden with
 	// HYATLAS_SYNC_EXTRACT.
 	if !s.sync.Blocks(s.mode) {
-		go s.extract(text, userID, agentID, id)
+		s.goExtract(text, userID, agentID, id)
 		return "pending"
 	}
 	// Blocking: the response tells the truth about this write instead of
@@ -431,6 +573,8 @@ func (s *Server) extractForMode(text, userID, agentID, id string) string {
 // extract runs one LLM extraction and promotes the result. Shared by the
 // synchronous and background paths so the two cannot drift.
 func (s *Server) extract(text, userID, agentID, id string) error {
+	s.beginExtract(id)
+	defer s.endExtract(id)
 	ctx, cancel := context.WithTimeout(context.Background(), extractTimeout)
 	defer cancel()
 	if s.llm == nil {
@@ -445,6 +589,15 @@ func (s *Server) extract(text, userID, agentID, id string) error {
 	if err != nil {
 		s.setExtractErr(err.Error())
 		return err
+	}
+	// The model call can take minutes; forget may have retired the raw row meanwhile.
+	// Its facts must not come back from a row the user removed.
+	if id != "" {
+		if cur := s.store.GetMany([]string{id}); len(cur) == 0 || isSuperseded(cur[0]) {
+			log.Printf("extract: raw memory %s was forgotten during extraction; nothing promoted", id)
+			_ = s.store.SetExtracted(id, true)
+			return nil
+		}
 	}
 	factIDs := promoteExtractionCtx(s.store, ex, ec, userID, agentID, id, s.dedupeScore)
 	// Task experiences: reusable "what solved it, where" lessons, stored as L3 facts
@@ -489,15 +642,20 @@ func windowFloor(minScore float64) float64 {
 // JWTs are a few hundred bytes to a few kilobytes.
 const maxPushedKey = 16 << 10
 
-// handleLLMKey is POST /api/v1/llm/key: the Hermes plugin hands over the current
+// handleLLMKey is POST /api/v1/llm/key: a launcher or tool you run hands over a
 // provider key, which the server keeps in memory only and uses for its LLM calls.
-// This is how a rotating credential (a 1-hour Nous Portal token) reaches the server
-// without the server or its launcher ever opening another application's credential
-// file. The key is never logged or echoed back. {"key": ""} clears it.
+// This is a generic way to give a rotating key to the server without writing it to
+// a file or the environment. The key is never logged or echoed back. {"key": ""}
+// clears it. Only a loopback caller is accepted, so the endpoint cannot be used from
+// another machine even when the server listens on a LAN address.
 func (s *Server) handleLLMKey(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		jsonResponse(w, 405, map[string]any{"error": "method not allowed: use POST"})
+		return
+	}
+	if !isLoopbackRemote(r.RemoteAddr) {
+		jsonResponse(w, 403, map[string]any{"error": "the key can only be set from this machine"})
 		return
 	}
 	var body struct {
@@ -517,6 +675,11 @@ func (s *Server) handleLLMKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.llm.SetPushedKey(key)
+	// A key that arrives may be the one the server has been waiting for, so writes
+	// stored raw-only in the meantime are extracted now rather than at the next tick.
+	if key != "" {
+		s.catchup.Kick()
+	}
 	jsonResponse(w, 200, map[string]any{"ok": true, "llm": s.llmState()})
 }
 
@@ -537,232 +700,6 @@ func appendNewHits(res, extra []SearchHit) []SearchHit {
 		}
 	}
 	return res
-}
-
-func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Query    string   `json:"query"`
-		Limit    int      `json:"limit"`
-		Layer    string   `json:"layer"`     // optional: filter to one memory layer
-		UserIDs  []string `json:"user_ids"`  // optional: restrict to these users
-		AgentIDs []string `json:"agent_ids"` // optional: restrict to these agents
-		UserID   string   `json:"user_id"`   // what the Hermes plugin sends
-		AgentID  string   `json:"agent_id"`  // what the Hermes plugin sends
-		MinScore *float64 `json:"min_score"` // optional: overrides HYATLAS_MIN_SCORE
-		Reader   string   `json:"reader"`    // optional: see parseReader; empty is hybrid
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonResponse(w, 400, map[string]any{"error": "bad body"})
-		return
-	}
-	if body.Query == "" {
-		jsonResponse(w, 400, map[string]any{"error": "query required"})
-		return
-	}
-	var users []string
-	seenUser := map[string]bool{}
-	for _, id := range append([]string{body.UserID}, body.UserIDs...) {
-		if id == "" || seenUser[id] {
-			continue
-		}
-		seenUser[id] = true
-		users = append(users, id)
-	}
-	agentID := body.AgentID
-	if agentID == "" && len(body.AgentIDs) > 0 {
-		agentID = body.AgentIDs[0]
-	}
-	users = s.expandOwners(users)
-	limit := body.Limit
-	if limit <= 0 {
-		limit = 5
-	}
-	minScore := s.minScore
-	if body.MinScore != nil {
-		minScore = *body.MinScore
-	}
-	// Fetch three times the limit so the floor, the duplicate drop and the L5 cap
-	// still leave limit hits. The vector search runs in every mode, because it
-	// counts the request as a search.
-	res, err := s.store.SearchOwners(body.Query, limit*3, memory.Layer(body.Layer), users, agentID)
-	if err != nil {
-		jsonResponse(w, 500, map[string]any{"error": err.Error()})
-		return
-	}
-	// One query embedding, shared by the long-fact clauses and the time window.
-	var qv []float32
-	queryVec := func() []float32 {
-		if qv == nil {
-			qv, _ = s.store.embed.Embed(s.store.ctx, body.Query)
-		}
-		return qv
-	}
-	factsWanted := body.Layer == "" || memory.Layer(body.Layer) == memory.L3Fact
-	// A long fact is also found by any one of its sentences (clauses.go), so it no
-	// longer loses to short facts on a query about one part of it.
-	if factsWanted {
-		if v := queryVec(); len(v) > 0 {
-			res = mergeBest(res, s.store.clauseHitsOwners(v, users, agentID, limit*3))
-		}
-	}
-	// Every vector candidate, before the floor, for graph-assisted recall below.
-	vecAll := res
-	// Keyword search catches exact identifiers (HYATLAS_SYNC_EXTRACT, a port, a
-	// ticker) that the embedding scores low; the two rankings are fused.
-	switch reader := parseReader(body.Reader); reader {
-	case readVector:
-		res = refineHits(res, minScore, 0)
-	default:
-		// Keyword candidates are fetched deep: BM25 favours short documents, so an
-		// identifier's top ranks can all be terse L5 relations, which the L5 cap below
-		// then thins out. A shallow fetch left nothing else to fill the slots (2 hits
-		// for "19528" though 20 facts mention it). Ranking already scores every row.
-		kw, err := s.store.KeywordSearch(body.Query, limit*10, memory.Layer(body.Layer), users, agentID)
-		if err != nil {
-			jsonResponse(w, 500, map[string]any{"error": err.Error()})
-			return
-		}
-		if reader == readKeyword {
-			res = nil
-		}
-		// The query's kind sets how much each ranking counts: identifiers lean on
-		// keyword search, "how" and "why" questions on meaning.
-		wVec, wKw := intentWeights(classifyQuery(body.Query))
-		res = fuseHitsWeighted(res, kw, minScore, 0, wVec, wKw)
-		// A query that is an identifier (RSI(2), HYATLAS_SYNC_EXTRACT, a port) is
-		// answered only by memories that mention it; embedding look-alikes are noise.
-		if terms := identifierTerms(body.Query); len(terms) > 0 {
-			res = requireTerms(res, terms)
-		}
-	}
-	// A query that names a time ("last week", "on 2026-10-05") favours memories
-	// dated in that window: dated facts the vector search missed join the pool,
-	// then out-of-window hits move down a few places. Only L3 facts carry dates.
-	now := time.Now()
-	if win, ok := parseTimeWindow(body.Query, now); ok {
-		if factsWanted {
-			if v := queryVec(); len(v) > 0 {
-				res = appendNewHits(res, s.store.windowCandidates(v, users, agentID, win, limit, windowFloor(minScore)))
-			}
-		}
-		res = rerankWindow(res, win)
-	}
-	// A query naming one of the owner's entities (an entity page's name or alias)
-	// favours hits about it, and facts linked to it in the knowledge graph may pass
-	// a slightly lower floor: they are related even when their wording is not.
-	if names := s.store.queryEntities(body.Query, users, agentID); len(names) > 0 {
-		res = rerankEntities(res, names)
-		if nb := s.store.graphNeighbourNames(names, users, agentID); len(nb) > 0 {
-			// Placed inside the limit, or the final cut would drop them. A keyword-only
-			// search admits no vector candidates.
-			cands := vecAll
-			if parseReader(body.Reader) == readKeyword {
-				cands = nil
-			}
-			res = graphAdmitWithin(cands, res, nb, minScore-0.10, graphRecallMax, limit)
-		}
-	}
-	// Time before the L5 cap, so the cap keeps the relations that rank best once
-	// age is counted.
-	res = dropStaleIntentions(res, s.intentionTTL, now)
-	if s.recency {
-		// Age counts from the later of written and last used, so an old memory the
-		// agent still relies on does not sink.
-		var lastUsed func(string) time.Time
-		if s.usage != nil {
-			lastUsed = s.usage.LastUsed
-		}
-		res = rerankRecencyUsed(res, now, lastUsed)
-	}
-	if s.usage != nil {
-		res = rerankUsage(res, s.usage)
-	}
-	// Two near-identical lines waste a slot; the lower one moves to the end, where
-	// the limit usually cuts it.
-	res = s.store.demoteNearDuplicates(res, nearDupScore)
-	if body.Layer == "" {
-		res = capLayer(res, memory.L5Knowledge, l5Share(limit))
-		// An entity page is a whole summary of one thing, so two are plenty; the
-		// rest of the slots go to the facts and rules around them.
-		res = capLayer(res, memory.L8Entity, 2)
-		// The patterns behind the facts found (schemas citing them as evidence) and
-		// an open intention that ranked just below the cut each get a slot, so the
-		// profile and proactive channels are not crowded out by facts.
-		var factIDs []string
-		for i, h := range res {
-			if i >= limit {
-				break
-			}
-			if h.Layer == memory.L3Fact {
-				factIDs = append(factIDs, h.ID)
-			}
-		}
-		res = ensureQuota(res, s.store.schemasSupporting(factIDs, users, agentID, schemaEvidenceMax), memory.L6Schema, limit)
-		if len(res) > limit {
-			var intents []SearchHit
-			for _, h := range res[limit:] {
-				if h.Layer == memory.L7Intention {
-					intents = append(intents, h)
-				}
-			}
-			res = ensureQuota(res, intents, memory.L7Intention, limit)
-		}
-	}
-	if len(res) > limit {
-		res = res[:limit]
-	}
-	type hit struct {
-		MemoryID   string  `json:"memory_id"`
-		Content    string  `json:"content"`
-		Score      float64 `json:"score"`
-		Layer      string  `json:"layer"`
-		GmtCreated int64   `json:"gmt_created"`
-		UserID     string  `json:"user_id,omitempty"`
-		AgentID    string  `json:"agent_id,omitempty"`
-		// EventDate is when the fact happened or is due, when extraction found one.
-		EventDate string `json:"event_date,omitempty"`
-		// History holds the older versions this hit replaced, newest first.
-		History []HistoryEntry `json:"history,omitempty"`
-	}
-	ids := make([]string, len(res))
-	for i, h := range res {
-		ids[i] = h.ID
-	}
-	history := s.store.historyOf(ids, historyPerHit)
-	pageHits := []hit{}
-	profileHits := []hit{}
-	proactiveHits := []hit{}
-	normalHits := []hit{}
-	experienceHits := []hit{}
-	for _, h := range res {
-		it := hit{MemoryID: h.ID, Content: h.Content, Score: float64(h.Score),
-			Layer: string(h.Layer), GmtCreated: gmtCreated(h.Meta["ts"]),
-			UserID: h.Meta["user_id"], AgentID: h.Meta["agent_id"],
-			EventDate: normalizeEventDate(h.Meta[metaEventAt]), History: history[h.ID]}
-		switch h.Layer {
-		case memory.L8Entity:
-			pageHits = append(pageHits, it)
-		case memory.L1Profile, memory.L6Schema:
-			profileHits = append(profileHits, it)
-		case memory.L7Intention:
-			proactiveHits = append(proactiveHits, it)
-		default:
-			if isExperience(h) {
-				experienceHits = append(experienceHits, it)
-			} else {
-				normalHits = append(normalHits, it)
-			}
-		}
-	}
-	// plugin channel order: now -> pages -> profile -> proactive -> experiences -> normal
-	out := map[string]any{"memories": map[string]any{
-		"pages": pageHits, "profile": profileHits, "proactive": proactiveHits,
-		"experiences": experienceHits, "normal": normalHits,
-	}}
-	if np, ok := s.nowFor(users, agentID); ok {
-		out["now"] = np
-	}
-	jsonResponse(w, 200, out)
 }
 
 // handleBacklog serves /api/v1/admin/backlog (see backlog.go). Without a job, as in
@@ -918,11 +855,13 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 			includeSuperseded = includeSuperseded || body.IncludeSuperseded
 		}
 	}
-	list := s.store.List
-	if includeSuperseded {
-		list = s.store.ListAll
+	// A user ID lists the rows of every ID of the same person (HYATLAS_USER_ALIASES).
+	var users []string
+	if userID != "" {
+		users = s.store.owners(userID)
 	}
-	items, total := list(memory.Layer(layer), userID, agentID, limit, offset, includeRaw == "false" && layer == "")
+	items, total := s.store.ListOwners(memory.Layer(layer), users, agentID, limit, offset,
+		includeRaw == "false" && layer == "", includeSuperseded)
 
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {
@@ -936,11 +875,15 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		// A superseded row says what replaced it, so history can be followed.
 		if isSuperseded(it) {
-			m["invalid_at"] = it.Meta["invalid_at"]
-			m["superseded_by"] = it.Meta["superseded_by"]
-			// Why consolidation dropped it, when it was a drop rather than a merge.
-			if r := it.Meta["drop_reason"]; r != "" {
-				m["drop_reason"] = r
+			r := retirementOf(it)
+			m["invalid_at"] = it.Meta[metaInvalidAt]
+			m["superseded_by"] = r.By
+			// How it was retired, and why when it was a drop rather than a merge.
+			if r.How != "" {
+				m["superseded_how"] = r.How
+			}
+			if r.Reason != "" {
+				m["drop_reason"] = r.Reason
 			}
 		}
 		out = append(out, m)
@@ -1013,6 +956,16 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, 400, map[string]any{
 			"deleted_count": 0,
 			"error":         "unscoped delete refused: pass layer/user_id/agent_id/id, or all=true to wipe the entire store",
+		})
+		return
+	}
+	// Deleting one memory by id stays open. A scoped delete or a wipe removes many
+	// rows at once and cannot be undone, and any local process can reach the port,
+	// so it needs the same HYATLAS_ADMIN switch as the maintenance endpoints.
+	if len(ids) == 0 && !s.admin {
+		jsonResponse(w, 403, map[string]any{
+			"deleted_count": 0,
+			"error":         "bulk delete is off: delete one memory with id, or restart the server with HYATLAS_ADMIN=on to delete by layer, user_id, agent_id or all",
 		})
 		return
 	}
@@ -1133,26 +1086,18 @@ func (s *Server) handleReprocess(w http.ResponseWriter, r *http.Request) {
 
 // unextractedRaw returns up to max raw rows that extraction has not reached, oldest
 // first (ts, then id, so equal timestamps order the same way each time). Extracted
-// rows are removed before the cut: a page of already-extracted rows must not hide
+// rows are skipped before the cut: a page of already-extracted rows must not hide
 // older unextracted ones, and the newest rows must not be re-picked while an old
 // backlog starves.
 func (s *Server) unextractedRaw(max int) []DocIndex {
-	_, total := s.store.List(memory.L2Raw, "", "", 1, 0, false)
-	all, _ := s.store.List(memory.L2Raw, "", "", total, 0, false)
-	out := make([]DocIndex, 0, len(all))
-	for _, d := range all {
-		if !d.Extracted {
-			out = append(out, d)
+	// Newest first, ties by larger id first, so walking it backwards gives the
+	// oldest first order and the walk can stop as soon as max rows are found.
+	all := s.store.liveNewestFirst(memory.L2Raw)
+	var out []DocIndex
+	for i := len(all) - 1; i >= 0 && len(out) < max; i-- {
+		if !all[i].Extracted {
+			out = append(out, all[i])
 		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Ts != out[j].Ts {
-			return out[i].Ts < out[j].Ts
-		}
-		return out[i].ID < out[j].ID
-	})
-	if len(out) > max {
-		out = out[:max]
 	}
 	return out
 }
@@ -1577,7 +1522,7 @@ func resolveRuntime() runtimeCfg {
 		Mode:         mode,
 		Sync:         resolveSync(),
 		Consolidate:  resolveConsolidate(mode),
-		Retention:    parseDuration("HYATLAS_RAW_RETENTION", 0),
+		Retention:    envDuration("HYATLAS_RAW_RETENTION", 0),
 		Batch:        envInt("HYATLAS_CONSOLIDATE_BATCH", defaultBatch),
 		Graph:        !envOff("HYATLAS_CONSOLIDATE_GRAPH"),
 		Admin:        envOn("HYATLAS_ADMIN"),
@@ -1614,7 +1559,7 @@ func resolveMode() Mode {
 // zero or negative interval: that silently turns ultra into pro, because the
 // slow path never ticks. Pro and lite have no slow path, so there it is ignored.
 func resolveConsolidate(m Mode) time.Duration {
-	d := parseDuration("HYATLAS_CONSOLIDATE_EVERY", defaultConsolidate)
+	d := envDuration("HYATLAS_CONSOLIDATE_EVERY", defaultConsolidate)
 	if err := checkConsolidateEvery(m, d); err != nil {
 		log.Fatal(err)
 	}
@@ -1654,8 +1599,7 @@ func (s *Server) attachSlowPath(ctx context.Context, rt runtimeCfg) bool {
 	}
 	s.cons = NewConsolidator(s.store, s.llm, rt.Consolidate, rt.Retention, rt.Batch)
 	s.cons.graph = rt.Graph
-	s.cons.SetAliases(s.ownerAliases)
-	go s.cons.Run(ctx)
+	s.cons.Start(ctx)
 	return true
 }
 
@@ -1727,8 +1671,8 @@ func main() {
 	// HYATLAS_LLM_BASE, HYATLAS_LLM_MODEL and HYATLAS_LLM_KEY are all set.
 	llmBase := rt.LLMBase
 	llmKey := os.Getenv("HYATLAS_LLM_KEY")
-	// Optional: read the key live from a file each call, for rotating
-	// credentials (e.g. Hermes keeps a fresh 1-hour JWT in auth.json).
+	// Optional: read the key live from a plain-text token file each call, for a
+	// rotating key that something of your own rewrites. A JSON file is refused.
 	// When set, this wins over the frozen HYATLAS_LLM_KEY value.
 	llmKeyFile := os.Getenv("HYATLAS_LLM_KEY_FILE")
 	llmModel := rt.LLMModel
@@ -1737,6 +1681,13 @@ func main() {
 	embedModel := rt.EmbedModel
 
 	ctx := context.Background()
+	// Ctrl-C or a service stop ends the server cleanly, writing what is still
+	// buffered (the doc index and usage counts). A hard kill skips this, which is
+	// why the Windows launcher calls /api/v1/flush before it stops the process.
+	// Every background writer runs on this context, so it stops with the signal and
+	// is waited for before the store closes (see waitBackground).
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 	var embedder Embedder
 	switch {
 	case strings.EqualFold(embedBase, "bge"):
@@ -1784,6 +1735,9 @@ func main() {
 		log.Fatal("store: ", err)
 	}
 	store.l5Dedupe = rt.DedupeScore
+	// Lite mode keeps raw rows in the keyword index, because raw rows are all it stores;
+	// a mode that extracts searches the facts and leaves them out.
+	store.SetKeywordRaw(!rt.Mode.UsesLLM())
 	// Graph edges written before 4.5.0 have no L5 search documents. Index any that
 	// are missing, in the background so the server answers at once.
 	go func() {
@@ -1817,10 +1771,11 @@ func main() {
 	srv := &Server{store: store, llm: llm, llmModel: llmModel, llmBase: llmBase,
 		mode: rt.Mode, sync: rt.Sync, start: time.Now(), dataDir: dir}
 
-	// Before attachSlowPath: the consolidator groups one person's IDs as one owner,
-	// so it needs the alias groups before its loop starts.
-	srv.ownerAliases = aliasMap(rt.UserAliases)
-	srv.attachSlowPath(ctx, rt)
+	// Before attachSlowPath: the store owns the alias groups, and the consolidator
+	// groups one person's IDs as one owner through them, so they must be set before
+	// its loop starts.
+	store.SetAliases(aliasMap(rt.UserAliases))
+	srv.attachSlowPath(sigCtx, rt)
 
 	if w := startupWarning(rt, llm); w != "" {
 		log.Print(w)
@@ -1831,7 +1786,8 @@ func main() {
 	srv.dedupeScore = rt.DedupeScore
 	srv.admin = rt.Admin
 	srv.recency = !envOff("HYATLAS_RECENCY")
-	srv.intentionTTL = parseDuration("HYATLAS_INTENTION_TTL", defaultIntentionTTL)
+	srv.intentionTTL = envDuration("HYATLAS_INTENTION_TTL", defaultIntentionTTL)
+	srv.mmrLambda = parseMMRLambda()
 	// The Now page needs an LLM; lite never calls one, so it gets none and only
 	// serves pages already stored.
 	var nowLLM *LLMClient
@@ -1842,9 +1798,7 @@ func main() {
 	// Facts stored before clause indexing get their clauses in the background.
 	go store.backfillClauses()
 	srv.episodes = NewEpisodes(dir, store, nowLLM, resolveEpisodeGap())
-	if srv.episodes != nil {
-		go srv.episodes.Run(ctx)
-	}
+	srv.episodes.Start(sigCtx)
 	if !envOff("HYATLAS_USAGE_LEARNING") {
 		srv.usage = NewUsageStats(dir)
 	}
@@ -1853,17 +1807,73 @@ func main() {
 	backlogCons := srv.cons
 	if backlogCons == nil {
 		backlogCons = NewConsolidator(store, llm, rt.Consolidate, rt.Retention, rt.Batch)
-		backlogCons.SetAliases(srv.ownerAliases)
 	}
 	srv.backlog = NewBacklogJob(dir, store, backlogCons, nowLLM, func() bool { return srv.admin })
+	srv.backlog.SetContext(sigCtx)
 	snap := resolveSnapshot(dir)
 	log.Print(snapshotLine(snap))
 	go runSnapshots(ctx, store, dir, snap)
 	if rt.Admin {
 		log.Print("HYATLAS_ADMIN=on: /api/v1/admin/compact_raw, /api/v1/admin/dedupe_facts and /api/v1/admin/restore are enabled")
 	}
+	// Started last, once every part extraction touches (Now pages, episodes) is wired.
+	// pro and ultra extract, so a write that missed its extraction (no key yet, or a
+	// failed call) is retried in the background. Lite makes no LLM call at all.
+	if rt.Mode.UsesLLM() {
+		srv.catchup = NewCatchup(srv, envDuration(catchupEveryKey, catchupEveryDefault))
+		srv.catchup.Start(sigCtx)
+	}
 	hs := &http.Server{Addr: net.JoinHostPort(rt.Host, port), Handler: srv.routes(), ReadHeaderTimeout: readHeaderTimeout}
-	log.Fatal(hs.ListenAndServe())
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		<-sigCtx.Done()
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = hs.Shutdown(sctx)
+	}()
+	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal(err)
+	}
+	// ListenAndServe returns as soon as Shutdown starts; wait for in-flight requests
+	// to finish before the final flush, so a write still running is not lost.
+	<-drained
+	// Every background writer was told to stop with the signal; give each a moment to
+	// finish, so nothing writes after the final flush. Extractions started by writes
+	// just served and a catch-up pass in progress are waited for too; whatever is left
+	// is picked up by the catch-up pass on the next start.
+	srv.waitBackground(shutdownExtractWait)
+	srv.flush()
+	store.Close()
+	log.Print("stopped")
+}
+
+// flush writes the buffered state (the doc index and the usage counts) to disk now.
+// It is what a clean stop does, and the /api/v1/flush route lets a launcher ask for
+// it before a hard kill.
+func (s *Server) flush() error {
+	err := s.store.Flush()
+	if s.usage != nil {
+		if uerr := s.usage.Flush(); uerr != nil && err == nil {
+			err = uerr
+		}
+	}
+	return err
+}
+
+// handleFlush is POST /api/v1/flush: write buffered state to disk now. It changes no
+// data, so it needs no admin switch.
+func (s *Server) handleFlush(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		jsonResponse(w, 405, map[string]any{"error": "method not allowed: use POST"})
+		return
+	}
+	if err := s.flush(); err != nil {
+		jsonResponse(w, 500, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	jsonResponse(w, 200, map[string]any{"ok": true})
 }
 
 // routes is the complete HTTP surface. Lifted out of main so the body limit and
@@ -1888,11 +1898,13 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/v1/admin/backlog", s.handleBacklog)
 	mux.HandleFunc("/api/v1/admin/restore", s.handleRestore)
 	mux.HandleFunc("/api/v1/llm/key", s.handleLLMKey)
+	mux.HandleFunc("/api/v1/llm/test", s.handleLLMTest)
 	mux.HandleFunc("/api/v1/now", s.handleNow)
+	mux.HandleFunc("/api/v1/flush", s.handleFlush)
 	mux.HandleFunc("/api/v1/feedback", s.handleFeedback)
+	mux.HandleFunc("/api/v1/forget", s.handleForget)
 	// Dashboard UI (embedded single-file frontend)
-	// --- v3.5 dashboard adapter endpoints (real v4 data, v3.5 shapes) ---
-	mux.HandleFunc("/api/status", s.handleDashStatus)
+	// --- v3.5 dashboard adapter endpoints (real data, v3.5 shapes) ---
 	mux.HandleFunc("/api/info", s.handleDashInfo)
 	mux.HandleFunc("/api/memories", s.handleDashMemories)
 	mux.HandleFunc("/api/layer-counts", s.handleDashLayerCounts)
@@ -2063,9 +2075,8 @@ func (s *Server) expandOwners(ids []string) []string {
 		out = append(out, id)
 	}
 	for _, id := range ids {
-		add(id)
-		for _, alias := range s.ownerAliases[id] {
-			add(alias)
+		for _, owner := range s.store.owners(id) {
+			add(owner)
 		}
 	}
 	return out
@@ -2082,6 +2093,17 @@ func parseHostList(raw string) []string {
 		}
 	}
 	return out
+}
+
+// isLoopbackRemote reports whether a request's RemoteAddr (host:port) is a loopback
+// IP: 127.0.0.0/8 or ::1. A name or an unparsable address is not loopback.
+func isLoopbackRemote(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 // isLoopbackHost reports whether h names this machine: localhost (with or without

@@ -8,6 +8,9 @@ hermes plugins enable hyatlas
 hermes memory setup                # choose "hyatlas", then answer its prompts (see below)
 ```
 
+Then run `hermes hyatlas doctor` to check everything works. It tells you what is wrong
+and how to fix it.
+
 `hermes plugins install` takes a catalog name, a Git URL, or `owner/repo` with the
 plugin's subdirectory. The subdirectory is required, because the repository root
 is not the plugin. Equivalent forms: `tuancookiez-hub/HyAtlas-Memory#plugins/hyatlas`
@@ -28,21 +31,18 @@ A plain local path does not work. Hermes reads it as `owner/repo` and tries GitH
 
 1. Shows the memory providers and "Built-in only". Pick `hyatlas`. The plugin
    declares no dependencies beyond Hermes core, so nothing is installed.
-2. On a real terminal, prompts for each of the plugin's 14 settings, in this order.
-   Enter keeps the default. Without a terminal it asks nothing (see *Without a
-   terminal* below). The settings are: server host, server port, user ID, agent ID,
-   auto-start, binary path, launcher script, request timeout, data directory, LLM
-   endpoint, LLM model, LLM API key, extraction mode, and block on extraction.
-   Extraction mode and block on extraction are menus (`lite` / `pro` / `ultra`,
-   and `on` / `off`). The first entry of each menu is blank, which means "the
-   server's default". The ones that matter for an LLM setup are the mode, the
-   endpoint, the model and the key. The key is entered masked and written to
-   Hermes' `.env` as `HYATLAS_LLM_KEY`. The launcher script is Windows only.
-3. Writes `memory.provider: hyatlas` to `config.yaml`, the non-secret settings to
-   `$HERMES_HOME/hyatlas.json`, and the key to `.env`.
+2. On a real terminal, asks five questions. Enter keeps the default. Without a
+   terminal it asks nothing (see *Without a terminal* below). They are: how much
+   HyAtlas should think (a menu: `ultra`, `pro`, `lite`), the AI endpoint (Enter =
+   the Nous Portal), the API key (masked, written to Hermes' `.env` as
+   `HYATLAS_LLM_KEY`; Enter skips it), the model (Enter = a free Nous Portal model),
+   and whether to auto-start the server with Hermes (y/N). A server you start
+   yourself receives the key from the plugin over localhost.
+3. Writes `memory.provider: hyatlas` to `config.yaml`, the answers to
+   `$HERMES_HOME/hyatlas.json` (added to what is already there), and the key to `.env`.
 
 It does not start the server and does not call the LLM. Start a new session to
-activate.
+activate. That's it. Run `hermes hyatlas doctor` to check everything works. Advanced settings: `hermes hyatlas settings` or Desktop → Settings → Plugins → hyatlas.
 
 **Without an LLM endpoint** the server still runs, with extraction off. Writes
 store the raw trace and local embeddings, `hermes hyatlas status` reports `llm`
@@ -78,25 +78,16 @@ plugins:
 
 Or export the matching `HYATLAS_*` variable, such as `HYATLAS_MODE=pro`.
 
-The LLM key is set only through the environment: export `HYATLAS_LLM_KEY`, or keep
-the value that `hermes memory setup` wrote to `.env`. The plugin does not use a key
-found in `hyatlas.json` or `config.yaml`.
+The LLM key is your own, and it is set only through the environment: save it with
+`hermes memory setup` (the `llm_key` secret, which Hermes keeps in `.env`), or export
+`HYATLAS_LLM_KEY`, or point `HYATLAS_LLM_KEY_FILE` at a plain-text file holding the
+token. The plugin does not use a key found in `hyatlas.json` or `config.yaml`. A Nous
+Portal API key, or the key of any OpenAI-compatible provider, works. The plugin never
+reads Hermes's own login or credential files. Until a key is set, `status` shows
+`llm: "awaiting_key"`.
 
-**Using your Hermes Nous login instead.** If Hermes is signed in to the Nous Portal
-and the server's endpoint is the Nous Portal, turn on `share_llm_key`:
-
-```json
-{ "share_llm_key": true }
-```
-
-in `$HERMES_HOME/hyatlas.json` (or `HYATLAS_SHARE_LLM_KEY=true`). The plugin then asks
-Hermes for its current key and hands it to the server over localhost, renewing it
-before the one-hour token expires. The server keeps it in memory only. Until the
-first Hermes chat after a restart, `status` shows `llm: "awaiting_key"`. Do not point
-`HYATLAS_LLM_KEY_FILE` at Hermes' `auth.json`: antivirus software treats a program
-reading another application's credentials as credential theft.
-
-Then check it:
+Then check it. `hermes hyatlas doctor` does all of the following in one command; the
+steps below are the same checks by hand:
 
 ```bash
 # 1. The provider is selected
@@ -229,11 +220,37 @@ hermes plugins update hyatlas    # then restart the gateway
 This updates the plugin only. The `hyatlas-go` binary is separate: update it with
 the server's installer or by replacing the binary with a newer release.
 
+### Upgrading to 5.0
+
+- **A replace or remove through Hermes's `memory` tool now forgets the old entry.** The
+  server retires the raw rows and what was derived from them, and the admin restore
+  can bring them back. Before, only `add` was mirrored.
+- **Bulk delete needs `HYATLAS_ADMIN=on`.** `delete_all` by layer, user, agent or all
+  is refused (403) without it. Deleting one memory by id is unchanged.
+- **Searches carry the session id**, so the current session's intentions rank first,
+  and the recall block follows the channel order the server sends.
+- **The plugin never sends local calls through a proxy.**
+- **`share_llm_key` is removed (Hermes catalog rule 11).** The plugin no longer takes
+  Hermes's Nous sign-in token or hands it to the server. Set your own extraction key
+  (`llm_key` through `hermes memory setup`, or `HYATLAS_LLM_KEY`, or a plain-text
+  `HYATLAS_LLM_KEY_FILE`). A Nous Portal API key, or any OpenAI-compatible provider
+  key, works as `llm_key`. A `share_llm_key` left in `hyatlas.json` is ignored.
+- **`HYATLAS_LLM_KEY_FILE` takes a plain-text token only.** A JSON file (such as
+  `auth.json`) gives no key; the server logs a warning and uses `HYATLAS_LLM_KEY`.
+- **Durations read one way**: `15m`, a bare number as seconds, and `0`, `off`, `false`
+  or `no` to turn off. `HYATLAS_CONSOLIDATE_EVERY=off` now fails at start in ultra, as
+  `0` always did; `HYATLAS_INTENTION_TTL=off` means no limit on intentions.
+- **Turns missed by extraction are caught up** (`HYATLAS_CATCHUP_EVERY`, 10 minutes),
+  and `/api/v1/status` shows `unextracted`, the number still waiting.
+- **Lists for a `user_id` include that person's aliases** (`HYATLAS_USER_ALIASES`), and
+  episodes and the Now page are kept under the first ID of the alias group. A Now page
+  stored before aliases were set up is still found.
+
 ### Upgrading to 4.8 or later
 
 - **The sample launcher no longer reads Hermes' `auth.json`.** If you used it with a
-  Nous login, turn on `share_llm_key` (above); otherwise extraction waits with
-  `llm: "awaiting_key"`.
+  Nous login, set your own extraction key (see the key section above); otherwise
+  extraction waits with `llm: "awaiting_key"`.
 - **Per-write summaries stop.** L4 now holds one summary per episode of work
   (`HYATLAS_EPISODE_GAP`, 30 minutes). Older per-write summaries stay as they are.
 - **Usage learning moves to `usage_learning.json`.** An old `usage.json` with usage

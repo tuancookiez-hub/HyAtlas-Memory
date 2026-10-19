@@ -2,9 +2,7 @@ package main
 
 import (
 	"fmt"
-	"maps"
 	"regexp"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -254,7 +252,7 @@ func hitTimeRange(meta map[string]string, loc *time.Location) (from, to time.Tim
 	if s := normalizeEventDate(meta[metaEventAt]); s != "" {
 		return eventDateRange(s, loc)
 	}
-	if t, err := time.Parse(time.RFC3339, meta["ts"]); err == nil {
+	if t := docTime(meta["ts"]); !t.IsZero() {
 		return t, t.Add(time.Second), true
 	}
 	return time.Time{}, time.Time{}, false
@@ -270,26 +268,14 @@ func (w timeWindow) overlaps(from, to time.Time) bool {
 // weight 1/(rrfK+i+1), multiplied by windowMiss when it falls outside w. The sort
 // is stable, and the returned hits keep their Scores, so only the order changes.
 func rerankWindow(hits []SearchHit, w timeWindow) []SearchHit {
-	order := make([]int, len(hits))
-	weight := make([]float64, len(hits))
 	loc := w.From.Location()
-	for i, h := range hits {
-		order[i] = i
-		wt := 1 / float64(rrfK+i+1)
+	return rerankByFactor(hits, func(_ int, h SearchHit) float64 {
 		from, to, ok := hitTimeRange(h.Meta, loc)
 		if !ok || !w.overlaps(from, to) {
-			wt *= windowMiss
+			return windowMiss
 		}
-		weight[i] = wt
-	}
-	sort.SliceStable(order, func(a, b int) bool {
-		return weight[order[a]] > weight[order[b]]
+		return 1
 	})
-	out := make([]SearchHit, len(hits))
-	for i, j := range order {
-		out[i] = hits[j]
-	}
-	return out
 }
 
 // windowCandidates returns the live L3 facts whose time span overlaps w, scored
@@ -303,41 +289,32 @@ func (s *MemoryStore) windowCandidates(qv []float32, users []string, agentID str
 	}
 	loc := w.From.Location()
 
-	// Collect candidates under the read lock. The lock is released before the
-	// vectors are read, because vectors takes the lock itself.
-	s.mu.RLock()
-	var live []DocIndex
-	for _, d := range s.index {
-		if d.Layer != string(memory.L3Fact) || isSuperseded(d) {
-			continue
-		}
-		if _, dead := s.superseded[d.ID]; dead {
-			continue
-		}
-		if len(users) > 0 && !slices.Contains(users, d.UserID) {
-			continue
-		}
-		if agentID != "" && d.AgentID != agentID {
-			continue
-		}
+	// Collect the live facts of the owners, then keep those in the window. The read
+	// lock is released before the vectors are read, because vectors takes it itself.
+	type dated struct {
+		doc DocIndex
+		ts  time.Time
+	}
+	var cand []dated
+	for _, d := range s.liveDocs(memory.L3Fact, users, agentID) {
 		from, to, ok := hitTimeRange(d.Meta, loc)
 		if !ok || !w.overlaps(from, to) {
 			continue
 		}
-		live = append(live, d)
+		cand = append(cand, dated{doc: d, ts: docTime(d.Ts)})
 	}
-	s.mu.RUnlock()
 
-	// Keep the newest windowScanMax facts. An unreadable Ts sorts as the oldest.
-	tsOf := func(d DocIndex) time.Time {
-		t, _ := time.Parse(time.RFC3339, d.Ts)
-		return t
-	}
-	sort.SliceStable(live, func(a, b int) bool {
-		return tsOf(live[a]).After(tsOf(live[b]))
+	// Keep the newest windowScanMax facts. An unreadable Ts sorts as the oldest. Each
+	// time is parsed once, before the sort.
+	sort.SliceStable(cand, func(a, b int) bool {
+		return cand[a].ts.After(cand[b].ts)
 	})
-	if len(live) > windowScanMax {
-		live = live[:windowScanMax]
+	if len(cand) > windowScanMax {
+		cand = cand[:windowScanMax]
+	}
+	live := make([]DocIndex, len(cand))
+	for i, c := range cand {
+		live[i] = c.doc
 	}
 	ids := make([]string, len(live))
 	for i, d := range live {
@@ -360,7 +337,7 @@ func (s *MemoryStore) windowCandidates(qv []float32, users []string, agentID str
 			Content: d.Content,
 			Score:   float32(score),
 			Layer:   memory.L3Fact,
-			Meta:    maps.Clone(d.Meta),
+			Meta:    d.Meta,
 		})
 	}
 	sort.SliceStable(hits, func(a, b int) bool {

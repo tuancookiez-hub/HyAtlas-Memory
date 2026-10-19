@@ -45,17 +45,6 @@ func TestRerankRecencyUsedIdleTime(t *testing.T) {
 	}
 }
 
-// TestRerankRecencyWrapperMatchesNil checks that rerankRecency is the nil-lastUsed case.
-func TestRerankRecencyWrapperMatchesNil(t *testing.T) {
-	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
-	old := recencyHit("old", memory.L3Fact, "project_state", now.AddDate(0, 0, -200))
-	fresh := recencyHit("fresh", memory.L3Fact, "project_state", now.AddDate(0, 0, -2))
-	in := []SearchHit{old, fresh}
-	if !sameIDs(rerankRecency(in, now), ids(rerankRecencyUsed(in, now, nil))) {
-		t.Fatalf("rerankRecency differs from rerankRecencyUsed with nil lastUsed")
-	}
-}
-
 // TestUsageLastUsed checks LastUsed for a nil receiver, a missing id, an unreadable
 // timestamp and a recorded use.
 func TestUsageLastUsed(t *testing.T) {
@@ -177,6 +166,9 @@ func TestUsageLearningHasItsOwnFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Close()
+	if err := u.Flush(); err != nil {
+		t.Fatal(err)
+	}
 	if got := NewUsageStats(dir).m["m1"].Shown; got != 1 {
 		t.Fatalf("usage entry lost after a store write: shown=%d", got)
 	}

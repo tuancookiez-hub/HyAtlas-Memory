@@ -101,6 +101,79 @@ type PageStore struct {
 	applyMu sync.Mutex
 	mu      sync.RWMutex
 	pages   map[string]*Page
+
+	// nameCache holds each owner's entity names with their search tokens, built on
+	// first use (see entityNames). A change to any page of an owner, made under mu,
+	// drops that owner's entry. cacheMu guards the map; it is always taken after mu.
+	cacheMu   sync.Mutex
+	nameCache map[string][]entityName
+}
+
+// entityName is one name or alias of a page with its normalised key and the stemmed
+// search terms of its words, so a search matches it without tokenising it again.
+type entityName struct {
+	Name   string
+	Key    string
+	Tokens []string
+}
+
+// nameCacheKey is the cache key of an owner.
+func nameCacheKey(user, agent string) string { return user + "\x00" + agent }
+
+// invalidateNamesLocked drops the cached entity names of an owner. The caller holds
+// mu for writing, so no reader can store a stale list afterwards.
+func (p *PageStore) invalidateNamesLocked(user, agent string) {
+	p.cacheMu.Lock()
+	delete(p.nameCache, nameCacheKey(user, agent))
+	p.cacheMu.Unlock()
+}
+
+// entityNames returns the names and aliases of the owner's pages, with their tokens,
+// in the order List gives the pages (newest first, name before aliases). The list is
+// built on first use and kept until a page of the owner changes. The caller must not
+// modify it.
+func (p *PageStore) entityNames(user, agent string) []entityName {
+	key := nameCacheKey(user, agent)
+	p.cacheMu.Lock()
+	if names, ok := p.nameCache[key]; ok {
+		p.cacheMu.Unlock()
+		return names
+	}
+	p.cacheMu.Unlock()
+
+	// Built under the read lock, so an update (which holds mu for writing) cannot
+	// invalidate between the read of the pages and the store of the result.
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	var pgs []*Page
+	for _, pg := range p.pages {
+		if pg.UserID == user && pg.AgentID == agent {
+			pgs = append(pgs, pg)
+		}
+	}
+	sort.Slice(pgs, func(i, j int) bool {
+		if pgs[i].Updated != pgs[j].Updated {
+			return pgs[i].Updated > pgs[j].Updated
+		}
+		return pgs[i].ID < pgs[j].ID
+	})
+	names := []entityName{}
+	for _, pg := range pgs {
+		for _, name := range append([]string{pg.Name}, pg.Aliases...) {
+			en := entityName{Name: name, Key: normalizeName(name)}
+			for _, w := range nameTokens(name) {
+				en.Tokens = append(en.Tokens, keywordTokens(w)...)
+			}
+			names = append(names, en)
+		}
+	}
+	p.cacheMu.Lock()
+	if p.nameCache == nil {
+		p.nameCache = map[string][]entityName{}
+	}
+	p.nameCache[key] = names
+	p.cacheMu.Unlock()
+	return names
 }
 
 // NewPageStore opens <dataDir>/pages.json, loading it when present.
@@ -187,6 +260,15 @@ func (p *PageStore) Related(text, user, agent string, n int) []Page {
 	qv, err := p.store.embed.Embed(p.store.ctx, text)
 	if err != nil {
 		log.Printf("pages: related: embed: %v", err)
+		return nil
+	}
+	return p.RelatedVec(qv, user, agent, n)
+}
+
+// RelatedVec is Related with the text already embedded, so a caller that holds the
+// vector does not embed it again. An empty vector gives no pages.
+func (p *PageStore) RelatedVec(qv []float32, user, agent string, n int) []Page {
+	if p == nil || n <= 0 || len(qv) == 0 {
 		return nil
 	}
 	hits, err := p.store.searchWhere(qv, n*3, memory.L8Entity, map[string]string{"user_id": user, "agent_id": agent})
@@ -293,6 +375,7 @@ func (p *PageStore) applyOne(user, agent, sourceID string, up PageUpdate, shown 
 		return false, false, nil
 	}
 	pg.Updated = now
+	p.invalidateNamesLocked(user, agent)
 	snap := clonePage(*pg)
 	perr := p.persistLocked()
 	p.mu.Unlock()
@@ -457,7 +540,7 @@ func (p *PageStore) reindex(pg Page) error {
 	// Supersede only a previous, different version. When the text is unchanged the
 	// id is the same, and superseding it would retire the document just written.
 	if pg.DocID != "" && pg.DocID != docID {
-		if _, err := p.store.Supersede([]string{pg.DocID}, docID); err != nil {
+		if _, err := p.store.retire([]string{pg.DocID}, Retire{By: docID, How: howUpdated}); err != nil {
 			log.Printf("pages: supersede old version of %s: %v", pg.ID, err)
 		}
 	}
@@ -468,6 +551,75 @@ func (p *PageStore) reindex(pg Page) error {
 		return p.persistLocked()
 	}
 	return nil
+}
+
+// ForgetSources removes every state entry and history event whose Source is in ids,
+// the raw rows a forget retired, and returns how many pages changed. A changed page
+// is re-indexed like an Apply update (a new l8_entity document, the previous one
+// superseded, so it stays recoverable). A page left with no state and no history
+// is dropped, and its live document retired as forgotten. A restore of the raw row
+// does not bring page entries back.
+func (p *PageStore) ForgetSources(ids map[string]bool) (pages int, err error) {
+	if p == nil || len(ids) == 0 {
+		return 0, nil
+	}
+	p.applyMu.Lock()
+	defer p.applyMu.Unlock()
+
+	var snaps []Page
+	var emptied []Page
+	p.mu.Lock()
+	for id, pg := range p.pages {
+		state := make([]PageState, 0, len(pg.State))
+		for _, s := range pg.State {
+			if !ids[s.Source] {
+				state = append(state, s)
+			}
+		}
+		hist := make([]PageEvent, 0, len(pg.History))
+		for _, ev := range pg.History {
+			if !ids[ev.Source] {
+				hist = append(hist, ev)
+			}
+		}
+		if len(state) == len(pg.State) && len(hist) == len(pg.History) {
+			continue
+		}
+		pages++
+		p.invalidateNamesLocked(pg.UserID, pg.AgentID)
+		if len(state) == 0 && len(hist) == 0 {
+			emptied = append(emptied, clonePage(*pg))
+			delete(p.pages, id)
+			continue
+		}
+		pg.State, pg.History = state, hist
+		snaps = append(snaps, clonePage(*pg))
+	}
+	if pages > 0 {
+		err = p.persistLocked()
+	}
+	p.mu.Unlock()
+
+	for _, pg := range emptied {
+		if pg.DocID == "" {
+			continue
+		}
+		if _, e := p.store.retire([]string{pg.DocID}, Retire{How: howForgotten, Reason: reasonPageEmptied}); e != nil {
+			log.Printf("pages: retire emptied page %s: %v", pg.ID, e)
+			if err == nil {
+				err = e
+			}
+		}
+	}
+	for _, snap := range snaps {
+		if e := p.reindex(snap); e != nil {
+			log.Printf("pages: reindex after forget %s: %v", snap.ID, e)
+			if err == nil {
+				err = e
+			}
+		}
+	}
+	return pages, err
 }
 
 // Repair re-indexes every page whose live document is missing, and returns how many
@@ -536,8 +688,9 @@ func (l *pageUpdates) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// UnmarshalJSON reads each field loosely: a field of the wrong type is ignored
-// rather than failing the update, and "set" may be a list of {attr,value}.
+// UnmarshalJSON reads each field loosely: a field of the wrong type is read by
+// looseString (empty when it is not text or a scalar) rather than failing the
+// update, and "set" may be a list of {attr,value}.
 func (u *PageUpdate) UnmarshalJSON(b []byte) error {
 	*u = PageUpdate{}
 	var raw map[string]json.RawMessage
@@ -545,11 +698,7 @@ func (u *PageUpdate) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	str := func(key string) string {
-		var s string
-		if json.Unmarshal(raw[key], &s) != nil {
-			return ""
-		}
-		return s
+		return looseString(raw[key])
 	}
 	u.Page, u.Name, u.Kind, u.Event = str("page"), str("name"), str("kind"), str("event")
 	var sets []json.RawMessage
@@ -568,16 +717,17 @@ func (u *PageUpdate) UnmarshalJSON(b []byte) error {
 }
 
 // UnmarshalJSON accepts a value of any scalar type, since a model may send
-// 4.6 or true rather than a string.
+// 4.6 or true rather than a string. The attr is read by looseString, so a
+// wrong-typed attr empties itself instead of failing the set.
 func (s *PageSet) UnmarshalJSON(b []byte) error {
 	var obj struct {
-		Attr  string `json:"attr"`
-		Value any    `json:"value"`
+		Attr  json.RawMessage `json:"attr"`
+		Value any             `json:"value"`
 	}
 	if err := json.Unmarshal(b, &obj); err != nil {
 		return err
 	}
-	s.Attr = obj.Attr
+	s.Attr = looseString(obj.Attr)
 	switch v := obj.Value.(type) {
 	case string:
 		s.Value = v

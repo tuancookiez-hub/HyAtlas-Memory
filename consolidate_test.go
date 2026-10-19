@@ -194,6 +194,10 @@ func TestDecayRawProtectsCitedMemories(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Decay only removes rows the extraction pass has read.
+	if err := srv.store.SetExtracted(uncited, true); err != nil {
+		t.Fatal(err)
+	}
 	// A live edge citing one of them.
 	if err := srv.store.Graph().AddEdgeWithSource("", "", "skyhook", "listens_on", "4471", cited); err != nil {
 		t.Fatalf("edge: %v", err)
@@ -241,6 +245,75 @@ func TestDecayRawDisabledWithoutRetention(t *testing.T) {
 	}
 	if _, total := srv.store.List("l2_raw", "", "", 0, 0, false); total != 1 {
 		t.Errorf("raw count = %d, want 1 (nothing may be deleted)", total)
+	}
+}
+
+// An old raw row the extraction pass has not read yet must survive decay, while an
+// old row it has read and nothing cites is deleted as before.
+func TestDecayRawKeepsUnextractedRows(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	old := time.Now().UTC().Add(-40 * 24 * time.Hour).Format(time.RFC3339)
+
+	unextracted, extracted := newID(), newID()
+	for _, id := range []string{unextracted, extracted} {
+		if err := srv.store.Add("l2_raw", id, "old raw "+id, map[string]string{
+			"user_id": "u", "agent_id": "a", "ts": old,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := srv.store.SetExtracted(extracted, true); err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewConsolidator(srv.store, nil, time.Hour, 7*24*time.Hour, 200)
+	pruned, protected := c.decayRaw()
+	if pruned != 1 || protected != 0 {
+		t.Errorf("decayRaw() = (%d,%d), want (1,0): only the extracted raw is decayed", pruned, protected)
+	}
+
+	_, n := srv.store.List("l2_raw", "", "", 1, 0, false)
+	rows, _ := srv.store.List("l2_raw", "", "", n, 0, false)
+	remaining := map[string]bool{}
+	for _, d := range rows {
+		remaining[d.ID] = true
+	}
+	if !remaining[unextracted] {
+		t.Error("the unextracted raw memory was deleted before the extraction pass read it")
+	}
+	if remaining[extracted] {
+		t.Error("the old extracted, uncited raw memory was not decayed")
+	}
+}
+
+// An old extracted raw row that a live L6 schema names as a source is still that
+// schema's provenance, so decay keeps it, the same as a row cited by an L5 edge.
+func TestDecayRawProtectsSourcesOfSchemas(t *testing.T) {
+	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
+	old := time.Now().UTC().Add(-40 * 24 * time.Hour).Format(time.RFC3339)
+
+	source := newID()
+	if err := srv.store.Add("l2_raw", source, "old raw", map[string]string{
+		"user_id": "u", "agent_id": "a", "ts": old,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.store.SetExtracted(source, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.store.Add("l6_schema", newID(), "a live pattern", map[string]string{
+		"user_id": "u", "agent_id": "a", "ts": old, "source_ids": source,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewConsolidator(srv.store, nil, time.Hour, 7*24*time.Hour, 200)
+	pruned, protected := c.decayRaw()
+	if pruned != 0 || protected != 1 {
+		t.Errorf("decayRaw() = (%d,%d), want (0,1): the schema's source is kept", pruned, protected)
+	}
+	if _, total := srv.store.List("l2_raw", "", "", 0, 0, false); total != 1 {
+		t.Errorf("raw count = %d, want 1 (the schema's source must survive)", total)
 	}
 }
 
@@ -534,15 +607,15 @@ func TestStatusReportsExtractSync(t *testing.T) {
 // rather than silently disabling the slow path on a typo.
 func TestParseDuration(t *testing.T) {
 	t.Setenv("HYATLAS_TEST_DUR", "90s")
-	if got := parseDuration("HYATLAS_TEST_DUR", time.Hour); got != 90*time.Second {
+	if got := envDuration("HYATLAS_TEST_DUR", time.Hour); got != 90*time.Second {
 		t.Errorf("parseDuration = %v, want 90s", got)
 	}
 	t.Setenv("HYATLAS_TEST_DUR", "nonsense")
-	if got := parseDuration("HYATLAS_TEST_DUR", time.Hour); got != time.Hour {
+	if got := envDuration("HYATLAS_TEST_DUR", time.Hour); got != time.Hour {
 		t.Errorf("a bad value must fall back to the default, got %v", got)
 	}
 	t.Setenv("HYATLAS_TEST_DUR", "")
-	if got := parseDuration("HYATLAS_TEST_DUR", 42*time.Minute); got != 42*time.Minute {
+	if got := envDuration("HYATLAS_TEST_DUR", 42*time.Minute); got != 42*time.Minute {
 		t.Errorf("unset must use the default, got %v", got)
 	}
 }
@@ -859,11 +932,13 @@ func TestSlowPathOwnsL5AndL6(t *testing.T) {
 	seed(t, srv.store, 2, "own")
 
 	// Per-turn pass writing every field it used to own.
-	promoteExtraction(srv.store, &Extraction{
-		Facts:     []Fact{{Data: "a fact", Layer: "project_state"}},
-		Knowledge: []Relation{{From: "p", Relation: "q", To: "r"}},
-		Schemas:   []Schema{{Pattern: "a pattern", Context: "ctx"}},
-	}, "u", "a", "mem-src")
+	ex, err := parseExtraction(`{"facts":[{"data":"a fact","layer":"project_state"}],
+		"knowledge":[{"from":"p","relation":"q","to":"r"}],
+		"schemas":[{"pattern":"a pattern","context":"ctx"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promoteExtractionCtx(srv.store, ex, ExtractContext{}, "u", "a", "mem-src", 0)
 
 	if _, edges := srv.store.Graph().Snapshot(0); len(edges) != 0 {
 		t.Errorf("per-turn pass wrote %d L5 edge(s); L5 belongs to the slow path", len(edges))
@@ -1125,7 +1200,7 @@ func TestCheckConsolidateEveryRejectsDisabledSlowPath(t *testing.T) {
 	}
 	// The env spelling "0" must parse to the zero duration the check rejects.
 	t.Setenv("HYATLAS_CONSOLIDATE_EVERY", "0")
-	if d := parseDuration("HYATLAS_CONSOLIDATE_EVERY", time.Hour); d != 0 {
+	if d := envDuration("HYATLAS_CONSOLIDATE_EVERY", time.Hour); d != 0 {
 		t.Errorf("HYATLAS_CONSOLIDATE_EVERY=0 parsed to %v, want 0", d)
 	}
 }

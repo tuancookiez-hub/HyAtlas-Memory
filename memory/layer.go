@@ -1,4 +1,4 @@
-// Package memory defines the HyAtlas v4 eight-layer memory model.
+// Package memory defines the HyAtlas eight-layer memory model.
 //
 // This is the truthful layer set for the new system — no dead "identity" slot.
 // The former L4 IDENTITY (retired) is folded into Profile/Fact; L4 SUMMARY is a

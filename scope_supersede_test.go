@@ -93,7 +93,7 @@ func factIDs(prompt string) []string {
 }
 
 // seedSourced writes one L3 fact owned by user/agent and extracted from the L2
-// row source, the way promoteExtraction does.
+// row source, the way promoteExtractionCtx does.
 func seedSourced(t *testing.T, store *MemoryStore, user, agent, source, text string) string {
 	t.Helper()
 	id := newID()
@@ -576,6 +576,11 @@ func TestDecayRawKeepsRowsBehindLiveFacts(t *testing.T) {
 		if err := srv.store.Add(memory.L2Raw, id, "raw "+id, map[string]string{
 			"user_id": "u", "agent_id": "a", "ts": old,
 		}); err != nil {
+			t.Fatal(err)
+		}
+		// Extracted, as rows with facts behind them are: decay never takes an
+		// unextracted row.
+		if err := srv.store.SetExtracted(id, true); err != nil {
 			t.Fatal(err)
 		}
 	}

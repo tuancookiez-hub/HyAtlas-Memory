@@ -27,6 +27,21 @@ const (
 	howUpdated  = "updated"  // extended by a newer fact that keeps everything it said
 	howRestated = "restated" // a near-duplicate folded into a newer phrasing
 	howMerged   = "merged"   // absorbed by a consolidation merge
+	howDropped  = "dropped"  // dropped with no replacement
+	howDone     = "done"     // an intention that was done or abandoned
+	// howForgotten: removed or replaced with Hermes's memory tool and mirrored by
+	// /api/v1/forget, or an entity page left empty by such a forget. Retired, not
+	// deleted, so the admin restore brings the row back.
+	howForgotten = "forgotten"
+)
+
+// Reasons recorded with a forget.
+const (
+	// defaultForgetReason is the drop_reason when a forget request gives none.
+	defaultForgetReason = "removed with Hermes's memory tool"
+	// reasonPageEmptied is the drop_reason of an entity page whose every entry came
+	// from forgotten memories.
+	reasonPageEmptied = "every entry of this page came from forgotten memories"
 )
 
 // normalizeEventDate returns s as YYYY-MM-DD or YYYY-MM when it is a valid date in

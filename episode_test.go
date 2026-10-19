@@ -338,6 +338,21 @@ func TestNewEpisodesNilSafe(t *testing.T) {
 	}
 }
 
+// A Note with no facts and no open episode has nothing to record, so it must not
+// write episodes.json.
+func TestEpisodeNoteWithoutFactsSkipsWrite(t *testing.T) {
+	dir := t.TempDir()
+	llm := NewLLMClient("http://unused.invalid", "k", "m")
+	e := NewEpisodes(dir, nil, llm, 30*time.Minute)
+	e.Note("u", "a", nil, episodeTestTime)
+	if _, err := os.Stat(filepath.Join(dir, episodesFile)); !os.IsNotExist(err) {
+		t.Fatalf("episodes.json written for a Note with no facts: stat err = %v", err)
+	}
+	if open, pending := e.Counts(); open != 0 || pending != 0 {
+		t.Fatalf("Counts = %d, %d; want 0, 0", open, pending)
+	}
+}
+
 // TestResolveEpisodeGap checks the environment variable rules: unset gives the
 // default, "off" disables, a duration is used as given, and junk falls back.
 func TestResolveEpisodeGap(t *testing.T) {
@@ -350,6 +365,9 @@ func TestResolveEpisodeGap(t *testing.T) {
 		{env: "off", set: true, want: 0},
 		{env: "10m", set: true, want: 10 * time.Minute},
 		{env: "x", set: true, want: 30 * time.Minute},
+		{env: "no", set: true, want: 0},
+		{env: "90", set: true, want: 90 * time.Second},
+		{env: "-10m", set: true, want: 30 * time.Minute},
 	}
 	for _, c := range cases {
 		if c.set {

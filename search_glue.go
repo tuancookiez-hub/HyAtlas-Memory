@@ -2,24 +2,30 @@ package main
 
 import "sort"
 
-// clauseHitsOwners runs clauseHits for each of the search's owners and merges the
-// results, so a search over a group of aliased IDs finds clauses under any of them.
-// An empty users list searches every owner (agentID still applies when set).
+// clauseHitsOwners finds the clause hits of the search's owners, so a search over a
+// group of aliased IDs finds clauses under any of them. An empty users list searches
+// every owner (agentID still applies when set). For several owners it runs one clause
+// query with no owner filter, wide enough for limit parents per owner, and keeps the
+// hits whose owner is in users, instead of one query per owner.
 func (s *MemoryStore) clauseHitsOwners(qv []float32, users []string, agentID string, limit int) []SearchHit {
-	if len(users) == 0 {
-		var where map[string]string
-		if agentID != "" {
-			where = map[string]string{"agent_id": agentID}
-		}
-		return s.clauseHits(qv, where, limit)
+	switch len(users) {
+	case 0:
+		return s.clauseHits(qv, ownerWhere("", agentID), limit)
+	case 1:
+		return s.clauseHits(qv, ownerWhere(users[0], agentID), limit)
+	}
+	want := make(map[string]bool, len(users))
+	for _, u := range users {
+		want[u] = true
+	}
+	if limit <= 0 {
+		limit = 5
 	}
 	var out []SearchHit
-	for _, u := range users {
-		where := map[string]string{"user_id": u}
-		if agentID != "" {
-			where["agent_id"] = agentID
+	for _, h := range s.clauseHits(qv, ownerWhere("", agentID), limit*len(users)) {
+		if want[h.Meta["user_id"]] {
+			out = append(out, h)
 		}
-		out = mergeBest(out, s.clauseHits(qv, where, limit))
 	}
 	return out
 }

@@ -101,13 +101,14 @@ func (s *MemoryStore) writeExperiences(exs []Experience, userID, agentID, source
 			"confidence":         normalizeConfidence(e.Confidence),
 			"source_id":          sourceID, "ts": ts,
 		}
-		if err := s.Add(memory.L3Fact, id, text, meta); err != nil {
+		// The vector from the dedupe search is reused, so the lesson is embedded once.
+		if err := s.addWithVector(memory.L3Fact, id, text, meta, qv); err != nil {
 			log.Printf("experience: write: %v", err)
 			continue
 		}
 		ids = append(ids, id)
 		if len(old) > 0 {
-			if _, err := s.supersedeWith(old, id, map[string]string{metaSupersededHow: howUpdated}); err != nil {
+			if _, err := s.retire(old, Retire{By: id, How: howUpdated}); err != nil {
 				log.Printf("experience: supersede %s: %v", old[0], err)
 			}
 		}

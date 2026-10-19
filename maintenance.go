@@ -158,9 +158,7 @@ func (s *MemoryStore) rewriteContent(layer memory.Layer, updates map[string]stri
 		n++
 	}
 	s.mu.Lock()
-	if err := s.persistIndexLocked(); err != nil && firstErr == nil {
-		firstErr = err
-	}
+	s.markDirtyLocked()
 	s.mu.Unlock()
 	return n, firstErr
 }
@@ -346,7 +344,7 @@ func (s *Server) handleDedupeFacts(w http.ResponseWriter, r *http.Request) {
 		marked := 0
 		var firstErr error
 		for _, survivor := range order {
-			n, err := s.store.supersedeWith(bySurvivor[survivor], survivor, map[string]string{metaSupersededHow: howRestated})
+			n, err := s.store.retire(bySurvivor[survivor], Retire{By: survivor, How: howRestated})
 			marked += n
 			if err != nil && firstErr == nil {
 				firstErr = err
@@ -386,7 +384,8 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		ids = append(ids, d.ID)
-		rows = append(rows, row{d.ID, d.Layer, utf8Trunc(d.Content, 200), d.Meta["superseded_by"], d.Meta["drop_reason"]})
+		r := retirementOf(d)
+		rows = append(rows, row{d.ID, d.Layer, utf8Trunc(d.Content, 200), r.By, r.Reason})
 	}
 	resp := map[string]any{"dry_run": dry, "requested": len(body.IDs), "superseded": len(ids), "rows": rows}
 	if !dry && len(ids) > 0 {

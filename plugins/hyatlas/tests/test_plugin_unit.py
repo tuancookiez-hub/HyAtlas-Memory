@@ -330,16 +330,17 @@ def test_sync_turn_skips_empty():
         srv.stop()
 
 
-def test_on_memory_write_mirrors_add_only():
+def test_on_memory_write_mirrors_add_replace_and_remove():
     srv = FakeV4Server()
     try:
         p = _provider_at(srv.base)
         p.on_memory_write("add", "memory", "user prefers concise answers")
         assert len(srv.store["memories"]) == 1
-        p.on_memory_write("replace", "memory", "x")  # not mirrored
-        p.on_memory_write("remove", "memory", "y")  # not mirrored
+        p.on_memory_write("replace", "memory", "x")  # no previous_content: forget nothing, add x
+        assert len(srv.store["memories"]) == 2
+        p.on_memory_write("remove", "memory", "y")  # no previous_content: nothing sent
         p.on_memory_write("add", "memory", "")       # empty content skipped
-        assert len(srv.store["memories"]) == 1
+        assert len(srv.store["memories"]) == 2
     finally:
         srv.stop()
 
@@ -611,7 +612,7 @@ _SERVER_READ = {
     "llm_model": "HYATLAS_LLM_MODEL",
 }
 _CLIENT_ONLY = {"user_id", "agent_id", "auto_start", "binary_path",
-                "launcher_path", "request_timeout", "llm_key", "share_llm_key"}
+                "launcher_path", "request_timeout", "llm_key"}
 
 
 def test_every_server_read_setting_is_forwarded_to_the_child(monkeypatch):
@@ -1323,12 +1324,13 @@ def test_provider_schema_matches_manifest_schema():
     declared = manifest.get("config_schema") or {}
     provider = {f["key"]: f for f in mod.HyatlasMemoryProvider().get_config_schema()}
 
-    assert set(declared) == set(provider), (
-        f"manifest/provider settings diverged: "
-        f"manifest-only={sorted(set(declared) - set(provider))} "
-        f"provider-only={sorted(set(provider) - set(declared))}"
-    )
-    for key, field in declared.items():
+    # The provider offers only the onboarding questions; the manifest declares every
+    # setting, so the Desktop form still shows the advanced ones.
+    assert set(provider) <= set(declared), (
+        f"provider-only settings: {sorted(set(provider) - set(declared))}")
+    assert set(declared) == set(_load_sibling("settings").KEYS)
+    for key in provider:
+        field = declared[key]
         assert field.get("default") == provider[key]["default"], (
             f"{key}: default {field.get('default')!r} in manifest vs "
             f"{provider[key]['default']!r} in provider"
@@ -1340,7 +1342,7 @@ def test_settings_schema_is_the_single_source():
     settings = _load_sibling("settings")
     assert settings.KEYS == tuple(f["key"] for f in settings.SCHEMA)
     assert settings.DEFAULTS == {f["key"]: f["default"] for f in settings.SCHEMA}
-    assert [f["key"] for f in settings.config_schema()] == list(settings.KEYS)
+    assert [f["key"] for f in settings.config_schema()] == [f["key"] for f in settings.ONBOARDING]
     # labels/types are manifest-only; leaking them confuses the setup form
     assert not any("label" in f or "type" in f for f in settings.config_schema())
 
@@ -1400,10 +1402,11 @@ def test_mode_declared_in_both_schemas():
     manifest = yaml.safe_load((Path(_PKG) / "plugin.yaml").read_text(encoding="utf-8"))
     declared = manifest["config_schema"]
     assert "mode" in declared
-    assert declared["mode"]["choices"] == ["", "lite", "pro", "ultra"]
+    st = _load_sibling("settings")
+    assert declared["mode"]["choices"] == list(st.MODE_CHOICES)
     provider = {f["key"]: f for f in mod.HyatlasMemoryProvider().get_config_schema()}
     assert "mode" in provider
-    assert provider["mode"]["choices"] == ["", "lite", "pro", "ultra"]
+    assert provider["mode"]["choices"] == list(st.MODE_CHOICES)
 
 
 def test_spawner_forwards_validated_mode_only():
@@ -1417,7 +1420,8 @@ def test_spawner_forwards_validated_mode_only():
 
 def test_spawner_omits_mode_when_unset():
     proc = _load_sibling("process")
-    hp = proc.HyatlasProcess({})
+    # An explicit empty mode, since a missing one now resolves to the wizard default.
+    hp = proc.HyatlasProcess({"mode": ""})
     hp._mode = ""
     env = hp._env()
     os.environ.pop("HYATLAS_MODE", None)
@@ -1469,14 +1473,13 @@ def test_sync_setting_rejects_unknown_value():
 
 
 def test_sync_declared_in_both_schemas():
-    """Manifest and provider schema must both expose sync."""
+    """The manifest exposes sync (an advanced setting); the setup wizard does not ask it."""
     yaml = pytest.importorskip("yaml")
     declared = yaml.safe_load((Path(_PKG) / "plugin.yaml").read_text(encoding="utf-8"))["config_schema"]
     assert "sync" in declared
-    assert declared["sync"]["choices"] == ["", "on", "off"]
+    assert declared["sync"]["choices"] == ["default", "on", "off"]
     provider = {f["key"]: f for f in mod.HyatlasMemoryProvider().get_config_schema()}
-    assert "sync" in provider
-    assert provider["sync"]["choices"] == ["", "on", "off"]
+    assert "sync" not in provider
 
 
 def test_spawner_forwards_validated_sync_only():
@@ -1566,21 +1569,19 @@ def test_save_config_strips_the_llm_key():
 
 # ---- no LLM endpoint may be baked into the plugin ----
 
-def test_llm_endpoint_and_model_default_to_empty():
-    """The endpoint is the user's choice, so nothing may be assumed.
+def test_llm_endpoint_and_model_default_to_the_nous_portal_but_the_key_is_empty():
+    """Enter in the wizard picks the Nous Portal and a free model; the key is never defaulted.
 
-    A remote default here would mean an unconfigured install has somewhere to
-    send memory text. The server dropped its defaults for the same reason; the
-    plugin must not reintroduce them from the other side.
+    The endpoint is shown in the prompt ("Enter for the Nous Portal"), so the user
+    sees where memory text would go. Text still cannot leave without a key the user
+    typed, and nothing else is assumed.
     """
     settings = _load_sibling("settings")
     fields = {f["key"]: f for f in settings.config_schema()}
-    assert fields["llm_base"]["default"] == ""
-    assert fields["llm_model"]["default"] == ""
+    assert fields["llm_base"]["default"] == "https://inference-api.nousresearch.com/v1"
+    assert fields["llm_model"]["default"] == "meituan/longcat-2.5-preview:free"
     assert fields["llm_key"]["default"] == ""
-    # And load() really resolves to empty, not to something hidden in DEFAULTS.
-    for k in ("llm_base", "llm_model", "llm_key"):
-        assert settings.DEFAULTS[k] == "", f"{k} has a baked-in default"
+    assert settings.DEFAULTS["llm_key"] == "", "the key must never have a baked-in default"
 
 
 def test_no_remote_endpoint_is_hardcoded_in_plugin_source():
@@ -1597,6 +1598,9 @@ def test_no_remote_endpoint_is_hardcoded_in_plugin_source():
             continue
         text = f.read_text(encoding="utf-8", errors="replace")
         for needle in banned:
+            # settings.py alone names the Nous Portal, as the visible wizard default.
+            if f.name == "settings.py" and needle in ("nousresearch.com", "inference-api"):
+                continue
             if needle in text:
                 offenders.append(f"{f.name}: {needle}")
     assert not offenders, f"plugin source bakes in an endpoint: {offenders}"
@@ -1696,8 +1700,8 @@ def test_null_values_in_profile_fall_back_to_defaults(monkeypatch):
     })
     cfg = settings.load()
     for k, want in (("request_timeout", 15.0), ("server_port", 19528),
-                    ("auto_start", False), ("data_dir", ""), ("mode", ""),
-                    ("user_id", "default"), ("llm_base", "")):
+                    ("auto_start", False), ("data_dir", ""), ("mode", settings.DEFAULTS["mode"]),
+                    ("user_id", "default"), ("llm_base", settings.DEFAULTS["llm_base"])):
         assert cfg[k] == want, f"{k}: null overrode the default ({cfg[k]!r})"
 
     # The exact expression that used to raise.
@@ -1870,9 +1874,9 @@ def test_bool_field_declares_no_choices():
 def test_truthy_handles_strings_from_a_select():
     """Any bool read from config must treat the string "false" as false."""
     settings = _load_sibling("settings")
-    for v in (True, "true", "True", "TRUE", "1", "yes", "on"):
+    for v in (True, "true", "True", "TRUE", "1", "yes", "y", "Y", "on"):
         assert settings.truthy(v) is True, v
-    for v in (False, "false", "False", "FALSE", "0", "no", "off", "", None, [], "banana"):
+    for v in (False, "false", "False", "FALSE", "0", "no", "off", "", "n", "N", None, [], "banana"):
         assert settings.truthy(v) is False, v
 
 
@@ -1995,7 +1999,7 @@ def test_llm_settings_do_not_claim_a_server_default():
     for key in ("llm_base", "llm_model"):
         desc = by_key[key]["description"]
         assert "server's default" not in desc and "server default" not in desc, key
-        assert "unconfigured" in desc, key
+        assert "Nous Portal" in desc and "lite" in desc, key
 
 
 # ---------------------------------------------------------------------------

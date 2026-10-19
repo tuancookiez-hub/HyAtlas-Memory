@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-// HTTP frontend for HyAtlas v4. A single-page dashboard that renders from the
+// HTTP frontend for HyAtlas. A single-page dashboard that renders from the
 // real API endpoints — no mock data. Pages: Overview, Today, Layers, Explore,
 // L5, Observatory, Quality, System. Night-mode-first (dark) like the rest of
 // the workspace.

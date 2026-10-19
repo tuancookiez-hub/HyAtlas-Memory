@@ -35,15 +35,9 @@ type snapshotConfig struct {
 // because chromem treats every subdirectory of the data dir as a collection, so
 // a snapshot stored inside it would be read back as one.
 func resolveSnapshot(dataDir string) snapshotConfig {
-	cfg := snapshotConfig{Keep: envInt("HYATLAS_SNAPSHOT_KEEP", snapshotDefaultKeep)}
-
-	// parseDuration reads a bare "0" as zero seconds, so "0" and "off" are
-	// handled here, before it, to make the intent explicit.
-	raw := strings.TrimSpace(os.Getenv("HYATLAS_SNAPSHOT_EVERY"))
-	if strings.EqualFold(raw, "off") || raw == "0" {
-		cfg.Every = 0
-	} else {
-		cfg.Every = parseDuration("HYATLAS_SNAPSHOT_EVERY", 24*time.Hour)
+	cfg := snapshotConfig{
+		Keep:  envInt("HYATLAS_SNAPSHOT_KEEP", snapshotDefaultKeep),
+		Every: envDuration("HYATLAS_SNAPSHOT_EVERY", 24*time.Hour),
 	}
 
 	if dir := strings.TrimSpace(os.Getenv("HYATLAS_SNAPSHOT_DIR")); dir != "" {
@@ -81,6 +75,11 @@ func snapshotLine(cfg snapshotConfig) string {
 // built under a temporary name and renamed into place, so an interrupted
 // snapshot never looks complete.
 func (s *MemoryStore) Snapshot(dataDir, dst string) error {
+	// The index file is written in the background, so bring it up to date first.
+	// Flush takes its own locks, none of the ones below.
+	if err := s.Flush(); err != nil {
+		log.Printf("snapshot: flush index: %v", err)
+	}
 	// Same lock order as Supersede and Add, so the snapshot cannot deadlock with them.
 	s.supMu.Lock()
 	defer s.supMu.Unlock()

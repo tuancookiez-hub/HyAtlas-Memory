@@ -106,6 +106,10 @@ func TestDecayRawProtectsEverySourceOfEdge(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Decay only removes rows the extraction pass has read.
+	if err := srv.store.SetExtracted(uncited, true); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := srv.store.Graph().AddEdgeWithSources("u", "a", "x", "r", "y", []string{r1, r2}); err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +278,7 @@ func TestCursorResumesAndRotatesOwners(t *testing.T) {
 }
 
 // An owner the deadline cuts off after earlier owners spent the pass is not
-// blamed for it: its cluster is not counted toward maxWindowFails, so repeated
+// blamed for it: its cluster is not counted toward maxClusterFails, so repeated
 // late cuts cannot get a healthy window skipped, and the next pass starts with it.
 func TestLateDeadlineCutDoesNotCountAsWindowFailure(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
@@ -299,8 +303,8 @@ func TestLateDeadlineCutDoesNotCountAsWindowFailure(t *testing.T) {
 	c := NewConsolidator(srv.store, NewLLMClient(mock.URL, "k", "m"), time.Hour, 0, 200)
 	c.parallel = 1 // the test pins which call is cut, so calls run one at a time
 
-	// Cut bob late more times than maxWindowFails would tolerate.
-	for pass := 1; pass <= maxWindowFails+1; pass++ {
+	// Cut bob late more times than maxClusterFails would tolerate.
+	for pass := 1; pass <= maxClusterFails+1; pass++ {
 		// alice leads and has changed, so her call spends time before bob's.
 		seedSourced(t, srv.store, "alice", "x1", fmt.Sprintf("alice-new-%d", pass), fmt.Sprintf("alice new %d", pass))
 		c.cursor = 0
@@ -447,12 +451,12 @@ func TestSchemaDedupeAndRefinement(t *testing.T) {
 // and the merged preference is mirrored under its new text.
 func TestMergedPreferenceReplacesItsL1Mirror(t *testing.T) {
 	srv := newTestServer(t, "m", "http://127.0.0.1:1/v1")
-	promoteExtraction(srv.store, &Extraction{
+	promoteExtractionCtx(srv.store, &Extraction{
 		Facts: []Fact{{Data: "prefers tabs", Layer: "user_preferences"}},
-	}, "alice", "a1", "raw-p1")
-	promoteExtraction(srv.store, &Extraction{
+	}, ExtractContext{}, "alice", "a1", "raw-p1", 0)
+	promoteExtractionCtx(srv.store, &Extraction{
 		Facts: []Fact{{Data: "prefers tabs in go", Layer: "user_preferences"}},
-	}, "alice", "a1", "raw-p2")
+	}, ExtractContext{}, "alice", "a1", "raw-p2", 0)
 
 	facts := liveRows(t, srv.store, memory.L3Fact, "alice", "a1")
 	if len(facts) != 2 {

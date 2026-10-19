@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -26,9 +27,17 @@ type usageEntry struct {
 // memory that is only ever shown sinks. It is persisted next to the store so the
 // signal survives restarts.
 type UsageStats struct {
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	m    map[string]usageEntry
 	path string
+	// dirty is set when the counts changed since the last write, and gen counts those
+	// changes so a write can tell whether a change landed while it was running.
+	dirty bool
+	gen   uint64
+	// flushArmed is set while the timer that writes the counts is waiting. fileMu keeps
+	// two writes from racing on the same temp file.
+	flushArmed bool
+	fileMu     sync.Mutex
 }
 
 // usageMinShown is how many recalls a memory needs before its used/shown ratio is
@@ -45,6 +54,11 @@ const usageMaxEntries = 20000
 // usage.json with the store's write and search counters, so each overwrote the
 // other and neither survived a restart reliably.
 const usageLearningFile = "usage_learning.json"
+
+// usageFlushEvery is the least time between two writes of the counts. Changes in the
+// window are written together by one timer, so a busy server does not rewrite the
+// whole file on every recall.
+const usageFlushEvery = 2 * time.Second
 
 // NewUsageStats loads <dataDir>/usage_learning.json if it exists. Without it, a
 // usage.json from before 4.8.0 is read once if it holds per-memory entries rather
@@ -72,7 +86,8 @@ func NewUsageStats(dataDir string) *UsageStats {
 
 // Record counts one recall: every id in recalled was shown; the ones whose text the
 // reply evidently used are counted as used. contents maps id -> memory text.
-// It persists the file (tmp+rename) and returns how many were used.
+// It marks the counts for a write, which Flush or the flush timer makes later, and
+// returns how many were used. The write never happens while the caller holds the lock.
 //
 // Why: the plugin sends what it recalled and what the assistant then said. A memory
 // the agent keeps getting and never uses is noise; one it uses matters. This is that
@@ -104,9 +119,81 @@ func (u *UsageStats) Record(recalled []string, contents map[string]string, reply
 		u.pruneLocked()
 	}
 	if len(seen) > 0 {
-		_ = u.persistLocked()
+		u.markDirtyLocked()
 	}
 	return used
+}
+
+// markDirtyLocked records that the counts changed and starts the flush timer if none
+// is waiting. Stats with no file path are memory only and never write. The caller
+// must hold u.mu for writing.
+func (u *UsageStats) markDirtyLocked() {
+	if u.path == "" {
+		return
+	}
+	u.gen++
+	u.dirty = true
+	if !u.flushArmed {
+		u.flushArmed = true
+		time.AfterFunc(usageFlushEvery, u.flushTimer)
+	}
+}
+
+// flushTimer runs when the flush timer ends. It clears the armed flag and writes the
+// counts. A failed write is logged, because usage counts are advisory.
+func (u *UsageStats) flushTimer() {
+	u.mu.Lock()
+	u.flushArmed = false
+	u.mu.Unlock()
+	if err := u.Flush(); err != nil {
+		log.Printf("usage: cannot save %s: %v", u.path, err)
+	}
+}
+
+// Flush writes the counts to usage_learning.json now if they changed since the last
+// write, and returns nil when nothing changed or the stats have no file. The server
+// should call it on shutdown, so counts recorded in the last two seconds are kept. A
+// nil UsageStats does nothing.
+//
+// The map is marshalled under the read lock and the file is written outside it, so
+// searches that read the counts are never held up by the disk.
+func (u *UsageStats) Flush() error {
+	if u == nil || u.path == "" {
+		return nil
+	}
+	u.fileMu.Lock()
+	defer u.fileMu.Unlock()
+
+	u.mu.RLock()
+	if !u.dirty {
+		u.mu.RUnlock()
+		return nil
+	}
+	gen := u.gen
+	b, err := json.Marshal(u.m)
+	u.mu.RUnlock()
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(u.path), 0o755); err != nil {
+		return err
+	}
+	tmp := u.path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, u.path); err != nil {
+		return err
+	}
+
+	u.mu.Lock()
+	// A change that landed during the write keeps the counts dirty for the next flush.
+	if u.gen == gen {
+		u.dirty = false
+	}
+	u.mu.Unlock()
+	return nil
 }
 
 // pruneLocked drops entries until the map holds usageMaxEntries*9/10. It goes first
@@ -170,8 +257,8 @@ func (u *UsageStats) Factor(id string) float64 {
 	if u == nil {
 		return 1.0
 	}
-	u.mu.Lock()
-	defer u.mu.Unlock()
+	u.mu.RLock()
+	defer u.mu.RUnlock()
 	e, ok := u.m[id]
 	if !ok || e.Shown < usageMinShown {
 		return 1.0
@@ -189,8 +276,8 @@ func (u *UsageStats) LastUsed(id string) time.Time {
 	if u == nil {
 		return time.Time{}
 	}
-	u.mu.Lock()
-	defer u.mu.Unlock()
+	u.mu.RLock()
+	defer u.mu.RUnlock()
 	e, ok := u.m[id]
 	if !ok {
 		return time.Time{}
@@ -212,20 +299,7 @@ func rerankUsage(hits []SearchHit, u *UsageStats) []SearchHit {
 	if u == nil || len(hits) == 0 {
 		return hits
 	}
-	type scored struct {
-		hit   SearchHit
-		score float64
-	}
-	items := make([]scored, len(hits))
-	for i, h := range hits {
-		items[i] = scored{hit: h, score: (1.0 / float64(rrfK+i+1)) * u.Factor(h.ID)}
-	}
-	sort.SliceStable(items, func(a, b int) bool { return items[a].score > items[b].score })
-	out := make([]SearchHit, len(items))
-	for i, it := range items {
-		out[i] = it.hit
-	}
-	return out
+	return rerankByFactor(hits, func(_ int, h SearchHit) float64 { return u.Factor(h.ID) })
 }
 
 // usedInReply reports whether reply evidently drew on memory text. Words of the
@@ -380,24 +454,4 @@ func (u *UsageStats) HandleFeedback(store *MemoryStore, expand func([]string) []
 		used := u.Record(kept, contents, reply, body.Query)
 		jsonResponse(w, 200, map[string]any{"ok": true, "shown": len(kept), "used": used})
 	}
-}
-
-// persistLocked writes the counts to u.path via a temp file and a rename, so a crash
-// mid-write leaves the previous file intact. The caller must hold u.mu.
-func (u *UsageStats) persistLocked() error {
-	if u.path == "" {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(u.path), 0o755); err != nil {
-		return err
-	}
-	b, err := json.Marshal(u.m)
-	if err != nil {
-		return err
-	}
-	tmp := u.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, u.path)
 }

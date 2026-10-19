@@ -63,7 +63,7 @@ var extractTimeout = defaultExtractTimeout
 // non-positive values all yield defaultExtractTimeout, so a typo cannot leave
 // extraction with no bound at all.
 func resolveExtractTimeout() time.Duration {
-	d := parseDuration("HYATLAS_EXTRACT_TIMEOUT", defaultExtractTimeout)
+	d := envDuration("HYATLAS_EXTRACT_TIMEOUT", defaultExtractTimeout)
 	if d <= 0 {
 		return defaultExtractTimeout
 	}

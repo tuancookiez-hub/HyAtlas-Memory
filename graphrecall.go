@@ -1,10 +1,23 @@
 package main
 
 import (
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/tuancookiez-hub/hyatlas-v4/graph"
+	"github.com/tuancookiez-hub/hyatlas-v4/memory"
 )
+
+// metaVia is the Meta key of a search hit that records how the hit got into the
+// result when it was not found by the query itself; admitLinked sets it to viaLink.
+const metaVia = "via"
+
+// viaLink is the metaVia value of a fact that came in through a link.
+const viaLink = "link"
+
+// metaLinks is the metadata key holding a fact's links: comma-separated id:relation.
+const metaLinks = "links"
 
 // graphRecallMax is how many extra hits graph-assisted recall may add to one search.
 // The cap keeps a densely connected entity from pushing out the hits the query asked for.
@@ -109,10 +122,19 @@ func graphAdmit(candidates []SearchHit, admitted []SearchHit, neighbour []string
 // returned slice is new, the inputs are not modified, and scores are unchanged.
 func graphAdmitWithin(candidates, admitted []SearchHit, neighbour []string, floor float64, max, limit int) []SearchHit {
 	out := graphAdmit(candidates, admitted, neighbour, floor, max)
+	return placeWithin(admitted, out[len(admitted):], limit)
+}
+
+// placeWithin puts extras inside the visible part of admitted, which is its first
+// limit hits: at most a third of the visible slots, at the end of the visible part,
+// so the query's own best hits keep the top places. Extras that do not fit follow the
+// admitted hits. When limit is zero or less, the extras simply follow admitted. The
+// returned slice is new and the inputs are not modified.
+func placeWithin(admitted, extras []SearchHit, limit int) []SearchHit {
 	if limit <= 0 {
-		return out
+		out := make([]SearchHit, 0, len(admitted)+len(extras))
+		return append(append(out, admitted...), extras...)
 	}
-	extras := out[len(admitted):]
 	room := limit / 3
 	if room < 1 {
 		room = 1
@@ -122,10 +144,114 @@ func graphAdmitWithin(candidates, admitted []SearchHit, neighbour []string, floo
 	if pos < 0 {
 		pos = 0
 	}
-	res := make([]SearchHit, 0, len(out))
+	res := make([]SearchHit, 0, len(admitted)+len(extras))
 	res = append(res, admitted[:pos]...)
 	res = append(res, extras[:n]...)
 	res = append(res, admitted[pos:]...)
 	res = append(res, extras[n:]...)
 	return res
+}
+
+// linkedMax is how many facts the links of the top hits may add to one search.
+const linkedMax = 2
+
+// factLink is one link a fact carries to another fact: the other fact's id and how
+// the two relate.
+type factLink struct {
+	ID       string
+	Relation string
+}
+
+// linkRelations are the relations a fact link may name.
+var linkRelations = map[string]bool{"related": true, "contrasts": true, "same_series": true}
+
+// parseLinks reads the links metadata, a comma-separated list of id:relation. It is
+// tolerant: an item with no colon, an empty id, or an unknown relation is skipped, and
+// so is a repeated id.
+func parseLinks(s string) []factLink {
+	var out []factLink
+	seen := map[string]bool{}
+	for _, item := range strings.Split(s, ",") {
+		id, rel, ok := strings.Cut(strings.TrimSpace(item), ":")
+		id, rel = strings.TrimSpace(id), strings.ToLower(strings.TrimSpace(rel))
+		if !ok || id == "" || !linkRelations[rel] || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, factLink{ID: id, Relation: rel})
+	}
+	return out
+}
+
+// linkedFacts returns the live L3 facts with the given ids that belong to one of the
+// owners in users (any owner when users is empty) and to agentID when that is set. A
+// superseded row, a missing row and another owner's row are left out. The result keeps
+// the order of ids, each hit unscored (admitLinked scores it) and each Meta a copy.
+func (s *MemoryStore) linkedFacts(ids []string, users []string, agentID string) []SearchHit {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []SearchHit
+	for _, id := range ids {
+		d, ok := s.index[id]
+		if !ok || d.Layer != string(memory.L3Fact) || isSuperseded(d) {
+			continue
+		}
+		if _, dead := s.superseded[id]; dead {
+			continue
+		}
+		if len(users) > 0 && !slices.Contains(users, d.UserID) {
+			continue
+		}
+		if agentID != "" && d.AgentID != agentID {
+			continue
+		}
+		out = append(out, SearchHit{ID: d.ID, Content: d.Content, Layer: memory.L3Fact, Meta: maps.Clone(d.Meta)})
+	}
+	return out
+}
+
+// admitLinked adds up to linkedMax facts that the top limit hits link to and the query
+// itself missed. A linked fact needs no score floor, because the model linked it, and
+// it takes at most a third of the visible slots (placeWithin), after the query's own
+// best hits. Each reports its own cosine similarity to the query vector qv (0 when qv is
+// empty or the fact has no stored vector), never the score of the hit that links to it,
+// and is marked with metaVia = viaLink. It ranks in link order.
+func admitLinked(s *MemoryStore, hits []SearchHit, users []string, agentID string, limit int, qv []float32) []SearchHit {
+	if limit <= 0 {
+		return hits
+	}
+	have := make(map[string]bool, len(hits))
+	for _, h := range hits {
+		have[h.ID] = true
+	}
+	var extras []SearchHit
+	for i, h := range hits {
+		if i >= limit || len(extras) >= linkedMax {
+			break
+		}
+		var ids []string
+		for _, l := range parseLinks(h.Meta[metaLinks]) {
+			if !have[l.ID] {
+				ids = append(ids, l.ID)
+			}
+		}
+		for _, e := range s.linkedFacts(ids, users, agentID) {
+			if len(extras) >= linkedMax || have[e.ID] {
+				continue
+			}
+			have[e.ID] = true
+			if e.Meta == nil {
+				e.Meta = map[string]string{}
+			}
+			e.Meta[metaVia] = viaLink
+			if len(qv) > 0 {
+				e.Score = float32(cosineSim(qv, s.vectors([]string{e.ID})[e.ID]))
+			}
+			extras = append(extras, e)
+		}
+	}
+	if len(extras) == 0 {
+		return hits
+	}
+	return placeWithin(hits, extras, limit)
 }

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"slices"
+	"maps"
 	"sort"
 	"strings"
 
@@ -35,22 +35,7 @@ func (s *MemoryStore) schemasSupporting(factIDs []string, users []string, agentI
 	}
 	var found []scored
 
-	// Collect under the read lock. Nothing here takes the lock again, so holding it
-	// across the walk is safe.
-	s.mu.RLock()
-	for _, d := range s.index {
-		if d.Layer != string(memory.L6Schema) || isSuperseded(d) {
-			continue
-		}
-		if _, dead := s.superseded[d.ID]; dead {
-			continue
-		}
-		if len(users) > 0 && !slices.Contains(users, d.UserID) {
-			continue
-		}
-		if agentID != "" && d.AgentID != agentID {
-			continue
-		}
+	for _, d := range s.liveDocs(memory.L6Schema, users, agentID) {
 		cites := 0
 		seen := map[string]bool{}
 		for _, id := range strings.Split(d.Meta["evidence"], ",") {
@@ -68,7 +53,6 @@ func (s *MemoryStore) schemasSupporting(factIDs []string, users []string, agentI
 		}
 		found = append(found, scored{doc: d, cites: cites})
 	}
-	s.mu.RUnlock()
 
 	// Most cited first; equal counts fall back to newest first.
 	sort.SliceStable(found, func(a, b int) bool {
@@ -83,10 +67,7 @@ func (s *MemoryStore) schemasSupporting(factIDs []string, users []string, agentI
 
 	hits := make([]SearchHit, 0, len(found))
 	for _, f := range found {
-		meta := make(map[string]string, len(f.doc.Meta))
-		for k, v := range f.doc.Meta {
-			meta[k] = v
-		}
+		meta := maps.Clone(f.doc.Meta)
 		hits = append(hits, SearchHit{
 			ID:      f.doc.ID,
 			Content: f.doc.Content,

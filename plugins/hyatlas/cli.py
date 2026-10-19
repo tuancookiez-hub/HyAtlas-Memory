@@ -1,4 +1,4 @@
-"""``hermes hyatlas`` subcommand — health, search, add, recent, start, stop.
+"""``hermes hyatlas`` subcommand — health, doctor, settings, search, add, recent, start, stop.
 
 Hermes wires this file in as the active memory provider's CLI (see
 ``plugins.memory.discover_plugin_cli_commands``): it imports this module under
@@ -14,12 +14,14 @@ import argparse
 import importlib.util
 import json
 import logging
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 
+from . import settings
 from .client import HyatlasClient, HyatlasClientError, HyatlasUnreachable
 
 logger = logging.getLogger(__name__)
@@ -57,10 +59,23 @@ def register_cli(plugin_parser: argparse.ArgumentParser) -> None:
     """Register ``hermes hyatlas <subcommand>`` subcommands."""
     sub = plugin_parser.add_subparsers(dest="hyatlas_cmd", required=True)
 
-    p_status = sub.add_parser("status", help="Show v4 server health + layer counts")
+    p_status = sub.add_parser("status", help="Show server health + layer counts")
     p_status.set_defaults(func=_cmd_status)
 
-    p_search = sub.add_parser("search", help="Semantic search the v4 memory store")
+    p_doctor = sub.add_parser(
+        "doctor", help="Check that memory works (server, mode, key, model, round trip) and how to fix it")
+    p_doctor.set_defaults(func=_cmd_doctor)
+
+    p_settings = sub.add_parser(
+        "settings", help="Show every setting and where it comes from; `settings set KEY VALUE` changes one")
+    p_settings.set_defaults(func=_cmd_settings)
+    settings_sub = p_settings.add_subparsers(dest="settings_cmd")
+    p_set = settings_sub.add_parser("set", help="Write one non-secret setting to hyatlas.json")
+    p_set.add_argument("key", help="Setting name, for example server_port")
+    p_set.add_argument("value", help="New value")
+    p_set.set_defaults(func=_cmd_settings_set)
+
+    p_search = sub.add_parser("search", help="Semantic search the memory store")
     p_search.add_argument("query", help="Search query string")
     p_search.add_argument("--layer", default="", help="Restrict to one layer")
     p_search.add_argument("--limit", type=int, default=10)
@@ -81,10 +96,10 @@ def register_cli(plugin_parser: argparse.ArgumentParser) -> None:
     p_recent.add_argument("--no-include-raw", dest="include_raw", action="store_false")
     p_recent.set_defaults(include_raw=None, func=_cmd_recent)
 
-    p_start = sub.add_parser("start", help="Start the v4 Go server (canonical launcher when present)")
+    p_start = sub.add_parser("start", help="Start the Go server (canonical launcher when present)")
     p_start.set_defaults(func=_cmd_start)
 
-    p_stop = sub.add_parser("stop", help="Stop the v4 Go server")
+    p_stop = sub.add_parser("stop", help="Stop the Go server")
     p_stop.set_defaults(func=_cmd_stop)
 
 
@@ -108,8 +123,8 @@ def _launcher(cfg: dict) -> "Path | None":
     The script is never discovered implicitly: a script that runs a shell is only
     executed when the user names it in ``launcher_path``. The script itself is the
     user's tooling and is not part of this plugin. The repository's
-    ``hyatlas-go.ps1`` reads no credentials; a Hermes login reaches the server
-    through the ``share_llm_key`` setting instead (see keyshare.py).
+    ``hyatlas-go.ps1`` reads no credentials; the extraction key is your own
+    (``llm_key``, ``HYATLAS_LLM_KEY`` or ``HYATLAS_LLM_KEY_FILE``).
     With no ``launcher_path`` the binary is spawned directly.
     """
     if sys.platform != "win32":
@@ -166,6 +181,74 @@ def _cmd_status(args: argparse.Namespace) -> int:
     except (HyatlasClientError, HyatlasUnreachable) as e:
         _print({"error": str(e)})
         return 1
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    """Run the doctor's checks against the configured server and print the report."""
+    from . import doctor as doctor_mod
+    try:
+        provider = _provider()
+        return doctor_mod.run_doctor(provider._ensure_client(), provider._config,
+                                     sources=settings.load_with_sources()[1])
+    except Exception as e:  # noqa: BLE001 - the doctor must end with a message, not a traceback
+        print(f"The doctor could not run: {type(e).__name__}: {e}")
+        return 1
+
+
+def _key_is_set() -> bool:
+    """True when an extraction key is available to the plugin; the key itself is never read out."""
+    if settings.llm_key():
+        return True
+    key_file = os.environ.get("HYATLAS_LLM_KEY_FILE", "").strip()
+    return bool(key_file) and Path(key_file).is_file()
+
+
+def _cmd_settings(args: argparse.Namespace) -> int:
+    """Print every setting with its value and source, grouped Basics and Advanced."""
+    cfg, src = settings.load_with_sources()
+    print("Basics")
+    for f in settings.ONBOARDING:
+        key = f["key"]
+        if key == "llm_key":
+            value, where = ("set" if _key_is_set() else "unset"), "env"
+        else:
+            value, where = settings.normalize_mode(cfg[key]) if key == "mode" else cfg[key], src[key]
+            if key == "auto_start":
+                value = "yes" if value else "no"
+        print(f"  {key:<16}{str(value) or '(empty)':<48}[{where}]")
+    print("")
+    print("Advanced (change one with `hermes hyatlas settings set KEY VALUE`)")
+    for f in settings.ADVANCED:
+        key = f["key"]
+        value = cfg[key]
+        print(f"  {key:<16}{str(value) if value != '' else '(empty)':<48}[{src[key]}]")
+        print(f"  {'':<16}{f['help']}")
+    print("")
+    print("The API key is set with `hermes memory setup`. It is saved in Hermes's .env, not here.")
+    return 0
+
+
+def _cmd_settings_set(args: argparse.Namespace) -> int:
+    """Validate one setting and write it to hyatlas.json."""
+    try:
+        value = settings.parse_value(args.key, args.value)
+    except ValueError as e:
+        print(f"Not changed: {e}")
+        return 1
+    try:
+        path = settings.save_profile({args.key: value}, warn=print)
+    except OSError as e:
+        print(f"Could not write hyatlas.json: {e}")
+        return 1
+    print(f"{args.key} = {value} (saved in {path})")
+    cfg, src = settings.load_with_sources()
+    if src.get(args.key) in ("config.yaml", "env"):
+        print(f"Note: {args.key} is also set in {src[args.key]}, which wins over hyatlas.json, "
+              "so this change has no effect until that one is removed.")
+    if args.key in settings.SPAWNED_ONLY_KEYS and not settings.truthy(cfg.get("auto_start")):
+        print(f"Note: {settings.SPAWNED_ONLY_NOTE}")
+    print("Restart Hermes (and the server, if it is running) for the change to apply.")
+    return 0
 
 
 def _cmd_search(args: argparse.Namespace) -> int:

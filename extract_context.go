@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -193,25 +194,35 @@ Return ONLY valid JSON, no prose, no markdown fences.`
 }
 
 // extractContext gathers what the store already holds that bears on text for
-// this owner: the nearest live L3 facts and the newest open L7 intentions. A
+// this owner (every alias ID of the person): the nearest live L3 facts, the entity
+// pages and the newest open L7 intentions. A
 // failed lookup is logged and skipped; extraction then runs without that part,
 // exactly as it did before there was any context.
 func (s *MemoryStore) extractContext(text, userID, agentID string, now time.Time) ExtractContext {
 	var ec ExtractContext
 
-	// Experiences take some of the nearest L3 slots, so twice as many rows are read
-	// and the walk stops once the ordinary facts fill extractRelatedMax.
-	near, err := s.search(text, extractRelatedMax*2, memory.L3Fact, userID, agentID)
+	// The input is embedded once, and that vector serves the fact search and the
+	// entity-page search. Without a vector neither can run, so the context stays
+	// empty and the extraction proceeds without it.
+	qv, err := s.embed.Embed(s.ctx, text)
 	if err != nil {
-		log.Printf("extract context: related facts: %v", err)
+		log.Printf("extract context: embed: %v", err)
+	}
+
+	// An experience is updated only by its own repeat (experience.go), never by an
+	// extracted fact, so the search leaves experiences out and the ordinary facts
+	// fill extractRelatedMax.
+	var near []SearchHit
+	if err == nil {
+		near, err = s.searchOwnersWhere(qv, extractRelatedMax, memory.L3Fact, s.owners(userID), agentID,
+			searchOpts{excludeLabel: experienceLabel})
+		if err != nil {
+			log.Printf("extract context: related facts: %v", err)
+		}
 	}
 	for _, h := range near {
 		if len(ec.Related) == extractRelatedMax {
 			break
-		}
-		// An experience is updated only by its own repeat (experience.go), never by an extracted fact.
-		if isExperience(h) {
-			continue
 		}
 		if float64(h.Score) < extractRelatedMin {
 			continue
@@ -221,13 +232,25 @@ func (s *MemoryStore) extractContext(text, userID, agentID string, now time.Time
 
 	// The owner's nearest entity pages, so the model updates a page rather than
 	// creating a second one for the same thing. Skipped when there is no page store.
-	if s.pages != nil {
-		ec.Pages = s.pages.Related(text, userID, agentID, extractPagesMax)
+	if s.pages != nil && strings.TrimSpace(text) != "" {
+		// Every ID of the owner has pages of its own; the owner's own ID comes first.
+		seen := map[string]bool{}
+		for _, u := range s.owners(userID) {
+			for _, pg := range s.pages.RelatedVec(qv, u, agentID, extractPagesMax) {
+				if len(ec.Pages) == extractPagesMax {
+					break
+				}
+				if !seen[pg.ID] {
+					seen[pg.ID] = true
+					ec.Pages = append(ec.Pages, pg)
+				}
+			}
+		}
 	}
 
 	// List is newest first, so the first extractIntentionMax rows are the newest
 	// and the walk can stop at the first one that is out of the window.
-	items, _ := s.List(memory.L7Intention, userID, agentID, extractIntentionMax, 0, false)
+	items, _ := s.ListOwners(memory.L7Intention, s.ownersOrAll(userID), agentID, extractIntentionMax, 0, false, false)
 	for _, d := range items {
 		ts, err := time.Parse(time.RFC3339, d.Ts)
 		if err != nil || now.Sub(ts) > extractIntentionWindow {
@@ -286,23 +309,23 @@ func (s *MemoryStore) applyIntentions(ex *Extraction, ec ExtractContext, introID
 	var replaced []string
 	if introID != "" && ex.Intention != nil {
 		replaced = shown(ex.Intention.Replaces, ec.hasIntention)
-		s.supersedeLogged("intention replaced", replaced, introID)
+		s.supersedeLogged("intention replaced", replaced, introID, howReplaced)
 	}
 	var done []string
 	for _, id := range shown(ex.IntentionsDone, ec.hasIntention) {
-		if !containsID(replaced, id) {
+		if !slices.Contains(replaced, id) {
 			done = append(done, id)
 		}
 	}
-	s.supersedeLogged("intention done", done, sourceID)
+	s.supersedeLogged("intention done", done, sourceID, howDone)
 }
 
-// supersedeLogged supersedes ids by by and logs one line for the batch.
-func (s *MemoryStore) supersedeLogged(what string, ids []string, by string) {
+// supersedeLogged retires ids by by in the given how and logs one line for the batch.
+func (s *MemoryStore) supersedeLogged(what string, ids []string, by, how string) {
 	if len(ids) == 0 {
 		return
 	}
-	n, err := s.Supersede(ids, by)
+	n, err := s.retire(ids, Retire{By: by, How: how})
 	if err != nil {
 		log.Printf("extract: %s: supersede %v: %v", what, ids, err)
 		return

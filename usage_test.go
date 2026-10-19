@@ -7,11 +7,55 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/tuancookiez-hub/hyatlas-v4/memory"
 )
+
+// Record only marks the counts. The file is written by Flush, or by the flush timer
+// within usageFlushEvery, and a Flush with nothing new writes nothing.
+func TestRecordDefersWrite(t *testing.T) {
+	const text = "the extraction model is poolside and returns forbidden"
+	dir := t.TempDir()
+	path := filepath.Join(dir, usageLearningFile)
+	u := NewUsageStats(dir)
+
+	recordN(u, "m", text, "unrelated words", 1)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("file written inside Record: stat err = %v", err)
+	}
+	if err := u.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if got := NewUsageStats(dir).m["m"].Shown; got != 1 {
+		t.Fatalf("after Flush: shown = %d, want 1", got)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("clean Flush rewrote the file: stat err = %v", err)
+	}
+
+	recordN(u, "m", text, "unrelated words", 1)
+	deadline := time.Now().Add(usageFlushEvery + 3*time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("flush timer did not write the counts")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
 
 func TestUsedInReply(t *testing.T) {
 	cases := []struct {
@@ -71,6 +115,9 @@ func TestRecordAndFactor(t *testing.T) {
 		t.Fatalf("unknown id: factor = %v, want 1.0", f)
 	}
 
+	if err := u.Flush(); err != nil {
+		t.Fatal(err)
+	}
 	reloaded := NewUsageStats(dir)
 	if a, b := reloaded.Factor("used"), u.Factor("used"); a != b {
 		t.Fatalf("reloaded factor = %v, want %v", a, b)

@@ -1,4 +1,4 @@
-"""Subprocess lifecycle for the HyAtlas v4 Go binary.
+"""Subprocess lifecycle for the HyAtlas server binary.
 
 The Go binary (``hyatlas-go`` / ``hyatlas-go.exe``) is the actual memory
 server. The plugin can optionally start it as a child process when
@@ -105,6 +105,19 @@ def _serving(config: Optional[Dict[str, Any]]) -> bool:
         return HyatlasClient(base_url=f"http://{_origin(config)}", timeout=2.0).is_reachable()
     except Exception:
         return False
+
+
+def _flush(config: Optional[Dict[str, Any]]) -> None:
+    """Ask the server to write its buffered state before a hard kill.
+
+    The server writes its doc index and usage counts in the background; a clean stop
+    flushes them, but ``taskkill /F`` gives it no chance. Best effort: a server that
+    does not answer, or predates the route, is simply killed as before.
+    """
+    try:
+        HyatlasClient(base_url=f"http://{_origin(config)}", timeout=3.0)._post("/api/v1/flush", {})
+    except Exception as e:
+        logger.debug("flush before stop: %s", e)
 
 
 def _read_pid() -> Optional[int]:
@@ -214,7 +227,7 @@ def _release_start_lock(fd: int) -> None:
 
 
 class HyatlasProcess:
-    """Lifecycle manager for the v4 Go binary subprocess."""
+    """Lifecycle manager for the HyAtlas server binary subprocess."""
 
     def __init__(self, config: Dict[str, Any]) -> None:
         self._config = config
@@ -238,13 +251,13 @@ class HyatlasProcess:
 
     @staticmethod
     def _discover_binary() -> Optional[str]:
-        """Find the v4 Go binary in PATH, alongside this plugin, or in well-known paths."""
+        """Find the HyAtlas server binary in PATH, alongside this plugin, or in well-known paths."""
         # 1. PATH
         for name in ("hyatlas-go", "hyatlas-go.exe"):
             found = shutil.which(name)
             if found:
                 return found
-        # 2. Alongside the plugin (cargo-dist / release layouts)
+        # 2. Alongside the plugin (a bin/ folder next to it)
         here = Path(__file__).resolve().parent
         for name in ("hyatlas-go", "hyatlas-go.exe"):
             candidate = here / "bin" / name
@@ -294,8 +307,13 @@ class HyatlasProcess:
         allow = _ENV_ALLOW
         env: Dict[str, str] = {
             k: v for k, v in os.environ.items()
-            if k in allow or k.startswith("HYATLAS_")
+            if (k in allow or k.startswith("HYATLAS_")) and k != settings.LLM_KEY_ENV
         }
+        # The key comes through Hermes's profile-scoped secret route, not straight
+        # from this process's environment, which may hold another profile's value.
+        key = settings.llm_key()
+        if key:
+            env[settings.LLM_KEY_ENV] = key
         env.setdefault("HYATLAS_GO_HOST", str(self._config.get("server_host") or "127.0.0.1"))
         env.setdefault("HYATLAS_GO_PORT", str(self._config.get("server_port", 19528)))
         # The client resolves both of those from config, so the spawned server has
@@ -307,13 +325,13 @@ class HyatlasProcess:
         # The extraction mode is a privacy boundary, so only a value start() has
         # already validated and normalised is forwarded. Empty means "let the
         # server decide", so nothing is set and the server keeps its own default.
-        mode = getattr(self, "_mode", "") or settings.mode(self._config)
+        mode = self._mode or settings.mode(self._config)
         if mode:
             env.setdefault("HYATLAS_MODE", mode)
         # A server this plugin spawns serves Hermes turns, so by default it never
         # makes a turn wait on the LLM: pro still extracts every write, just
         # behind the response. An explicit setting or exported variable wins.
-        sync = getattr(self, "_sync", "") or settings.sync(self._config) or "off"
+        sync = self._sync or settings.sync(self._config) or "off"
         env.setdefault("HYATLAS_SYNC_EXTRACT", sync)
 
         # Endpoint and model are non-secret, so they arrive through the settings
@@ -329,12 +347,12 @@ class HyatlasProcess:
 
         # The key is deliberately NOT forwarded from config: it is declared
         # secret, so the setup wizard routes it to Hermes' .env and save_config
-        # strips it. It reaches the child through the HYATLAS_* prefix rule above
-        # like any other exported variable, and never through this code path.
+        # strips it. It reaches the child only through settings.llm_key() above,
+        # Hermes's profile-scoped secret read, and never from config.
         return env
 
     def start(self, lock_wait: float = DEFAULT_LOCK_WAIT) -> None:
-        """Spawn the v4 Go binary as a detached subprocess.
+        """Spawn the HyAtlas server binary as a detached subprocess.
 
         Raises ValueError if a configured extraction mode or sync setting is not
         one the server accepts. The server treats that as fatal, so starting anyway would
@@ -560,6 +578,7 @@ class HyatlasProcess:
 
         if pid is not None and HyatlasProcess._is_server(pid):
             if sys.platform == "win32":
+                _flush(cfg)
                 subprocess.run(["taskkill", "/F", "/PID", str(pid)],
                                capture_output=True, timeout=5)
             else:

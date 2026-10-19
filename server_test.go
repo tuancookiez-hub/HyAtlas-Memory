@@ -79,15 +79,16 @@ func TestHandleDashInfoReportsLiveLLMModel(t *testing.T) {
 // the fact, and no graph edge or schema row is written here.
 func TestPromoteExtractionThreadsSource(t *testing.T) {
 	srv := newTestServer(t, "test", "test")
-	ex := &Extraction{
-		Facts: []Fact{{Data: "Apple is in Cupertino", Layer: "project_state"}},
-		// Even when the model volunteers these, the per-turn pass must ignore
-		// them: the prompt no longer requests them and System2 owns the layers.
-		Knowledge: []Relation{{From: "Apple", Relation: "based_in", To: "Cupertino"}},
-		Schemas:   []Schema{{Pattern: "companies have a HQ", Context: "geo facts"}},
+	// Even when the model volunteers knowledge and schemas, the per-turn pass must
+	// ignore them: the prompt no longer requests them and System2 owns the layers.
+	ex, err := parseExtraction(`{"facts":[{"data":"Apple is in Cupertino","layer":"project_state"}],
+		"knowledge":[{"from":"Apple","relation":"based_in","to":"Cupertino"}],
+		"schemas":[{"pattern":"companies have a HQ","context":"geo facts"}]}`)
+	if err != nil {
+		t.Fatal(err)
 	}
 	sourceID := "mem-test-source-abc"
-	promoteExtraction(srv.store, ex, "default", "default", sourceID)
+	promoteExtractionCtx(srv.store, ex, ExtractContext{}, "default", "default", sourceID, 0)
 
 	// No L5 edge from the per-turn pass.
 	if _, rels := srv.store.Graph().Snapshot(50); len(rels) != 0 {
@@ -122,9 +123,9 @@ func TestPromoteExtractionThreadsSource(t *testing.T) {
 func TestPromoteExtractionMirrorsPreferencesToProfile(t *testing.T) {
 	srv := newTestServer(t, "test", "test")
 	sourceID := "mem-pref-source"
-	promoteExtraction(srv.store, &Extraction{
+	promoteExtractionCtx(srv.store, &Extraction{
 		Facts: []Fact{{Data: "prefers tabs over spaces", Layer: "user_preferences"}},
-	}, "default", "default", sourceID)
+	}, ExtractContext{}, "default", "default", sourceID, 0)
 
 	_, total := srv.store.List("l1_profile", "", "", 1, 0, false)
 	rows, _ := srv.store.List("l1_profile", "", "", total, 0, false)
@@ -140,10 +141,11 @@ func TestPromoteExtractionMirrorsPreferencesToProfile(t *testing.T) {
 // because episodes (episode.go) summarise whole stretches of work instead.
 func TestPromoteExtractionWritesIntentionNotSummary(t *testing.T) {
 	srv := newTestServer(t, "test", "test")
-	promoteExtraction(srv.store, &Extraction{
-		Summary:   &Summary{Text: "configured the service port"},
-		Intention: &Intention{Goal: "ship the listener"},
-	}, "default", "default", "mem-si-source")
+	ex, err := parseExtraction(`{"summary":{"text":"configured the service port"},"intention":{"goal":"ship the listener"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promoteExtractionCtx(srv.store, ex, ExtractContext{}, "default", "default", "mem-si-source", 0)
 
 	if _, n := srv.store.List("l4_summary", "", "", 1, 0, false); n != 0 {
 		t.Errorf("L4 summary count = %d, want 0", n)
