@@ -58,16 +58,16 @@ jobs:
       - name: Fetch BGE-small ONNX model (~133 MB)
         shell: bash
         run: |
-          mkdir -p models
+          mkdir -p cmd/hyatlas-go/models
           # Xenova/bge-small-en-v1.5 ships a self-contained ONNX model.
-          curl -fsSL --retry 3 -o models/bge-small-en-v1.5.onnx \
+          curl -fsSL --retry 3 -o cmd/hyatlas-go/models/bge-small-en-v1.5.onnx \
             "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model.onnx"
-          curl -fsSL --retry 3 -o models/vocab.txt \
+          curl -fsSL --retry 3 -o cmd/hyatlas-go/models/vocab.txt \
             "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/vocab.txt"
           # Empty .data sidecar — self-contained ONNX exports don't need it,
           # but the embedded build's go:embed directive requires the file.
-          : > models/bge-small-en-v1.5.onnx.data
-          ls -la models/
+          : > cmd/hyatlas-go/models/bge-small-en-v1.5.onnx.data
+          ls -la cmd/hyatlas-go/models/
 
       - name: Fetch onnxruntime shared library (${{ matrix.asset_os }})
         shell: bash
@@ -81,20 +81,20 @@ jobs:
             windows)
               curl -fsSL --retry 3 -o ort.zip "${url}.zip"
               unzip -o -q ort.zip
-              cp "onnxruntime-${ORT_PKG}-${ORT_VERSION}/lib/onnxruntime.dll" models/
+              cp "onnxruntime-${ORT_PKG}-${ORT_VERSION}/lib/onnxruntime.dll" cmd/hyatlas-go/models/
               ;;
             macos)
               curl -fsSL --retry 3 -o ort.tgz "${url}.tgz"
               tar -xzf ort.tgz
-              cp "onnxruntime-${ORT_PKG}-${ORT_VERSION}/lib/libonnxruntime.dylib" models/
+              cp "onnxruntime-${ORT_PKG}-${ORT_VERSION}/lib/libonnxruntime.dylib" cmd/hyatlas-go/models/
               ;;
             linux)
               curl -fsSL --retry 3 -o ort.tgz "${url}.tgz"
               tar -xzf ort.tgz
-              cp "onnxruntime-${ORT_PKG}-${ORT_VERSION}/lib/libonnxruntime.so" models/
+              cp "onnxruntime-${ORT_PKG}-${ORT_VERSION}/lib/libonnxruntime.so" cmd/hyatlas-go/models/
               ;;
           esac
-          ls -la models/
+          ls -la cmd/hyatlas-go/models/
 
       - name: Build (embedded, platform-native)
         shell: bash
@@ -102,7 +102,7 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           go build -tags embedded \
-            -o "hyatlas-go-${RELEASE_TAG}-${{ matrix.asset_os }}-${{ matrix.goarch }}${{ matrix.ext }}" .
+            -o "hyatlas-go-${RELEASE_TAG}-${{ matrix.asset_os }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/hyatlas-go
           ls -la
 
       - name: Smoke test the built binary
@@ -124,7 +124,7 @@ jobs:
           HYATLAS_GO_PORT="$PORT" \
           HYATLAS_GO_DATA="$DATA" \
           HYATLAS_EMBED_BASE=bge \
-          HYATLAS_MODEL_DIR="$PWD/models" \
+          HYATLAS_MODEL_DIR="$PWD/cmd/hyatlas-go/models" \
           HYATLAS_LLM_BASE="http://127.0.0.1:1/v1" \
           HYATLAS_LLM_MODEL=probe \
           HYATLAS_LLM_KEY=probe \
