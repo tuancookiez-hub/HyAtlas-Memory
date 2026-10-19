@@ -6,7 +6,7 @@
 
 HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It replaces the Python floor (venv, zvec, Kuzu, FastAPI, HTTP embed subprocess) with a single binary: an embedded Chromem vector store, in-process BGE-small embeddings via onnxruntime-go, and LLM fact extraction, where `HYATLAS_MODE` sets how much the server reasons and `HYATLAS_SYNC_EXTRACT` sets whether a write waits for extraction. The 8-layer memory model (Profile · Raw · Fact · Summary · Knowledge · Schema · Intention · Entity) is implemented in full.
 
-**Current release:** [v4.9.0](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v4.9.0). **5.0.0** is assembled and not released yet; what it changes is in [CHANGELOG.md](CHANGELOG.md), and this README describes the 5.0.0 code.
+**Current release:** [v5.0.0](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v5.0.0), the stable floor; what it changes is in [CHANGELOG.md](CHANGELOG.md).
 
 **What it does, in short:**
 - **Writing.** Each conversation turn goes through one LLM call that extracts dated facts, updates or replaces older ones, open intentions with due dates, entity pages and reusable task experiences.
@@ -74,7 +74,7 @@ Useful env vars (installer only):
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v4.9.0` |
+| `HYATLAS_VERSION` | Release tag to install. A source build clones this tag (see above) | `v5.0.0` |
 | `HYATLAS_INSTALL_DIR` | Where the binary goes | `~/.local/bin` (Windows: `%LOCALAPPDATA%\hyatlas`) |
 | `HYATLAS_MODEL_DIR` | Where the installer caches the model (source builds) | `~/.hyatlas/models` (Windows: `%LOCALAPPDATA%\hyatlas\models`) |
 | `HYATLAS_MODE` | Extraction mode written to the Hermes `.env`: `lite` \| `pro` \| `ultra`. Any other exported value stops the installer with an error and nothing is written | `ultra` (asked interactively) |

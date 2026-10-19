@@ -1,6 +1,6 @@
 # Changelog
 
-## [5.0.0] — unreleased (local)
+## [5.0.0] — 2026-10-20
 
 A stable floor: a review of the whole system and a clean-up of the 4.8 and 4.9 code. The
 same eight layers and three modes, faster and harder to lose data from, with the gaps the
@@ -65,6 +65,19 @@ and stricter key handling.
 
 ### Fixed
 
+- **No native memory leak in embeddings.** Each embedding left its onnxruntime tensors
+  allocated, so a long-running server's memory kept growing. They are freed after every run.
+- **A long token no longer stalls a write.** A hash or pasted blob without spaces took
+  seconds to tokenize; the tokenizer now stops at the longest vocabulary entry and once the
+  sequence is full. Tokens, and so stored vectors, are unchanged.
+- **The AI key is read through Hermes's secret route** (`get_secret`, which honours the active
+  profile), and config.yaml through Hermes's public config loader (catalog rules 9 and 11).
+- Smaller store fixes: a deleted row can no longer be revived by a rewrite in flight, a
+  failed delete is reported instead of leaving a ghost row, the "extracted" flag survives an
+  index rebuild, a failed topic cluster's retry wait is kept when clusters are re-cut,
+  shortened text never splits a multi-byte character, and the backlog apply refuses a
+  replacement loop of any length.
+
 - **Turns are no longer left unextracted.** A write made while the server waits for its
   key, or whose extraction failed (outage, rate limit), stayed raw-only until someone
   called `/api/v1/reprocess`. A catch-up pass now extracts them: when a key arrives and
@@ -94,6 +107,7 @@ and stricter key handling.
 
 ### Removed
 
+- **`/api/status`**, a v3.5 dashboard shim nothing called; use `/api/v1/status`.
 - **`share_llm_key`** (the plugin no longer takes Hermes's Nous sign-in token; set your
   own extraction key). Hermes's catalog rule 11 says a plugin gets credentials only
   through Hermes routes and must not hand Hermes's provider token to another program.
