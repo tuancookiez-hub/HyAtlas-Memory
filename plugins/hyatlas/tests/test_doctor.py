@@ -13,6 +13,8 @@ import os
 import sys
 import types
 
+import re
+
 import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -188,7 +190,8 @@ def test_unconfigured_llm_fails_with_setup_fix(monkeypatch):
 
 def test_model_ok_shows_model_host_and_latency(monkeypatch):
     code, out = run(FakeClient(), env_key=_SECRET, monkeypatch=monkeypatch)
-    assert "✓ Model" in out and "1.2 s" in out and "api.example.com" in out
+    assert "✓ Model" in out and "1.2 s" in out
+    assert re.search(r"\bvia api\.example\.com$", out, re.M), out
 
 
 @pytest.mark.parametrize("error,phrase", [

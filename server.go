@@ -1093,7 +1093,7 @@ func (s *Server) unextractedRaw(max int) []DocIndex {
 	// Newest first, ties by larger id first, so walking it backwards gives the
 	// oldest first order and the walk can stop as soon as max rows are found.
 	all := s.store.liveNewestFirst(memory.L2Raw)
-	out := make([]DocIndex, 0, min(max, len(all)))
+	var out []DocIndex
 	for i := len(all) - 1; i >= 0 && len(out) < max; i-- {
 		if !all[i].Extracted {
 			out = append(out, all[i])
