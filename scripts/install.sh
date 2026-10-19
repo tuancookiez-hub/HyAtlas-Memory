@@ -234,7 +234,10 @@ build_from_source() {
     (Note: on Windows this script must run from Git Bash / MSYS, not cmd.exe.)"
     fi
     cd "$repo_dir"
-    CGO_ENABLED=1 go build -o "$TMP_DIR/$BINARY_NAME" . \
+    # The server moved to cmd/hyatlas-go after v5.0.0; older tags build from the root.
+    local pkg="."
+    [ -d cmd/hyatlas-go ] && pkg="./cmd/hyatlas-go"
+    CGO_ENABLED=1 go build -o "$TMP_DIR/$BINARY_NAME" "$pkg" \
         || err "Build failed. See the error above; check that you have Go 1.26+ and a C compiler."
     ok "Built from source ($(du -h "$TMP_DIR/$BINARY_NAME" | cut -f1))"
     cd - >/dev/null

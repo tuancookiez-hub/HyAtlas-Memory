@@ -23,7 +23,7 @@ jobs:
       - name: go test
         run: go test ./...
       - name: Build (plain — no embedded tag)
-        run: go build -o /tmp/hyatlas-go-plain .
+        run: go build -o /tmp/hyatlas-go-plain ./cmd/hyatlas-go
       - name: Smoke test (server boots and serves /healthz)
         run: |
           set -e
@@ -102,28 +102,28 @@ jobs:
       - name: Create stub model files for go:embed verification
         shell: bash
         run: |
-          mkdir -p models
+          mkdir -p cmd/hyatlas-go/models
           # 1-byte stub files — the embedded build only needs them to exist for
           # go:embed; the full BGE-small model is 133 MB and is bundled into
           # release artifacts separately, not committed to the repo.
-          : > models/bge-small-en-v1.5.onnx
-          : > models/bge-small-en-v1.5.onnx.data
-          : > models/vocab.txt
+          : > cmd/hyatlas-go/models/bge-small-en-v1.5.onnx
+          : > cmd/hyatlas-go/models/bge-small-en-v1.5.onnx.data
+          : > cmd/hyatlas-go/models/vocab.txt
           # The platform-matching shared library name is what the build
           # actually looks for via go:embed. Stub that too.
           if [ "$RUNNER_OS" = "Windows" ]; then
-            : > models/onnxruntime.dll
+            : > cmd/hyatlas-go/models/onnxruntime.dll
           elif [ "$RUNNER_OS" = "macOS" ]; then
-            : > models/libonnxruntime.dylib
+            : > cmd/hyatlas-go/models/libonnxruntime.dylib
           else
-            : > models/libonnxruntime.so
+            : > cmd/hyatlas-go/models/libonnxruntime.so
           fi
-          ls -la models/
+          ls -la cmd/hyatlas-go/models/
       - name: go vet
         run: go vet ./...
       - name: Build (embedded — verifies go:embed directives are correct)
         shell: bash
-        run: go build -tags embedded -o hyatlas-go-embedded .
+        run: go build -tags embedded -o hyatlas-go-embedded ./cmd/hyatlas-go
       - name: Upload artifact (embedded)
         uses: actions/upload-artifact@v7
         with:

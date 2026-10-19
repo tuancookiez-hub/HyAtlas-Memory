@@ -1,8 +1,8 @@
 # HyAtlas — NOW
 
-**5.0.0 assembled locally, not released** | last release v4.9.0 (2026-10-18) | Release: tuancookiez-hub/HyAtlas-Memory
+**v5.0.0 released 2026-10-20 (the stable floor)** | previous release v4.9.1 (2026-10-18) | Release: tuancookiez-hub/HyAtlas-Memory
 
-## 5.0.0 (assembled locally, not released, not tagged, not pushed)
+## 5.0.0 (released 2026-10-20)
 A stable floor: the whole 4.8 and 4.9 code reviewed and tidied, then the gaps closed.
 Catch-up extraction for turns that were never extracted, admin-only bulk delete, clean
 shutdown with `/api/v1/flush`, a reversible forget mirrored from Hermes's memory tool

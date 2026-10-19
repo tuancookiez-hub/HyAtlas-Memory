@@ -10,11 +10,11 @@ Open an issue before opening a PR for any non-trivial change. The `feat/l1-raw-t
 
 ```bash
 # Embedded build (BGE model and onnxruntime bundled in the binary).
-# Needs models/ populated first; see "Embedded build inputs" below.
-go build -tags embedded -o hyatlas-go .
+# Needs cmd/hyatlas-go/models/ populated first; see "Embedded build inputs" below.
+go build -tags embedded -o hyatlas-go ./cmd/hyatlas-go
 
 # Plain build (small; reads the model from a models/ folder at runtime)
-go build -o hyatlas-go .
+go build -o hyatlas-go ./cmd/hyatlas-go
 ```
 
 On Windows, name the output `hyatlas-go.exe`.
@@ -26,12 +26,12 @@ Requires:
 
 ### Embedded build inputs
 
-`assets_embedded_<os>.go` uses `go:embed` on these files in `models/`, so the build fails without them:
+`cmd/hyatlas-go/assets_embedded_<os>.go` uses `go:embed` on these files in `cmd/hyatlas-go/models/`, so the build fails without them:
 
 | File | Source used by CI (`.github/workflows/release.yml`) |
 |---|---|
 | `bge-small-en-v1.5.onnx` | `https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model.onnx` |
-| `bge-small-en-v1.5.onnx.data` | an empty file is fine (`: > models/bge-small-en-v1.5.onnx.data`) |
+| `bge-small-en-v1.5.onnx.data` | an empty file is fine (`: > cmd/hyatlas-go/models/bge-small-en-v1.5.onnx.data`) |
 | `vocab.txt` | `https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/vocab.txt` |
 | `libonnxruntime.so` / `.dylib` / `onnxruntime.dll` | the onnxruntime 1.28.1 release archive for your platform |
 
@@ -63,7 +63,7 @@ and runs the installer anyway.
 
 - Standard `gofmt` formatting
 - Prefer stdlib over dependencies
-- API handlers return JSON. The one exception is the static dashboard under `/dashboard/`, which serves HTML, CSS and JS from the embedded `dashboard/dist`.
+- API handlers return JSON. The one exception is the static dashboard under `/dashboard/`, which serves HTML, CSS and JS from the embedded `cmd/hyatlas-go/dashboard/dist`.
 - Errors logged with context, not silently dropped
 - Long-running operations take a `context.Context` as the first parameter
 

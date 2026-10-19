@@ -4,7 +4,7 @@
 
 > **One binary. Eight layers. Three extraction modes.** One Go binary (the embedded release build is about 160 MB because it carries the BGE model), no Python at runtime, in-process BGE embeddings. Release binaries: **Linux amd64 · macOS arm64 · Windows amd64**. Other platforms build from source.
 
-HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It replaces the Python floor (venv, zvec, Kuzu, FastAPI, HTTP embed subprocess) with a single binary: an embedded Chromem vector store, in-process BGE-small embeddings via onnxruntime-go, and LLM fact extraction, where `HYATLAS_MODE` sets how much the server reasons and `HYATLAS_SYNC_EXTRACT` sets whether a write waits for extraction. The 8-layer memory model (Profile · Raw · Fact · Summary · Knowledge · Schema · Intention · Entity) is implemented in full.
+HyAtlas is a complete rewrite of the HyAtlas memory system in pure Go (since v4.0). It replaces the Python floor (venv, zvec, Kuzu, FastAPI, HTTP embed subprocess) with a single binary: an embedded Chromem vector store, in-process BGE-small embeddings via onnxruntime-go, and LLM fact extraction, where `HYATLAS_MODE` sets how much the server reasons and `HYATLAS_SYNC_EXTRACT` sets whether a write waits for extraction. The 8-layer memory model (Profile · Raw · Fact · Summary · Knowledge · Schema · Intention · Entity) is implemented in full.
 
 **Current release:** [v5.0.0](https://github.com/tuancookiez-hub/HyAtlas-Memory/releases/tag/v5.0.0), the stable floor; what it changes is in [CHANGELOG.md](CHANGELOG.md).
 
@@ -20,6 +20,89 @@ HyAtlas v4.0 is a complete rewrite of the HyAtlas memory system in pure Go. It r
 ![Three modes across an eight-layer memory: Lite 1/8, Pro 6/8, Ultra 8/8](docs/images/modes.png)
 
 ![How HyAtlas works: remember, reflect, remind](docs/images/how-it-works.png)
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TD
+  H["Hermes turn (plugin)"] --> A["POST /api/v1/add"]
+  A --> RAW["Embed + store L2 raw"]
+  RAW --> CTX["Gather context: 5 related facts (>= 0.70),<br/>open intentions, entity pages"]
+  CTX --> X["Extract (LLM, one call): facts with dates,<br/>replaces / updates, intention with due date,<br/>intentions done, entity pages, task experiences"]
+  X -.-> RC["Reconcile (LLM, opt-in, local models):<br/>update / replace / link similar stored facts"]
+  X --> P["Promote: L3 facts (0.92 restatement fold),<br/>L1 mirror, L7 intention, L8 pages"]
+  P --> NOW["Now page (LLM),<br/>at most every 15 min"]
+  P --> EP["Episode summary (LLM),<br/>after a 30-min gap"]
+  P --> ST[("chromem vectors L1-L8,<br/>long-fact clauses, doc index")]
+  EP --> ST
+  KEY["Plugin hands over its own key<br/>(loopback only, memory only)"] -.-> X
+  CU["Catch-up every 10 min:<br/>turns not yet extracted"] -.-> X
+  FG["Hermes memory replace / remove<br/>-> POST /api/v1/forget"] --> RET["Retire matching rows<br/>(reversible, with a reason)"]
+  RET --> ST
+
+  T["Ticker: 6h, catch-up while due"] --> CL["Topic clusters (0.55),<br/>only changed clusters"]
+  CL --> C["Consolidate (LLM, per cluster): merges,<br/>drops + reason, schemas, L5 edges, arc"]
+  C --> G["Guards: merge >= 0.65, schema dup >= 0.92,<br/>schemas keep their evidence, restore"]
+  G --> ST
+  C --> KG["L5 graph with evidence"]
+  C -.-> XS["Cross-topic pass (LLM, daily):<br/>patterns that span topics"]
+  XS --> G
+
+  Q["POST /api/v1/search"] --> F["Vector (+ long-fact clauses) and stemmed keyword,<br/>fused by rank, weighted by the kind of query"]
+  F --> F2["Dates in the query, entity boost,<br/>graph-assisted recall, idle-time recency,<br/>usage feedback, near-duplicate demotion, MMR diversity"]
+  F2 --> OUT["Now -> pages -> profile (+ schemas behind the facts)<br/>-> proactive -> experiences -> normal,<br/>with event dates and replaced versions"]
+```
+
+Lite mode keeps only the raw write and search: no LLM call at all. Pro adds extraction,
+episodes and the Now page. Ultra adds consolidation, which is what fills L5 and L6.
+Every LLM step goes to the endpoint you configure; nothing else leaves the machine.
+
+| Layer | What it holds |
+|---|---|
+| **L1 Profile** | User preferences, style, constraints (mirrors L3 facts labelled `user_preferences`) |
+| **L2 Raw** | Every incoming memory as-is |
+| **L3 Fact** | LLM-extracted factual atoms |
+| **L4 Summary** | One summary per episode of work (writes with no gap over `HYATLAS_EPISODE_GAP`), plus one rolling arc per owner from consolidation |
+| **L5 Knowledge** | Entity/relation graph (JSON-persisted). Built by the ultra slow path from relations corroborated across at least two turns, each with evidence citations |
+| **L6 Schema** | Recurring patterns generalised by the ultra slow path |
+| **L7 Intention** | LLM-extracted current goal / next step |
+| **L8 Entity** | One page per thing that matters (a project, tool, person, place): its current state plus a dated history. Written by each extraction; a changed value moves the old one into history |
+
+### Stack
+
+- **Vector store:** [Chromem-go](https://github.com/philippgille/chromem-go) v0.7.0 — embedded, disk-persisted, no server process
+- **Embeddings:** `bge/bge.go` — BGE-small-en-v1.5 (384-dim) via onnxruntime-go (cgo). WordPiece tokenizer, mean-pool, L2-normalize. No Python.
+- **LLM extraction:** Via any OpenAI-compatible endpoint. One structured call per write (pro, ultra) fills L3 Fact, L7 Intention, L8 entity pages and, for user preferences, L1 Profile from the L2 Raw entry. The call is given today's date and shown the owner's few nearest existing facts and open intentions, so it can date a fact (`event_at`) or an intention (`due_at`), mark a fact whose value changed as replaced, fold new detail or a repeat of the same event into an existing fact as updated (with a count), and mark an intention as moved on or done; those rows are superseded, not deleted, and record how (`superseded_how`). An intention is written only for a goal beyond the one exchange, and not again for a turn that just continues an open one. The plugin shows each recalled memory with its date. Blocking or background follows `HYATLAS_SYNC_EXTRACT`. L5 and L6 come from the separate ultra consolidation pass.
+- **Graph:** `graph/graph.go` — exact-match traversal over JSON-persisted nodes and relations, scoped per owner
+- **HTTP:** Standard Go `net/http`. No framework.
+
+### Differences from v3.5 (historical)
+
+This table lists differences that the code in this repository shows. It does not
+include benchmark numbers.
+
+| | v3.5 (Python) | v4 and later (Go) |
+|---|---|---|
+| Runtime | venv, zvec, Kuzu, FastAPI, HTTP embed subprocess | One binary, no Python |
+| Release binary | — | About 160 MB, embedded (model included). A plain build is small and needs a model folder |
+| Listening port | `19527` | `19528` by default |
+| L4 Summary | Dormant | Active |
+| Restart | — | Reloads the doc index and graph from the data directory |
+
+### Repository layout
+
+```
+cmd/hyatlas-go/   the server (package main): HTTP API, extraction, consolidation, search;
+                  dashboard/dist is the embedded web dashboard
+bge/              in-process BGE-small embedder (onnxruntime-go)
+graph/            the L5 knowledge graph store
+memory/           layer and mode definitions
+plugins/hyatlas/  the Hermes plugin (memory provider, CLI, Desktop pane, dashboard tab)
+scripts/          the one-line installer and the ONNX export script
+docs/             images and infographic sources
+```
 
 ---
 
@@ -107,11 +190,11 @@ The server's own variables (`HYATLAS_SYNC_EXTRACT`, `HYATLAS_CONSOLIDATE_*`,
 ```bash
 git clone https://github.com/tuancookiez-hub/HyAtlas-Memory.git
 cd HyAtlas-Memory
-go build -o hyatlas-go .                     # plain build (small; reads the model from a models/ folder at runtime)
-go build -tags embedded -o hyatlas-go .       # embedded build (about 160 MB, model and onnxruntime bundled in)
+go build -o hyatlas-go ./cmd/hyatlas-go                     # plain build (small; reads the model from a models/ folder at runtime)
+go build -tags embedded -o hyatlas-go ./cmd/hyatlas-go       # embedded build (about 160 MB, model and onnxruntime bundled in)
 ```
 
-> **For the embedded build to compile**, `models/` must contain four files, because
+> **For the embedded build to compile**, `cmd/hyatlas-go/models/` must contain four files, because
 > `go:embed` lists them by name:
 > `bge-small-en-v1.5.onnx`, `bge-small-en-v1.5.onnx.data` (an empty file is fine),
 > `vocab.txt`, and the onnxruntime library for your platform: `libonnxruntime.so`
@@ -452,73 +535,9 @@ call `POST /api/v1/flush` before they stop the process.
 
 ---
 
-## Architecture
-
-```mermaid
-flowchart TD
-  A["POST /api/v1/add"] --> RAW["Embed + store L2 raw"]
-  RAW --> CTX["Gather context: 5 related facts (>= 0.70),<br/>open intentions, entity pages"]
-  CTX --> X["Extract (LLM, one call): facts with dates,<br/>replaces / updates, intention with due date,<br/>intentions done, entity pages, task experiences"]
-  X -.-> RC["Reconcile (LLM, opt-in, local models):<br/>update / replace similar stored facts"]
-  X --> P["Promote: L3 facts (0.92 restatement fold),<br/>L1 mirror, L7 intention, L8 pages"]
-  P --> NOW["Now page (LLM),<br/>at most every 15 min"]
-  P --> EP["Episode summary (LLM),<br/>after a 30-min gap"]
-  P --> ST[("chromem vectors L1-L8,<br/>long-fact clauses, doc index")]
-  EP --> ST
-  KEY["Hermes plugin hands over its key<br/>(localhost, memory only)"] -.-> X
-
-  T["Ticker: 6h, catch-up while due"] --> CL["Topic clusters (0.55),<br/>only changed clusters"]
-  CL --> C["Consolidate (LLM, per cluster): merges,<br/>drops + reason, schemas, L5 edges, arc"]
-  C --> G["Guards: merge >= 0.65, schema dup >= 0.92,<br/>schemas keep their evidence, restore"]
-  G --> ST
-  C --> KG["L5 graph with evidence"]
-
-  Q["POST /api/v1/search"] --> F["Vector (+ long-fact clauses) and stemmed keyword,<br/>fused by rank, weighted by the kind of query"]
-  F --> F2["Dates in the query, entity boost,<br/>graph-assisted recall, idle-time recency,<br/>usage feedback, near-duplicate demotion"]
-  F2 --> OUT["Now -> pages -> profile (+ schemas behind the facts)<br/>-> proactive -> experiences -> normal,<br/>with event dates and replaced versions"]
-```
-
-Lite mode keeps only the raw write and search: no LLM call at all. Pro adds extraction,
-episodes and the Now page. Ultra adds consolidation, which is what fills L5 and L6.
-Every LLM step goes to the endpoint you configure; nothing else leaves the machine.
-
-| Layer | What it holds |
-|---|---|
-| **L1 Profile** | User preferences, style, constraints (mirrors L3 facts labelled `user_preferences`) |
-| **L2 Raw** | Every incoming memory as-is |
-| **L3 Fact** | LLM-extracted factual atoms |
-| **L4 Summary** | One summary per episode of work (writes with no gap over `HYATLAS_EPISODE_GAP`), plus one rolling arc per owner from consolidation |
-| **L5 Knowledge** | Entity/relation graph (JSON-persisted). Built by the ultra slow path from relations corroborated across at least two turns, each with evidence citations |
-| **L6 Schema** | Recurring patterns generalised by the ultra slow path |
-| **L7 Intention** | LLM-extracted current goal / next step |
-| **L8 Entity** | One page per thing that matters (a project, tool, person, place): its current state plus a dated history. Written by each extraction; a changed value moves the old one into history |
-
-### Stack
-
-- **Vector store:** [Chromem-go](https://github.com/philippgille/chromem-go) v0.7.0 — embedded, disk-persisted, no server process
-- **Embeddings:** `bge/bge.go` — BGE-small-en-v1.5 (384-dim) via onnxruntime-go (cgo). WordPiece tokenizer, mean-pool, L2-normalize. No Python.
-- **LLM extraction:** Via any OpenAI-compatible endpoint. One structured call per write (pro, ultra) fills L3 Fact, L7 Intention, L8 entity pages and, for user preferences, L1 Profile from the L2 Raw entry. The call is given today's date and shown the owner's few nearest existing facts and open intentions, so it can date a fact (`event_at`) or an intention (`due_at`), mark a fact whose value changed as replaced, fold new detail or a repeat of the same event into an existing fact as updated (with a count), and mark an intention as moved on or done; those rows are superseded, not deleted, and record how (`superseded_how`). An intention is written only for a goal beyond the one exchange, and not again for a turn that just continues an open one. The plugin shows each recalled memory with its date. Blocking or background follows `HYATLAS_SYNC_EXTRACT`. L5 and L6 come from the separate ultra consolidation pass.
-- **Graph:** `graph/graph.go` — exact-match traversal over JSON-persisted nodes and relations, scoped per owner
-- **HTTP:** Standard Go `net/http`. No framework.
-
-### Differences from v3.5 (historical)
-
-This table lists differences that the code in this repository shows. It does not
-include benchmark numbers.
-
-| | v3.5 (Python) | v4 (Go) |
-|---|---|---|
-| Runtime | venv, zvec, Kuzu, FastAPI, HTTP embed subprocess | One binary, no Python |
-| Release binary | — | About 160 MB, embedded (model included). A plain build is small and needs a model folder |
-| Listening port | `19527` | `19528` by default |
-| L4 Summary | Dormant | Active |
-| Restart | — | Reloads the doc index and graph from the data directory |
-
----
-
 ## Model assets
 
-The BGE-small model + the platform-matching onnxruntime shared library live in `models/` (gitignored). For a plain build, the server reads them at runtime. For an embedded build, `go:embed` bundles them into the binary at compile time, so the release binary (built with `-tags embedded`) needs no model folder at all.
+The BGE-small model + the platform-matching onnxruntime shared library live in `models/` (gitignored). For a plain build, the server reads them at runtime. For an embedded build, `go:embed` bundles them into the binary at compile time from `cmd/hyatlas-go/models/` (copy the same files there before building), so the release binary (built with `-tags embedded`) needs no model folder at all.
 
 **Where a plain build looks** (when `HYATLAS_MODEL_DIR` is unset), in order:
 
@@ -559,7 +578,7 @@ If `HYATLAS_MODEL_DIR` is set, that directory is the only one searched. A plain 
 - **Mind Palace (v4.1.0+)** — a temporal visualization of the L5 knowledge graph in the Hermes Desktop `hyatlas` pane. Its design is in [`plugins/hyatlas/desktop/SPEC.md`](plugins/hyatlas/desktop/SPEC.md). The Desktop app itself is not part of this repository.
 - **Living memory (v4.6.0–v4.7.x)** — the Now page, L8 entity pages, usage learning, topic-clustered consolidation with drop reasons, guards and restore.
 - **Precision per fact (v4.8.0)** — event dates and date-aware search, updates with counts, intention due dates, episode summaries, history on read, near-duplicate demotion, idle-time recency, and the localhost key hand-over that replaced reading `auth.json`.
-- **A stable floor (v5.0.0, not released yet)** — turns that were never extracted are caught up, forgetting mirrored from Hermes's memory tool, linked facts and recurring events under `HYATLAS_RECONCILE`, the current session's intentions first, one alias rule everywhere, a clean shutdown, and a faster, inverted-index search.
+- **A stable floor (v5.0.0)** — turns that were never extracted are caught up, forgetting mirrored from Hermes's memory tool, linked facts and recurring events under `HYATLAS_RECONCILE`, the current session's intentions first, one alias rule everywhere, a clean shutdown, and a faster, inverted-index search.
 - **Smarter recall (v4.9.0)** — task experiences, schemas with evidence, long facts found by their sentences, an entity boost and graph-assisted recall, query-kind weighting, and an opt-in second reconcile call for local models.
 
 ## API Reference
@@ -568,7 +587,7 @@ Base URL: `http://127.0.0.1:19528`
 
 Method notes: the handlers read their parameters from the query string, the JSON
 body, or both. Where a method is shown, that is the one the Hermes plugin and the
-docs use. Some handlers also accept other methods, so check `routes()` in `server.go`
+docs use. Some handlers also accept other methods, so check `routes()` in `cmd/hyatlas-go/server.go`
 if you depend on that. Every route is behind the Host/Origin guard described above.
 
 | Method | Path | Parameters and response |

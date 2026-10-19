@@ -15,7 +15,7 @@ function Start-V4 {
     } catch { }
 
     if (-not (Test-Path $goExe)) {
-        Write-Error "Binary not found: $goExe`nRun: cd $goDir && go build"
+        Write-Error "Binary not found: $goExe`nRun: cd $goDir && go build -o hyatlas-go.exe ./cmd/hyatlas-go"
         exit 1
     }
 
