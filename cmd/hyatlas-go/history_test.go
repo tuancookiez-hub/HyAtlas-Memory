@@ -17,6 +17,9 @@ func openHistoryStore(t *testing.T, dir string) *MemoryStore {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Close drains the async usage write, so it cannot land in dir after the test
+	// has removed it ("directory not empty" at TempDir cleanup).
+	t.Cleanup(st.Close)
 	return st
 }
 
