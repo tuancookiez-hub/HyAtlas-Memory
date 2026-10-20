@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+# The test jobs only read the repository; nothing here writes to it.
+permissions:
+  contents: read
+
 jobs:
   build-plain:
     name: Build (Go 1.26, plain — Linux)
